@@ -1,8 +1,8 @@
 # oxi
 
-Desktop chat UI (Rust + **egui**) with a **local agent loop**: HTTP streaming to OpenAI-compatible APIs and built-in tools (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`). **No Node, no `pi` binary, and no JSONL RPC** — a single Rust binary.
+Desktop chat UI (Rust + **egui**) with a **local agent loop**: HTTP streaming to OpenAI-compatible APIs and built-in tools (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`). **No JSONL RPC** — a single Rust binary.
 
-In this monorepo the crate lives under the directory [`pi-rust-chat/`](.) (historical folder name); the built binary is **`oxi`**.
+The crate lives at the repository root; the built binary is **`oxi`**.
 
 ## Requirements
 
@@ -12,7 +12,7 @@ In this monorepo the crate lives under the directory [`pi-rust-chat/`](.) (histo
 
 Settings are stored at `~/.config/oxi/settings.json` (macOS/Linux) or the platform config dir from the `dirs` crate. You can set **provider**, **model id**, optional **base URL override**, **system prompt**, and which **tools** are enabled.
 
-If you previously used the app under `~/.config/pi-rust-chat/`, copy `settings.json` and `oauth.json` into `~/.config/oxi/` (or rename the folder).
+If you previously used the app with a different config directory, copy `settings.json` and `oauth.json` into `~/.config/oxi/` (or rename the folder).
 
 ### OAuth (recommended for Codex and Copilot)
 
@@ -44,12 +44,11 @@ Default base URLs: OpenAI / Codex (API key mode) `https://api.openai.com/v1`; Co
 ## Run
 
 ```bash
-cd pi-rust-chat
 cargo run --release
 # binary: target/release/oxi
 ```
 
-Use **Set cwd** in the sidebar (or launch from your repo) so the workspace root matches the project you want the agent to use.
+Run from the repository root. Use **Set cwd** in the sidebar (or launch from your repo) so the workspace root matches the project you want the agent to use.
 
 ## Standalone behavior
 
@@ -62,4 +61,4 @@ Use **Set cwd** in the sidebar (or launch from your repo) so the workspace root 
 
 - `bash` is powerful and can modify the workspace; disable it in Settings if you want a read-only review workflow.
 - `bash` runs with a bounded timeout and basic risky-command rejection, but it still executes shell commands inside the selected workspace.
-- File-search tools skip common heavy directories such as `.git`, `target`, and `node_modules`.
+- File-search tools skip common heavy directories such as `.git`, `target`, and typical dependency/vendor folders.
