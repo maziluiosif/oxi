@@ -1,0 +1,32 @@
+[package]
+name = "oxi"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone coding agent chat UI (Rust + egui; OpenAI-compatible LLMs + local tools)"
+license = "MIT"
+
+[dependencies]
+eframe = "0.29"
+egui = "0.29"
+egui_extras = { version = "0.29", features = ["all_loaders"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+pulldown-cmark = "0.12"
+base64 = "0.22"
+rfd = "0.15"
+arboard = "3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+bytes = "1"
+regex = "1"
+glob = "0.3"
+walkdir = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "5"
+thiserror = "1"
+sha2 = "0.10"
+rand = "0.8"
+webbrowser = "1"
+url = "2"
