@@ -10,7 +10,7 @@ mod theme;
 mod ui;
 
 use crate::theme::setup_style;
-use app::PiChatApp;
+use app::OxiApp;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -27,7 +27,7 @@ fn main() -> eframe::Result<()> {
         Box::new(|cc| {
             setup_style(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(PiChatApp::new()) as Box<dyn eframe::App>)
+            Ok(Box::new(OxiApp::new()) as Box<dyn eframe::App>)
         }),
     )
 }

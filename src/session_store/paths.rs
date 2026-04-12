@@ -95,3 +95,96 @@ fn expand_tilde(raw: &str) -> PathBuf {
     }
     PathBuf::from(raw)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("oxi-paths-{name}-{nanos}"));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn generate_session_id_unique() {
+        let a = generate_session_id();
+        std::thread::sleep(Duration::from_millis(1));
+        let b = generate_session_id();
+        assert_ne!(a, b);
+        assert!(a.starts_with("session-"));
+    }
+
+    #[test]
+    fn default_session_dir_under_agent_dir() {
+        let root = Path::new("/tmp/my-project");
+        let agent = Path::new("/home/user/.config/oxi");
+        let dir = default_session_dir(root, agent);
+        assert!(dir.starts_with(agent.join("sessions")));
+        // Should contain sanitized path
+        let dir_str = dir.to_string_lossy();
+        assert!(dir_str.contains("tmp-my-project"));
+    }
+
+    #[test]
+    fn default_session_dir_sanitizes_slashes() {
+        let root = Path::new("/a/b/c");
+        let agent = Path::new("/agent");
+        let dir = default_session_dir(root, agent);
+        let name = dir.file_name().unwrap().to_string_lossy();
+        assert!(!name.contains('/'));
+        assert!(name.starts_with("--"));
+        assert!(name.ends_with("--"));
+    }
+
+    #[test]
+    fn configured_session_dir_returns_none_without_settings() {
+        let root = temp_dir("no-settings");
+        let agent = temp_dir("agent-no-settings");
+        assert!(configured_session_dir(&root, &agent).is_none());
+    }
+
+    #[test]
+    fn configured_session_dir_reads_project_setting() {
+        let root = temp_dir("with-settings");
+        let agent = temp_dir("agent-with-settings");
+        let pi_dir = root.join(".pi");
+        fs::create_dir_all(&pi_dir).unwrap();
+        fs::write(
+            pi_dir.join("settings.json"),
+            r#"{"sessionDir": ".sessions"}"#,
+        ).unwrap();
+        let dir = configured_session_dir(&root, &agent);
+        assert!(dir.is_some());
+        assert!(dir.unwrap().ends_with(".sessions"));
+    }
+
+    #[test]
+    fn expand_tilde_home() {
+        let expanded = expand_tilde("~");
+        if std::env::var_os("HOME").is_some() {
+            assert_ne!(expanded, PathBuf::from("~"));
+        }
+    }
+
+    #[test]
+    fn expand_tilde_with_path() {
+        let expanded = expand_tilde("~/projects");
+        if std::env::var_os("HOME").is_some() {
+            assert!(expanded.to_string_lossy().contains("projects"));
+            assert!(!expanded.to_string_lossy().starts_with('~'));
+        }
+    }
+
+    #[test]
+    fn expand_tilde_absolute() {
+        let expanded = expand_tilde("/absolute/path");
+        assert_eq!(expanded, PathBuf::from("/absolute/path"));
+    }
+}

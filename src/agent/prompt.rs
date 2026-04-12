@@ -17,12 +17,7 @@ pub fn build_system_prompt(settings: &AppSettings, cwd: &str) -> String {
         .collect();
     let tools_list = tools.join(", ");
 
-    let custom = settings.system_prompt.trim();
-    if !custom.is_empty() {
-        return format!("{custom}\n\nCurrent date: {date}\nCurrent working directory: {cwd_norm}");
-    }
-
-    let template = settings.agent_system_prompt.trim();
+    let template = settings.system_prompt.trim();
     let template = if template.is_empty() {
         DEFAULT_AGENT_SYSTEM_PROMPT
     } else {

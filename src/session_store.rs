@@ -43,6 +43,8 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             messages: Vec::new(),
             session_file: Some(session.path),
             messages_loaded: false,
+            input_text: String::new(),
+            pending_images: Vec::new(),
         })
         .collect()
 }
@@ -179,6 +181,8 @@ mod tests {
             })),
             session_file: None,
             messages_loaded: true,
+            input_text: String::new(),
+            pending_images: Vec::new(),
         };
 
         save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
@@ -229,6 +233,8 @@ mod tests {
             ],
             session_file: None,
             messages_loaded: true,
+            input_text: String::new(),
+            pending_images: Vec::new(),
         };
 
         save_session_messages(root.to_str().unwrap(), &mut session).unwrap();

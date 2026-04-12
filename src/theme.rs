@@ -10,11 +10,19 @@ use eframe::egui::{
 const NOTO_SANS_REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
 const UBUNTU_MONO_REGULAR: &[u8] = include_bytes!("../assets/fonts/UbuntuMono-R.ttf");
 const APPLE_SYMBOLS: &[u8] = include_bytes!("../assets/fonts/AppleSymbols.ttf");
+const SYMBOLS_NERD_FONT_MONO: &[u8] = include_bytes!("../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
 
 /// App-wide type scale (slightly larger for readability).
 pub const FS_BODY: f32 = 14.5;
 pub const FS_SMALL: f32 = 12.75;
 pub const FS_TINY: f32 = 11.75;
+
+/// [`FontFamily`] for Nerd Font icon glyphs used in tool pills.
+/// Using a named family keeps PUA codepoints out of the normal text fallback chains.
+#[inline]
+pub fn icon_font() -> FontFamily {
+    FontFamily::Name("icons".into())
+}
 
 // Cursor-like dark palette: near-black chat, slightly lifted sidebar, cool blue accents.
 pub const C_BG_MAIN: Color32 = Color32::from_rgb(0x0b, 0x0b, 0x0c);
@@ -44,7 +52,7 @@ pub const CHAT_VIEW_MARGIN_LEFT: f32 = 12.0;
 pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 24.0;
 /// Inner margin of the chat [`Frame`] (transcript + composer stack).
 pub const CHAT_FRAME_TOP: f32 = 10.0;
-pub const CHAT_FRAME_BOTTOM: f32 = 31.0;
+pub const CHAT_FRAME_BOTTOM: f32 = 10.0;
 
 /// Usable width for the chat column (transcript + bottom composer). Subtracts scrollbar gutter so
 /// input and transcript line up.
@@ -93,6 +101,10 @@ fn install_fonts(ctx: &egui::Context) {
         "apple_symbols".to_string(),
         FontData::from_static(APPLE_SYMBOLS).into(),
     );
+    fonts.font_data.insert(
+        "symbols_nerd_font_mono".to_string(),
+        FontData::from_static(SYMBOLS_NERD_FONT_MONO).into(),
+    );
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     proportional.insert(0, "noto_sans".to_string());
@@ -102,6 +114,15 @@ fn install_fonts(ctx: &egui::Context) {
     monospace.insert(0, "ubuntu_mono".to_string());
     monospace.push("noto_sans".to_string());
     monospace.push("apple_symbols".to_string());
+
+    // Dedicated icon family — used only for tool pill glyphs.
+    // Keeps Nerd Font PUA codepoints out of the proportional/monospace fallback chains
+    // so they never accidentally substitute real text characters.
+    fonts
+        .families
+        .entry(FontFamily::Name("icons".into()))
+        .or_default()
+        .push("symbols_nerd_font_mono".to_string());
 
     ctx.set_fonts(fonts);
 }
