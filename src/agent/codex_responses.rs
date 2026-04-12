@@ -19,6 +19,12 @@ struct ToolCallAccum {
     arguments: String,
 }
 
+/// Deduplicate `output_item.done` reasoning summary when streaming deltas already filled thinking.
+#[derive(Default)]
+struct CodexStreamState {
+    got_thinking_delta: bool,
+}
+
 /// Find first SSE record boundary (`\r\n\r\n` or `\n\n`).
 fn sse_record_end(buffer: &str) -> Option<(usize, usize)> {
     if let Some(i) = buffer.find("\r\n\r\n") {
@@ -33,6 +39,7 @@ fn drain_codex_sse_blocks(
     buffer: &mut String,
     assistant_text: &mut String,
     pending_tools: &mut Vec<ToolCallAccum>,
+    sse_state: &mut CodexStreamState,
     tx: &Sender<AgentEvent>,
 ) -> Result<(), String> {
     while let Some((idx, sep_len)) = sse_record_end(buffer) {
@@ -52,7 +59,7 @@ fn drain_codex_sse_blocks(
             Ok(v) => v,
             Err(_) => continue,
         };
-        process_responses_event(&v, assistant_text, pending_tools, tx)?;
+        process_responses_event(&v, assistant_text, pending_tools, sse_state, tx)?;
     }
     Ok(())
 }
@@ -232,44 +239,101 @@ fn openai_user_to_responses_input(content: Option<&Value>) -> Vec<Value> {
     }
 }
 
+/// Text chunk from Responses API stream events (`delta` string or `delta.text`).
+fn responses_stream_text_chunk(v: &Value) -> Option<&str> {
+    match v.get("delta") {
+        Some(d) => d
+            .as_str()
+            .or_else(|| d.get("text").and_then(|x| x.as_str())),
+        None => v.get("text").and_then(|x| x.as_str()),
+    }
+}
+
+/// Join `item.summary[].text` from a completed reasoning output item (pi-mono `output_item.done`).
+fn reasoning_item_summary_joined(item: &Value) -> Option<String> {
+    let arr = item.get("summary")?.as_array()?;
+    let parts: Vec<&str> = arr
+        .iter()
+        .filter_map(|p| p.get("text").and_then(|x| x.as_str()))
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("\n\n"))
+}
+
 fn process_responses_event(
     v: &Value,
     assistant_text: &mut String,
     pending_tools: &mut Vec<ToolCallAccum>,
+    state: &mut CodexStreamState,
     tx: &Sender<AgentEvent>,
 ) -> Result<(), String> {
     let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
 
     match typ {
         "response.created" | "response.completed" | "response.incomplete" => {}
+        // New reasoning item in the stream — allow a later `output_item.done` fallback for this item.
+        "response.output_item.added" => {
+            if let Some(item) = v.get("item") {
+                if item.get("type").and_then(|x| x.as_str()) == Some("reasoning") {
+                    state.got_thinking_delta = false;
+                }
+            }
+        }
         "response.output_text.delta" => {
-            if let Some(d) = v.get("delta").and_then(|x| x.as_str()) {
+            if let Some(d) = responses_stream_text_chunk(v) {
                 assistant_text.push_str(d);
                 let _ = tx.send(AgentEvent::TextDelta(d.to_string()));
             }
         }
-        // Extended thinking / reasoning from Codex Responses API
-        "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
-            if let Some(d) = v.get("delta").and_then(|x| x.as_str()) {
+        // ChatGPT Codex / Responses API (pi-mono `processResponsesStream`).
+        "response.reasoning_summary_text.delta" => {
+            if let Some(d) = responses_stream_text_chunk(v) {
                 if !d.is_empty() {
+                    state.got_thinking_delta = true;
+                    let _ = tx.send(AgentEvent::ThinkingDelta(d.to_string()));
+                }
+            }
+        }
+        // Alternate / older event names (direct deltas without summary-part handshake).
+        "response.reasoning.delta"
+        | "response.reasoning_text.delta"
+        | "response.reasoning_text_delta"
+        | "response.reasoning_summary_text_delta" => {
+            if let Some(d) = responses_stream_text_chunk(v) {
+                if !d.is_empty() {
+                    state.got_thinking_delta = true;
                     let _ = tx.send(AgentEvent::ThinkingDelta(d.to_string()));
                 }
             }
         }
         "response.output_item.done" => {
             if let Some(item) = v.get("item") {
-                if item.get("type").and_then(|x| x.as_str()) == Some("function_call") {
-                    let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
-                    let args = item
-                        .get("arguments")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("{}");
-                    let call_id = item.get("call_id").and_then(|x| x.as_str()).unwrap_or("");
-                    pending_tools.push(ToolCallAccum {
-                        id: call_id.to_string(),
-                        name: name.to_string(),
-                        arguments: args.to_string(),
-                    });
+                match item.get("type").and_then(|x| x.as_str()) {
+                    Some("reasoning") => {
+                        if !state.got_thinking_delta {
+                            if let Some(text) = reasoning_item_summary_joined(item) {
+                                if !text.is_empty() {
+                                    let _ = tx.send(AgentEvent::ThinkingDelta(text));
+                                }
+                            }
+                        }
+                    }
+                    Some("function_call") => {
+                        let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                        let args = item
+                            .get("arguments")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("{}");
+                        let call_id = item.get("call_id").and_then(|x| x.as_str()).unwrap_or("");
+                        pending_tools.push(ToolCallAccum {
+                            id: call_id.to_string(),
+                            name: name.to_string(),
+                            arguments: args.to_string(),
+                        });
+                    }
+                    _ => {}
                 }
             }
         }
@@ -331,6 +395,7 @@ pub async fn run_codex_responses_loop(
             "tool_choice": "auto",
             "parallel_tool_calls": true,
             "text": { "verbosity": "medium" },
+            "reasoning": { "effort": "medium", "summary": "auto" },
             "include": ["reasoning.encrypted_content"]
         });
         let _ = tx.send(AgentEvent::AgentStart);
@@ -370,6 +435,7 @@ pub async fn run_codex_responses_loop(
         let mut buffer = String::new();
         let mut assistant_text = String::new();
         let mut pending_tools: Vec<ToolCallAccum> = Vec::new();
+        let mut sse_state = CodexStreamState::default();
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
@@ -377,12 +443,24 @@ pub async fn run_codex_responses_loop(
             }
             let chunk = chunk.map_err(|e| e.to_string())?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
-            drain_codex_sse_blocks(&mut buffer, &mut assistant_text, &mut pending_tools, tx)?;
+            drain_codex_sse_blocks(
+                &mut buffer,
+                &mut assistant_text,
+                &mut pending_tools,
+                &mut sse_state,
+                tx,
+            )?;
         }
         if !buffer.trim().is_empty() {
             buffer.push('\n');
             buffer.push('\n');
-            drain_codex_sse_blocks(&mut buffer, &mut assistant_text, &mut pending_tools, tx)?;
+            drain_codex_sse_blocks(
+                &mut buffer,
+                &mut assistant_text,
+                &mut pending_tools,
+                &mut sse_state,
+                tx,
+            )?;
         }
         let _ = tx.send(AgentEvent::AssistantMessageDone);
 

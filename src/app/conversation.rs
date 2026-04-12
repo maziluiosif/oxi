@@ -69,12 +69,29 @@ impl OxiApp {
 
         let scroll_outer_w = ui.available_width();
         let force_scroll_bottom = self.conv.scroll_to_bottom_once;
-        let stick_bottom = force_scroll_bottom
-            || self.active_waiting_response()
-            || self.conv.workspaces[wi].sessions[si]
-                .messages
-                .last()
-                .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming);
+        // Suppress auto-stick when the user is dragging to select text so the
+        // viewport stays put and the selection works naturally.
+        let user_selecting_text = {
+            let ctx = ui.ctx();
+            let primary_down = ctx.input(|i| i.pointer.primary_down());
+            let dragged_far = ctx.input(|i| {
+                match (i.pointer.press_origin(), i.pointer.interact_pos()) {
+                    (Some(origin), Some(pos)) => {
+                        origin.distance(pos) > SELECTION_SCROLL_MIN_DRAG_PX
+                    }
+                    _ => false,
+                }
+            });
+            primary_down && dragged_far
+        };
+
+        let stick_bottom = !user_selecting_text
+            && (force_scroll_bottom
+                || self.active_waiting_response()
+                || self.conv.workspaces[wi].sessions[si]
+                    .messages
+                    .last()
+                    .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming));
 
         ScrollArea::vertical()
             .max_width(scroll_outer_w)
@@ -158,7 +175,7 @@ impl OxiApp {
                     }
                 });
 
-                if force_scroll_bottom {
+                if force_scroll_bottom && !user_selecting_text {
                     ui.scroll_to_cursor(Some(Align::BOTTOM));
                 }
             });
@@ -191,35 +208,62 @@ impl OxiApp {
     }
 }
 
-/// Returns (scroll_delta, should_consume_wheel) during label-selection drags.
+/// Same idea as egui’s default click-vs-drag distance (~6px).
+const SELECTION_SCROLL_MIN_DRAG_PX: f32 = 6.0;
+
+/// Returns `(scroll_delta, consume_smooth_scroll)`.
+///
+/// - **Wheel / trackpad**: forwarded while selecting text (button down + selection) or dragging a
+///   widget, so the transcript still scrolls — inner labels can steal scroll otherwise.
+/// - **Edge auto-scroll** (near top/bottom while dragging): only after the pointer moved past
+///   [`SELECTION_SCROLL_MIN_DRAG_PX`], so a click in the top band does not jump the view.
 pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> (egui::Vec2, bool) {
     let ctx = ui.ctx();
     let widget_dragging = ctx.dragged_id().is_some();
-    let label_selection_dragging = ctx.input(|i| i.pointer.primary_down())
-        && egui::text_selection::LabelSelectionState::load(ctx).has_selection();
 
-    if !widget_dragging && !label_selection_dragging {
+    let label_extend_active = ctx.input(|i| i.pointer.primary_down())
+        && egui::text_selection::LabelSelectionState::load(ctx).has_selection();
+    let label_drag_past_click_dist = ctx.input(|i| {
+        match (i.pointer.press_origin(), i.pointer.interact_pos()) {
+            (Some(origin), Some(pos)) => origin.distance(pos) > SELECTION_SCROLL_MIN_DRAG_PX,
+            _ => false,
+        }
+    });
+    let label_selection_dragging = label_extend_active && label_drag_past_click_dist;
+
+    if !widget_dragging && !label_extend_active {
         return (egui::Vec2::ZERO, false);
     }
 
     let mut delta = egui::Vec2::ZERO;
     let wheel_delta = ctx.input(|i| i.smooth_scroll_delta);
-    if wheel_delta != egui::Vec2::ZERO {
+    // Trackpads often emit a tiny scroll together with a tap; ignore on the press frame.
+    let click_frame_scroll_noise =
+        ctx.input(|i| i.pointer.primary_pressed()) && wheel_delta.length() < 8.0;
+    if wheel_delta != egui::Vec2::ZERO && !click_frame_scroll_noise {
+        // Same sign convention as `ScrollArea` wheel handling and `scroll_with_delta` (see egui
+        // `scroll_area.rs`): e.g. `y > 0` scrolls the viewport up. Forward as-is, then consume
+        // `smooth_scroll_delta` so the area does not apply it twice.
         delta += wheel_delta;
     }
 
+    // Edge auto-scroll while extending a selection near the top/bottom of the viewport.
     if label_selection_dragging {
         let pointer = ctx.input(|i| i.pointer.interact_pos());
         if let Some(pointer) = pointer {
             let rect = ui.max_rect();
             let edge = 24.0;
             if pointer.y < rect.top() + edge {
-                delta.y -= (rect.top() + edge - pointer.y).min(24.0);
+                // cursor near top → scroll up → delta.y positive (egui convention)
+                delta.y += (rect.top() + edge - pointer.y).min(24.0);
             } else if pointer.y > rect.bottom() - edge {
-                delta.y += (pointer.y - (rect.bottom() - edge)).min(24.0);
+                // cursor near bottom → scroll down → delta.y negative
+                delta.y -= (pointer.y - (rect.bottom() - edge)).min(24.0);
             }
         }
     }
 
-    (delta, label_selection_dragging)
+    // Consume wheel when we applied it manually for an active text selection (avoid double scroll).
+    let consume = label_extend_active && delta != egui::Vec2::ZERO;
+    (delta, consume)
 }
