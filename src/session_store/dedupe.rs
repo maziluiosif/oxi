@@ -121,8 +121,10 @@ mod tests {
     #[test]
     fn dedupe_removes_exact_duplicate_halves() {
         let mut msgs = vec![
-            user("hi"), assistant("hello"),
-            user("hi"), assistant("hello"),
+            user("hi"),
+            assistant("hello"),
+            user("hi"),
+            assistant("hello"),
         ];
         dedupe_trailing_duplicate_messages(&mut msgs);
         assert_eq!(msgs.len(), 2);
@@ -131,8 +133,10 @@ mod tests {
     #[test]
     fn dedupe_keeps_non_duplicates() {
         let mut msgs = vec![
-            user("hi"), assistant("hello"),
-            user("bye"), assistant("goodbye"),
+            user("hi"),
+            assistant("hello"),
+            user("bye"),
+            assistant("goodbye"),
         ];
         dedupe_trailing_duplicate_messages(&mut msgs);
         assert_eq!(msgs.len(), 4);
@@ -155,10 +159,14 @@ mod tests {
     #[test]
     fn dedupe_quadruple_reduces_to_single() {
         let mut msgs = vec![
-            user("a"), assistant("b"),
-            user("a"), assistant("b"),
-            user("a"), assistant("b"),
-            user("a"), assistant("b"),
+            user("a"),
+            assistant("b"),
+            user("a"),
+            assistant("b"),
+            user("a"),
+            assistant("b"),
+            user("a"),
+            assistant("b"),
         ];
         dedupe_trailing_duplicate_messages(&mut msgs);
         // 8 -> 4 -> 2

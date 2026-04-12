@@ -81,7 +81,9 @@ impl OxiApp {
 
         let active_workspace = self.conv.active_workspace;
         let old_states = std::mem::take(&mut self.flow.sessions);
-        self.active_workspace_mut().sessions.insert(0, Self::blank_session(title));
+        self.active_workspace_mut()
+            .sessions
+            .insert(0, Self::blank_session(title));
         self.active_workspace_mut().active = 0;
 
         self.flow.sessions = old_states

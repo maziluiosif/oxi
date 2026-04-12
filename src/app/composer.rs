@@ -66,7 +66,7 @@ impl OxiApp {
                         ui.horizontal(|ui| {
                             self.render_controls_row(ui, can_send);
                         });
-                        });
+                    });
             });
             if pad > 0.0 {
                 ui.add_space(pad);
@@ -162,12 +162,10 @@ impl OxiApp {
                             ui.label(RichText::new(short).size(FS_TINY).color(C_ACCENT));
                             if ui
                                 .add(
-                                    Button::new(
-                                        RichText::new("×").size(11.0).color(C_TEXT_MUTED),
-                                    )
-                                    .frame(false)
-                                    .fill(Color32::TRANSPARENT)
-                                    .min_size(egui::vec2(14.0, 14.0)),
+                                    Button::new(RichText::new("×").size(11.0).color(C_TEXT_MUTED))
+                                        .frame(false)
+                                        .fill(Color32::TRANSPARENT)
+                                        .min_size(egui::vec2(14.0, 14.0)),
                                 )
                                 .on_hover_text("Remove image")
                                 .clicked()

@@ -45,14 +45,24 @@ pub fn render_empty_state(ui: &mut Ui) {
         let hints = [
             ("⚙", "Configure provider & model in Settings"),
             ("📁", "Use \"Add workspace\" to set your project root"),
-            ("🔧", "Tools (read, write, bash, …) run inside the workspace"),
-            ("⌨", "Enter to send · Shift+Enter for newline · ↑/↓ for history"),
+            (
+                "🔧",
+                "Tools (read, write, bash, …) run inside the workspace",
+            ),
+            (
+                "⌨",
+                "Enter to send · Shift+Enter for newline · ↑/↓ for history",
+            ),
             ("🖼", "Attach images with + or paste with Ctrl/Cmd+V"),
         ];
         for (icon, tip) in hints {
             ui.horizontal(|ui| {
                 ui.add_space(2.0);
-                ui.label(RichText::new(icon).size(FS_SMALL).color(crate::theme::C_TEXT_MUTED));
+                ui.label(
+                    RichText::new(icon)
+                        .size(FS_SMALL)
+                        .color(crate::theme::C_TEXT_MUTED),
+                );
                 ui.add_space(6.0);
                 ui.label(RichText::new(tip).size(FS_SMALL).color(C_TEXT_MUTED));
             });

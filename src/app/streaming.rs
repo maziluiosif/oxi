@@ -20,7 +20,10 @@ impl OxiApp {
         }
 
         let key = self.active_session_key();
-        if self.run_state(key).is_some_and(|state| state.waiting_response) {
+        if self
+            .run_state(key)
+            .is_some_and(|state| state.waiting_response)
+        {
             return;
         }
 
@@ -57,7 +60,9 @@ impl OxiApp {
 
         self.materialize_prompt(key, &text, &user_attachments);
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
-        if let Err(e) = session_store::save_session_messages(&root_path, self.session_mut_by_key(key)) {
+        if let Err(e) =
+            session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
+        {
             self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
         }
 

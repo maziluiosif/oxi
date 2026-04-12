@@ -26,10 +26,7 @@ pub fn build_openai_messages(system: &str, chat: &[ChatMessage]) -> Vec<Value> {
     let system_msg = json!({ "role": "system", "content": system });
 
     // Build all candidate turn JSON values first.
-    let mut turns: Vec<Value> = chat
-        .iter()
-        .filter_map(message_to_openai)
-        .collect();
+    let mut turns: Vec<Value> = chat.iter().filter_map(message_to_openai).collect();
 
     // Apply context budget trimming.
     trim_to_budget(&mut turns, system.len());
@@ -225,7 +222,7 @@ mod tests {
             "total {total} exceeds budget {CONTEXT_CHAR_BUDGET}"
         );
         // MIN_KEEP_TURNS pairs must always be present (+ system message).
-        assert!(msgs.len() >= MIN_KEEP_TURNS * 2 + 1);
+        assert!(msgs.len() > MIN_KEEP_TURNS * 2);
     }
 
     #[test]

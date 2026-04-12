@@ -10,7 +10,8 @@ use eframe::egui::{
 const NOTO_SANS_REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
 const UBUNTU_MONO_REGULAR: &[u8] = include_bytes!("../assets/fonts/UbuntuMono-R.ttf");
 const APPLE_SYMBOLS: &[u8] = include_bytes!("../assets/fonts/AppleSymbols.ttf");
-const SYMBOLS_NERD_FONT_MONO: &[u8] = include_bytes!("../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
+const SYMBOLS_NERD_FONT_MONO: &[u8] =
+    include_bytes!("../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
 
 /// App-wide type scale (slightly larger for readability).
 pub const FS_BODY: f32 = 14.5;
@@ -91,19 +92,19 @@ fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "noto_sans".to_string(),
-        FontData::from_static(NOTO_SANS_REGULAR).into(),
+        FontData::from_static(NOTO_SANS_REGULAR),
     );
     fonts.font_data.insert(
         "ubuntu_mono".to_string(),
-        FontData::from_static(UBUNTU_MONO_REGULAR).into(),
+        FontData::from_static(UBUNTU_MONO_REGULAR),
     );
     fonts.font_data.insert(
         "apple_symbols".to_string(),
-        FontData::from_static(APPLE_SYMBOLS).into(),
+        FontData::from_static(APPLE_SYMBOLS),
     );
     fonts.font_data.insert(
         "symbols_nerd_font_mono".to_string(),
-        FontData::from_static(SYMBOLS_NERD_FONT_MONO).into(),
+        FontData::from_static(SYMBOLS_NERD_FONT_MONO),
     );
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
