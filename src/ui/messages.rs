@@ -1015,19 +1015,25 @@ fn render_edit_tool_block(
     ui.add_space(6.0);
 }
 
+/// Shared inputs for [`render_explored_tool_pill_run`] (keeps the renderer under clippy’s
+/// argument limit).
+struct ExploredToolPillCtx<'a> {
+    msg_idx: usize,
+    blocks: &'a [AssistantBlock],
+    needs_scroll: bool,
+    hidden_before: &'a mut usize,
+    visible_start: usize,
+    last_tool_idx: Option<usize>,
+    streaming: bool,
+}
+
 /// Renders a consecutive run of tool block indices. When `needs_scroll`, only a fixed number of
 /// pills are visible (oldest hidden); thinking/prose must **not** live inside this region — the
 /// caller keeps those blocks outside the [`ScrollArea`].
 fn render_explored_tool_pill_run(
     ui: &mut Ui,
-    msg_idx: usize,
-    blocks: &[AssistantBlock],
     tool_run: &[usize],
-    needs_scroll: bool,
-    hidden_before: &mut usize,
-    visible_start: usize,
-    last_tool_idx: Option<usize>,
-    streaming: bool,
+    ctx: &mut ExploredToolPillCtx<'_>,
 ) {
     if tool_run.is_empty() {
         return;
@@ -1036,11 +1042,12 @@ fn render_explored_tool_pill_run(
     // While the live explored cluster is capped to the last N tool pills, older tool batches can
     // become fully hidden. In that case, do not allocate the fixed-height scroll region at all,
     // otherwise we leave large blank gaps between thinking blocks during streaming.
-    let visible_run: &[usize] = if needs_scroll {
-        let hidden_in_this_run = visible_start
-            .saturating_sub(*hidden_before)
+    let visible_run: &[usize] = if ctx.needs_scroll {
+        let hidden_in_this_run = ctx
+            .visible_start
+            .saturating_sub(*ctx.hidden_before)
             .min(tool_run.len());
-        *hidden_before += hidden_in_this_run;
+        *ctx.hidden_before += hidden_in_this_run;
         let visible = &tool_run[hidden_in_this_run..];
         if visible.is_empty() {
             return;
@@ -1049,6 +1056,11 @@ fn render_explored_tool_pill_run(
     } else {
         tool_run
     };
+
+    let msg_idx = ctx.msg_idx;
+    let blocks = ctx.blocks;
+    let last_tool_idx = ctx.last_tool_idx;
+    let streaming = ctx.streaming;
 
     let render_pills = |ui: &mut Ui| {
         for &ti in visible_run {
@@ -1059,7 +1071,7 @@ fn render_explored_tool_pill_run(
         }
     };
 
-    if needs_scroll {
+    if ctx.needs_scroll {
         let scroll_h = (TOOL_PILL_HEIGHT + TOOL_PILL_GAP) * MAX_VISIBLE_STREAMING_TOOL_PILLS as f32;
         ScrollArea::vertical()
             .id_salt((msg_idx, visible_run[0], "tool_pill_scroll"))
@@ -1137,17 +1149,16 @@ fn render_explored_tool_list(
                 let tool_run: Vec<usize> = (batch_lo..i)
                     .filter(|&j| matches!(blocks[j], AssistantBlock::Tool { .. }))
                     .collect();
-                render_explored_tool_pill_run(
-                    ui,
+                let mut pill_ctx = ExploredToolPillCtx {
                     msg_idx,
                     blocks,
-                    &tool_run,
                     needs_scroll,
-                    &mut hidden_before,
+                    hidden_before: &mut hidden_before,
                     visible_start,
                     last_tool_idx,
                     streaming,
-                );
+                };
+                render_explored_tool_pill_run(ui, &tool_run, &mut pill_ctx);
             }
         }
     }
