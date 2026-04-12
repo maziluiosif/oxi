@@ -3,18 +3,18 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::text::{LayoutJob, LayoutSection, TextFormat, TextWrapping};
 use eframe::egui::{
     self, CollapsingHeader, Color32, FontId, Frame, Id, Image, Label, Margin, RichText, Rounding,
     ScrollArea, Sense, Stroke, TextureOptions, Ui,
 };
-use eframe::egui::scroll_area::ScrollBarVisibility;
 
 use crate::markdown;
 use crate::model::{
-    assistant_is_effectively_empty, build_assistant_block_groups,
-    concat_thinking_blocks, estimate_thought_seconds, tool_breaks_explore_cluster,
-    AssistantBlock, AssistantBlockGroup, ChatMessage, MsgRole, UserAttachment,
+    assistant_is_effectively_empty, build_assistant_block_groups, concat_thinking_blocks,
+    estimate_thought_seconds, tool_breaks_explore_cluster, AssistantBlock, AssistantBlockGroup,
+    ChatMessage, MsgRole, UserAttachment,
 };
 use crate::theme::{
     animated_status_label, content_wrap_width, icon_font, tool_status_label, C_BG_ELEVATED,
@@ -266,14 +266,14 @@ fn render_static_preview_job_panel(
 /// Tool icons — Nerd Font PUA codepoints rendered with the dedicated `icons` font family.
 fn tool_icon(name: &str) -> &'static str {
     match name {
-        "read"  => "\u{f021b}",  // nf-md-file_document
-        "write" => "\u{f0193}",  // nf-md-file_edit
-        "edit"  => "\u{f03eb}",  // nf-md-pencil
-        "bash"  => "\u{f018d}",  // nf-md-console
-        "grep"  => "\u{f021e}",  // nf-md-file_find
-        "find"  => "\u{f0349}",  // nf-md-magnify
-        "ls"    => "\u{f0645}",  // nf-md-folder_open
-        _       => "\u{f0214}",  // nf-md-file
+        "read" => "\u{f021b}",  // nf-md-file_document
+        "write" => "\u{f0193}", // nf-md-file_edit
+        "edit" => "\u{f03eb}",  // nf-md-pencil
+        "bash" => "\u{f018d}",  // nf-md-console
+        "grep" => "\u{f021e}",  // nf-md-file_find
+        "find" => "\u{f0349}",  // nf-md-magnify
+        "ls" => "\u{f0645}",    // nf-md-folder_open
+        _ => "\u{f0214}",       // nf-md-file
     }
 }
 
@@ -282,7 +282,11 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
     let raw = args_summary?;
     let v = serde_json::from_str::<serde_json::Value>(raw).ok()?;
     // path / filePath pentru read/write/edit/find
-    if let Some(p) = v.get("path").or_else(|| v.get("filePath")).and_then(|x| x.as_str()) {
+    if let Some(p) = v
+        .get("path")
+        .or_else(|| v.get("filePath"))
+        .and_then(|x| x.as_str())
+    {
         // afișăm doar ultimele 2 segmente
         let segs: Vec<&str> = p.trim_start_matches('/').split('/').collect();
         let short = if segs.len() > 2 {
@@ -292,24 +296,26 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
         };
         // adaugă range de linii dacă există
         let offset = v.get("offset").and_then(|x| x.as_u64());
-        let limit  = v.get("limit").and_then(|x| x.as_u64());
+        let limit = v.get("limit").and_then(|x| x.as_u64());
         return Some(match (offset, limit) {
             (Some(o), Some(l)) => format!("{short}  L{o}–{}", o + l - 1),
-            (Some(o), None)    => format!("{short}  L{o}+"),
-            _                  => short,
+            (Some(o), None) => format!("{short}  L{o}+"),
+            _ => short,
         });
     }
     // command pentru bash
     if let Some(cmd) = v.get("command").and_then(|x| x.as_str()) {
         let tok: String = cmd.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
         let mut s: String = tok.chars().take(60).collect();
-        if tok.chars().count() > 60 { s.push('…'); }
+        if tok.chars().count() > 60 {
+            s.push('…');
+        }
         return Some(s);
     }
     // pattern + path pentru grep
     if name == "grep" {
-        let pat  = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("");
-        let dir  = v.get("path").and_then(|x| x.as_str()).unwrap_or("");
+        let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("");
+        let dir = v.get("path").and_then(|x| x.as_str()).unwrap_or("");
         if !pat.is_empty() {
             return Some(if dir.is_empty() {
                 format!("`{pat}`")
@@ -322,7 +328,9 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
     if let serde_json::Value::Object(map) = &v {
         if let Some(s) = map.values().find_map(|x| x.as_str()) {
             let mut t: String = s.chars().take(48).collect();
-            if s.chars().count() > 48 { t.push('…'); }
+            if s.chars().count() > 48 {
+                t.push('…');
+            }
             return Some(t);
         }
     }
@@ -348,12 +356,15 @@ fn render_tool_pill(
         full_output_path: _,
         output_truncated: _,
         ..
-    } = block else { return; };
+    } = block
+    else {
+        return;
+    };
 
-    let has_error  = *is_error == Some(true);
-    let has_diff   = diff.as_deref().is_some_and(|t| !t.trim().is_empty());
+    let has_error = *is_error == Some(true);
+    let has_diff = diff.as_deref().is_some_and(|t| !t.trim().is_empty());
     let has_output = !output.trim().is_empty();
-    let has_body   = has_diff || has_output;
+    let has_body = has_diff || has_output;
     // A tool is "actively running" only while streaming AND it has not been finalized yet
     // (is_error is set by finalize_tool_run — None means still in-flight).
     // Additionally only the last pill in the visual run gets the spinner.
@@ -384,7 +395,7 @@ fn render_tool_pill(
     let arg_color = Color32::from_rgb(0x7a, 0x7d, 0x8c);
 
     let icon = tool_icon(name);
-    let arg  = tool_short_arg(name, args_summary.as_ref());
+    let arg = tool_short_arg(name, args_summary.as_ref());
 
     // Dacă are body, wrapper-ul e un CollapsingHeader pe pill; altfel doar pill.
     let state_tag = block_state_tag(streaming);
@@ -435,11 +446,7 @@ fn render_tool_pill(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Keep the spinner pinned at the far right on the latest live tool.
                         if running {
-                            ui.add(
-                                eframe::egui::Spinner::new()
-                                    .size(9.0)
-                                    .color(C_TEXT_MUTED),
-                            );
+                            ui.add(eframe::egui::Spinner::new().size(9.0).color(C_TEXT_MUTED));
                         }
                     });
                 });
@@ -473,7 +480,8 @@ fn render_tool_pill(
         .inner;
 
     if header_response.hovered() {
-        ui.ctx().set_cursor_icon(eframe::egui::CursorIcon::PointingHand);
+        ui.ctx()
+            .set_cursor_icon(eframe::egui::CursorIcon::PointingHand);
     }
     if header_response.clicked() {
         open.toggle(ui);
@@ -626,7 +634,10 @@ pub fn render_assistant_message_run(
 fn write_content_from_args(args_summary: Option<&String>) -> Option<String> {
     let raw = args_summary?;
     let value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-    value.get("content").and_then(|v| v.as_str()).map(str::to_owned)
+    value
+        .get("content")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
 }
 
 fn pseudo_diff_from_write_content(content: &str) -> String {
@@ -816,7 +827,10 @@ fn render_edit_tool_block(
         output: _,
         is_error,
         ..
-    } = block else { return; };
+    } = block
+    else {
+        return;
+    };
 
     let write_preview = if name.eq_ignore_ascii_case("write") {
         write_content_from_args(args_summary.as_ref())
@@ -832,13 +846,14 @@ fn render_edit_tool_block(
         .or(write_preview);
 
     let has_error = *is_error == Some(true);
-    let has_diff  = rendered_diff.as_deref().is_some_and(|t| !t.trim().is_empty());
+    let has_diff = rendered_diff
+        .as_deref()
+        .is_some_and(|t| !t.trim().is_empty());
     // Spinner only while the tool is truly in-flight: streaming + not finalized (is_error=None) + no diff yet
-    let running   = streaming && is_error.is_none() && !has_diff;
+    let running = streaming && is_error.is_none() && !has_diff;
 
     // Full path from args for the header; fallback to tool_short_arg
-    let file_path = tool_path_from_args(args_summary.as_ref())
-        .unwrap_or_else(|| name.clone());
+    let file_path = tool_path_from_args(args_summary.as_ref()).unwrap_or_else(|| name.clone());
     // Display: last 2 path segments so it fits without truncation most of the time
     let display_path = {
         let segs: Vec<&str> = file_path.trim_start_matches('/').split('/').collect();
@@ -866,11 +881,13 @@ fn render_edit_tool_block(
     } else {
         Color32::from_rgb(0x16, 0x17, 0x1a)
     };
-    let diff_bg   = Color32::from_rgb(0x10, 0x11, 0x14);
+    let diff_bg = Color32::from_rgb(0x10, 0x11, 0x14);
 
     let collapse_id = Id::new((msg_idx, block_idx, "edit_diff_collapse"));
     let mut open = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(), collapse_id, true,
+        ui.ctx(),
+        collapse_id,
+        true,
     );
     let is_open = open.is_open();
 
@@ -887,7 +904,12 @@ fn render_edit_tool_block(
                 .fill(header_bg)
                 .rounding(if is_open && has_diff {
                     // round only top corners when diff is visible below
-                    eframe::egui::Rounding { nw: 8.0, ne: 8.0, sw: 0.0, se: 0.0 }
+                    eframe::egui::Rounding {
+                        nw: 8.0,
+                        ne: 8.0,
+                        sw: 0.0,
+                        se: 0.0,
+                    }
                 } else {
                     Rounding::same(8.0)
                 })
@@ -920,11 +942,7 @@ fn render_edit_tool_block(
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if running {
-                                ui.add(
-                                    eframe::egui::Spinner::new()
-                                        .size(10.0)
-                                        .color(C_TEXT_MUTED),
-                                );
+                                ui.add(eframe::egui::Spinner::new().size(10.0).color(C_TEXT_MUTED));
                             } else if has_diff {
                                 // +added / -removed badges
                                 ui.label(
@@ -955,17 +973,23 @@ fn render_edit_tool_block(
                 open.toggle(ui);
             }
             if has_diff && header_resp.interact(Sense::hover()).hovered() {
-                ui.ctx().set_cursor_icon(eframe::egui::CursorIcon::PointingHand);
+                ui.ctx()
+                    .set_cursor_icon(eframe::egui::CursorIcon::PointingHand);
             }
 
             // ── Diff block ───────────────────────────────────────────────────
             if has_diff {
                 open.show_body_unindented(ui, |ui| {
-                    if let Some(diff_text) = rendered_diff.as_deref().filter(|t| !t.trim().is_empty()) {
+                    if let Some(diff_text) =
+                        rendered_diff.as_deref().filter(|t| !t.trim().is_empty())
+                    {
                         Frame::none()
                             .fill(diff_bg)
                             .rounding(eframe::egui::Rounding {
-                                nw: 0.0, ne: 0.0, sw: 8.0, se: 8.0,
+                                nw: 0.0,
+                                ne: 0.0,
+                                sw: 8.0,
+                                se: 8.0,
                             })
                             .inner_margin(Margin::symmetric(10.0, 8.0))
                             .show(ui, |ui| {
@@ -1050,7 +1074,8 @@ fn render_explored_tool_list(
                 }
                 AssistantBlock::Tool { .. } => {
                     if needs_scroll {
-                        let visible_start = tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
+                        let visible_start =
+                            tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
                         if hidden_before < visible_start {
                             hidden_before += 1;
                             i += 1;
@@ -1360,7 +1385,9 @@ pub fn render_assistant_blocks(
     // deciding what to do next (between tool calls or before writing the final answer).
     // Show a subtle animated label so the UI does not look frozen.
     let all_tools_done = streaming
-        && blocks.iter().any(|b| matches!(b, AssistantBlock::Tool { .. }))
+        && blocks
+            .iter()
+            .any(|b| matches!(b, AssistantBlock::Tool { .. }))
         && blocks
             .iter()
             .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
@@ -1371,9 +1398,9 @@ pub fn render_assistant_blocks(
                     false
                 }
             })
-        && !blocks.iter().any(|b| {
-            matches!(b, AssistantBlock::Answer(t) if !t.trim().is_empty())
-        });
+        && !blocks
+            .iter()
+            .any(|b| matches!(b, AssistantBlock::Answer(t) if !t.trim().is_empty()));
     let planning_overlay = all_tools_done;
 
     let worked_end = trailing_answer_start(blocks);

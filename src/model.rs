@@ -417,7 +417,11 @@ mod tests {
         set_tool_output_on_blocks(&mut blocks, Some("no_match"), "orphan", true);
         assert_eq!(blocks.len(), 2);
         match &blocks[1] {
-            AssistantBlock::Tool { output, output_truncated, .. } => {
+            AssistantBlock::Tool {
+                output,
+                output_truncated,
+                ..
+            } => {
                 assert_eq!(output, "orphan");
                 assert!(*output_truncated);
             }
@@ -544,19 +548,20 @@ mod tests {
 
     #[test]
     fn bash_command_tokens_extracts_first_words() {
-        let blocks = vec![
-            AssistantBlock::Tool {
-                tool_call_id: "a".into(),
-                name: "bash".into(),
-                args_summary: Some(r#"{"command": "cargo build"}
-"#.into()),
-                output: String::new(),
-                diff: None,
-                is_error: None,
-                full_output_path: None,
-                output_truncated: false,
-            },
-        ];
+        let blocks = vec![AssistantBlock::Tool {
+            tool_call_id: "a".into(),
+            name: "bash".into(),
+            args_summary: Some(
+                r#"{"command": "cargo build"}
+"#
+                .into(),
+            ),
+            output: String::new(),
+            diff: None,
+            is_error: None,
+            full_output_path: None,
+            output_truncated: false,
+        }];
         let tokens = bash_command_tokens(&blocks, &[0]);
         assert_eq!(tokens, "cargo");
     }

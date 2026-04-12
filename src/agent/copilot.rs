@@ -25,7 +25,10 @@ mod tests {
 
     #[test]
     fn last_user_message_is_user_initiator() {
-        let m = vec![json!({"role": "system", "content": "s"}), json!({"role": "user", "content": "hi"})];
+        let m = vec![
+            json!({"role": "system", "content": "s"}),
+            json!({"role": "user", "content": "hi"}),
+        ];
         assert_eq!(copilot_x_initiator_from_openai_messages(&m), "user");
     }
 

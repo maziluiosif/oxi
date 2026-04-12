@@ -19,9 +19,17 @@ use crate::oauth::{
 };
 use crate::settings::{AppSettings, LlmProviderKind, ProviderProfile};
 
+fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
+    let _ = tx.send(AgentEvent::StreamError(msg.into()));
+    let _ = tx.send(AgentEvent::AgentEnd);
+}
+
 fn copilot_chat_extra_headers() -> Vec<(String, String)> {
     vec![
-        ("User-Agent".to_string(), "GitHubCopilotChat/0.35.0".to_string()),
+        (
+            "User-Agent".to_string(),
+            "GitHubCopilotChat/0.35.0".to_string(),
+        ),
         ("Editor-Version".to_string(), "vscode/1.107.0".to_string()),
         (
             "Editor-Plugin-Version".to_string(),
@@ -82,8 +90,9 @@ fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String
     if !key.is_empty() {
         return Ok(key.to_string());
     }
-    std::env::var("OPENROUTER_API_KEY")
-        .map_err(|_| "Set OpenRouter API key in profile or OPENROUTER_API_KEY in the environment.".into())
+    std::env::var("OPENROUTER_API_KEY").map_err(|_| {
+        "Set OpenRouter API key in profile or OPENROUTER_API_KEY in the environment.".into()
+    })
 }
 
 fn configured_copilot_pat(profile: &ProviderProfile) -> Result<String, String> {
@@ -133,8 +142,7 @@ pub fn spawn_agent_run(
         let rt = match tokio::runtime::Runtime::new() {
             Ok(r) => r,
             Err(e) => {
-                let _ = tx.send(AgentEvent::StreamError(format!("tokio: {e}")));
-                let _ = tx.send(AgentEvent::AgentEnd);
+                finish_with_error(&tx, format!("tokio: {e}"));
                 return;
             }
         };
@@ -143,8 +151,7 @@ pub fn spawn_agent_run(
             let profile = match settings.active_profile().cloned() {
                 Some(p) => p,
                 None => {
-                    let _ = tx.send(AgentEvent::StreamError("No active profile configured.".into()));
-                    let _ = tx.send(AgentEvent::AgentEnd);
+                    finish_with_error(&tx, "No active profile configured.");
                     return;
                 }
             };
@@ -158,8 +165,7 @@ pub fn spawn_agent_run(
             {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(AgentEvent::StreamError(e.to_string()));
-                    let _ = tx.send(AgentEvent::AgentEnd);
+                    finish_with_error(&tx, e.to_string());
                     return;
                 }
             };
@@ -180,8 +186,7 @@ pub fn spawn_agent_run(
                                 (t, b)
                             }
                             Err(e) => {
-                                let _ = tx.send(AgentEvent::StreamError(e));
-                                let _ = tx.send(AgentEvent::AgentEnd);
+                                finish_with_error(&tx, e);
                                 return;
                             }
                         }
@@ -189,8 +194,7 @@ pub fn spawn_agent_run(
                         match configured_copilot_pat(&profile) {
                             Ok(t) => (t, profile.effective_base_url()),
                             Err(e) => {
-                                let _ = tx.send(AgentEvent::StreamError(e));
-                                let _ = tx.send(AgentEvent::AgentEnd);
+                                finish_with_error(&tx, e);
                                 return;
                             }
                         }
@@ -229,13 +233,11 @@ pub fn spawn_agent_run(
                             )
                             .await
                         }
-                        CopilotApi::Responses => Err(
-                            format!(
-                                "GitHub Copilot model `{model}` requires the Responses API, \
+                        CopilotApi::Responses => Err(format!(
+                            "GitHub Copilot model `{model}` requires the Responses API, \
                                  which is not yet implemented in oxi. \
                                  Try a Claude / GPT-4o / Gemini Copilot model instead."
-                            )
-                        ),
+                        )),
                     }
                 }
                 LlmProviderKind::GptCodex => {
@@ -243,8 +245,7 @@ pub fn spawn_agent_run(
                         let creds = match ensure_codex_access_token(&client, &mut oauth).await {
                             Ok(x) => x,
                             Err(e) => {
-                                let _ = tx.send(AgentEvent::StreamError(e));
-                                let _ = tx.send(AgentEvent::AgentEnd);
+                                finish_with_error(&tx, e);
                                 return;
                             }
                         };
@@ -271,8 +272,7 @@ pub fn spawn_agent_run(
                         let key = match configured_openai_key(&profile) {
                             Ok(k) => k,
                             Err(e) => {
-                                let _ = tx.send(AgentEvent::StreamError(e));
-                                let _ = tx.send(AgentEvent::AgentEnd);
+                                finish_with_error(&tx, e);
                                 return;
                             }
                         };
@@ -298,8 +298,7 @@ pub fn spawn_agent_run(
                     let key = match configured_openai_key(&profile) {
                         Ok(k) => k,
                         Err(e) => {
-                            let _ = tx.send(AgentEvent::StreamError(e));
-                            let _ = tx.send(AgentEvent::AgentEnd);
+                            finish_with_error(&tx, e);
                             return;
                         }
                     };
@@ -324,8 +323,7 @@ pub fn spawn_agent_run(
                     let key = match configured_openrouter_key(&profile) {
                         Ok(k) => k,
                         Err(e) => {
-                            let _ = tx.send(AgentEvent::StreamError(e));
-                            let _ = tx.send(AgentEvent::AgentEnd);
+                            finish_with_error(&tx, e);
                             return;
                         }
                     };

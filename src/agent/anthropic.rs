@@ -183,7 +183,6 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
     Some((media_type.to_string(), data.to_string()))
 }
 
-
 /// Check if a Claude model supports extended thinking.
 fn supports_extended_thinking(model: &str) -> bool {
     let m = model.trim().to_ascii_lowercase();
@@ -196,6 +195,7 @@ fn supports_extended_thinking(model: &str) -> bool {
         || m.starts_with("claude-3-5-sonnet")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_copilot_loop(
     client: &reqwest::Client,
     base_url: &str,
@@ -253,7 +253,10 @@ pub async fn run_copilot_loop(
             reqwest::header::HeaderName::from_static("anthropic-dangerous-direct-browser-access"),
             HeaderValue::from_static("true"),
         );
-        headers.insert(reqwest::header::ACCEPT, HeaderValue::from_static("application/json"));
+        headers.insert(
+            reqwest::header::ACCEPT,
+            HeaderValue::from_static("application/json"),
+        );
         headers.insert(
             reqwest::header::USER_AGENT,
             HeaderValue::from_static("GitHubCopilotChat/0.35.0"),
@@ -351,18 +354,33 @@ pub async fn run_copilot_loop(
             openai_messages.push(asst);
             // Execute tool calls in parallel where safe.
             let is_readonly = |name: &str| matches!(name, "read" | "grep" | "find" | "ls");
-            struct ToolCall { id: String, name: String, args: Value }
-            let parsed: Vec<ToolCall> = tool_list.into_iter().map(|tu| {
-                let args: Value = serde_json::from_str(&tu.input_json).unwrap_or(json!({}));
-                ToolCall { id: tu.id, name: tu.name, args }
-            }).collect();
+            struct ToolCall {
+                id: String,
+                name: String,
+                args: Value,
+            }
+            let parsed: Vec<ToolCall> = tool_list
+                .into_iter()
+                .map(|tu| {
+                    let args: Value = serde_json::from_str(&tu.input_json).unwrap_or(json!({}));
+                    ToolCall {
+                        id: tu.id,
+                        name: tu.name,
+                        args,
+                    }
+                })
+                .collect();
 
             let mut i = 0;
             while i < parsed.len() {
-                if cancel.load(Ordering::SeqCst) { break; }
+                if cancel.load(Ordering::SeqCst) {
+                    break;
+                }
                 if is_readonly(&parsed[i].name) {
                     let batch_start = i;
-                    while i < parsed.len() && is_readonly(&parsed[i].name) { i += 1; }
+                    while i < parsed.len() && is_readonly(&parsed[i].name) {
+                        i += 1;
+                    }
                     let batch = &parsed[batch_start..i];
                     for tc in batch {
                         let _ = tx.send(AgentEvent::ToolStart {
@@ -518,7 +536,6 @@ fn parse_anthropic_event(
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
