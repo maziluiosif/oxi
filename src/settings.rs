@@ -167,6 +167,7 @@ impl AppSettings {
         Self::default()
     }
 
+    #[allow(clippy::field_reassign_with_default)]
     fn from_legacy(old: LegacyAppSettings) -> Self {
         let provider = old.provider;
         let mut s = Self::default();
@@ -246,7 +247,9 @@ impl AppSettings {
     }
 
     pub fn active_profile(&self) -> Option<&ProviderProfile> {
-        self.profiles.iter().find(|p| p.id == self.active_profile_id)
+        self.profiles
+            .iter()
+            .find(|p| p.id == self.active_profile_id)
     }
 
     pub fn set_active_profile(&mut self, id: impl AsRef<str>) {

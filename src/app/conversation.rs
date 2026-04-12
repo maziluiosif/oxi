@@ -1,12 +1,12 @@
 //! Conversation transcript view (scroll area, messages, status banner).
 
+use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
     self, Align, Button, Color32, Frame, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
 };
-use eframe::egui::scroll_area::ScrollBarVisibility;
 
 use crate::model::MsgRole;
-use crate::theme::{C_BG_ELEVATED, C_BORDER_SUBTLE, C_TEXT_MUTED, CHAT_COLUMN_MAX, FS_SMALL};
+use crate::theme::{CHAT_COLUMN_MAX, C_BG_ELEVATED, C_BORDER_SUBTLE, C_TEXT_MUTED, FS_SMALL};
 use crate::ui::chrome::render_empty_state;
 use crate::ui::messages::{render_assistant_message_run, render_message};
 
@@ -135,10 +135,17 @@ impl OxiApp {
                                 if msg.role == MsgRole::Assistant {
                                     let start = mi;
                                     mi += 1;
-                                    while mi < messages.len() && messages[mi].role == MsgRole::Assistant {
+                                    while mi < messages.len()
+                                        && messages[mi].role == MsgRole::Assistant
+                                    {
                                         mi += 1;
                                     }
-                                    render_assistant_message_run(ui, start, &messages[start..mi], agent_ack);
+                                    render_assistant_message_run(
+                                        ui,
+                                        start,
+                                        &messages[start..mi],
+                                        agent_ack,
+                                    );
                                 } else {
                                     render_message(ui, mi, msg, agent_ack);
                                     mi += 1;

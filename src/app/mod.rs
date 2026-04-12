@@ -9,8 +9,8 @@ use crate::session_store;
 use crate::settings::AppSettings;
 
 mod agent_handlers;
-mod connection;
 mod composer;
+mod connection;
 mod conversation;
 mod eframe_app;
 mod input_history;
@@ -110,7 +110,10 @@ impl OxiApp {
     }
 
     pub(crate) fn any_waiting_response(&self) -> bool {
-        self.flow.sessions.values().any(|state| state.waiting_response)
+        self.flow
+            .sessions
+            .values()
+            .any(|state| state.waiting_response)
     }
 
     pub(crate) fn active_agent_ack(&self) -> bool {
@@ -182,8 +185,9 @@ impl OxiApp {
             std::mem::take(&mut self.conv.input);
         self.conv.workspaces[old_wi].sessions[old_si].pending_images =
             std::mem::take(&mut self.conv.pending_images);
-        self.conv.input =
-            std::mem::take(&mut self.conv.workspaces[new_workspace].sessions[new_session].input_text);
+        self.conv.input = std::mem::take(
+            &mut self.conv.workspaces[new_workspace].sessions[new_session].input_text,
+        );
         self.conv.pending_images = std::mem::take(
             &mut self.conv.workspaces[new_workspace].sessions[new_session].pending_images,
         );

@@ -263,7 +263,9 @@ mod tests {
         assert!(result.get("details").is_some());
         assert_eq!(result["details"]["diff"], "+line\n-old");
         assert_eq!(result["details"]["fullOutputPath"], "/tmp/out.txt");
-        assert!(result["details"]["truncation"]["truncated"].as_bool().unwrap());
+        assert!(result["details"]["truncation"]["truncated"]
+            .as_bool()
+            .unwrap());
     }
 
     #[test]

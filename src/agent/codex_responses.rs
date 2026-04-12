@@ -293,6 +293,7 @@ fn process_responses_event(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_codex_responses_loop(
     client: &reqwest::Client,
     base_url: &str,
@@ -410,18 +411,33 @@ pub async fn run_codex_responses_loop(
             messages.push(msg);
             // Execute tool calls in parallel where safe.
             let is_readonly = |name: &str| matches!(name, "read" | "grep" | "find" | "ls");
-            struct ToolCallP { id: String, name: String, args: Value }
-            let parsed: Vec<ToolCallP> = tool_calls.into_iter().map(|tc| {
-                let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
-                ToolCallP { id: tc.id, name: tc.name, args }
-            }).collect();
+            struct ToolCallP {
+                id: String,
+                name: String,
+                args: Value,
+            }
+            let parsed: Vec<ToolCallP> = tool_calls
+                .into_iter()
+                .map(|tc| {
+                    let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
+                    ToolCallP {
+                        id: tc.id,
+                        name: tc.name,
+                        args,
+                    }
+                })
+                .collect();
 
             let mut i = 0;
             while i < parsed.len() {
-                if cancel.load(Ordering::SeqCst) { break; }
+                if cancel.load(Ordering::SeqCst) {
+                    break;
+                }
                 if is_readonly(&parsed[i].name) {
                     let batch_start = i;
-                    while i < parsed.len() && is_readonly(&parsed[i].name) { i += 1; }
+                    while i < parsed.len() && is_readonly(&parsed[i].name) {
+                        i += 1;
+                    }
                     let batch = &parsed[batch_start..i];
                     for tc in batch {
                         let _ = tx.send(AgentEvent::ToolStart {
