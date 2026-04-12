@@ -159,7 +159,8 @@ mod tests {
         fs::write(
             pi_dir.join("settings.json"),
             r#"{"sessionDir": ".sessions"}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let dir = configured_session_dir(&root, &agent);
         assert!(dir.is_some());
         assert!(dir.unwrap().ends_with(".sessions"));

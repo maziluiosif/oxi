@@ -34,6 +34,7 @@ pub struct SessionKey {
     pub session_idx: usize,
 }
 
+#[derive(Default)]
 pub struct SessionRunState {
     pub agent_rx: Option<Receiver<AgentEvent>>,
     pub cancel_agent: Option<Arc<AtomicBool>>,
@@ -41,19 +42,6 @@ pub struct SessionRunState {
     pub stream_started_at: Option<Instant>,
     pub agent_ack: bool,
     pub stream_error: Option<String>,
-}
-
-impl Default for SessionRunState {
-    fn default() -> Self {
-        Self {
-            agent_rx: None,
-            cancel_agent: None,
-            waiting_response: false,
-            stream_started_at: None,
-            agent_ack: false,
-            stream_error: None,
-        }
-    }
 }
 
 impl SessionRunState {

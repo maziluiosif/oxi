@@ -1,17 +1,16 @@
 //! Sidebar: workspace list, session rows, search, settings button.
 
-use eframe::egui::{
-    self, Align, Button, Color32, Frame, Layout, Margin, Order, RichText, Rounding,
-    ScrollArea, Sense, Stroke, Ui,
-};
 use eframe::egui::scroll_area::ScrollBarVisibility;
+use eframe::egui::{
+    self, Align, Button, Color32, Frame, Layout, Margin, Order, RichText, Rounding, ScrollArea,
+    Sense, Stroke, Ui,
+};
 
 use crate::theme::{
     format_stream_elapsed, sidebar_session_title_display, small_spinner, workspace_sidebar_label,
-    C_ACCENT, C_BG_ELEVATED, C_BG_SIDEBAR, C_BORDER, C_BORDER_SUBTLE, C_ROW_ACTIVE, C_ROW_HOVER,
+    CHAT_FRAME_BOTTOM, CHAT_FRAME_TOP, CHAT_VIEW_MARGIN_LEFT, CHAT_VIEW_MARGIN_RIGHT, C_ACCENT,
+    C_BG_ELEVATED, C_BG_MAIN, C_BG_SIDEBAR, C_BORDER, C_BORDER_SUBTLE, C_ROW_ACTIVE, C_ROW_HOVER,
     C_SIDEBAR_SECTION, C_TEXT, C_TEXT_MUTED, FS_SMALL, FS_TINY, SIDEBAR_RESIZE_SEP_W,
-    CHAT_VIEW_MARGIN_LEFT, CHAT_VIEW_MARGIN_RIGHT, CHAT_FRAME_TOP, CHAT_FRAME_BOTTOM,
-    C_BG_MAIN,
 };
 use crate::ui::chrome::sidebar_text_field;
 
@@ -93,7 +92,11 @@ impl OxiApp {
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
             |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("+  Add workspace").size(FS_SMALL).color(C_TEXT));
+                    ui.label(
+                        RichText::new("+  Add workspace")
+                            .size(FS_SMALL)
+                            .color(C_TEXT),
+                    );
                 });
             },
         );
@@ -162,8 +165,7 @@ impl OxiApp {
                     ui.vertical(|ui| {
                         let row_w = ui.available_width();
                         ui.push_id((wi, si), |ui| {
-                            let selected =
-                                wi == self.conv.active_workspace && si == active_si;
+                            let selected = wi == self.conv.active_workspace && si == active_si;
                             let running = self.session_row_is_running(wi, si);
                             let title = row_title.clone();
                             const ROW_INNER_H: f32 = 17.0;
@@ -209,6 +211,7 @@ impl OxiApp {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_session_row_inner(
         &self,
         ui: &mut Ui,
@@ -225,84 +228,75 @@ impl OxiApp {
         const SPINNER_GAP: f32 = 4.0;
 
         let inner = rect.shrink2(egui::vec2(3.0, ROW_VMARGIN));
-        ui.allocate_new_ui(
-            egui::UiBuilder::new().max_rect(inner),
-            |ui| {
-                ui.set_min_width(inner.width());
-                let lead_w = 14.0;
-                let time_w = if running { 40.0 } else { 0.0 };
-                let spin_reserve = if running { 14.0 } else { 0.0 };
-                let sx = ui.spacing().item_spacing.x;
-                let time_label = if running {
-                    self.stream_started_at_for(wi, si)
-                        .map(|t| format_stream_elapsed(t.elapsed()))
-                } else {
-                    None
-                };
-                let fixed = lead_w
-                    + BULLET_GAP
-                    + if running { SPINNER_GAP } else { 0.0 }
-                    + time_w
-                    + spin_reserve
-                    + sx * if running { 4.0 } else { 2.0 };
-                let title_w = (ui.available_width() - fixed).max(24.0);
-                let bullet_col = if selected { C_ACCENT } else { C_TEXT_MUTED };
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+            ui.set_min_width(inner.width());
+            let lead_w = 14.0;
+            let time_w = if running { 40.0 } else { 0.0 };
+            let spin_reserve = if running { 14.0 } else { 0.0 };
+            let sx = ui.spacing().item_spacing.x;
+            let time_label = if running {
+                self.stream_started_at_for(wi, si)
+                    .map(|t| format_stream_elapsed(t.elapsed()))
+            } else {
+                None
+            };
+            let fixed = lead_w
+                + BULLET_GAP
+                + if running { SPINNER_GAP } else { 0.0 }
+                + time_w
+                + spin_reserve
+                + sx * if running { 4.0 } else { 2.0 };
+            let title_w = (ui.available_width() - fixed).max(24.0);
+            let bullet_col = if selected { C_ACCENT } else { C_TEXT_MUTED };
 
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = sx;
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = sx;
+                ui.allocate_ui_with_layout(
+                    egui::vec2(lead_w, ROW_INNER_H),
+                    egui::Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                    },
+                );
+                ui.add_space(BULLET_GAP);
+                if running {
                     ui.allocate_ui_with_layout(
-                        egui::vec2(lead_w, ROW_INNER_H),
+                        egui::vec2(spin_reserve, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
-                            ui.label(
-                                RichText::new("•").size(FS_SMALL).color(bullet_col),
-                            );
+                            small_spinner(ui);
                         },
                     );
-                    ui.add_space(BULLET_GAP);
-                    if running {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(spin_reserve, ROW_INNER_H),
-                            egui::Layout::left_to_right(Align::Center),
-                            |ui| {
-                                small_spinner(ui);
-                            },
-                        );
-                        ui.add_space(SPINNER_GAP);
-                    }
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(title_w, ROW_INNER_H),
-                        egui::Layout::left_to_right(Align::Center),
-                        |ui| {
-                            use eframe::egui::Label;
-                            ui.add(
-                                Label::new(
-                                    RichText::new(title.as_str())
-                                        .size(FS_SMALL)
-                                        .color(C_TEXT),
-                                )
+                    ui.add_space(SPINNER_GAP);
+                }
+                ui.allocate_ui_with_layout(
+                    egui::vec2(title_w, ROW_INNER_H),
+                    egui::Layout::left_to_right(Align::Center),
+                    |ui| {
+                        use eframe::egui::Label;
+                        ui.add(
+                            Label::new(RichText::new(title.as_str()).size(FS_SMALL).color(C_TEXT))
                                 .truncate()
                                 .halign(Align::LEFT),
+                        );
+                    },
+                );
+                if let Some(ref s) = time_label {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(time_w, ROW_INNER_H),
+                        egui::Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.label(
+                                RichText::new(s)
+                                    .size(FS_TINY)
+                                    .color(C_TEXT_MUTED)
+                                    .monospace(),
                             );
                         },
                     );
-                    if let Some(ref s) = time_label {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(time_w, ROW_INNER_H),
-                            egui::Layout::right_to_left(Align::Center),
-                            |ui| {
-                                ui.label(
-                                    RichText::new(s)
-                                        .size(FS_TINY)
-                                        .color(C_TEXT_MUTED)
-                                        .monospace(),
-                                );
-                            },
-                        );
-                    }
-                });
-            },
-        );
+                }
+            });
+        });
     }
 
     /// Top-right floating "New chat" button over the chat column.
@@ -381,8 +375,10 @@ impl OxiApp {
                         .show(ui, |ui| {
                             let chat_panel_rect = ui.max_rect();
                             let style = (*ui.ctx().style()).clone();
-                            let column_center_w =
-                                crate::theme::chat_column_center_width(ui.available_width(), &style);
+                            let column_center_w = crate::theme::chat_column_center_width(
+                                ui.available_width(),
+                                &style,
+                            );
 
                             // Top-down split: reserve composer height from the last frame so the
                             // transcript never overlaps or pushes the input below the clip rect.
@@ -409,13 +405,7 @@ impl OxiApp {
         });
     }
 
-    fn render_sidebar_resize_sep(
-        &mut self,
-        ui: &mut Ui,
-        full_h: f32,
-        min_w: f32,
-        max_w: f32,
-    ) {
+    fn render_sidebar_resize_sep(&mut self, ui: &mut Ui, full_h: f32, min_w: f32, max_w: f32) {
         let boundary_x = ui.cursor().min.x;
         let sep_rect = egui::Rect::from_min_max(
             egui::pos2(boundary_x - SIDEBAR_RESIZE_SEP_W * 0.5, ui.min_rect().top()),

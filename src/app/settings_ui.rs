@@ -8,14 +8,14 @@ use eframe::egui::{
 use crate::oauth::{clear_codex, clear_copilot, load_oauth_store, save_oauth_store, OAuthUiMsg};
 use crate::settings::{LlmProviderKind, ALL_TOOL_NAMES};
 use crate::theme::{
-    C_BG_ELEVATED, C_BG_MAIN, C_BG_SIDEBAR, C_BORDER_SUBTLE, C_ROW_ACTIVE, C_ROW_HOVER,
-    C_TEXT, C_TEXT_MUTED, CHAT_FRAME_BOTTOM, CHAT_FRAME_TOP, CHAT_VIEW_MARGIN_LEFT,
-    CHAT_VIEW_MARGIN_RIGHT, FS_SMALL, FS_TINY, SIDEBAR_RESIZE_SEP_W,
+    CHAT_FRAME_BOTTOM, CHAT_FRAME_TOP, CHAT_VIEW_MARGIN_LEFT, CHAT_VIEW_MARGIN_RIGHT,
+    C_BG_ELEVATED, C_BG_MAIN, C_BG_SIDEBAR, C_BORDER_SUBTLE, C_ROW_ACTIVE, C_ROW_HOVER, C_TEXT,
+    C_TEXT_MUTED, FS_SMALL, FS_TINY, SIDEBAR_RESIZE_SEP_W,
 };
 
+use super::state::SettingsTab;
 use super::task_runner::spawn_async_task;
 use super::OxiApp;
-use super::state::SettingsTab;
 
 impl OxiApp {
     pub(crate) fn render_settings_page(&mut self, ui: &mut Ui) {
@@ -59,7 +59,11 @@ impl OxiApp {
                         ui.min_rect().top() + full_h,
                     ),
                 );
-                let sep = ui.interact(sep_rect, ui.id().with("settings_sidebar_sep"), Sense::drag());
+                let sep = ui.interact(
+                    sep_rect,
+                    ui.id().with("settings_sidebar_sep"),
+                    Sense::drag(),
+                );
                 if sep.dragged() {
                     self.conv.sidebar_width = (self.conv.sidebar_width + sep.drag_delta().x)
                         .clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
@@ -102,7 +106,8 @@ impl OxiApp {
 
         if self.conv.settings != settings_before {
             if let Err(e) = self.conv.settings.save() {
-                self.run_state_mut(self.active_session_key()).stream_error = Some(format!("Save settings: {e}"));
+                self.run_state_mut(self.active_session_key()).stream_error =
+                    Some(format!("Save settings: {e}"));
             }
         }
     }
@@ -285,7 +290,11 @@ impl OxiApp {
                             .margin(Margin::symmetric(4.0, 2.0)),
                     );
                     ui.add_space(6.0);
-                    ui.label(RichText::new("API key / token").size(FS_TINY).color(C_TEXT_MUTED));
+                    ui.label(
+                        RichText::new("API key / token")
+                            .size(FS_TINY)
+                            .color(C_TEXT_MUTED),
+                    );
                     ui.add(
                         TextEdit::singleline(&mut self.conv.settings.profiles[idx].api_key)
                             .password(true)

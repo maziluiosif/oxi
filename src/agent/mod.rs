@@ -1,8 +1,8 @@
 //! Local agent (no pi RPC): LLM streaming + tools.
 
 mod anthropic;
-mod copilot;
 mod codex_responses;
+mod copilot;
 pub mod events;
 mod history;
 mod openai;
