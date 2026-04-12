@@ -92,3 +92,147 @@ fn assistant_blocks_equal(left: &[AssistantBlock], right: &[AssistantBlock]) -> 
                 _ => false,
             })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::MsgRole;
+
+    fn user(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: MsgRole::User,
+            text: text.into(),
+            attachments: vec![],
+            blocks: vec![],
+            streaming: false,
+        }
+    }
+
+    fn assistant(answer: &str) -> ChatMessage {
+        ChatMessage {
+            role: MsgRole::Assistant,
+            text: String::new(),
+            attachments: vec![],
+            blocks: vec![AssistantBlock::Answer(answer.into())],
+            streaming: false,
+        }
+    }
+
+    #[test]
+    fn dedupe_removes_exact_duplicate_halves() {
+        let mut msgs = vec![
+            user("hi"), assistant("hello"),
+            user("hi"), assistant("hello"),
+        ];
+        dedupe_trailing_duplicate_messages(&mut msgs);
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn dedupe_keeps_non_duplicates() {
+        let mut msgs = vec![
+            user("hi"), assistant("hello"),
+            user("bye"), assistant("goodbye"),
+        ];
+        dedupe_trailing_duplicate_messages(&mut msgs);
+        assert_eq!(msgs.len(), 4);
+    }
+
+    #[test]
+    fn dedupe_handles_empty() {
+        let mut msgs: Vec<ChatMessage> = vec![];
+        dedupe_trailing_duplicate_messages(&mut msgs);
+        assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn dedupe_handles_odd_count() {
+        let mut msgs = vec![user("hi"), assistant("hello"), user("extra")];
+        dedupe_trailing_duplicate_messages(&mut msgs);
+        assert_eq!(msgs.len(), 3);
+    }
+
+    #[test]
+    fn dedupe_quadruple_reduces_to_single() {
+        let mut msgs = vec![
+            user("a"), assistant("b"),
+            user("a"), assistant("b"),
+            user("a"), assistant("b"),
+            user("a"), assistant("b"),
+        ];
+        dedupe_trailing_duplicate_messages(&mut msgs);
+        // 8 -> 4 -> 2
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn chat_messages_equal_different_text() {
+        let a = user("hello");
+        let b = user("world");
+        assert!(!chat_messages_equal(&a, &b));
+    }
+
+    #[test]
+    fn chat_messages_equal_different_roles() {
+        let a = user("hi");
+        let b = assistant("hi");
+        assert!(!chat_messages_equal(&a, &b));
+    }
+
+    #[test]
+    fn chat_messages_equal_same_content() {
+        let a = user("same");
+        let b = user("same");
+        assert!(chat_messages_equal(&a, &b));
+    }
+
+    #[test]
+    fn chat_messages_equal_with_attachments() {
+        let a = ChatMessage {
+            role: MsgRole::User,
+            text: "img".into(),
+            attachments: vec![UserAttachment::Image {
+                mime: "image/png".into(),
+                data: vec![1, 2, 3],
+            }],
+            blocks: vec![],
+            streaming: false,
+        };
+        let b = ChatMessage {
+            role: MsgRole::User,
+            text: "img".into(),
+            attachments: vec![UserAttachment::Image {
+                mime: "image/png".into(),
+                data: vec![1, 2, 3],
+            }],
+            blocks: vec![],
+            streaming: false,
+        };
+        assert!(chat_messages_equal(&a, &b));
+    }
+
+    #[test]
+    fn chat_messages_equal_different_attachments() {
+        let a = ChatMessage {
+            role: MsgRole::User,
+            text: "img".into(),
+            attachments: vec![UserAttachment::Image {
+                mime: "image/png".into(),
+                data: vec![1, 2, 3],
+            }],
+            blocks: vec![],
+            streaming: false,
+        };
+        let b = ChatMessage {
+            role: MsgRole::User,
+            text: "img".into(),
+            attachments: vec![UserAttachment::Image {
+                mime: "image/jpeg".into(),
+                data: vec![4, 5, 6],
+            }],
+            blocks: vec![],
+            streaming: false,
+        };
+        assert!(!chat_messages_equal(&a, &b));
+    }
+}

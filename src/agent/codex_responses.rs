@@ -248,6 +248,14 @@ fn process_responses_event(
                 let _ = tx.send(AgentEvent::TextDelta(d.to_string()));
             }
         }
+        // Extended thinking / reasoning from Codex Responses API
+        "response.reasoning.delta" | "response.reasoning_summary_text.delta" => {
+            if let Some(d) = v.get("delta").and_then(|x| x.as_str()) {
+                if !d.is_empty() {
+                    let _ = tx.send(AgentEvent::ThinkingDelta(d.to_string()));
+                }
+            }
+        }
         "response.output_item.done" => {
             if let Some(item) = v.get("item") {
                 if item.get("type").and_then(|x| x.as_str()) == Some("function_call") {
@@ -400,38 +408,88 @@ pub async fn run_codex_responses_loop(
                 }
             }
             messages.push(msg);
-            for tc in tool_calls {
-                if cancel.load(Ordering::SeqCst) {
-                    break;
-                }
+            // Execute tool calls in parallel where safe.
+            let is_readonly = |name: &str| matches!(name, "read" | "grep" | "find" | "ls");
+            struct ToolCallP { id: String, name: String, args: Value }
+            let parsed: Vec<ToolCallP> = tool_calls.into_iter().map(|tc| {
                 let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
-                let tid = tc.id.clone();
-                let _ = tx.send(AgentEvent::ToolStart {
-                    name: tc.name.clone(),
-                    tool_call_id: tid.clone(),
-                    args: Some(args.clone()),
-                });
-                let result = run_tool(cwd, &tc.name, &args, enabled);
-                let (text, is_err) = match result {
-                    Ok(s) => (s, false),
-                    Err(e) => (e, true),
-                };
-                let _ = tx.send(AgentEvent::ToolOutput {
-                    tool_call_id: tid.clone(),
-                    text: text.clone(),
-                    truncated: text.len() >= 120_000,
-                });
-                let _ = tx.send(AgentEvent::ToolEnd {
-                    tool_call_id: tid.clone(),
-                    is_error: Some(is_err),
-                    full_output_path: None,
-                    diff: None,
-                });
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": tid,
-                    "content": text,
-                }));
+                ToolCallP { id: tc.id, name: tc.name, args }
+            }).collect();
+
+            let mut i = 0;
+            while i < parsed.len() {
+                if cancel.load(Ordering::SeqCst) { break; }
+                if is_readonly(&parsed[i].name) {
+                    let batch_start = i;
+                    while i < parsed.len() && is_readonly(&parsed[i].name) { i += 1; }
+                    let batch = &parsed[batch_start..i];
+                    for tc in batch {
+                        let _ = tx.send(AgentEvent::ToolStart {
+                            name: tc.name.clone(),
+                            tool_call_id: tc.id.clone(),
+                            args: Some(tc.args.clone()),
+                        });
+                    }
+                    let mut handles = Vec::new();
+                    for tc in batch {
+                        let cwd_owned = cwd.to_path_buf();
+                        let name = tc.name.clone();
+                        let args = tc.args.clone();
+                        let enabled_copy = *enabled;
+                        handles.push(tokio::task::spawn_blocking(move || {
+                            run_tool(&cwd_owned, &name, &args, &enabled_copy)
+                        }));
+                    }
+                    for (j, handle) in handles.into_iter().enumerate() {
+                        let tc = &batch[j];
+                        let result = handle.await.map_err(|e| e.to_string())?;
+                        let text = result.output.clone();
+                        let is_err = result.is_error;
+                        let _ = tx.send(AgentEvent::ToolOutput {
+                            tool_call_id: tc.id.clone(),
+                            text: text.clone(),
+                            truncated: text.len() >= 120_000,
+                        });
+                        let _ = tx.send(AgentEvent::ToolEnd {
+                            tool_call_id: tc.id.clone(),
+                            is_error: Some(is_err),
+                            full_output_path: None,
+                            diff: result.diff,
+                        });
+                        messages.push(json!({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": text,
+                        }));
+                    }
+                } else {
+                    let tc = &parsed[i];
+                    let _ = tx.send(AgentEvent::ToolStart {
+                        name: tc.name.clone(),
+                        tool_call_id: tc.id.clone(),
+                        args: Some(tc.args.clone()),
+                    });
+                    let result = run_tool(cwd, &tc.name, &tc.args, enabled);
+                    let text = result.output.clone();
+                    let is_err = result.is_error;
+                    let _ = tx.send(AgentEvent::ToolOutput {
+                        tool_call_id: tc.id.clone(),
+                        text: text.clone(),
+                        truncated: text.len() >= 120_000,
+                    });
+                    let _ = tx.send(AgentEvent::ToolEnd {
+                        tool_call_id: tc.id.clone(),
+                        is_error: Some(is_err),
+                        full_output_path: None,
+                        diff: result.diff,
+                    });
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": text,
+                    }));
+                    i += 1;
+                }
             }
             continue;
         }

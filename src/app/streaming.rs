@@ -8,17 +8,22 @@ use crate::model::{
     UserAttachment,
 };
 
-use super::PiChatApp;
+use super::{OxiApp, SessionKey};
 use crate::session_store;
 
-impl PiChatApp {
+impl OxiApp {
     pub(crate) fn send_message(&mut self) {
         let text = self.conv.input.trim().to_string();
         let has_images = !self.conv.pending_images.is_empty();
-        if (text.is_empty() && !has_images) || self.flow.waiting_response {
+        if text.is_empty() && !has_images {
             return;
         }
-        let session_idx = self.active_workspace().active;
+
+        let key = self.active_session_key();
+        if self.run_state(key).is_some_and(|state| state.waiting_response) {
+            return;
+        }
+
         if self.active_session().messages.is_empty() && self.active_session().session_file.is_none()
         {
             self.active_session_mut().title = if !text.is_empty() {
@@ -43,41 +48,41 @@ impl PiChatApp {
         self.conv.input.clear();
         self.conv.scroll_to_bottom_once = true;
 
-        self.flow.agent_ack = false;
-        self.begin_waiting_response();
-        self.flow.stream_session_idx = Some(session_idx);
-        self.flow.stream_error = None;
-
-        self.materialize_prompt(session_idx, &text, &user_attachments);
-        let root_path = self.active_workspace().root_path.clone();
-        if let Err(e) =
-            session_store::save_session_messages(&root_path, self.session_mut(session_idx))
         {
-            self.flow.stream_error = Some(format!("Save session: {e}"));
+            let run = self.run_state_mut(key);
+            run.agent_ack = false;
+            run.begin_waiting_response();
+            run.stream_error = None;
         }
 
-        if let Err(e) = self.send_prompt_payload(&text, &user_attachments) {
-            self.flow.stream_error = Some(e.clone());
-            let sess = self.stream_session_mut();
+        self.materialize_prompt(key, &text, &user_attachments);
+        let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
+        if let Err(e) = session_store::save_session_messages(&root_path, self.session_mut_by_key(key)) {
+            self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
+        }
+
+        if let Err(e) = self.send_prompt_payload(key) {
+            self.run_state_mut(key).stream_error = Some(e.clone());
+            let sess = self.session_mut_by_key(key);
             if let Some(last) = sess.messages.last_mut() {
                 if last.role == MsgRole::Assistant {
                     last.streaming = false;
                     last.blocks = vec![AssistantBlock::Answer(format!("[Send error] {e}"))];
                 }
             }
-            self.end_waiting_response();
-            self.flow.agent_ack = false;
-            self.flow.stream_session_idx = None;
+            let run = self.run_state_mut(key);
+            run.end_waiting_response();
+            run.agent_ack = false;
         }
     }
 
     pub(crate) fn materialize_prompt(
         &mut self,
-        session_idx: usize,
+        key: SessionKey,
         text: &str,
         attachments: &[UserAttachment],
     ) {
-        let sess = self.session_mut(session_idx);
+        let sess = self.session_mut_by_key(key);
         sess.messages_loaded = true;
         sess.messages.push(ChatMessage {
             role: MsgRole::User,
@@ -95,16 +100,16 @@ impl PiChatApp {
         });
     }
 
-    pub(crate) fn last_assistant_mut(&mut self) -> Option<&mut ChatMessage> {
-        self.stream_session_mut()
+    pub(crate) fn last_assistant_mut(&mut self, key: SessionKey) -> Option<&mut ChatMessage> {
+        self.session_mut_by_key(key)
             .messages
             .iter_mut()
             .rev()
             .find(|m| m.role == MsgRole::Assistant)
     }
 
-    pub(crate) fn on_text_block_start(&mut self) {
-        let Some(m) = self.last_assistant_mut() else {
+    pub(crate) fn on_text_block_start(&mut self, key: SessionKey) {
+        let Some(m) = self.last_assistant_mut(key) else {
             return;
         };
         if let Some(AssistantBlock::Answer(s)) = m.blocks.last() {
@@ -115,8 +120,8 @@ impl PiChatApp {
         m.blocks.push(AssistantBlock::Answer(String::new()));
     }
 
-    pub(crate) fn append_text_delta(&mut self, delta: &str) {
-        let Some(m) = self.last_assistant_mut() else {
+    pub(crate) fn append_text_delta(&mut self, key: SessionKey, delta: &str) {
+        let Some(m) = self.last_assistant_mut(key) else {
             return;
         };
         match m.blocks.last_mut() {
@@ -125,9 +130,18 @@ impl PiChatApp {
         }
     }
 
-    /// Error lines and similar go into the answer stream (Markdown).
-    pub(crate) fn append_assistant_answer(&mut self, s: &str) {
-        let Some(m) = self.last_assistant_mut() else {
+    pub(crate) fn append_thinking_delta(&mut self, key: SessionKey, delta: &str) {
+        let Some(m) = self.last_assistant_mut(key) else {
+            return;
+        };
+        match m.blocks.last_mut() {
+            Some(AssistantBlock::Thinking(s)) => s.push_str(delta),
+            _ => m.blocks.push(AssistantBlock::Thinking(delta.to_string())),
+        }
+    }
+
+    pub(crate) fn append_assistant_answer(&mut self, key: SessionKey, s: &str) {
+        let Some(m) = self.last_assistant_mut(key) else {
             return;
         };
         match m.blocks.last_mut() {
@@ -138,11 +152,12 @@ impl PiChatApp {
 
     pub(crate) fn start_tool_block(
         &mut self,
+        key: SessionKey,
         name: &str,
         tool_call_id: Option<&str>,
         args: Option<&serde_json::Value>,
     ) {
-        let Some(m) = self.last_assistant_mut() else {
+        let Some(m) = self.last_assistant_mut(key) else {
             return;
         };
         let id = tool_call_id.unwrap_or("").to_string();
@@ -178,14 +193,14 @@ impl PiChatApp {
         });
     }
 
-    /// `partialResult` / final `result` are cumulative; route by `toolCallId` when present.
     pub(crate) fn set_tool_output(
         &mut self,
+        key: SessionKey,
         tool_call_id: Option<&str>,
         text: &str,
         truncated: bool,
     ) {
-        let Some(m) = self.last_assistant_mut() else {
+        let Some(m) = self.last_assistant_mut(key) else {
             return;
         };
         set_tool_output_on_blocks(&mut m.blocks, tool_call_id, text, truncated);
@@ -193,12 +208,13 @@ impl PiChatApp {
 
     pub(crate) fn finalize_tool_run(
         &mut self,
+        key: SessionKey,
         tool_call_id: Option<&str>,
         is_error: Option<bool>,
         full_output_path: Option<String>,
         diff: Option<String>,
     ) {
-        let Some(m) = self.last_assistant_mut() else {
+        let Some(m) = self.last_assistant_mut(key) else {
             return;
         };
         let tid = tool_call_id.unwrap_or("");
@@ -221,50 +237,44 @@ impl PiChatApp {
         }
     }
 
-    pub(crate) fn send_prompt_payload(
-        &mut self,
-        _text: &str,
-        attachments: &[UserAttachment],
-    ) -> Result<(), String> {
-        let session_idx = self.stream_session_index();
-        let cwd = PathBuf::from(self.active_workspace().root_path.trim());
+    pub(crate) fn send_prompt_payload(&mut self, key: SessionKey) -> Result<(), String> {
+        let cwd = PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
         let chat = {
-            let s = self.session_mut(session_idx);
+            let s = self.session_mut_by_key(key);
             if s.messages.len() < 2 {
                 return Err("internal: expected user and assistant messages".into());
             }
             s.messages[..s.messages.len() - 1].to_vec()
         };
         let settings = self.conv.settings.clone();
-        let _has_attachments = !attachments.is_empty();
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let _join = spawn_agent_run(settings, cwd, chat, tx, cancel.clone());
-        self.conn.agent_rx = Some(rx);
-        self.conn.cancel_agent = Some(cancel);
+        let run = self.run_state_mut(key);
+        run.agent_rx = Some(rx);
+        run.cancel_agent = Some(cancel);
         Ok(())
     }
 
-    pub(crate) fn finish_assistant_stream(&mut self) {
-        if let Some(stream_idx) = self.flow.stream_session_idx {
-            let widx = self.conv.active_workspace;
-            if let Some(last) = self.conv.workspaces[widx].sessions[stream_idx]
-                .messages
-                .iter_mut()
-                .rev()
-                .find(|m| m.role == MsgRole::Assistant)
-            {
-                last.streaming = false;
-            }
-            let root_path = self.active_workspace().root_path.clone();
-            if let Err(e) =
-                session_store::save_session_messages(&root_path, self.session_mut(stream_idx))
-            {
-                self.flow.stream_error = Some(format!("Save session: {e}"));
-            }
+    pub(crate) fn finish_assistant_stream(&mut self, key: SessionKey) {
+        if let Some(last) = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == MsgRole::Assistant)
+        {
+            last.streaming = false;
         }
-        self.end_waiting_response();
-        self.flow.agent_ack = false;
-        self.flow.stream_session_idx = None;
+        let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
+        if let Err(e) =
+            session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
+        {
+            self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
+        }
+        let run = self.run_state_mut(key);
+        run.end_waiting_response();
+        run.agent_ack = false;
+        run.cancel_agent = None;
+        run.agent_rx = None;
     }
 }

@@ -5,31 +5,50 @@ use eframe::egui;
 use crate::agent::AgentEvent;
 use crate::oauth::OAuthUiMsg;
 
-use super::PiChatApp;
+use super::{OxiApp, SessionKey};
 
-impl PiChatApp {
+impl OxiApp {
     pub(crate) fn drain_agent(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.conn.agent_rx.take() else {
-            return;
-        };
+        let keys: Vec<SessionKey> = self.flow.sessions.keys().copied().collect();
         let mut repainted = false;
-        loop {
-            match rx.try_recv() {
-                Ok(ev) => {
-                    self.apply_agent_event(ev);
-                    repainted = true;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    self.conn.agent_rx = Some(rx);
-                    break;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.conn.cancel_agent = None;
-                    repainted = true;
-                    break;
+
+        for key in keys {
+            let Some(rx) = self
+                .flow
+                .sessions
+                .get_mut(&key)
+                .and_then(|state| state.agent_rx.take())
+            else {
+                continue;
+            };
+
+            loop {
+                match rx.try_recv() {
+                    Ok(ev) => {
+                        self.apply_agent_event(key, ev);
+                        repainted = true;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        if let Some(state) = self.flow.sessions.get_mut(&key) {
+                            state.agent_rx = Some(rx);
+                        }
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        if let Some(state) = self.flow.sessions.get_mut(&key) {
+                            state.cancel_agent = None;
+                        }
+                        repainted = true;
+                        break;
+                    }
                 }
             }
         }
+
+        self.flow.sessions.retain(|_, state| {
+            state.agent_rx.is_some() || state.waiting_response || state.stream_error.is_some()
+        });
+
         if repainted {
             ctx.request_repaint();
         }
@@ -79,16 +98,19 @@ impl PiChatApp {
         ctx.request_repaint();
     }
 
-    fn apply_agent_event(&mut self, ev: AgentEvent) {
+    fn apply_agent_event(&mut self, key: SessionKey, ev: AgentEvent) {
         match ev {
             AgentEvent::AgentStart => {
-                self.flow.agent_ack = true;
+                self.run_state_mut(key).agent_ack = true;
             }
             AgentEvent::TextStart => {
-                self.on_text_block_start();
+                self.on_text_block_start(key);
             }
             AgentEvent::TextDelta(d) => {
-                self.append_text_delta(&d);
+                self.append_text_delta(key, &d);
+            }
+            AgentEvent::ThinkingDelta(d) => {
+                self.append_thinking_delta(key, &d);
             }
             AgentEvent::ToolStart {
                 name,
@@ -100,7 +122,7 @@ impl PiChatApp {
                 } else {
                     Some(tool_call_id.as_str())
                 };
-                self.start_tool_block(&name, id, args.as_ref());
+                self.start_tool_block(key, &name, id, args.as_ref());
             }
             AgentEvent::ToolOutput {
                 tool_call_id,
@@ -112,7 +134,7 @@ impl PiChatApp {
                 } else {
                     Some(tool_call_id.as_str())
                 };
-                self.set_tool_output(id, &text, truncated);
+                self.set_tool_output(key, id, &text, truncated);
             }
             AgentEvent::ToolEnd {
                 tool_call_id,
@@ -125,15 +147,15 @@ impl PiChatApp {
                 } else {
                     Some(tool_call_id.as_str())
                 };
-                self.finalize_tool_run(id, is_error, full_output_path, diff);
+                self.finalize_tool_run(key, id, is_error, full_output_path, diff);
             }
             AgentEvent::StreamError(reason) => {
-                self.append_assistant_answer(&format!("\n[Error] {reason}\n"));
-                self.finish_assistant_stream();
+                self.append_assistant_answer(key, &format!("\n[Error] {reason}\n"));
+                self.finish_assistant_stream(key);
             }
             AgentEvent::AssistantMessageDone => {}
             AgentEvent::AgentEnd => {
-                self.finish_assistant_stream();
+                self.finish_assistant_stream(key);
             }
         }
     }
