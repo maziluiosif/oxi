@@ -7,6 +7,8 @@ pub enum AgentEvent {
     AgentStart,
     TextStart,
     TextDelta(String),
+    /// Extended reasoning / thinking content from models that support it.
+    ThinkingDelta(String),
     ToolStart {
         name: String,
         tool_call_id: String,

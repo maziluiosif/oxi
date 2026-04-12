@@ -3,9 +3,9 @@ use eframe::egui::{self, Frame, LayerId};
 use crate::model::MsgRole;
 use crate::theme::C_BG_MAIN;
 
-use super::PiChatApp;
+use super::OxiApp;
 
-impl eframe::App for PiChatApp {
+impl eframe::App for OxiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.layer_painter(LayerId::background())
             .rect_filled(ctx.screen_rect(), 0.0, C_BG_MAIN);
@@ -20,7 +20,7 @@ impl eframe::App for PiChatApp {
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
             })
         });
-        if self.flow.waiting_response || any_assistant_streaming {
+        if self.any_waiting_response() || any_assistant_streaming {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 

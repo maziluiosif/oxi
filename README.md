@@ -1,64 +1,382 @@
 # oxi
 
-Desktop chat UI (Rust + **egui**) with a **local agent loop**: HTTP streaming to OpenAI-compatible APIs and built-in tools (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`). **No JSONL RPC** — a single Rust binary.
+`oxi` is a desktop coding-agent chat app built in Rust with **egui/eframe**.
+It runs as a **single local binary** and combines:
 
-The crate lives at the repository root; the built binary is **`oxi`**.
+- a local desktop chat UI
+- streaming LLM responses
+- built-in workspace tools
+- local session persistence per workspace
+- optional OAuth for Codex and GitHub Copilot
 
-## Requirements
+The repository builds the native `oxi` desktop binary.
 
-- Rust toolchain (2021 edition)
+## Overview
 
-## Configuration
+`oxi` is designed for local coding workflows rather than generic chat.
+From the current codebase, it supports:
 
-Settings are stored at `~/.config/oxi/settings.json` (macOS/Linux) or the platform config dir from the `dirs` crate. You can set **provider**, **model id**, optional **base URL override**, **system prompt**, and which **tools** are enabled.
+- multiple **workspaces** in the sidebar
+- multiple **chat sessions** per workspace
+- a local agent loop that can call built-in tools:
+  - `read`
+  - `write`
+  - `edit`
+  - `bash`
+  - `grep`
+  - `find`
+  - `ls`
+- streaming assistant output with structured UI blocks
+- configurable provider **profiles**
+- local persistence for settings, OAuth tokens, and chat sessions
+- image attachments in chat messages
 
-If you previously used the app with a different config directory, copy `settings.json` and `oauth.json` into `~/.config/oxi/` (or rename the folder).
+## Main capabilities
 
-### OAuth (recommended for Codex and Copilot)
+### Workspace-oriented chats
 
-Open **Settings** (model chip in the composer) and use **OAuth sign-in**:
+On startup, the app uses the current working directory as the first workspace.
+You can then add more workspace folders from the UI.
 
-- **GitHub Copilot** — GitHub device flow (browser + user code). Tokens are saved to `~/.config/oxi/oauth.json`. Optional **Enterprise hostname** (blank = `github.com`).
-- **ChatGPT / Codex** — OpenAI OAuth (PKCE) with redirect to `http://localhost:1455/auth/callback`. Requires port **1455** free. Tokens are stored in the same `oauth.json`.
+Each workspace has:
 
-If OAuth is configured for a provider, it takes precedence over environment variables for that provider.
+- its own list of chat sessions
+- its own active session
+- tool execution rooted in that workspace directory
 
-### Environment variables (API keys, fallback)
+Tool calls are executed with the selected workspace as the current directory.
 
-| Provider | Variable |
-|----------|----------|
-| OpenAI | `OPENAI_API_KEY` |
-| OpenRouter | `OPENROUTER_API_KEY` |
-| GPT Codex (no OAuth) | `OPENAI_API_KEY` — Chat Completions on `api.openai.com` |
-| GitHub Copilot (no OAuth) | `COPILOT_GITHUB_TOKEN`, or `GH_TOKEN`, or `GITHUB_TOKEN` |
+### Multiple sessions per workspace
 
-Optional OpenRouter headers (see [OpenRouter docs](https://openrouter.ai/docs)):
+Sessions are shown in the sidebar and loaded from disk when available.
+Behavior visible in code:
 
-- `OPENROUTER_HTTP_REFERER` — sent as `HTTP-Referer`
-- `OPENROUTER_TITLE` — sent as `X-Title`
+- if no saved sessions exist, the app creates an in-memory `New chat`
+- saved sessions are sorted by modification time
+- session message bodies are loaded lazily when selected
+- deleting a session removes its backing `.jsonl` file
+- deletion tries the `trash` command first, then falls back to direct file removal
 
-Default base URLs: OpenAI / Codex (API key mode) `https://api.openai.com/v1`; Codex (OAuth) uses `https://chatgpt.com/backend-api` (Responses API); OpenRouter `https://openrouter.ai/api/v1`; Copilot API host is taken from the Copilot token when using OAuth, or `https://api.individual.githubcopilot.com` when using a PAT. Override with the **base URL** field where applicable.
+### Local built-in tools
 
-**Codex + ChatGPT account:** not every model id is allowed (the API may return `detail` explaining unsupported models). If you see that error, change **model id** in settings to one that your plan exposes for Codex (see ChatGPT / OpenAI model picker for Codex).
+The agent can call these tools when enabled in Settings:
 
-## Run
+| Tool | Purpose |
+|---|---|
+| `read` | Read a text file, optionally by line range |
+| `write` | Write or overwrite a file, creating parent directories |
+| `edit` | Replace exact text in a file |
+| `bash` | Run a shell command in the workspace directory |
+| `grep` | Search regex text in files under the workspace |
+| `find` | Find files matching a glob pattern |
+| `ls` | List directory entries |
+
+Behavior confirmed in `src/agent/tools.rs`:
+
+- path-based tools reject paths that escape the workspace root
+- `write` can create new files under the workspace
+- `edit` requires each `oldText` to match exactly once
+- `read` is capped at 2000 lines per call
+- `grep` skips `.git`, `target`, and `node_modules`
+- `find` also skips `.git`, `target`, and `node_modules`
+- `grep`, `find`, and `ls` have result caps
+- tool output is truncated when too large
+- `bash` defaults to a 15s timeout and is capped at 30s
+- `bash` blocks only a small deny-list of risky command substrings, not full sandboxing
+- `write` and `edit` generate unified diffs for the UI
+
+### Streaming coding UI
+
+Assistant output is rendered as structured blocks rather than plain text only.
+From the code and UI modules, the app supports:
+
+- thinking blocks
+- grouped tool activity
+- compact tool pills
+- diff rendering for file edits/writes
+- markdown final answers
+- visible user attachments in the transcript
+
+### Provider profiles
+
+Settings support multiple profiles across multiple providers.
+Each profile stores:
+
+- profile id
+- display name
+- provider kind
+- model id
+- optional base URL override
+- API key / token
+- OpenRouter optional headers
+
+The active profile can also be switched directly from the composer.
+
+## Architecture
+
+High-level layout:
+
+- `src/main.rs` — native `eframe` entry point and window setup
+- `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior
+- `src/agent/` — local agent runner, prompt building, message history conversion, tool execution, provider loops
+- `src/oauth/` — OAuth flows and token persistence
+- `src/session_store/` — session loading/saving and storage path handling
+- `src/ui/` — transcript and chrome rendering helpers
+- `src/settings.rs` — persistent settings and provider profile model
+
+Important runtime behavior from the current implementation:
+
+- the app starts with the current working directory as the initial workspace
+- agent runs happen in a background thread with a Tokio runtime
+- settings are loaded on startup from the app config directory
+- tools are executed locally against the selected workspace root
+- the system prompt is expanded at runtime with enabled tools, current date, and working directory
+- conversation history is converted to OpenAI-style message JSON before provider requests are sent
+- long history is trimmed by an approximate character budget before sending
+
+## Providers
+
+The current code supports these provider kinds:
+
+- **OpenAI**
+- **OpenRouter**
+- **GPT Codex**
+- **GitHub Copilot**
+
+### OpenAI
+
+Defaults from `src/settings.rs`:
+
+- base URL: `https://api.openai.com/v1`
+- default model: `gpt-4o-mini`
+
+Authentication fallback order in code:
+
+- profile API key
+- `OPENAI_API_KEY`
+
+### OpenRouter
+
+Defaults:
+
+- base URL: `https://openrouter.ai/api/v1`
+- default model: `openai/gpt-4o-mini`
+
+Authentication fallback order:
+
+- profile API key
+- `OPENROUTER_API_KEY`
+
+Optional headers supported:
+
+- `HTTP-Referer` from profile field or `OPENROUTER_HTTP_REFERER`
+- `X-Title` from profile field or `OPENROUTER_TITLE`
+
+### GPT Codex
+
+Defaults:
+
+- default model: `gpt-4o-mini`
+
+Two runtime modes exist:
+
+1. **OAuth mode**
+   - uses ChatGPT/Codex OAuth
+   - uses the Responses-style backend at `https://chatgpt.com/backend-api` unless the profile overrides the base URL
+
+2. **API key fallback mode**
+   - uses OpenAI-compatible chat completions
+   - authenticates with profile API key or `OPENAI_API_KEY`
+
+### GitHub Copilot
+
+Defaults:
+
+- base URL for token/PAT mode: `https://api.individual.githubcopilot.com`
+- default model: `claude-sonnet-4`
+
+Two runtime modes exist:
+
+1. **OAuth mode**
+   - uses GitHub device flow
+   - exchanges the GitHub token for a Copilot API token
+
+2. **token/PAT fallback mode**
+   - uses the profile token or one of:
+     - `COPILOT_GITHUB_TOKEN`
+     - `GH_TOKEN`
+     - `GITHUB_TOKEN`
+
+Copilot backend selection is model-dependent:
+
+- `claude-*` → Anthropic Messages API path
+- `o*` / `gpt-5*` style models → Responses API path
+- everything else → chat-completions-style path
+
+Current limitation:
+
+- Copilot models that require the **Responses API** are detected, but not yet implemented in `oxi`
+
+## OAuth flows
+
+### GitHub Copilot OAuth
+
+Implemented via GitHub device flow.
+
+Behavior visible in code:
+
+- the app opens the browser to the verification URL
+- the UI shows the device code
+- optional enterprise hostname is supported
+- tokens are stored in `oauth.json`
+- the Copilot API token is refreshed automatically before expiry
+
+### ChatGPT / Codex OAuth
+
+Implemented via PKCE.
+
+Behavior visible in code:
+
+- the app opens the browser for login
+- it listens on `http://localhost:1455/auth/callback`
+- access and refresh tokens are stored in `oauth.json`
+- the access token is refreshed automatically before expiry
+- the callback port `1455` must be available
+
+## Attachments
+
+The UI supports image attachments through:
+
+- file picker
+- drag and drop
+- paste from clipboard
+
+Supported image formats in code:
+
+- PNG
+- JPEG
+- GIF
+- WebP
+
+Attachment limits are enforced in the UI layer.
+
+Important note about provider payloads:
+
+- user image attachments are stored in messages and rendered in the transcript
+- they are converted into OpenAI-style `image_url` content blocks when history is prepared
+- actual provider compatibility may still depend on the selected backend/model
+
+## Settings and configuration
+
+Settings are stored at:
+
+- `~/.config/oxi/settings.json` on systems where `dirs::config_dir()` resolves there
+- or the platform-equivalent config directory
+
+OAuth tokens are stored separately at:
+
+- `~/.config/oxi/oauth.json`
+
+The settings model currently contains:
+
+- active profile id
+- provider profiles
+- system prompt template
+- tool enable/disable flags
+
+The settings UI allows:
+
+- adding/removing profiles
+- selecting the active profile
+- editing model id, base URL, and API key/token
+- editing OpenRouter headers
+- enabling/disabling tools
+- launching OAuth sign-in and sign-out
+- saving settings to disk
+
+## Sessions and local data
+
+Chat sessions are persisted as `.jsonl` files.
+
+Behavior visible in the session store:
+
+- sessions are loaded per workspace
+- titles are derived from session metadata or the first user message
+- duplicate trailing history can be deduplicated before save/load flows
+- assistant blocks and attachments are preserved in session serialization
+
+## Build and run
+
+### Requirements
+
+- Rust toolchain
+- desktop environment supported by `eframe`
+
+### Run
 
 ```bash
 cargo run --release
-# binary: target/release/oxi
 ```
 
-Run from the repository root. Use **Set cwd** in the sidebar (or launch from your repo) so the workspace root matches the project you want the agent to use.
+Binary output:
 
-## Standalone behavior
+```bash
+target/release/oxi
+```
 
-- The app runs a **local agent loop** directly inside the Rust process.
-- Chats can still be persisted locally as JSONL session files under the app config directory unless session loading is disabled for a workspace path.
-- Image attachments in the composer are not sent to the model in this build (a notice is shown if you try).
-- OAuth tokens are currently stored in plain JSON at `~/.config/oxi/oauth.json`, so prefer OS-level disk encryption on shared machines.
+## Environment variables
 
-## Safety notes
+| Purpose | Variable(s) |
+|---|---|
+| OpenAI auth | `OPENAI_API_KEY` |
+| OpenRouter auth | `OPENROUTER_API_KEY` |
+| OpenRouter referer | `OPENROUTER_HTTP_REFERER` |
+| OpenRouter title | `OPENROUTER_TITLE` |
+| Codex fallback auth | `OPENAI_API_KEY` |
+| Copilot fallback auth | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` |
 
-- `bash` is powerful and can modify the workspace; disable it in Settings if you want a read-only review workflow.
-- `bash` runs with a bounded timeout and basic risky-command rejection, but it still executes shell commands inside the selected workspace.
-- File-search tools skip common heavy directories such as `.git`, `target`, and typical dependency/vendor folders.
+## System prompt behavior
+
+The app stores one editable system prompt template.
+
+Supported placeholder:
+
+- `{tools_list}` — replaced with the enabled tool names
+
+At runtime, the prompt builder also appends:
+
+- current date
+- current working directory
+
+Default prompt guidance includes:
+
+- prefer reading files before editing
+- keep shell commands safe and relevant
+- do not guess when the codebase can be inspected
+- verify claims from source files before answering
+
+## Current limitations and safety notes
+
+Based on the current source code:
+
+- `bash` safety checks are basic and not a real sandbox
+- tool execution can modify files inside the selected workspace
+- Copilot Responses API models are not yet implemented
+- OAuth tokens are stored as JSON on disk
+- workspace path protections apply to file-based tools, but you should still use the app on trusted repositories
+- long conversations are trimmed heuristically by character budget, not exact tokenizer counts
+
+## Useful source files
+
+- `src/agent/tools.rs` — built-in tool definitions and execution
+- `src/agent/runner.rs` — provider selection, auth fallback, and run orchestration
+- `src/agent/history.rs` — conversation-to-provider message conversion and context trimming
+- `src/agent/prompt.rs` — system prompt construction
+- `src/settings.rs` — settings and provider profile model
+- `src/app/settings_ui.rs` — settings UI
+- `src/app/sessions.rs` — workspaces, attachments, and session deletion behavior
+- `src/session_store.rs` — session persistence entry points
+
+## License
+
+MIT

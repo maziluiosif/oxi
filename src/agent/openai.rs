@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
 
+use super::copilot::copilot_x_initiator_from_openai_messages;
 use super::events::AgentEvent;
 use super::tools::run_tool;
 
@@ -32,6 +33,7 @@ pub async fn run_chat_loop(
     enabled: &[bool; 7],
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
+    copilot_dynamic_x_initiator: bool,
 ) -> Result<(), String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut round = 0u32;
@@ -63,6 +65,13 @@ pub async fn run_chat_loop(
             let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| e.to_string())?;
             let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
             headers.insert(name, val);
+        }
+        if copilot_dynamic_x_initiator {
+            let initiator = copilot_x_initiator_from_openai_messages(messages);
+            headers.insert(
+                HeaderName::from_static("x-initiator"),
+                HeaderValue::from_static(initiator),
+            );
         }
         let res = client
             .post(&url)
@@ -141,38 +150,97 @@ pub async fn run_chat_loop(
                 }
             }
             messages.push(msg);
-            for tc in tool_calls {
-                if cancel.load(Ordering::SeqCst) {
-                    break;
-                }
+            // Execute tool calls in parallel where safe.
+            // Mutating tools (write, edit, bash) are run sequentially to avoid races.
+            // Read-only tools (read, grep, find, ls) can run concurrently.
+            let is_readonly = |name: &str| matches!(name, "read" | "grep" | "find" | "ls");
+
+            // Split into consecutive groups: each group is either all-readonly (parallel) or a single mutating call.
+            struct ToolCall { id: String, name: String, args: Value }
+            let parsed: Vec<ToolCall> = tool_calls.into_iter().map(|tc| {
                 let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
-                let tid = tc.id.clone();
-                let _ = tx.send(AgentEvent::ToolStart {
-                    name: tc.name.clone(),
-                    tool_call_id: tid.clone(),
-                    args: Some(args.clone()),
-                });
-                let result = run_tool(cwd, &tc.name, &args, enabled);
-                let (text, is_err) = match result {
-                    Ok(s) => (s, false),
-                    Err(e) => (e, true),
-                };
-                let _ = tx.send(AgentEvent::ToolOutput {
-                    tool_call_id: tid.clone(),
-                    text: text.clone(),
-                    truncated: text.len() >= 120_000,
-                });
-                let _ = tx.send(AgentEvent::ToolEnd {
-                    tool_call_id: tid.clone(),
-                    is_error: Some(is_err),
-                    full_output_path: None,
-                    diff: None,
-                });
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": tid,
-                    "content": text,
-                }));
+                ToolCall { id: tc.id, name: tc.name, args }
+            }).collect();
+
+            let mut i = 0;
+            while i < parsed.len() {
+                if cancel.load(Ordering::SeqCst) { break; }
+                if is_readonly(&parsed[i].name) {
+                    // Collect consecutive readonly calls
+                    let batch_start = i;
+                    while i < parsed.len() && is_readonly(&parsed[i].name) { i += 1; }
+                    let batch = &parsed[batch_start..i];
+                    // Send all ToolStart events
+                    for tc in batch {
+                        let _ = tx.send(AgentEvent::ToolStart {
+                            name: tc.name.clone(),
+                            tool_call_id: tc.id.clone(),
+                            args: Some(tc.args.clone()),
+                        });
+                    }
+                    // Spawn all in parallel
+                    let mut handles = Vec::new();
+                    for tc in batch {
+                        let cwd_owned = cwd.to_path_buf();
+                        let name = tc.name.clone();
+                        let args = tc.args.clone();
+                        let enabled_copy = *enabled;
+                        handles.push(tokio::task::spawn_blocking(move || {
+                            run_tool(&cwd_owned, &name, &args, &enabled_copy)
+                        }));
+                    }
+                    // Collect results in order
+                    for (j, handle) in handles.into_iter().enumerate() {
+                        let tc = &batch[j];
+                        let result = handle.await.map_err(|e| e.to_string())?;
+                        let text = result.output.clone();
+                        let is_err = result.is_error;
+                        let _ = tx.send(AgentEvent::ToolOutput {
+                            tool_call_id: tc.id.clone(),
+                            text: text.clone(),
+                            truncated: text.len() >= 120_000,
+                        });
+                        let _ = tx.send(AgentEvent::ToolEnd {
+                            tool_call_id: tc.id.clone(),
+                            is_error: Some(is_err),
+                            full_output_path: None,
+                            diff: result.diff,
+                        });
+                        messages.push(json!({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": text,
+                        }));
+                    }
+                } else {
+                    // Mutating tool: run sequentially
+                    let tc = &parsed[i];
+                    let _ = tx.send(AgentEvent::ToolStart {
+                        name: tc.name.clone(),
+                        tool_call_id: tc.id.clone(),
+                        args: Some(tc.args.clone()),
+                    });
+                    let result = run_tool(cwd, &tc.name, &tc.args, enabled);
+                    let text = result.output.clone();
+                    let is_err = result.is_error;
+                    let _ = tx.send(AgentEvent::ToolOutput {
+                        tool_call_id: tc.id.clone(),
+                        text: text.clone(),
+                        truncated: text.len() >= 120_000,
+                    });
+                    let _ = tx.send(AgentEvent::ToolEnd {
+                        tool_call_id: tc.id.clone(),
+                        is_error: Some(is_err),
+                        full_output_path: None,
+                        diff: result.diff,
+                    });
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": text,
+                    }));
+                    i += 1;
+                }
             }
             continue;
         }
@@ -197,8 +265,14 @@ fn process_sse_line(
     if line.is_empty() || line == "data: [DONE]" {
         return Ok(());
     }
-    let data = line.strip_prefix("data:").unwrap_or(line).trim();
-    if data == "[DONE]" {
+    if line.starts_with(':') {
+        return Ok(());
+    }
+    let Some(data) = line.strip_prefix("data:") else {
+        return Ok(());
+    };
+    let data = data.trim();
+    if data == "[DONE]" || data.is_empty() {
         return Ok(());
     }
     let v: Value = serde_json::from_str(data).map_err(|e| format!("SSE JSON: {e}: {data}"))?;
@@ -249,6 +323,16 @@ fn process_sse_line(
         if let Some(content) = d.get("content").and_then(|x| x.as_str()) {
             assistant_text.push_str(content);
             let _ = tx.send(AgentEvent::TextDelta(content.to_string()));
+        }
+        // Extended thinking / reasoning (OpenAI o-series models send `reasoning_content`)
+        if let Some(reasoning) = d
+            .get("reasoning_content")
+            .or_else(|| d.get("reasoning"))
+            .and_then(|x| x.as_str())
+        {
+            if !reasoning.is_empty() {
+                let _ = tx.send(AgentEvent::ThinkingDelta(reasoning.to_string()));
+            }
         }
     }
     Ok(())

@@ -139,3 +139,147 @@ fn assistant_message_to_json_entries(blocks: &[AssistantBlock]) -> Vec<Value> {
     entries.extend(trailing_entries);
     entries
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AssistantBlock, MsgRole, UserAttachment};
+    use std::path::Path;
+
+    #[test]
+    fn session_file_stem_from_path() {
+        let p = Path::new("/tmp/sessions/my-session.jsonl");
+        assert_eq!(session_file_stem_or_generated(p), "my-session");
+    }
+
+    #[test]
+    fn session_file_stem_uses_actual_stem() {
+        // A `.jsonl` hidden file should use the file stem (which is ".jsonl" itself)
+        let p = Path::new("/tmp/sessions/.jsonl");
+        let stem = session_file_stem_or_generated(p);
+        // .jsonl is a dotfile, file_stem = ".jsonl" which is non-empty, so it uses that
+        assert_eq!(stem, ".jsonl");
+    }
+
+    #[test]
+    fn user_message_to_json_plain_text() {
+        let msg = ChatMessage {
+            role: MsgRole::User,
+            text: "hello".into(),
+            attachments: vec![],
+            blocks: vec![],
+            streaming: false,
+        };
+        let entries = chat_message_to_json_entries(&msg);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["role"], "user");
+        assert_eq!(entries[0]["content"], "hello");
+    }
+
+    #[test]
+    fn user_message_with_image_produces_array_content() {
+        let msg = ChatMessage {
+            role: MsgRole::User,
+            text: "look".into(),
+            attachments: vec![UserAttachment::Image {
+                mime: "image/png".into(),
+                data: vec![1, 2, 3],
+            }],
+            blocks: vec![],
+            streaming: false,
+        };
+        let entries = chat_message_to_json_entries(&msg);
+        assert_eq!(entries.len(), 1);
+        let content = entries[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2); // text + image
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image");
+    }
+
+    #[test]
+    fn assistant_message_with_thinking_and_answer() {
+        let msg = ChatMessage {
+            role: MsgRole::Assistant,
+            text: String::new(),
+            attachments: vec![],
+            blocks: vec![
+                AssistantBlock::Thinking("reason".into()),
+                AssistantBlock::Answer("result".into()),
+            ],
+            streaming: false,
+        };
+        let entries = chat_message_to_json_entries(&msg);
+        assert_eq!(entries.len(), 1);
+        let content = entries[0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[1]["type"], "text");
+    }
+
+    #[test]
+    fn assistant_message_with_tool_produces_tool_result() {
+        let msg = ChatMessage {
+            role: MsgRole::Assistant,
+            text: String::new(),
+            attachments: vec![],
+            blocks: vec![AssistantBlock::Tool {
+                tool_call_id: "call_1".into(),
+                name: "bash".into(),
+                args_summary: Some(r#"{"command":"ls"}"#.into()),
+                output: "file.txt\n".into(),
+                diff: None,
+                is_error: Some(false),
+                full_output_path: None,
+                output_truncated: false,
+            }],
+            streaming: false,
+        };
+        let entries = chat_message_to_json_entries(&msg);
+        assert_eq!(entries.len(), 2); // assistant + toolResult
+        assert_eq!(entries[0]["role"], "assistant");
+        assert_eq!(entries[1]["role"], "toolResult");
+        assert_eq!(entries[1]["toolCallId"], "call_1");
+    }
+
+    #[test]
+    fn assistant_message_with_tool_diff_includes_details() {
+        let msg = ChatMessage {
+            role: MsgRole::Assistant,
+            text: String::new(),
+            attachments: vec![],
+            blocks: vec![AssistantBlock::Tool {
+                tool_call_id: "call_2".into(),
+                name: "edit".into(),
+                args_summary: None,
+                output: "edited".into(),
+                diff: Some("+line\n-old".into()),
+                is_error: None,
+                full_output_path: Some("/tmp/out.txt".into()),
+                output_truncated: true,
+            }],
+            streaming: false,
+        };
+        let entries = chat_message_to_json_entries(&msg);
+        let result = &entries[1];
+        assert!(result.get("details").is_some());
+        assert_eq!(result["details"]["diff"], "+line\n-old");
+        assert_eq!(result["details"]["fullOutputPath"], "/tmp/out.txt");
+        assert!(result["details"]["truncation"]["truncated"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn empty_blocks_skipped() {
+        let msg = ChatMessage {
+            role: MsgRole::Assistant,
+            text: String::new(),
+            attachments: vec![],
+            blocks: vec![
+                AssistantBlock::Thinking("".into()),
+                AssistantBlock::Answer("".into()),
+            ],
+            streaming: false,
+        };
+        let entries = chat_message_to_json_entries(&msg);
+        let content = entries[0]["content"].as_array().unwrap();
+        assert!(content.is_empty());
+    }
+}

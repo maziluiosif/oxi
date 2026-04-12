@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
 
+use super::copilot::copilot_x_initiator_from_openai_messages;
 use super::events::AgentEvent;
 use super::tools::run_tool;
 
@@ -39,7 +40,7 @@ fn to_anthropic_tools(openai_tools: &[Value]) -> Vec<Value> {
 }
 
 /// Convert OpenAI-format `messages` to Anthropic `messages` (system stripped — pass separately).
-fn to_anthropic_messages(openai: &[Value]) -> (String, Vec<Value>) {
+fn to_anthropic_messages(openai: &[Value], cache_control: Option<Value>) -> (String, Vec<Value>) {
     let mut system = String::new();
     let mut msgs = Vec::new();
     for m in openai {
@@ -53,12 +54,14 @@ fn to_anthropic_messages(openai: &[Value]) -> (String, Vec<Value>) {
         if role == "tool" {
             let id = m.get("tool_call_id").and_then(|x| x.as_str()).unwrap_or("");
             let content = m.get("content").and_then(|x| x.as_str()).unwrap_or("");
+            let is_error = m.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
             msgs.push(json!({
                 "role": "user",
                 "content": [{
                     "type": "tool_result",
                     "tool_use_id": id,
-                    "content": content
+                    "content": content,
+                    "is_error": is_error
                 }]
             }));
             continue;
@@ -106,6 +109,19 @@ fn to_anthropic_messages(openai: &[Value]) -> (String, Vec<Value>) {
             "role": "user",
             "content": content
         }));
+    }
+    if let Some(cache_control) = cache_control {
+        if let Some(last_msg) = msgs.last_mut() {
+            if last_msg.get("role").and_then(|x| x.as_str()) == Some("user") {
+                if let Some(content) = last_msg.get_mut("content").and_then(|x| x.as_array_mut()) {
+                    if let Some(last_block) = content.last_mut() {
+                        if let Some(obj) = last_block.as_object_mut() {
+                            obj.insert("cache_control".to_string(), cache_control);
+                        }
+                    }
+                }
+            }
+        }
     }
     (system, msgs)
 }
@@ -167,6 +183,19 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
     Some((media_type.to_string(), data.to_string()))
 }
 
+
+/// Check if a Claude model supports extended thinking.
+fn supports_extended_thinking(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    m.starts_with("claude-sonnet-4")
+        || m.starts_with("claude-opus-4")
+        || m.starts_with("claude-4")
+        || m.starts_with("claude-3.7-sonnet")
+        || m.starts_with("claude-3-7-sonnet")
+        || m.starts_with("claude-3.5-sonnet")
+        || m.starts_with("claude-3-5-sonnet")
+}
+
 pub async fn run_copilot_loop(
     client: &reqwest::Client,
     base_url: &str,
@@ -181,6 +210,9 @@ pub async fn run_copilot_loop(
 ) -> Result<(), String> {
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let anthropic_tools = to_anthropic_tools(tools_openai);
+    let cache_control = Some(json!({ "type": "ephemeral" }));
+    // Enable extended thinking for models that support it.
+    let supports_thinking = supports_extended_thinking(model);
     let mut round = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
@@ -191,16 +223,22 @@ pub async fn run_copilot_loop(
         if round > 64 {
             return Err("Too many tool rounds".into());
         }
-        let (system, anth_msgs) = to_anthropic_messages(openai_messages);
+        let (system, anth_msgs) = to_anthropic_messages(openai_messages, cache_control.clone());
         let _ = tx.send(AgentEvent::AgentStart);
-        let body = json!({
+        let mut body = json!({
             "model": model,
-            "max_tokens": 8192,
+            "max_tokens": if supports_thinking { 16384 } else { 8192 },
             "stream": true,
             "system": system,
             "messages": anth_msgs,
             "tools": anthropic_tools,
         });
+        if supports_thinking {
+            body["thinking"] = json!({
+                "type": "enabled",
+                "budget_tokens": 10240
+            });
+        }
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -209,11 +247,37 @@ pub async fn run_copilot_loop(
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             reqwest::header::HeaderName::from_static("anthropic-version"),
-            HeaderValue::from_static("2023-06-01"),
+            HeaderValue::from_static("2025-04-14"),
         );
         headers.insert(
             reqwest::header::HeaderName::from_static("anthropic-dangerous-direct-browser-access"),
             HeaderValue::from_static("true"),
+        );
+        headers.insert(reqwest::header::ACCEPT, HeaderValue::from_static("application/json"));
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            HeaderValue::from_static("GitHubCopilotChat/0.35.0"),
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("editor-version"),
+            HeaderValue::from_static("vscode/1.107.0"),
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("editor-plugin-version"),
+            HeaderValue::from_static("copilot-chat/0.35.0"),
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("copilot-integration-id"),
+            HeaderValue::from_static("vscode-chat"),
+        );
+        let initiator = copilot_x_initiator_from_openai_messages(openai_messages);
+        headers.insert(
+            reqwest::header::HeaderName::from_static("x-initiator"),
+            HeaderValue::from_static(initiator),
+        );
+        headers.insert(
+            reqwest::header::HeaderName::from_static("openai-intent"),
+            HeaderValue::from_static("conversation-edits"),
         );
         let res = client
             .post(&url)
@@ -285,38 +349,90 @@ pub async fn run_copilot_loop(
                 }
             }
             openai_messages.push(asst);
-            for tu in tool_list {
-                if cancel.load(Ordering::SeqCst) {
-                    break;
-                }
+            // Execute tool calls in parallel where safe.
+            let is_readonly = |name: &str| matches!(name, "read" | "grep" | "find" | "ls");
+            struct ToolCall { id: String, name: String, args: Value }
+            let parsed: Vec<ToolCall> = tool_list.into_iter().map(|tu| {
                 let args: Value = serde_json::from_str(&tu.input_json).unwrap_or(json!({}));
-                let tid = tu.id.clone();
-                let _ = tx.send(AgentEvent::ToolStart {
-                    name: tu.name.clone(),
-                    tool_call_id: tid.clone(),
-                    args: Some(args.clone()),
-                });
-                let result = run_tool(cwd, &tu.name, &args, enabled);
-                let (text, is_err) = match result {
-                    Ok(s) => (s, false),
-                    Err(e) => (e, true),
-                };
-                let _ = tx.send(AgentEvent::ToolOutput {
-                    tool_call_id: tid.clone(),
-                    text: text.clone(),
-                    truncated: text.len() >= 120_000,
-                });
-                let _ = tx.send(AgentEvent::ToolEnd {
-                    tool_call_id: tid.clone(),
-                    is_error: Some(is_err),
-                    full_output_path: None,
-                    diff: None,
-                });
-                openai_messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": tid,
-                    "content": text,
-                }));
+                ToolCall { id: tu.id, name: tu.name, args }
+            }).collect();
+
+            let mut i = 0;
+            while i < parsed.len() {
+                if cancel.load(Ordering::SeqCst) { break; }
+                if is_readonly(&parsed[i].name) {
+                    let batch_start = i;
+                    while i < parsed.len() && is_readonly(&parsed[i].name) { i += 1; }
+                    let batch = &parsed[batch_start..i];
+                    for tc in batch {
+                        let _ = tx.send(AgentEvent::ToolStart {
+                            name: tc.name.clone(),
+                            tool_call_id: tc.id.clone(),
+                            args: Some(tc.args.clone()),
+                        });
+                    }
+                    let mut handles = Vec::new();
+                    for tc in batch {
+                        let cwd_owned = cwd.to_path_buf();
+                        let name = tc.name.clone();
+                        let args = tc.args.clone();
+                        let enabled_copy = *enabled;
+                        handles.push(tokio::task::spawn_blocking(move || {
+                            run_tool(&cwd_owned, &name, &args, &enabled_copy)
+                        }));
+                    }
+                    for (j, handle) in handles.into_iter().enumerate() {
+                        let tc = &batch[j];
+                        let result = handle.await.map_err(|e| e.to_string())?;
+                        let text = result.output.clone();
+                        let is_err = result.is_error;
+                        let _ = tx.send(AgentEvent::ToolOutput {
+                            tool_call_id: tc.id.clone(),
+                            text: text.clone(),
+                            truncated: text.len() >= 120_000,
+                        });
+                        let _ = tx.send(AgentEvent::ToolEnd {
+                            tool_call_id: tc.id.clone(),
+                            is_error: Some(is_err),
+                            full_output_path: None,
+                            diff: result.diff,
+                        });
+                        openai_messages.push(json!({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": text,
+                            "is_error": is_err,
+                        }));
+                    }
+                } else {
+                    let tc = &parsed[i];
+                    let _ = tx.send(AgentEvent::ToolStart {
+                        name: tc.name.clone(),
+                        tool_call_id: tc.id.clone(),
+                        args: Some(tc.args.clone()),
+                    });
+                    let result = run_tool(cwd, &tc.name, &tc.args, enabled);
+                    let text = result.output.clone();
+                    let is_err = result.is_error;
+                    let _ = tx.send(AgentEvent::ToolOutput {
+                        tool_call_id: tc.id.clone(),
+                        text: text.clone(),
+                        truncated: text.len() >= 120_000,
+                    });
+                    let _ = tx.send(AgentEvent::ToolEnd {
+                        tool_call_id: tc.id.clone(),
+                        is_error: Some(is_err),
+                        full_output_path: None,
+                        diff: result.diff,
+                    });
+                    openai_messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": text,
+                        "is_error": is_err,
+                    }));
+                    i += 1;
+                }
             }
             continue;
         }
@@ -338,22 +454,32 @@ fn parse_anthropic_event(
     tx: &Sender<AgentEvent>,
 ) -> Result<(), String> {
     let mut event_type = "";
-    let mut data_line = "";
+    let mut data_lines: Vec<&str> = Vec::new();
     for line in block.lines() {
         if let Some(rest) = line.strip_prefix("event:") {
             event_type = rest.trim();
         } else if let Some(rest) = line.strip_prefix("data:") {
-            data_line = rest.trim();
+            data_lines.push(rest.trim());
         }
     }
-    if data_line.is_empty() {
+    if data_lines.is_empty() {
         return Ok(());
     }
-    let v: Value = serde_json::from_str(data_line).map_err(|e| e.to_string())?;
+    let data_line = data_lines.join("\n");
+    if data_line == "[DONE]" {
+        return Ok(());
+    }
+    let v: Value = serde_json::from_str(&data_line)
+        .map_err(|e| format!("Anthropic SSE JSON: {e}: {data_line}"))?;
     match event_type {
         "content_block_delta" => {
             if let Some(delta) = v.get("delta") {
-                if let Some(t) = delta.get("text").and_then(|x| x.as_str()) {
+                let delta_type = delta.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                if delta_type == "thinking_delta" {
+                    if let Some(t) = delta.get("thinking").and_then(|x| x.as_str()) {
+                        let _ = tx.send(AgentEvent::ThinkingDelta(t.to_string()));
+                    }
+                } else if let Some(t) = delta.get("text").and_then(|x| x.as_str()) {
                     text_out.push_str(t);
                     let _ = tx.send(AgentEvent::TextDelta(t.to_string()));
                 }
@@ -391,4 +517,43 @@ fn parse_anthropic_event(
         _ => {}
     }
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn thinking_supported_for_known_models() {
+        assert!(supports_extended_thinking("claude-sonnet-4"));
+        assert!(supports_extended_thinking("claude-opus-4"));
+        assert!(supports_extended_thinking("claude-3.7-sonnet"));
+        assert!(supports_extended_thinking("claude-3-5-sonnet-20241022"));
+    }
+
+    #[test]
+    fn thinking_not_supported_for_old_models() {
+        assert!(!supports_extended_thinking("claude-3-opus-20240229"));
+        assert!(!supports_extended_thinking("claude-3-haiku-20240307"));
+        assert!(!supports_extended_thinking("claude-3.5-haiku-20241022"));
+    }
+
+    #[test]
+    fn anthropic_tools_conversion() {
+        let openai = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file",
+                "parameters": { "type": "object" }
+            }
+        })];
+        let anth = to_anthropic_tools(&openai);
+        assert_eq!(anth.len(), 1);
+        assert_eq!(anth[0]["name"], "read");
+        assert_eq!(anth[0]["description"], "Read a file");
+        assert_eq!(anth[0]["input_schema"]["type"], "object");
+    }
 }
