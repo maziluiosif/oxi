@@ -1037,7 +1037,9 @@ fn render_explored_tool_pill_run(
     // become fully hidden. In that case, do not allocate the fixed-height scroll region at all,
     // otherwise we leave large blank gaps between thinking blocks during streaming.
     let visible_run: &[usize] = if needs_scroll {
-        let hidden_in_this_run = visible_start.saturating_sub(*hidden_before).min(tool_run.len());
+        let hidden_in_this_run = visible_start
+            .saturating_sub(*hidden_before)
+            .min(tool_run.len());
         *hidden_before += hidden_in_this_run;
         let visible = &tool_run[hidden_in_this_run..];
         if visible.is_empty() {
@@ -1286,7 +1288,12 @@ fn render_thinking_group_block(
         ui,
         C_BG_ELEVATED,
         BLOCK_PREVIEW_LINES,
-        expand_persist_id(Id::new((msg_idx, salt, "thinking_body", block_state_tag(live)))),
+        expand_persist_id(Id::new((
+            msg_idx,
+            salt,
+            "thinking_body",
+            block_state_tag(live),
+        ))),
         overflow,
         combined.as_str(),
         C_TEXT_MUTED,
@@ -1370,7 +1377,11 @@ fn render_activity_range(
                 if combined.trim().is_empty() {
                     continue;
                 }
-                let thinking_live = thinking_group_is_live(blocks, global.last().copied().unwrap_or(global[0]) + 1, streaming);
+                let thinking_live = thinking_group_is_live(
+                    blocks,
+                    global.last().copied().unwrap_or(global[0]) + 1,
+                    streaming,
+                );
                 render_thinking_group_block(ui, msg_idx, global[0], combined, thinking_live);
             }
             AssistantBlockGroup::Answer(i) => {
