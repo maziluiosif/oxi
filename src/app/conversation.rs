@@ -74,14 +74,15 @@ impl OxiApp {
         let user_selecting_text = {
             let ctx = ui.ctx();
             let primary_down = ctx.input(|i| i.pointer.primary_down());
-            let dragged_far = ctx.input(|i| {
-                match (i.pointer.press_origin(), i.pointer.interact_pos()) {
-                    (Some(origin), Some(pos)) => {
-                        origin.distance(pos) > SELECTION_SCROLL_MIN_DRAG_PX
-                    }
-                    _ => false,
-                }
-            });
+            let dragged_far =
+                ctx.input(
+                    |i| match (i.pointer.press_origin(), i.pointer.interact_pos()) {
+                        (Some(origin), Some(pos)) => {
+                            origin.distance(pos) > SELECTION_SCROLL_MIN_DRAG_PX
+                        }
+                        _ => false,
+                    },
+                );
             primary_down && dragged_far
         };
 
@@ -223,12 +224,13 @@ pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> (egui::Vec2, bool)
 
     let label_extend_active = ctx.input(|i| i.pointer.primary_down())
         && egui::text_selection::LabelSelectionState::load(ctx).has_selection();
-    let label_drag_past_click_dist = ctx.input(|i| {
-        match (i.pointer.press_origin(), i.pointer.interact_pos()) {
-            (Some(origin), Some(pos)) => origin.distance(pos) > SELECTION_SCROLL_MIN_DRAG_PX,
-            _ => false,
-        }
-    });
+    let label_drag_past_click_dist =
+        ctx.input(
+            |i| match (i.pointer.press_origin(), i.pointer.interact_pos()) {
+                (Some(origin), Some(pos)) => origin.distance(pos) > SELECTION_SCROLL_MIN_DRAG_PX,
+                _ => false,
+            },
+        );
     let label_selection_dragging = label_extend_active && label_drag_past_click_dist;
 
     if !widget_dragging && !label_extend_active {
