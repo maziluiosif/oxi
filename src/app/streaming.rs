@@ -139,10 +139,27 @@ impl OxiApp {
         let Some(m) = self.last_assistant_mut(key) else {
             return;
         };
-        match m.blocks.last_mut() {
-            Some(AssistantBlock::Thinking(s)) => s.push_str(delta),
-            _ => m.blocks.push(AssistantBlock::Thinking(delta.to_string())),
+        // TextStart creates an empty Answer before any SSE deltas; reasoning often streams first.
+        // Keep Thinking before that placeholder so the collapsible block is not hidden after an empty answer.
+        if let Some(AssistantBlock::Thinking(s)) = m.blocks.last_mut() {
+            s.push_str(delta);
+            return;
         }
+        if matches!(m.blocks.last(), Some(AssistantBlock::Answer(s)) if s.is_empty()) {
+            let n = m.blocks.len();
+            if n >= 2 {
+                let i = n - 2;
+                if let AssistantBlock::Thinking(s) = &mut m.blocks[i] {
+                    s.push_str(delta);
+                    return;
+                }
+            }
+            let empty = m.blocks.pop().unwrap();
+            m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
+            m.blocks.push(empty);
+            return;
+        }
+        m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
     }
 
     pub(crate) fn append_assistant_answer(&mut self, key: SessionKey, s: &str) {
