@@ -1015,6 +1015,63 @@ fn render_edit_tool_block(
     ui.add_space(6.0);
 }
 
+/// Renders a consecutive run of tool block indices. When `needs_scroll`, only a fixed number of
+/// pills are visible (oldest hidden); thinking/prose must **not** live inside this region — the
+/// caller keeps those blocks outside the [`ScrollArea`].
+fn render_explored_tool_pill_run(
+    ui: &mut Ui,
+    msg_idx: usize,
+    blocks: &[AssistantBlock],
+    tool_run: &[usize],
+    needs_scroll: bool,
+    hidden_before: &mut usize,
+    visible_start: usize,
+    last_tool_idx: Option<usize>,
+    streaming: bool,
+) {
+    if tool_run.is_empty() {
+        return;
+    }
+
+    // While the live explored cluster is capped to the last N tool pills, older tool batches can
+    // become fully hidden. In that case, do not allocate the fixed-height scroll region at all,
+    // otherwise we leave large blank gaps between thinking blocks during streaming.
+    let visible_run: &[usize] = if needs_scroll {
+        let hidden_in_this_run = visible_start.saturating_sub(*hidden_before).min(tool_run.len());
+        *hidden_before += hidden_in_this_run;
+        let visible = &tool_run[hidden_in_this_run..];
+        if visible.is_empty() {
+            return;
+        }
+        visible
+    } else {
+        tool_run
+    };
+
+    let render_pills = |ui: &mut Ui| {
+        for &ti in visible_run {
+            let block = &blocks[ti];
+            let is_last = Some(ti) == last_tool_idx;
+            render_tool_pill(ui, msg_idx, ti, block, streaming, is_last);
+            ui.add_space(TOOL_PILL_GAP);
+        }
+    };
+
+    if needs_scroll {
+        let scroll_h = (TOOL_PILL_HEIGHT + TOOL_PILL_GAP) * MAX_VISIBLE_STREAMING_TOOL_PILLS as f32;
+        ScrollArea::vertical()
+            .id_salt((msg_idx, visible_run[0], "tool_pill_scroll"))
+            .auto_shrink([false, false])
+            .max_height(scroll_h)
+            .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
+            .stick_to_bottom(true)
+            .enable_scrolling(false)
+            .show(ui, render_pills);
+    } else {
+        render_pills(ui);
+    }
+}
+
 fn render_explored_tool_list(
     ui: &mut Ui,
     msg_idx: usize,
@@ -1029,8 +1086,9 @@ fn render_explored_tool_list(
         .iter()
         .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
         .count();
-    // While streaming and cluster is not manually expanded: show a fixed-height ScrollArea
-    // that is always stuck to the bottom — newest pill is always visible, oldest scroll away.
+    // While streaming and cluster is not manually expanded: tool *pills* use a fixed-height
+    // ScrollArea stuck to the bottom. Thinking and markdown answers stay **outside** that strip
+    // so they are never clipped or skipped.
     let needs_scroll = streaming && !expanded && tool_count > MAX_VISIBLE_STREAMING_TOOL_PILLS;
 
     let last_tool_idx = blocks[start..end]
@@ -1040,82 +1098,68 @@ fn render_explored_tool_list(
         .find(|(_, b)| matches!(b, AssistantBlock::Tool { .. }))
         .map(|(j, _)| start + j);
 
-    let render_items = |ui: &mut Ui| {
-        let mut i = start;
-        let mut hidden_before = 0usize;
-        while i < end {
-            match &blocks[i] {
-                AssistantBlock::Thinking(_) => {
-                    let first = i;
-                    while i < end && matches!(blocks[i], AssistantBlock::Thinking(_)) {
-                        i += 1;
-                    }
-                    let indices: Vec<usize> = (first..i).collect();
-                    let combined = concat_thinking_blocks(blocks, &indices);
-                    if combined.trim().is_empty() {
-                        continue;
-                    }
-                    if needs_scroll {
-                        hidden_before += indices
-                            .iter()
-                            .filter(|&&idx| matches!(blocks[idx], AssistantBlock::Tool { .. }))
-                            .count();
-                        continue;
-                    }
-                    let secs = estimate_thought_seconds(combined.len());
-                    let header = format!("Thought for {secs}s");
-                    render_thinking_group_block(ui, msg_idx, first, header, combined, streaming);
-                }
-                AssistantBlock::Answer(text) => {
-                    if !text.trim().is_empty() && !needs_scroll {
-                        crate::markdown::render_markdown(ui, text);
-                    }
+    let visible_start = tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
+    let mut hidden_before = 0usize;
+    let mut i = start;
+
+    while i < end {
+        match &blocks[i] {
+            AssistantBlock::Thinking(_) => {
+                let first = i;
+                while i < end && matches!(blocks[i], AssistantBlock::Thinking(_)) {
                     i += 1;
                 }
-                AssistantBlock::Tool { .. } => {
-                    if needs_scroll {
-                        let visible_start =
-                            tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
-                        if hidden_before < visible_start {
-                            hidden_before += 1;
-                            i += 1;
-                            continue;
-                        }
-                    }
-                    let block = &blocks[i];
-                    let is_last = Some(i) == last_tool_idx;
-                    render_tool_pill(ui, msg_idx, i, block, streaming, is_last);
-                    ui.add_space(TOOL_PILL_GAP);
-                    i += 1;
+                let indices: Vec<usize> = (first..i).collect();
+                let combined = concat_thinking_blocks(blocks, &indices);
+                if combined.trim().is_empty() {
+                    continue;
                 }
+                let thinking_live = thinking_group_is_live(blocks, i, streaming);
+                render_thinking_group_block(ui, msg_idx, first, combined, thinking_live);
             }
-        }
-        if needs_scroll {
-            let hidden = tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
-            if hidden > 0 {
-                ui.add_space(2.0);
-                ui.label(
-                    RichText::new(format!("+{hidden} earlier tool calls"))
-                        .size(FS_TINY)
-                        .color(C_TEXT_MUTED),
+            AssistantBlock::Answer(text) => {
+                if !text.trim().is_empty() {
+                    crate::markdown::render_markdown(ui, text);
+                }
+                i += 1;
+            }
+            AssistantBlock::Tool { .. } => {
+                let batch_lo = i;
+                while i < end {
+                    match &blocks[i] {
+                        AssistantBlock::Tool { .. } => i += 1,
+                        AssistantBlock::Answer(t) if t.trim().is_empty() => i += 1,
+                        _ => break,
+                    }
+                }
+                let tool_run: Vec<usize> = (batch_lo..i)
+                    .filter(|&j| matches!(blocks[j], AssistantBlock::Tool { .. }))
+                    .collect();
+                render_explored_tool_pill_run(
+                    ui,
+                    msg_idx,
+                    blocks,
+                    &tool_run,
+                    needs_scroll,
+                    &mut hidden_before,
+                    visible_start,
+                    last_tool_idx,
+                    streaming,
                 );
             }
         }
-    };
+    }
 
     if needs_scroll {
-        // Height = exactly 5 pills + gaps between them.
-        let scroll_h = (TOOL_PILL_HEIGHT + TOOL_PILL_GAP) * MAX_VISIBLE_STREAMING_TOOL_PILLS as f32;
-        ScrollArea::vertical()
-            .id_salt((msg_idx, start, "tool_pill_scroll"))
-            .auto_shrink([false, false])
-            .max_height(scroll_h)
-            .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
-            .stick_to_bottom(true)
-            .enable_scrolling(false)
-            .show(ui, render_items);
-    } else {
-        render_items(ui);
+        let hidden = tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
+        if hidden > 0 {
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(format!("+{hidden} earlier tool calls"))
+                    .size(FS_TINY)
+                    .color(C_TEXT_MUTED),
+            );
+        }
     }
 }
 
@@ -1226,34 +1270,36 @@ fn render_thinking_group_block(
     ui: &mut Ui,
     msg_idx: usize,
     salt: usize,
-    title: String,
     combined: String,
     live: bool,
 ) {
-    CollapsingHeader::new(RichText::new(title).size(FS_SMALL).color(C_TEXT_MUTED))
-        .id_salt((msg_idx, salt, "thinking", block_state_tag(live)))
-        .default_open(true)
-        .show_unindented(ui, |ui| {
-            if live {
-                ui.horizontal(|ui| {
-                    animated_status_label(ui, "Thinking", FS_TINY);
-                });
-                ui.add_space(4.0);
-            }
-            let bubble_w = content_wrap_width(ui);
-            ui.set_width(bubble_w);
-            let overflow = combined.lines().count() > BLOCK_PREVIEW_LINES;
-            render_expandable_monospace_panel(
-                ui,
-                C_BG_ELEVATED,
-                BLOCK_PREVIEW_LINES,
-                expand_persist_id(Id::new((msg_idx, salt, "thinking_body"))),
-                overflow,
-                combined.as_str(),
-                C_TEXT_MUTED,
-            );
+    if live {
+        ui.horizontal(|ui| {
+            animated_status_label(ui, "Thinking", FS_TINY);
         });
+        ui.add_space(4.0);
+    }
+    let bubble_w = content_wrap_width(ui);
+    ui.set_width(bubble_w);
+    let overflow = combined.lines().count() > BLOCK_PREVIEW_LINES;
+    render_expandable_monospace_panel(
+        ui,
+        C_BG_ELEVATED,
+        BLOCK_PREVIEW_LINES,
+        expand_persist_id(Id::new((msg_idx, salt, "thinking_body", block_state_tag(live)))),
+        overflow,
+        combined.as_str(),
+        C_TEXT_MUTED,
+    );
     ui.add_space(8.0);
+}
+
+fn thinking_group_is_live(blocks: &[AssistantBlock], after_idx: usize, streaming: bool) -> bool {
+    streaming
+        && blocks[after_idx..].iter().all(|block| match block {
+            AssistantBlock::Answer(text) => text.trim().is_empty(),
+            _ => false,
+        })
 }
 
 fn trailing_answer_start(blocks: &[AssistantBlock]) -> usize {
@@ -1324,9 +1370,8 @@ fn render_activity_range(
                 if combined.trim().is_empty() {
                     continue;
                 }
-                let secs = estimate_thought_seconds(combined.len());
-                let header = format!("Thought for {secs}s");
-                render_thinking_group_block(ui, msg_idx, global[0], header, combined, streaming);
+                let thinking_live = thinking_group_is_live(blocks, global.last().copied().unwrap_or(global[0]) + 1, streaming);
+                render_thinking_group_block(ui, msg_idx, global[0], combined, thinking_live);
             }
             AssistantBlockGroup::Answer(i) => {
                 let gi = start + i;
