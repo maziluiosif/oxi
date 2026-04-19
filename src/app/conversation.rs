@@ -190,11 +190,11 @@ impl OxiApp {
                 .show(ui.ctx(), |ui| {
                     if ui
                         .add_sized(
-                            [28.0, 28.0],
+                            [30.0, 28.0],
                             Button::new(RichText::new("☰").size(14.0).color(C_TEXT_MUTED))
                                 .fill(C_BG_ELEVATED)
                                 .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                                .rounding(6.0),
+                                .rounding(8.0),
                         )
                         .on_hover_text("Show sidebar")
                         .clicked()

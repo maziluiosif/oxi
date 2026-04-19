@@ -17,8 +17,9 @@ use crate::model::{
     ChatMessage, MsgRole, UserAttachment,
 };
 use crate::theme::{
-    animated_status_label, content_wrap_width, icon_font, tool_status_label, C_BG_ELEVATED,
-    C_BG_INPUT, C_BORDER, C_TEXT, C_TEXT_MUTED, C_USER_BUBBLE, FS_BODY, FS_SMALL, FS_TINY,
+    animated_status_label, content_wrap_width, icon_font, tool_status_label, C_ACCENT,
+    C_BG_ELEVATED, C_BG_INPUT, C_BORDER, C_BORDER_SUBTLE, C_TEXT, C_TEXT_FAINT, C_TEXT_MUTED,
+    C_USER_BUBBLE, FS_BODY, FS_SMALL, FS_TINY,
 };
 use crate::ui::preview_expand::{
     clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
@@ -98,6 +99,13 @@ fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
         ..Default::default()
     };
 
+    // Cursor-style muted green/red: saturated text over a low-alpha tint.
+    const ADD_TEXT: Color32 = Color32::from_rgb(0x86, 0xef, 0xac);
+    const ADD_BG: Color32 = Color32::from_rgba_premultiplied(0x10, 0x33, 0x22, 0xff);
+    const DEL_TEXT: Color32 = Color32::from_rgb(0xfc, 0xa5, 0xa5);
+    const DEL_BG: Color32 = Color32::from_rgba_premultiplied(0x35, 0x14, 0x18, 0xff);
+    const CONTEXT_TEXT: Color32 = Color32::from_rgb(0x8d, 0x90, 0x9b);
+
     for (i, line) in lines.iter().enumerate() {
         let start = job.text.len();
         job.text.push_str(line);
@@ -106,17 +114,11 @@ fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
         }
         let end = job.text.len();
         let (color, background) = if line.starts_with('+') {
-            (
-                Color32::from_rgb(0xa7, 0xf3, 0xd0),
-                Color32::from_rgb(0x12, 0x2c, 0x22),
-            )
+            (ADD_TEXT, ADD_BG)
         } else if line.starts_with('-') {
-            (
-                Color32::from_rgb(0xfe, 0xca, 0xca),
-                Color32::from_rgb(0x31, 0x16, 0x1b),
-            )
+            (DEL_TEXT, DEL_BG)
         } else {
-            (Color32::from_gray(160), Color32::TRANSPARENT)
+            (CONTEXT_TEXT, Color32::TRANSPARENT)
         };
         job.sections.push(LayoutSection {
             leading_space: 0.0,
@@ -212,9 +214,9 @@ fn render_expandable_monospace_panel(
 ) {
     let frame = Frame::none()
         .fill(panel_fill)
-        .stroke(Stroke::new(1.0, C_BORDER))
+        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
         .rounding(Rounding::same(8.0))
-        .inner_margin(Margin::symmetric(8.0, 5.0))
+        .inner_margin(Margin::symmetric(10.0, 7.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let inner = ui.available_width().max(40.0);
@@ -372,66 +374,52 @@ fn render_tool_pill(
     let running = tool_in_flight && is_last_in_run;
 
     let pill_bg = if has_error {
-        Color32::from_rgb(0x28, 0x14, 0x14)
+        Color32::from_rgb(0x26, 0x13, 0x14)
     } else {
-        Color32::from_rgb(0x1a, 0x1b, 0x1f)
+        C_BG_ELEVATED
     };
     let pill_border = if has_error {
-        Color32::from_rgb(0x50, 0x1c, 0x1c)
+        Color32::from_rgb(0x4b, 0x1e, 0x1f)
     } else {
-        Color32::from_rgb(0x28, 0x29, 0x2f)
+        C_BORDER_SUBTLE
     };
-    // All icons and text use the same muted palette — no colour coding by tool type.
     let icon_color = if has_error {
         Color32::from_rgb(0xff, 0x80, 0x80)
     } else {
-        C_TEXT_MUTED
+        C_TEXT_FAINT
     };
     let name_color = if has_error {
         Color32::from_rgb(0xff, 0xa0, 0xa0)
     } else {
         C_TEXT
     };
-    let arg_color = Color32::from_rgb(0x7a, 0x7d, 0x8c);
+    let arg_color = C_TEXT_MUTED;
 
     let icon = tool_icon(name);
     let arg = tool_short_arg(name, args_summary.as_ref());
 
-    // Dacă are body, wrapper-ul e un CollapsingHeader pe pill; altfel doar pill.
     let state_tag = block_state_tag(streaming);
 
-    // Construim header-ul custom
     let draw_pill = |ui: &mut Ui, expanded: Option<bool>| {
         Frame::none()
             .fill(pill_bg)
             .stroke(Stroke::new(1.0, pill_border))
-            .rounding(Rounding::same(5.0))
-            .inner_margin(Margin::symmetric(7.0, 3.0))
+            .rounding(Rounding::same(7.0))
+            .inner_margin(Margin::symmetric(10.0, 5.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 5.0;
-                    if let Some(open) = expanded {
-                        ui.label(
-                            RichText::new(if open { "▾" } else { "▸" })
-                                .size(FS_TINY)
-                                .color(C_TEXT_MUTED),
-                        );
-                    }
-                    // Icon — plain monospace glyph, no coloured badge background
+                    ui.spacing_mut().item_spacing.x = 7.0;
                     ui.label(
                         RichText::new(icon)
-                            .font(FontId::new(FS_TINY + 1.0, icon_font()))
+                            .font(FontId::new(FS_SMALL + 0.5, icon_font()))
                             .color(icon_color),
                     );
-                    // Tool name
                     ui.label(
-                        RichText::new(name.as_str())
+                        RichText::new(tool_status_label(name))
                             .size(FS_SMALL)
-                            .color(name_color)
-                            .strong(),
+                            .color(name_color),
                     );
-                    // Argument (truncated)
                     if let Some(ref a) = arg {
                         ui.add(
                             Label::new(
@@ -444,9 +432,15 @@ fn render_tool_pill(
                         );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Keep the spinner pinned at the far right on the latest live tool.
+                        if let Some(open) = expanded {
+                            ui.label(
+                                RichText::new(if open { "▾" } else { "▸" })
+                                    .size(FS_TINY)
+                                    .color(C_TEXT_FAINT),
+                            );
+                        }
                         if running {
-                            ui.add(eframe::egui::Spinner::new().size(9.0).color(C_TEXT_MUTED));
+                            ui.add(eframe::egui::Spinner::new().size(10.0).color(C_TEXT_MUTED));
                         }
                     });
                 });
@@ -530,9 +524,9 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage, agent_ack:
             ui.set_width(col_w);
             Frame::none()
                 .fill(C_USER_BUBBLE)
-                .stroke(Stroke::new(1.0, C_BORDER))
-                .rounding(Rounding::same(18.0))
-                .inner_margin(Margin::symmetric(12.0, 8.0))
+                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                .rounding(Rounding::same(12.0))
+                .inner_margin(Margin::symmetric(14.0, 10.0))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     if !msg.text.is_empty() {
@@ -872,16 +866,16 @@ fn render_edit_tool_block(
         .unwrap_or((0, 0));
 
     let outer_border = if has_error {
-        Color32::from_rgb(0x5c, 0x20, 0x20)
+        Color32::from_rgb(0x4b, 0x1e, 0x1f)
     } else {
-        C_BORDER
+        C_BORDER_SUBTLE
     };
     let header_bg = if has_error {
         Color32::from_rgb(0x22, 0x14, 0x14)
     } else {
-        Color32::from_rgb(0x16, 0x17, 0x1a)
+        C_BG_ELEVATED
     };
-    let diff_bg = Color32::from_rgb(0x10, 0x11, 0x14);
+    let diff_bg = Color32::from_rgb(0x0c, 0x0d, 0x10);
 
     let collapse_id = Id::new((msg_idx, block_idx, "edit_diff_collapse"));
     let mut open = egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -899,11 +893,9 @@ fn render_edit_tool_block(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
 
-            // ── Header row ───────────────────────────────────────────────────
             let header_resp = Frame::none()
                 .fill(header_bg)
                 .rounding(if is_open && has_diff {
-                    // round only top corners when diff is visible below
                     eframe::egui::Rounding {
                         nw: 8.0,
                         ne: 8.0,
@@ -913,20 +905,20 @@ fn render_edit_tool_block(
                 } else {
                     Rounding::same(8.0)
                 })
-                .inner_margin(Margin::symmetric(10.0, 7.0))
+                .inner_margin(Margin::symmetric(12.0, 8.0))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.spacing_mut().item_spacing.x = 8.0;
 
-                        // Chevron toggle (only when diff available)
-                        if has_diff {
-                            ui.label(
-                                RichText::new(if is_open { "▾" } else { "▸" })
-                                    .size(FS_TINY)
-                                    .color(C_TEXT_MUTED),
-                            );
-                        }
+                        let dot_color = if has_error {
+                            Color32::from_rgb(0xff, 0x80, 0x80)
+                        } else if running {
+                            C_ACCENT
+                        } else {
+                            C_TEXT_FAINT
+                        };
+                        ui.label(RichText::new("●").size(FS_TINY).color(dot_color));
 
                         ui.label(
                             RichText::new(&display_path)
@@ -936,21 +928,29 @@ fn render_edit_tool_block(
                                 } else {
                                     C_TEXT
                                 })
-                                .strong()
-                                .monospace(),
+                                .monospace()
+                                .strong(),
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if has_diff {
+                                ui.label(
+                                    RichText::new(if is_open { "▾" } else { "▸" })
+                                        .size(FS_TINY)
+                                        .color(C_TEXT_FAINT),
+                                );
+                                ui.add_space(2.0);
+                            }
                             if running {
                                 ui.add(eframe::egui::Spinner::new().size(10.0).color(C_TEXT_MUTED));
                             } else if has_diff {
-                                // +added / -removed badges
                                 ui.label(
                                     RichText::new(format!("-{removed}"))
                                         .size(FS_TINY)
-                                        .color(Color32::from_rgb(0xfe, 0xa0, 0xa0))
+                                        .color(Color32::from_rgb(0xfc, 0xa5, 0xa5))
                                         .monospace(),
                                 );
+                                ui.add_space(2.0);
                                 ui.label(
                                     RichText::new(format!("+{added}"))
                                         .size(FS_TINY)
@@ -1235,27 +1235,32 @@ fn render_explored_cluster(ui: &mut Ui, ctx: ExploredClusterCtx<'_>) {
 
     if streaming {
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("▾")
-                    .size(FS_TINY)
-                    .color(Color32::from_rgb(0x5a, 0x5d, 0x6b)),
-            );
+            ui.label(RichText::new("▾").size(FS_TINY).color(C_TEXT_FAINT));
             ui.label(
                 RichText::new(&header_label)
                     .size(FS_TINY)
-                    .color(Color32::from_rgb(0x5a, 0x5d, 0x6b)),
+                    .color(C_TEXT_FAINT),
             );
         });
-        ui.vertical(|ui| {
-            ui.set_width(ui.available_width());
-            render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming, false);
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            let bar_rect = ui
+                .allocate_exact_size(eframe::egui::vec2(2.0, body_height), Sense::hover())
+                .0;
+            ui.painter()
+                .rect_filled(bar_rect, Rounding::same(1.0), C_BORDER_SUBTLE);
+            ui.add_space(8.0);
+            ui.vertical(|ui| {
+                ui.set_width(ui.available_width());
+                render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming, false);
+            });
         });
     } else {
         let header_response = open_state.show_header(ui, |ui| {
             ui.label(
                 RichText::new(&header_label)
                     .size(FS_TINY)
-                    .color(Color32::from_rgb(0x5a, 0x5d, 0x6b)),
+                    .color(C_TEXT_FAINT),
             );
         });
         header_response.body_unindented(|ui| {
@@ -1263,12 +1268,9 @@ fn render_explored_cluster(ui: &mut Ui, ctx: ExploredClusterCtx<'_>) {
                 let bar_rect = ui
                     .allocate_exact_size(eframe::egui::vec2(2.0, body_height), Sense::hover())
                     .0;
-                ui.painter().rect_filled(
-                    bar_rect,
-                    Rounding::same(1.0),
-                    Color32::from_rgb(0x2a, 0x2c, 0x35),
-                );
-                ui.add_space(6.0);
+                ui.painter()
+                    .rect_filled(bar_rect, Rounding::same(1.0), C_BORDER_SUBTLE);
+                ui.add_space(8.0);
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width());
                     render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming, expanded);
