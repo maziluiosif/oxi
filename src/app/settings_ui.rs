@@ -127,9 +127,7 @@ impl OxiApp {
                         if ui
                             .add(
                                 Button::new(
-                                    RichText::new("✕  Close")
-                                        .size(FS_SMALL)
-                                        .color(C_TEXT_MUTED),
+                                    RichText::new("✕  Close").size(FS_SMALL).color(C_TEXT_MUTED),
                                 )
                                 .fill(C_BG_ELEVATED)
                                 .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
@@ -202,11 +200,7 @@ impl OxiApp {
                 .monospace(),
             );
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("●")
-                        .size(FS_TINY)
-                        .color(C_SUCCESS),
-                );
+                ui.label(RichText::new("●").size(FS_TINY).color(C_SUCCESS));
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("Auto-saved")
@@ -382,15 +376,11 @@ impl OxiApp {
                         active_pill(ui, "Active");
                     } else if ui
                         .add(
-                            Button::new(
-                                RichText::new("Make active")
-                                    .size(FS_SMALL)
-                                    .color(C_TEXT),
-                            )
-                            .fill(C_BG_ELEVATED_2)
-                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                            .rounding(7.0)
-                            .min_size(egui::vec2(0.0, 26.0)),
+                            Button::new(RichText::new("Make active").size(FS_SMALL).color(C_TEXT))
+                                .fill(C_BG_ELEVATED_2)
+                                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                                .rounding(7.0)
+                                .min_size(egui::vec2(0.0, 26.0)),
                         )
                         .on_hover_text("Use this profile for new chats")
                         .clicked()
@@ -451,10 +441,12 @@ impl OxiApp {
                     );
                     ui.add_space(4.0);
                     ui.add(
-                        TextEdit::singleline(&mut self.conv.settings.profiles[idx].openrouter_title)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("X-Title")
-                            .margin(Margin::symmetric(8.0, 5.0)),
+                        TextEdit::singleline(
+                            &mut self.conv.settings.profiles[idx].openrouter_title,
+                        )
+                        .desired_width(f32::INFINITY)
+                        .hint_text("X-Title")
+                        .margin(Margin::symmetric(8.0, 5.0)),
                     );
                 });
             }
@@ -474,9 +466,7 @@ impl OxiApp {
         settings_section_title(
             ui,
             "System prompt",
-            Some(
-                "Single editable prompt. Use {tools_list} to inject the currently enabled tools.",
-            ),
+            Some("Single editable prompt. Use {tools_list} to inject the currently enabled tools."),
         );
 
         card_frame().show(ui, |ui| {
@@ -557,15 +547,11 @@ impl OxiApp {
                 }
                 if ui
                     .add_enabled(signed_in, {
-                        Button::new(
-                            RichText::new("Sign out")
-                                .size(FS_SMALL)
-                                .color(C_TEXT),
-                        )
-                        .fill(C_BG_ELEVATED_2)
-                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                        .rounding(7.0)
-                        .min_size(egui::vec2(0.0, 28.0))
+                        Button::new(RichText::new("Sign out").size(FS_SMALL).color(C_TEXT))
+                            .fill(C_BG_ELEVATED_2)
+                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                            .rounding(7.0)
+                            .min_size(egui::vec2(0.0, 28.0))
                     })
                     .clicked()
                 {
@@ -636,15 +622,11 @@ impl OxiApp {
                 }
                 if ui
                     .add_enabled(signed_in, {
-                        Button::new(
-                            RichText::new("Sign out")
-                                .size(FS_SMALL)
-                                .color(C_TEXT),
-                        )
-                        .fill(C_BG_ELEVATED_2)
-                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                        .rounding(7.0)
-                        .min_size(egui::vec2(0.0, 28.0))
+                        Button::new(RichText::new("Sign out").size(FS_SMALL).color(C_TEXT))
+                            .fill(C_BG_ELEVATED_2)
+                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                            .rounding(7.0)
+                            .min_size(egui::vec2(0.0, 28.0))
                     })
                     .clicked()
                 {
