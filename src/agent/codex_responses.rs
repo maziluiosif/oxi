@@ -311,15 +311,14 @@ fn process_responses_event(
         "response.output_item.done" => {
             if let Some(item) = v.get("item") {
                 match item.get("type").and_then(|x| x.as_str()) {
-                    Some("reasoning") => {
-                        if !state.got_thinking_delta {
+                    Some("reasoning")
+                        if !state.got_thinking_delta => {
                             if let Some(text) = reasoning_item_summary_joined(item) {
                                 if !text.is_empty() {
                                     let _ = tx.send(AgentEvent::ThinkingDelta(text));
                                 }
                             }
                         }
-                    }
                     Some("function_call") => {
                         let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
                         let args = item

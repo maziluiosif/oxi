@@ -37,8 +37,7 @@ impl OxiApp {
             let w = self
                 .conv
                 .sidebar_width
-                .max(SIDEBAR_W_MIN)
-                .min(SIDEBAR_W_MAX);
+                .clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
             ui.allocate_ui_with_layout(
                 egui::vec2(w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
