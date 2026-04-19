@@ -34,7 +34,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
         .filter_map(|path| parse_session_file(&path))
         .collect();
 
-    sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
+    sessions.sort_by_key(|b| std::cmp::Reverse(b.modified));
 
     sessions
         .into_iter()

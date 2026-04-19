@@ -136,15 +136,13 @@ pub fn parse_session_header_and_messages(path: &Path) -> Option<(Option<String>,
         }
 
         match value.get("type").and_then(Value::as_str) {
-            Some("session_info") => {
-                if session_name.is_none() {
-                    session_name = value
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|name| !name.is_empty())
-                        .map(ToOwned::to_owned);
-                }
+            Some("session_info") if session_name.is_none() => {
+                session_name = value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(ToOwned::to_owned);
             }
             Some("message") if first_user_message.is_none() => {
                 if let Some(message) = value.get("message") {
