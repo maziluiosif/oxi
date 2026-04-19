@@ -1,6 +1,6 @@
 use eframe::egui::Color32;
 
-use crate::theme::{C_ACCENT, C_TEXT_MUTED};
+use crate::theme::{C_ACCENT, C_SUCCESS};
 
 use super::{OxiApp, SessionKey};
 
@@ -31,7 +31,7 @@ impl OxiApp {
         } else if self.any_waiting_response() {
             ("Running", C_ACCENT)
         } else {
-            ("Ready", C_TEXT_MUTED)
+            ("Ready", C_SUCCESS)
         }
     }
 }

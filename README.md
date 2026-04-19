@@ -1,19 +1,20 @@
 # oxi
 
-`oxi` is a desktop coding-agent chat app built in Rust with **egui/eframe**.
-It runs as a **single local binary** and combines:
+`oxi` is a local desktop coding-agent chat app built in Rust with **egui/eframe**.
+It runs as a **single native binary** and combines:
 
-- a local desktop chat UI
+- a desktop chat UI
 - streaming LLM responses
 - built-in workspace tools
 - local session persistence per workspace
+- configurable provider profiles
 - optional OAuth for Codex and GitHub Copilot
 
-The repository builds the native `oxi` desktop binary.
+The repository builds the native `oxi` desktop app.
 
 ## Overview
 
-`oxi` is designed for local coding workflows rather than generic chat.
+`oxi` is meant for local coding workflows rather than generic chat.
 From the current codebase, it supports:
 
 - multiple **workspaces** in the sidebar
@@ -27,7 +28,7 @@ From the current codebase, it supports:
   - `find`
   - `ls`
 - streaming assistant output with structured UI blocks
-- configurable provider **profiles**
+- configurable provider **profiles** with per-profile model and auth settings
 - local persistence for settings, OAuth tokens, and chat sessions
 - image attachments in chat messages
 
@@ -36,7 +37,7 @@ From the current codebase, it supports:
 ### Workspace-oriented chats
 
 On startup, the app uses the current working directory as the first workspace.
-You can then add more workspace folders from the UI.
+You can add more workspace folders from the UI.
 
 Each workspace has:
 
@@ -49,11 +50,12 @@ Tool calls are executed with the selected workspace as the current directory.
 ### Multiple sessions per workspace
 
 Sessions are shown in the sidebar and loaded from disk when available.
-Behavior visible in code:
+Current behavior visible in code:
 
 - if no saved sessions exist, the app creates an in-memory `New chat`
 - saved sessions are sorted by modification time
 - session message bodies are loaded lazily when selected
+- session drafts keep per-session composer text and pending images when switching chats
 - deleting a session removes its backing `.jsonl` file
 - deletion tries the `trash` command first, then falls back to direct file removal
 
@@ -71,7 +73,7 @@ The agent can call these tools when enabled in Settings:
 | `find` | Find files matching a glob pattern |
 | `ls` | List directory entries |
 
-Behavior confirmed in `src/agent/tools.rs`:
+Behavior confirmed in `src/agent/tools/`:
 
 - path-based tools reject paths that escape the workspace root
 - `write` can create new files under the workspace
@@ -91,11 +93,12 @@ Assistant output is rendered as structured blocks rather than plain text only.
 From the code and UI modules, the app supports:
 
 - thinking blocks
-- grouped tool activity
+- grouped tool activity for exploration-style runs
 - compact tool pills
 - diff rendering for file edits/writes
 - markdown final answers
 - visible user attachments in the transcript
+- stop/cancel while a response is streaming
 
 ### Provider profiles
 
@@ -110,7 +113,12 @@ Each profile stores:
 - API key / token
 - OpenRouter optional headers
 
-The active profile can also be switched directly from the composer.
+The active profile can be switched from:
+
+- the Settings page
+- the composer profile dropdown in the main chat UI
+
+Settings are auto-saved when changed.
 
 ## Architecture
 
@@ -177,12 +185,14 @@ Optional headers supported:
 Defaults:
 
 - default model: `gpt-4o-mini`
+- API-key fallback base URL: `https://api.openai.com/v1`
 
 Two runtime modes exist:
 
 1. **OAuth mode**
    - uses ChatGPT/Codex OAuth
    - uses the Responses-style backend at `https://chatgpt.com/backend-api` unless the profile overrides the base URL
+   - sends requests to the Codex responses endpoint under that base URL
 
 2. **API key fallback mode**
    - uses OpenAI-compatible chat completions
@@ -200,6 +210,7 @@ Two runtime modes exist:
 1. **OAuth mode**
    - uses GitHub device flow
    - exchanges the GitHub token for a Copilot API token
+   - can derive an enterprise API base URL from the OAuth response
 
 2. **token/PAT fallback mode**
    - uses the profile token or one of:
@@ -216,6 +227,10 @@ Copilot backend selection is model-dependent:
 Current limitation:
 
 - Copilot models that require the **Responses API** are detected, but not yet implemented in `oxi`
+
+Implementation note:
+
+- Copilot requests set `X-Initiator` based on message flow so tool-follow-up turns are treated as agent turns
 
 ## OAuth flows
 
@@ -258,13 +273,16 @@ Supported image formats in code:
 - GIF
 - WebP
 
-Attachment limits are enforced in the UI layer.
+Attachment limits are enforced in the UI layer:
+
+- max image count per message
+- max bytes per image
 
 Important note about provider payloads:
 
 - user image attachments are stored in messages and rendered in the transcript
 - they are converted into OpenAI-style `image_url` content blocks when history is prepared
-- actual provider compatibility may still depend on the selected backend/model
+- actual provider compatibility still depends on the selected backend/model
 
 ## Settings and configuration
 
@@ -292,7 +310,8 @@ The settings UI allows:
 - editing OpenRouter headers
 - enabling/disabling tools
 - launching OAuth sign-in and sign-out
-- saving settings to disk
+- editing the system prompt
+- saving settings automatically to disk
 
 ## Sessions and local data
 
@@ -304,6 +323,7 @@ Behavior visible in the session store:
 - titles are derived from session metadata or the first user message
 - duplicate trailing history can be deduplicated before save/load flows
 - assistant blocks and attachments are preserved in session serialization
+- saved sessions initially load as headers-only rows and full messages are read lazily when opened
 
 ## Build and run
 
@@ -365,10 +385,13 @@ Based on the current source code:
 - OAuth tokens are stored as JSON on disk
 - workspace path protections apply to file-based tools, but you should still use the app on trusted repositories
 - long conversations are trimmed heuristically by character budget, not exact tokenizer counts
+- image support in provider requests depends on backend/model compatibility
 
 ## Useful source files
 
-- `src/agent/tools.rs` — built-in tool definitions and execution
+- `src/agent/tools/mod.rs` — built-in tool dispatch and shared limits
+- `src/agent/tools/file_ops.rs` — `read` / `write` / `edit` and diff generation
+- `src/agent/tools/shell_search.rs` — `bash` / `grep` / `find` / `ls`
 - `src/agent/runner.rs` — provider selection, auth fallback, and run orchestration
 - `src/agent/history.rs` — conversation-to-provider message conversion and context trimming
 - `src/agent/prompt.rs` — system prompt construction

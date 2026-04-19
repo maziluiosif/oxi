@@ -26,24 +26,32 @@ pub fn icon_font() -> FontFamily {
 }
 
 // Cursor-like dark palette: near-black chat, slightly lifted sidebar, cool blue accents.
-pub const C_BG_MAIN: Color32 = Color32::from_rgb(0x0b, 0x0b, 0x0c);
+pub const C_BG_MAIN: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0b);
 /// Sidebar column — a step above main chat (Cursor-like rail).
-pub const C_BG_SIDEBAR: Color32 = Color32::from_rgb(0x13, 0x13, 0x15);
-pub const C_BG_ELEVATED: Color32 = Color32::from_rgb(0x20, 0x20, 0x24);
+pub const C_BG_SIDEBAR: Color32 = Color32::from_rgb(0x0f, 0x10, 0x12);
+pub const C_BG_ELEVATED: Color32 = Color32::from_rgb(0x17, 0x18, 0x1c);
+/// Second-level elevated surface (cards inside panels).
+pub const C_BG_ELEVATED_2: Color32 = Color32::from_rgb(0x1c, 0x1d, 0x22);
 /// Composer field surface.
-pub const C_BG_INPUT: Color32 = Color32::from_rgb(0x17, 0x17, 0x1a);
-pub const C_BORDER: Color32 = Color32::from_rgb(0x27, 0x28, 0x2d);
-pub const C_BORDER_SUBTLE: Color32 = Color32::from_rgb(0x1f, 0x20, 0x24);
-pub const C_ACCENT: Color32 = Color32::from_rgb(0x5c, 0xb3, 0xff);
-pub const C_TEXT: Color32 = Color32::from_rgb(0xe7, 0xe7, 0xec);
-pub const C_TEXT_MUTED: Color32 = Color32::from_rgb(0x99, 0x99, 0xa3);
+pub const C_BG_INPUT: Color32 = Color32::from_rgb(0x14, 0x15, 0x18);
+pub const C_BORDER: Color32 = Color32::from_rgb(0x2a, 0x2c, 0x32);
+pub const C_BORDER_SUBTLE: Color32 = Color32::from_rgb(0x1e, 0x20, 0x25);
+pub const C_BORDER_STRONG: Color32 = Color32::from_rgb(0x38, 0x3b, 0x43);
+pub const C_ACCENT: Color32 = Color32::from_rgb(0x63, 0xb3, 0xff);
+pub const C_TEXT: Color32 = Color32::from_rgb(0xec, 0xec, 0xf1);
+pub const C_TEXT_MUTED: Color32 = Color32::from_rgb(0x93, 0x95, 0xa0);
+pub const C_TEXT_FAINT: Color32 = Color32::from_rgb(0x6b, 0x6d, 0x78);
 /// Workspace / folder headers in the sidebar (Cursor-style dim label).
 pub const C_SIDEBAR_SECTION: Color32 = Color32::from_rgb(0x7a, 0x7d, 0x87);
-pub const C_USER_BUBBLE: Color32 = Color32::from_rgb(0x2a, 0x2c, 0x33);
+pub const C_USER_BUBBLE: Color32 = Color32::from_rgb(0x25, 0x27, 0x2d);
 /// Selected chat row (sidebar) — cool grey pill like Cursor’s list selection.
-pub const C_ROW_ACTIVE: Color32 = Color32::from_rgb(0x26, 0x2b, 0x34);
+pub const C_ROW_ACTIVE: Color32 = Color32::from_rgb(0x24, 0x29, 0x32);
 /// Unselected row hover (sidebar list).
-pub const C_ROW_HOVER: Color32 = Color32::from_rgb(0x20, 0x22, 0x28);
+pub const C_ROW_HOVER: Color32 = Color32::from_rgb(0x1a, 0x1c, 0x21);
+/// Subtle success / positive color (connection ok, badges).
+pub const C_SUCCESS: Color32 = Color32::from_rgb(0x4a, 0xc8, 0x8c);
+/// Danger color for destructive actions.
+pub const C_DANGER: Color32 = Color32::from_rgb(0xe0, 0x6c, 0x6c);
 /// Max width for message/composer column (left-aligned; extra space stays on the right).
 pub const CHAT_COLUMN_MAX: f32 = 720.0;
 
@@ -134,35 +142,48 @@ pub fn setup_style(ctx: &egui::Context) {
     let mut visuals = Visuals::dark();
     visuals.window_fill = C_BG_MAIN;
     visuals.panel_fill = C_BG_MAIN;
-    visuals.extreme_bg_color = Color32::from_rgb(0x0c, 0x0c, 0x0d);
-    visuals.faint_bg_color = Color32::from_rgb(0x1d, 0x1d, 0x21);
+    visuals.extreme_bg_color = Color32::from_rgb(0x0b, 0x0b, 0x0c);
+    visuals.faint_bg_color = Color32::from_rgb(0x18, 0x19, 0x1d);
     visuals.override_text_color = Some(C_TEXT);
+    visuals.window_rounding = egui::Rounding::same(10.0);
+    visuals.menu_rounding = egui::Rounding::same(8.0);
+    visuals.widgets.noninteractive.rounding = egui::Rounding::same(6.0);
+    visuals.widgets.inactive.rounding = egui::Rounding::same(6.0);
+    visuals.widgets.hovered.rounding = egui::Rounding::same(6.0);
+    visuals.widgets.active.rounding = egui::Rounding::same(6.0);
+    visuals.widgets.open.rounding = egui::Rounding::same(6.0);
     // Side panel separator, indentation guides — match app chrome.
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, C_BORDER_SUBTLE);
     visuals.widgets.noninteractive.bg_fill = C_BG_ELEVATED;
     visuals.widgets.noninteractive.fg_stroke.color = C_TEXT_MUTED;
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(0x2a, 0x2c, 0x31);
-    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(0x2a, 0x2c, 0x31);
+    visuals.widgets.inactive.bg_fill = C_BG_ELEVATED;
+    visuals.widgets.inactive.weak_bg_fill = C_BG_ELEVATED;
     visuals.widgets.inactive.fg_stroke.color = C_TEXT;
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x34, 0x36, 0x3c);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x34, 0x36, 0x3c);
-    visuals.widgets.active.bg_fill = Color32::from_rgb(0x38, 0x3b, 0x43);
-    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(0x38, 0x3b, 0x43);
-    visuals.widgets.open.bg_fill = Color32::from_rgb(0x34, 0x35, 0x3a);
-    visuals.selection.bg_fill = Color32::from_rgb(0x2a, 0x3d, 0x55);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(0x4a, 0x7a, 0xb0));
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x23, 0x25, 0x2b);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x23, 0x25, 0x2b);
+    visuals.widgets.active.bg_fill = Color32::from_rgb(0x2b, 0x2e, 0x36);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(0x2b, 0x2e, 0x36);
+    visuals.widgets.open.bg_fill = Color32::from_rgb(0x22, 0x24, 0x2a);
+    visuals.selection.bg_fill = Color32::from_rgb(0x2a, 0x42, 0x60);
+    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(0x55, 0x8b, 0xc2));
     visuals.window_stroke = Stroke::new(1.0, C_BORDER_SUBTLE);
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, C_BORDER_SUBTLE);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x3d, 0x3f, 0x46));
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x47, 0x49, 0x51));
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, C_BORDER);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, C_BORDER_STRONG);
 
     let mut style = (*ctx.style()).clone();
     style.visuals = visuals;
     style.interaction.selectable_labels = false;
-    style.spacing.item_spacing = egui::vec2(5.0, 2.0);
-    style.spacing.button_padding = egui::vec2(6.0, 3.0);
-    style.spacing.indent = 11.0;
-    style.spacing.interact_size.y = 23.0;
+    style.spacing.item_spacing = egui::vec2(6.0, 3.0);
+    style.spacing.button_padding = egui::vec2(8.0, 4.0);
+    style.spacing.indent = 12.0;
+    style.spacing.interact_size.y = 24.0;
+    style.spacing.menu_margin = egui::Margin::same(6.0);
+    style.spacing.window_margin = egui::Margin::same(10.0);
+    style.spacing.combo_width = 220.0;
+    style.spacing.scroll.bar_width = 8.0;
+    style.spacing.scroll.handle_min_length = 24.0;
+    style.spacing.scroll.floating = true;
     ctx.set_style(style);
 }
 
