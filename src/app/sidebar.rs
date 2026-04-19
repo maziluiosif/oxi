@@ -21,33 +21,51 @@ impl OxiApp {
     pub(crate) fn render_sidebar(&mut self, ui: &mut Ui) {
         let (status_text, status_color) = self.connection_status();
         ui.set_min_width(ui.max_rect().width());
+
+        // Top row: app title + collapse button
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(RichText::new("CHATS").size(FS_TINY).color(C_TEXT_MUTED));
-            ui.label(RichText::new("·").size(FS_TINY).color(C_SIDEBAR_SECTION));
-            ui.label(RichText::new(status_text).size(FS_TINY).color(status_color));
-            ui.add_space(ui.available_width());
-            if ui
-                .add(
-                    Button::new(RichText::new("◀").size(FS_TINY).color(C_SIDEBAR_SECTION))
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(
+                RichText::new("oxi")
+                    .size(15.0)
+                    .color(crate::theme::C_TEXT)
+                    .strong(),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(
+                        Button::new(
+                            RichText::new("⇤")
+                                .size(FS_SMALL)
+                                .color(C_SIDEBAR_SECTION),
+                        )
                         .frame(false)
                         .fill(Color32::TRANSPARENT),
-                )
-                .on_hover_text("Hide sidebar")
-                .clicked()
-            {
-                self.conv.sidebar_open = false;
-            }
+                    )
+                    .on_hover_text("Hide sidebar")
+                    .clicked()
+                {
+                    self.conv.sidebar_open = false;
+                }
+            });
         });
-        ui.add_space(6.0);
+
+        // Subtle status line: connection status
+        ui.horizontal(|ui| {
+            ui.add_space(1.0);
+            ui.label(RichText::new("●").size(9.0).color(status_color));
+            ui.add_space(4.0);
+            ui.label(RichText::new(status_text).size(FS_TINY).color(C_TEXT_MUTED));
+        });
+        ui.add_space(10.0);
 
         sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
 
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         self.render_sidebar_add_workspace(ui);
-        ui.add_space(7.0);
+        ui.add_space(10.0);
 
-        let scroll_h = (ui.available_height() - 34.0).max(48.0);
+        let scroll_h = (ui.available_height() - 38.0).max(48.0);
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
             .max_height(scroll_h)
@@ -57,14 +75,19 @@ impl OxiApp {
                 self.render_sidebar_session_list(ui);
             });
 
-        ui.add_space(6.0);
+        ui.add_space(8.0);
+        // Settings footer row: same rounded pill styling
         if ui
             .add_sized(
-                [ui.available_width(), 28.0],
-                Button::new(RichText::new("⚙ Settings").size(FS_SMALL).color(C_TEXT))
-                    .fill(C_BG_ELEVATED)
-                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                    .rounding(6.0),
+                [ui.available_width(), 30.0],
+                Button::new(
+                    RichText::new("⚙   Settings")
+                        .size(FS_SMALL)
+                        .color(C_TEXT),
+                )
+                .fill(C_BG_ELEVATED)
+                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                .rounding(8.0),
             )
             .on_hover_text("Open settings")
             .clicked()
@@ -75,12 +98,16 @@ impl OxiApp {
     }
 
     fn render_sidebar_add_workspace(&mut self, ui: &mut Ui) {
-        const H: f32 = 26.0;
-        const R: f32 = 6.0;
+        const H: f32 = 30.0;
+        const R: f32 = 8.0;
         let full_w = ui.available_width();
         let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, H), Sense::click());
         let hovered = response.hovered();
-        let fill = if hovered { C_ROW_HOVER } else { C_BG_ELEVATED };
+        let fill = if hovered {
+            Color32::from_rgb(0x1f, 0x21, 0x26)
+        } else {
+            C_BG_ELEVATED
+        };
         let rounding = Rounding::same(R);
         ui.painter().rect_filled(rect, rounding, fill);
         ui.painter().rect_stroke(
@@ -93,7 +120,13 @@ impl OxiApp {
             |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(
-                        RichText::new("+  Add workspace")
+                        RichText::new("＋")
+                            .size(FS_SMALL)
+                            .color(if hovered { C_ACCENT } else { C_TEXT_MUTED }),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("Add workspace")
                             .size(FS_SMALL)
                             .color(C_TEXT),
                     );
@@ -131,20 +164,20 @@ impl OxiApp {
                 .add_sized(
                     [row_w, 0.0],
                     Button::new(
-                        RichText::new(format!("{chev}  {root_label}"))
+                        RichText::new(format!("{chev}  {}", root_label.to_uppercase()))
                             .size(FS_TINY)
                             .color(C_SIDEBAR_SECTION),
                     )
                     .frame(false)
                     .fill(Color32::TRANSPARENT)
-                    .min_size(egui::vec2(row_w, 17.0)),
+                    .min_size(egui::vec2(row_w, 20.0)),
                 )
                 .on_hover_text("Fold or unfold chats. Each folder is a workspace (agent cwd).")
                 .clicked()
             {
                 self.conv.workspaces[wi].sidebar_folded = !folded;
             }
-            ui.add_space(1.0);
+            ui.add_space(2.0);
             if folded {
                 continue;
             }
@@ -183,7 +216,7 @@ impl OxiApp {
                             } else {
                                 Color32::TRANSPARENT
                             };
-                            ui.painter().rect_filled(rect, Rounding::same(4.0), fill);
+                            ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
                             if response.clicked() {
                                 self.select_session_in_workspace(wi, si);
                             }
@@ -301,9 +334,9 @@ impl OxiApp {
 
     /// Top-right floating "New chat" button over the chat column.
     pub(crate) fn render_floating_new_chat_button(&mut self, ui: &Ui, chat_panel: egui::Rect) {
-        const M: f32 = 8.0;
-        const BW: f32 = 98.0;
-        const BH: f32 = 27.0;
+        const M: f32 = 10.0;
+        const BW: f32 = 110.0;
+        const BH: f32 = 28.0;
         let pos = chat_panel.right_top() + egui::vec2(-M - BW, M);
         egui::Area::new(ui.id().with("floating_new_chat"))
             .order(Order::Foreground)
@@ -312,10 +345,14 @@ impl OxiApp {
                 if ui
                     .add_sized(
                         [BW, BH],
-                        Button::new(RichText::new("New chat").size(FS_SMALL).color(C_TEXT))
-                            .fill(C_BG_ELEVATED)
-                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                            .rounding(8.0),
+                        Button::new(
+                            RichText::new("＋  New chat")
+                                .size(FS_SMALL)
+                                .color(C_TEXT),
+                        )
+                        .fill(C_BG_ELEVATED)
+                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                        .rounding(8.0),
                     )
                     .on_hover_text("New chat tab in the active workspace.")
                     .clicked()

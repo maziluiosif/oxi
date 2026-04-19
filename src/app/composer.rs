@@ -4,10 +4,10 @@ use crate::theme::*;
 
 use super::OxiApp;
 
-const COMPOSER_ACTION: f32 = 30.0;
+const COMPOSER_ACTION: f32 = 32.0;
 const COMPOSER_CONTROL_H: f32 = 30.0;
-const COMPOSER_FRAME_MARGIN: f32 = 10.0;
-const COMPOSER_GAP: f32 = 6.0;
+const COMPOSER_FRAME_MARGIN: f32 = 12.0;
+const COMPOSER_GAP: f32 = 8.0;
 
 impl OxiApp {
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
@@ -25,8 +25,8 @@ impl OxiApp {
                 ui.set_width(composer_w);
                 Frame::none()
                     .fill(C_BG_ELEVATED)
-                    .stroke(Stroke::new(1.0, C_BORDER))
-                    .rounding(12.0)
+                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                    .rounding(14.0)
                     .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN))
                     .show(ui, |ui| {
                         // === Text area ===
@@ -77,7 +77,12 @@ impl OxiApp {
 
     /// `[+ attach] [chips…]  …  [model ▾] [▶ send]`
     fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool) {
-        if ui.button("+").on_hover_text("Attach image").clicked() {
+        let attach_btn = Button::new(RichText::new("＋").size(14.0).color(C_TEXT_MUTED))
+            .fill(C_BG_INPUT)
+            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+            .rounding(8.0)
+            .min_size(egui::vec2(COMPOSER_CONTROL_H, COMPOSER_CONTROL_H));
+        if ui.add(attach_btn).on_hover_text("Attach image").clicked() {
             self.pick_image_attachment();
         }
         if !self.conv.pending_images.is_empty() {
@@ -90,13 +95,13 @@ impl OxiApp {
             let (fill, fg, enabled, icon, hover) = if active_session_streaming {
                 (C_ACCENT, Color32::WHITE, true, "■", "Stop generation")
             } else if can_send {
-                (C_ACCENT, Color32::WHITE, true, "▶", "Send")
+                (C_ACCENT, Color32::WHITE, true, "▲", "Send")
             } else {
                 (
-                    Color32::from_rgb(0x35, 0x37, 0x3d),
+                    Color32::from_rgb(0x2a, 0x2c, 0x31),
                     C_TEXT_MUTED,
                     false,
-                    "▶",
+                    "▲",
                     "Message is empty",
                 )
             };
@@ -104,10 +109,10 @@ impl OxiApp {
                 .add_enabled(
                     enabled,
                     Button::new(RichText::new(icon).size(13.5).color(fg))
-                        .min_size(egui::vec2(COMPOSER_ACTION - 2.0, COMPOSER_CONTROL_H - 1.0))
+                        .min_size(egui::vec2(COMPOSER_ACTION, COMPOSER_CONTROL_H))
                         .fill(fill)
                         .stroke(Stroke::NONE)
-                        .rounding(10.0),
+                        .rounding(999.0),
                 )
                 .on_hover_text(hover)
                 .clicked();
