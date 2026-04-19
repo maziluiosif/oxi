@@ -34,13 +34,9 @@ impl OxiApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add(
-                        Button::new(
-                            RichText::new("⇤")
-                                .size(FS_SMALL)
-                                .color(C_SIDEBAR_SECTION),
-                        )
-                        .frame(false)
-                        .fill(Color32::TRANSPARENT),
+                        Button::new(RichText::new("⇤").size(FS_SMALL).color(C_SIDEBAR_SECTION))
+                            .frame(false)
+                            .fill(Color32::TRANSPARENT),
                     )
                     .on_hover_text("Hide sidebar")
                     .clicked()
@@ -80,14 +76,10 @@ impl OxiApp {
         if ui
             .add_sized(
                 [ui.available_width(), 30.0],
-                Button::new(
-                    RichText::new("⚙   Settings")
-                        .size(FS_SMALL)
-                        .color(C_TEXT),
-                )
-                .fill(C_BG_ELEVATED)
-                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                .rounding(8.0),
+                Button::new(RichText::new("⚙   Settings").size(FS_SMALL).color(C_TEXT))
+                    .fill(C_BG_ELEVATED)
+                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                    .rounding(8.0),
             )
             .on_hover_text("Open settings")
             .clicked()
@@ -119,17 +111,13 @@ impl OxiApp {
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
             |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new("＋")
-                            .size(FS_SMALL)
-                            .color(if hovered { C_ACCENT } else { C_TEXT_MUTED }),
-                    );
+                    ui.label(RichText::new("＋").size(FS_SMALL).color(if hovered {
+                        C_ACCENT
+                    } else {
+                        C_TEXT_MUTED
+                    }));
                     ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("Add workspace")
-                            .size(FS_SMALL)
-                            .color(C_TEXT),
-                    );
+                    ui.label(RichText::new("Add workspace").size(FS_SMALL).color(C_TEXT));
                 });
             },
         );
@@ -345,14 +333,10 @@ impl OxiApp {
                 if ui
                     .add_sized(
                         [BW, BH],
-                        Button::new(
-                            RichText::new("＋  New chat")
-                                .size(FS_SMALL)
-                                .color(C_TEXT),
-                        )
-                        .fill(C_BG_ELEVATED)
-                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                        .rounding(8.0),
+                        Button::new(RichText::new("＋  New chat").size(FS_SMALL).color(C_TEXT))
+                            .fill(C_BG_ELEVATED)
+                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                            .rounding(8.0),
                     )
                     .on_hover_text("New chat tab in the active workspace.")
                     .clicked()
