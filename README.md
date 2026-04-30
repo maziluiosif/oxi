@@ -61,7 +61,8 @@ Current behavior visible in code:
 
 ### Local built-in tools
 
-The agent can call these tools when enabled in Settings:
+The agent can call these tools when enabled in Settings. File/search tools are enabled by default;
+`bash` is opt-in because it executes through the local shell.
 
 | Tool | Purpose |
 |---|---|
@@ -84,7 +85,7 @@ Behavior confirmed in `src/agent/tools/`:
 - `grep`, `find`, and `ls` have result caps
 - tool output is truncated when too large
 - `bash` defaults to a 15s timeout and is capped at 30s
-- `bash` blocks only a small deny-list of risky command substrings, not full sandboxing
+- `bash` blocks known risky command patterns, but it is still not full sandboxing
 - `write` and `edit` generate unified diffs for the UI
 
 ### Streaming coding UI
@@ -379,7 +380,7 @@ Default prompt guidance includes:
 
 Based on the current source code:
 
-- `bash` safety checks are basic and not a real sandbox
+- `bash` is opt-in and has safety checks, but it is not a real sandbox
 - tool execution can modify files inside the selected workspace
 - Copilot Responses API models are not yet implemented
 - OAuth tokens are stored as JSON on disk

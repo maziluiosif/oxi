@@ -138,7 +138,8 @@ impl Default for AppSettings {
             active_profile_id: "openai-default".to_string(),
             profiles,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
-            tools_enabled: [true; 7],
+            // Keep read/search/edit tools available by default, but make shell execution opt-in.
+            tools_enabled: [true, true, true, false, true, true, true],
         }
     }
 }
@@ -429,9 +430,18 @@ mod tests {
     }
 
     #[test]
-    fn tools_enabled_default_all_true() {
+    fn bash_tool_is_opt_in_by_default() {
         let s = AppSettings::default();
-        assert!(s.tools_enabled.iter().all(|&t| t));
+        let bash_idx = ALL_TOOL_NAMES
+            .iter()
+            .position(|name| *name == "bash")
+            .unwrap();
+        assert!(!s.tools_enabled[bash_idx]);
+        assert!(s
+            .tools_enabled
+            .iter()
+            .enumerate()
+            .all(|(idx, &enabled)| idx == bash_idx || enabled));
     }
 
     #[test]

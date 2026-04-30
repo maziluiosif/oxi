@@ -103,6 +103,84 @@ pub(crate) fn validate_bash_command(cmd: &str) -> Result<(), String> {
             return Err(format!("Refusing risky bash command containing: {denied}"));
         }
     }
+    reject_risky_rm(&normalized)?;
+    reject_remote_script_pipe(&normalized)?;
+    reject_recursive_world_writable(&normalized)?;
+    Ok(())
+}
+
+fn shell_segments(normalized: &str) -> impl Iterator<Item = &str> {
+    normalized
+        .split([';', '\n'])
+        .flat_map(|segment| segment.split("&&"))
+        .flat_map(|segment| segment.split("||"))
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+}
+
+fn reject_risky_rm(normalized: &str) -> Result<(), String> {
+    for segment in shell_segments(normalized) {
+        let words: Vec<&str> = segment.split_whitespace().collect();
+        if words.first() != Some(&"rm") {
+            continue;
+        }
+
+        let flags = words
+            .iter()
+            .skip(1)
+            .take_while(|word| word.starts_with('-') && *word != &"--")
+            .flat_map(|word| word.trim_start_matches('-').chars())
+            .collect::<Vec<_>>();
+        let recursive = flags.iter().any(|flag| matches!(flag, 'r' | 'R'));
+        let force = flags.contains(&'f');
+        if !recursive || !force {
+            continue;
+        }
+
+        let targets = words
+            .iter()
+            .skip(1)
+            .filter(|word| !word.starts_with('-') && **word != "--");
+        for target in targets {
+            if is_risky_rm_target(target) {
+                return Err(format!("Refusing risky recursive delete target: {target}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_risky_rm_target(target: &str) -> bool {
+    matches!(target, "." | ".." | "/" | "~")
+        || target.starts_with('/')
+        || target.starts_with("~/")
+        || target.contains("../")
+        || target.ends_with("/..")
+}
+
+fn reject_remote_script_pipe(normalized: &str) -> Result<(), String> {
+    let downloads = ["curl ", "wget "];
+    let interpreters = ["| sh", "| bash", "| zsh", "| python", "| perl", "| ruby"];
+    if downloads.iter().any(|cmd| normalized.contains(cmd))
+        && interpreters.iter().any(|pipe| normalized.contains(pipe))
+    {
+        return Err("Refusing remote download piped to an interpreter".to_string());
+    }
+    Ok(())
+}
+
+fn reject_recursive_world_writable(normalized: &str) -> Result<(), String> {
+    for segment in shell_segments(normalized) {
+        let words: Vec<&str> = segment.split_whitespace().collect();
+        if words.first() == Some(&"chmod")
+            && words.contains(&"777")
+            && words
+                .iter()
+                .any(|word| word.starts_with('-') && word.contains('r'))
+        {
+            return Err("Refusing recursive chmod 777".to_string());
+        }
+    }
     Ok(())
 }
 

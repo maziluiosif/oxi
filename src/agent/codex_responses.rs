@@ -311,12 +311,10 @@ fn process_responses_event(
         "response.output_item.done" => {
             if let Some(item) = v.get("item") {
                 match item.get("type").and_then(|x| x.as_str()) {
-                    Some("reasoning") => {
-                        if !state.got_thinking_delta {
-                            if let Some(text) = reasoning_item_summary_joined(item) {
-                                if !text.is_empty() {
-                                    let _ = tx.send(AgentEvent::ThinkingDelta(text));
-                                }
+                    Some("reasoning") if !state.got_thinking_delta => {
+                        if let Some(text) = reasoning_item_summary_joined(item) {
+                            if !text.is_empty() {
+                                let _ = tx.send(AgentEvent::ThinkingDelta(text));
                             }
                         }
                     }
@@ -595,4 +593,129 @@ pub async fn run_codex_responses_loop(
         break;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn response_text_delta_updates_assistant_text() {
+        let (tx, rx) = mpsc::channel();
+        let mut text = String::new();
+        let mut pending_tools = Vec::new();
+        let mut state = CodexStreamState::default();
+
+        process_responses_event(
+            &json!({"type": "response.output_text.delta", "delta": "hello"}),
+            &mut text,
+            &mut pending_tools,
+            &mut state,
+            &tx,
+        )
+        .unwrap();
+
+        assert_eq!(text, "hello");
+        match rx.try_recv().unwrap() {
+            AgentEvent::TextDelta(delta) => assert_eq!(delta, "hello"),
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+
+    #[test]
+    fn reasoning_done_falls_back_to_summary_once() {
+        let (tx, rx) = mpsc::channel();
+        let mut text = String::new();
+        let mut pending_tools = Vec::new();
+        let mut state = CodexStreamState::default();
+
+        process_responses_event(
+            &json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "reasoning",
+                    "summary": [{"text": "first"}, {"text": "second"}]
+                }
+            }),
+            &mut text,
+            &mut pending_tools,
+            &mut state,
+            &tx,
+        )
+        .unwrap();
+
+        match rx.try_recv().unwrap() {
+            AgentEvent::ThinkingDelta(delta) => assert_eq!(delta, "first\n\nsecond"),
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+
+    #[test]
+    fn reasoning_done_skips_summary_after_delta() {
+        let (tx, rx) = mpsc::channel();
+        let mut text = String::new();
+        let mut pending_tools = Vec::new();
+        let mut state = CodexStreamState::default();
+
+        process_responses_event(
+            &json!({"type": "response.reasoning_summary_text.delta", "delta": "streamed"}),
+            &mut text,
+            &mut pending_tools,
+            &mut state,
+            &tx,
+        )
+        .unwrap();
+        process_responses_event(
+            &json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "reasoning",
+                    "summary": [{"text": "duplicate"}]
+                }
+            }),
+            &mut text,
+            &mut pending_tools,
+            &mut state,
+            &tx,
+        )
+        .unwrap();
+
+        match rx.try_recv().unwrap() {
+            AgentEvent::ThinkingDelta(delta) => assert_eq!(delta, "streamed"),
+            event => panic!("unexpected event: {event:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn output_item_done_collects_function_call() {
+        let (tx, _rx) = mpsc::channel();
+        let mut text = String::new();
+        let mut pending_tools = Vec::new();
+        let mut state = CodexStreamState::default();
+
+        process_responses_event(
+            &json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "name": "read",
+                    "call_id": "call-1",
+                    "arguments": "{\"path\":\"Cargo.toml\"}"
+                }
+            }),
+            &mut text,
+            &mut pending_tools,
+            &mut state,
+            &tx,
+        )
+        .unwrap();
+
+        assert_eq!(pending_tools.len(), 1);
+        assert_eq!(pending_tools[0].id, "call-1");
+        assert_eq!(pending_tools[0].name, "read");
+        assert_eq!(pending_tools[0].arguments, "{\"path\":\"Cargo.toml\"}");
+    }
 }

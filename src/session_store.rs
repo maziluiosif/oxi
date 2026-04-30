@@ -3,6 +3,7 @@ mod format;
 mod io;
 mod paths;
 
+use std::cmp::Reverse;
 use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
@@ -34,7 +35,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
         .filter_map(|path| parse_session_file(&path))
         .collect();
 
-    sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
+    sessions.sort_by_key(|session| Reverse(session.modified));
 
     sessions
         .into_iter()

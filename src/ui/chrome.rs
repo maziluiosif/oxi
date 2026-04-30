@@ -89,13 +89,14 @@ pub fn hairline(ui: &mut Ui) {
 /// Pill-style tab used for provider selection or sub-tabs. Returns `true` when clicked.
 pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     let text_size = FS_SMALL;
-    let galley = ui.painter().layout_no_wrap(
-        label.to_string(),
-        FontId::proportional(text_size),
-        C_TEXT,
-    );
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), FontId::proportional(text_size), C_TEXT);
     let pad = egui::vec2(14.0, 6.0);
-    let size = egui::vec2(galley.rect.width() + pad.x * 2.0, galley.rect.height() + pad.y * 2.0);
+    let size = egui::vec2(
+        galley.rect.width() + pad.x * 2.0,
+        galley.rect.height() + pad.y * 2.0,
+    );
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let (fill, stroke, text_color) = if selected {
@@ -103,7 +104,11 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     } else if hovered {
         (C_ROW_HOVER, Stroke::new(1.0, C_BORDER_SUBTLE), C_TEXT)
     } else {
-        (Color32::TRANSPARENT, Stroke::new(1.0, C_BORDER_SUBTLE), C_TEXT_MUTED)
+        (
+            Color32::TRANSPARENT,
+            Stroke::new(1.0, C_BORDER_SUBTLE),
+            C_TEXT_MUTED,
+        )
     };
     let r = Rounding::same(999.0);
     ui.painter().rect_filled(rect, r, fill);
@@ -160,22 +165,19 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
     };
     ui.painter().rect_filled(rect, Rounding::same(7.0), fill);
     if selected {
-        ui.painter().rect_stroke(
-            rect,
-            Rounding::same(7.0),
-            Stroke::new(1.0, C_BORDER_SUBTLE),
-        );
+        ui.painter()
+            .rect_stroke(rect, Rounding::same(7.0), Stroke::new(1.0, C_BORDER_SUBTLE));
     }
     let text_color = if selected { C_TEXT } else { C_TEXT_MUTED };
     ui.allocate_new_ui(
         egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
         |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.label(
-                    RichText::new(icon)
-                        .size(FS_BODY)
-                        .color(if selected { C_ACCENT } else { C_TEXT_FAINT }),
-                );
+                ui.label(RichText::new(icon).size(FS_BODY).color(if selected {
+                    C_ACCENT
+                } else {
+                    C_TEXT_FAINT
+                }));
                 ui.add_space(8.0);
                 ui.add(
                     Label::new(RichText::new(label).size(FS_SMALL).color(text_color))
