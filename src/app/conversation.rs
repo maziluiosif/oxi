@@ -128,12 +128,17 @@ impl OxiApp {
 
                 ui.add_space(38.0);
 
-                let sel_scroll = conversation_selection_scroll_delta(ui);
+                let (sel_scroll, consume) = conversation_selection_scroll_delta(ui);
                 if sel_scroll != egui::Vec2::ZERO {
-                    ui.scroll_with_delta_animation(
-                        sel_scroll,
-                        egui::style::ScrollAnimation::none(),
-                    );
+                    // Apply instantly (no egui scroll animation): we feed a small per-frame delta
+                    // every frame, so egui's built-in smoothing would re-ease each step and stutter.
+                    // Our own time-based velocity already produces smooth motion.
+                    ui.scroll_with_delta_animation(sel_scroll, egui::style::ScrollAnimation::none());
+                    if consume {
+                        ui.ctx().input_mut(|i| {
+                            i.smooth_scroll_delta = egui::Vec2::ZERO;
+                        });
+                    }
                     ui.ctx().request_repaint();
                 }
 
@@ -212,53 +217,69 @@ impl OxiApp {
 
 /// Same idea as egui’s default click-vs-drag distance (~6px).
 const SELECTION_SCROLL_MIN_DRAG_PX: f32 = 6.0;
-/// Size of the top/bottom band where edge auto-scroll kicks in.
-const SELECTION_EDGE_BAND_PX: f32 = 24.0;
-/// Per-frame cap for the edge auto-scroll delta (points).
-const SELECTION_EDGE_MAX_DELTA_PX: f32 = 24.0;
 
 /// Vertical edge auto-scroll delta for the transcript while the user is dragging a text
 /// selection near the top/bottom of the viewport. Same sign convention as
 /// [`eframe::egui::Ui::scroll_with_delta`]: **`y > 0` scrolls the viewport up** (reveals
 /// content above), **`y < 0` scrolls down**.
 ///
-/// We intentionally do **not** forward wheel/trackpad here — egui's [`ScrollArea`] already
-/// handles wheel events when hovered, and double-dispatching caused occasional inverted
-/// scrolls while text was selected.
-pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> egui::Vec2 {
+/// Returns the delta plus a flag that is `true` while a label selection is being dragged; the
+/// caller uses it to zero egui's own `smooth_scroll_delta` so the forwarded wheel/trackpad delta
+/// is not applied twice.
+pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> (egui::Vec2, bool) {
     let ctx = ui.ctx();
-    let primary_down = ctx.input(|i| i.pointer.primary_down());
-    let has_selection = egui::text_selection::LabelSelectionState::load(ctx).has_selection();
-    if !primary_down || !has_selection {
-        return egui::Vec2::ZERO;
+    let widget_dragging = ctx.dragged_id().is_some();
+    let label_selection_dragging = ctx.input(|i| i.pointer.primary_down())
+        && egui::text_selection::LabelSelectionState::load(ctx).has_selection();
+
+    if !widget_dragging && !label_selection_dragging {
+        return (egui::Vec2::ZERO, false);
     }
-
-    let dragged_far = ctx.input(
-        |i| match (i.pointer.press_origin(), i.pointer.interact_pos()) {
-            (Some(origin), Some(pos)) => origin.distance(pos) > SELECTION_SCROLL_MIN_DRAG_PX,
-            _ => false,
-        },
-    );
-    if !dragged_far {
-        return egui::Vec2::ZERO;
-    }
-
-    let Some(pointer) = ctx.input(|i| i.pointer.interact_pos()) else {
-        return egui::Vec2::ZERO;
-    };
-
-    // `ui.clip_rect()` is the **visible** viewport; `ui.max_rect()` is the whole virtual
-    // content rect inside the scroll area (can be thousands of px tall / above the screen),
-    // which made the old edge-detection misfire.
-    let viewport = ui.clip_rect();
-    let edge = SELECTION_EDGE_BAND_PX;
-    let max = SELECTION_EDGE_MAX_DELTA_PX;
 
     let mut delta = egui::Vec2::ZERO;
-    if pointer.y < viewport.top() + edge {
-        delta.y += (viewport.top() + edge - pointer.y).min(max);
-    } else if pointer.y > viewport.bottom() - edge {
-        delta.y -= (pointer.y - (viewport.bottom() - edge)).min(max);
+    let wheel_delta = ctx.input(|i| i.smooth_scroll_delta);
+    if wheel_delta != egui::Vec2::ZERO {
+        delta += wheel_delta;
     }
-    delta
+
+    if label_selection_dragging {
+        // Keep frames flowing for the whole drag so time-based scrolling stays smooth even while
+        // the pointer is outside the window, where pointer-move events arrive irregularly.
+        ctx.request_repaint();
+
+        // While the button is held the pointer can leave the window (e.g. dragging up past the
+        // top). `interact_pos` then returns None on some frames, which made the edge auto-scroll
+        // flicker between full speed and zero (the stutter when dragging up). Fall back to the
+        // last seen Y so the velocity stays constant across those gaps.
+        let last_y_id = egui::Id::new("conv_sel_last_pointer_y");
+        let current_y = ctx.input(|i| i.pointer.interact_pos()).map(|p| p.y);
+        if let Some(y) = current_y {
+            ctx.data_mut(|d| d.insert_temp(last_y_id, y));
+        }
+        let pointer_y = current_y.or_else(|| ctx.data(|d| d.get_temp::<f32>(last_y_id)));
+
+        if let Some(py) = pointer_y {
+            // Use the visible viewport (clip rect) in screen coordinates — `max_rect` is the full
+            // scrolled content rect, so its edges fall outside the viewport and would trigger a
+            // constant edge-scroll. Only auto-scroll when the pointer reaches a viewport edge, and
+            // in the natural direction (positive y reveals earlier content, negative reveals later).
+            let rect = ui.clip_rect();
+            // Time-based velocity so the speed is independent of frame rate (smooth instead of
+            // per-frame jumps). The closer the pointer gets past the edge, the faster it scrolls.
+            const EDGE: f32 = 36.0;
+            const MAX_SPEED: f32 = 780.0; // points per second at full depth
+            let dt = ctx.input(|i| i.stable_dt).clamp(1.0 / 240.0, 1.0 / 30.0);
+            let mut velocity = 0.0;
+            if py < rect.top() + EDGE {
+                let depth = ((rect.top() + EDGE - py) / EDGE).clamp(0.0, 1.0);
+                velocity = depth * MAX_SPEED; // positive: reveal earlier content
+            } else if py > rect.bottom() - EDGE {
+                let depth = ((py - (rect.bottom() - EDGE)) / EDGE).clamp(0.0, 1.0);
+                velocity = -depth * MAX_SPEED; // negative: reveal later content
+            }
+            delta.y += velocity * dt;
+        }
+    }
+
+    (delta, label_selection_dragging)
 }

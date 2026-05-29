@@ -1,13 +1,50 @@
-use eframe::egui::{self, Button, Color32, Frame, Margin, RichText, Stroke, TextEdit, Ui};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use eframe::egui::{
+    self, Button, Color32, ComboBox, Frame, Id, Image, Margin, Order, RichText, Rounding, Stroke,
+    TextEdit, TextureHandle, Ui,
+};
 
 use crate::theme::*;
 
 use super::OxiApp;
 
-const COMPOSER_ACTION: f32 = 32.0;
-const COMPOSER_CONTROL_H: f32 = 30.0;
-const COMPOSER_FRAME_MARGIN: f32 = 12.0;
-const COMPOSER_GAP: f32 = 8.0;
+/// Diameter of the round send button.
+const SEND_DIAM: f32 = 30.0;
+/// Diameter of the round attach (`+`) button.
+const ATTACH_DIAM: f32 = 28.0;
+const COMPOSER_FRAME_MARGIN: f32 = 10.0;
+const COMPOSER_GAP: f32 = 6.0;
+/// Fixed height of an attachment thumbnail; width follows the image aspect ratio.
+const THUMB_H: f32 = 52.0;
+const THUMB_MAX_W: f32 = 132.0;
+
+/// Decode + cache a small thumbnail texture for a pending image attachment.
+fn composer_thumb_texture(ui: &Ui, data: &[u8]) -> Option<TextureHandle> {
+    let mut hasher = DefaultHasher::new();
+    data.hash(&mut hasher);
+    let h = hasher.finish();
+    let cache_id = Id::new(("composer_thumb_tex", h));
+    if let Some(tex) = ui
+        .ctx()
+        .data_mut(|d| d.get_persisted::<TextureHandle>(cache_id))
+    {
+        return Some(tex);
+    }
+    let dyn_img = image::load_from_memory(data).ok()?;
+    let rgba = dyn_img.thumbnail(160, 160).to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    let tex = ui.ctx().load_texture(
+        format!("composer_thumb_{h:016x}"),
+        color_image,
+        egui::TextureOptions::default(),
+    );
+    ui.ctx()
+        .data_mut(|d| d.insert_persisted(cache_id, tex.clone()));
+    Some(tex)
+}
 
 impl OxiApp {
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
@@ -25,24 +62,26 @@ impl OxiApp {
                 ui.set_width(composer_w);
                 Frame::none()
                     .fill(C_BG_ELEVATED)
-                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                    .stroke(Stroke::new(1.0, C_BORDER))
                     .rounding(14.0)
                     .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN))
                     .show(ui, |ui| {
+                        // === Attachment thumbnails (above the text, like Cursor) ===
+                        if !self.conv.pending_images.is_empty() {
+                            self.render_attachment_thumbnails(ui);
+                            ui.add_space(COMPOSER_GAP);
+                        }
+
                         // === Text area ===
                         // desired_rows(1) keeps it compact; it grows naturally
                         // as the user types (both newlines and soft-wrap).
-                        // We cap the height so it doesn't eat the screen.
                         let te_output = TextEdit::multiline(&mut self.conv.input)
                             .desired_width(f32::INFINITY)
                             .desired_rows(1)
-                            .hint_text("Ask oxi…")
+                            .hint_text("Ask oxi to do anything…")
                             .frame(false)
                             .show(ui);
 
-                        // If the text area grew beyond the max, we need to scroll
-                        // internally. For now we just let it grow and rely on the
-                        // conversation scroll area shrinking above.
                         let galley_h = te_output.galley.rect.height();
                         self.conv.composer_measured_text_h = galley_h;
 
@@ -75,44 +114,51 @@ impl OxiApp {
         self.conv.composer_measured_full_h = row.response.rect.height();
     }
 
-    /// `[+ attach] [chips…]  …  [model ▾] [▶ send]`
+    /// `[+]  [model ▾]                                  [↑]`
     fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool) {
-        let attach_btn = Button::new(RichText::new("＋").size(14.0).color(C_TEXT_MUTED))
-            .fill(C_BG_INPUT)
-            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-            .rounding(8.0)
-            .min_size(egui::vec2(COMPOSER_CONTROL_H, COMPOSER_CONTROL_H));
-        if ui.add(attach_btn).on_hover_text("Attach image").clicked() {
+        ui.spacing_mut().item_spacing.x = 6.0;
+
+        // ── Left: round attach button ──────────────────────────────────────
+        let attach = ui
+            .add(
+                Button::new(RichText::new("+").size(16.0).color(C_TEXT_MUTED))
+                    .min_size(egui::vec2(ATTACH_DIAM, ATTACH_DIAM))
+                    .fill(C_BG_INPUT)
+                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                    .rounding(ATTACH_DIAM * 0.5),
+            )
+            .on_hover_text("Attach image");
+        if attach.clicked() {
             self.pick_image_attachment();
         }
-        if !self.conv.pending_images.is_empty() {
-            ui.add_space(4.0);
-            self.render_attachment_chips_inline(ui);
-        }
 
+        // ── Left: minimal model selector (plain text + chevron) ────────────
+        self.render_model_selector(ui);
+
+        // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let active_session_streaming = self.active_waiting_response();
             let (fill, fg, enabled, icon, hover) = if active_session_streaming {
-                (C_ACCENT, Color32::WHITE, true, "■", "Stop generation")
+                (C_TEXT, C_BG_MAIN, true, "■", "Stop generation")
             } else if can_send {
-                (C_ACCENT, Color32::WHITE, true, "▲", "Send")
+                (C_TEXT, C_BG_MAIN, true, "↑", "Send")
             } else {
                 (
-                    Color32::from_rgb(0x2a, 0x2c, 0x31),
+                    Color32::from_rgb(0x22, 0x24, 0x28),
                     C_TEXT_MUTED,
                     false,
-                    "▲",
+                    "↑",
                     "Message is empty",
                 )
             };
             let clicked = ui
                 .add_enabled(
                     enabled,
-                    Button::new(RichText::new(icon).size(13.5).color(fg))
-                        .min_size(egui::vec2(COMPOSER_ACTION, COMPOSER_CONTROL_H))
+                    Button::new(RichText::new(icon).size(15.0).color(fg))
+                        .min_size(egui::vec2(SEND_DIAM, SEND_DIAM))
                         .fill(fill)
                         .stroke(Stroke::NONE)
-                        .rounding(999.0),
+                        .rounding(SEND_DIAM * 0.5),
                 )
                 .on_hover_text(hover)
                 .clicked();
@@ -123,16 +169,33 @@ impl OxiApp {
                     self.send_message();
                 }
             }
+        });
+    }
 
-            egui::ComboBox::from_id_salt("profile_combo")
-                .selected_text(
-                    self.conv
-                        .settings
-                        .active_profile()
-                        .map(|p| p.subtitle())
-                        .unwrap_or_else(|| "No profile".to_string()),
-                )
-                .width(220.0)
+    /// Borderless model dropdown styled as quiet text with a chevron.
+    fn render_model_selector(&mut self, ui: &mut Ui) {
+        let label = self
+            .conv
+            .settings
+            .active_profile()
+            .map(|p| p.subtitle())
+            .unwrap_or_else(|| "No profile".to_string());
+
+        ui.scope(|ui| {
+            let widgets = &mut ui.visuals_mut().widgets;
+            widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            widgets.inactive.bg_fill = Color32::TRANSPARENT;
+            widgets.inactive.bg_stroke = Stroke::NONE;
+            widgets.hovered.weak_bg_fill = C_ROW_HOVER;
+            widgets.hovered.bg_stroke = Stroke::NONE;
+            widgets.active.weak_bg_fill = C_ROW_HOVER;
+            widgets.active.bg_stroke = Stroke::NONE;
+            widgets.open.weak_bg_fill = C_ROW_HOVER;
+            widgets.open.bg_stroke = Stroke::NONE;
+
+            ComboBox::from_id_salt("profile_combo")
+                .selected_text(RichText::new(label).size(FS_SMALL).color(C_TEXT_MUTED))
+                .width(190.0)
                 .show_ui(ui, |ui| {
                     let current_id = self.conv.settings.active_profile_id.clone();
                     let items: Vec<(String, String)> = self
@@ -151,34 +214,62 @@ impl OxiApp {
         });
     }
 
-    pub(crate) fn render_attachment_chips_inline(&mut self, ui: &mut Ui) {
+    /// Image attachment thumbnails shown at the top of the composer, each with a
+    /// corner remove button (Cursor-style).
+    pub(crate) fn render_attachment_thumbnails(&mut self, ui: &mut Ui) {
         let mut remove_idx: Option<usize> = None;
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for (i, (mime, _)) in self.conv.pending_images.iter().enumerate() {
-                let short = mime.strip_prefix("image/").unwrap_or(mime.as_str());
-                ui.horizontal(|ui| {
-                    Frame::none()
-                        .fill(C_BG_MAIN)
-                        .stroke(Stroke::new(1.0, C_BORDER))
-                        .rounding(4.0)
-                        .inner_margin(Margin::symmetric(4.0, 1.0))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new(short).size(FS_TINY).color(C_ACCENT));
-                            if ui
-                                .add(
-                                    Button::new(RichText::new("×").size(11.0).color(C_TEXT_MUTED))
-                                        .frame(false)
-                                        .fill(Color32::TRANSPARENT)
-                                        .min_size(egui::vec2(14.0, 14.0)),
-                                )
-                                .on_hover_text("Remove image")
-                                .clicked()
-                            {
-                                remove_idx = Some(i);
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+            for (i, (mime, data)) in self.conv.pending_images.iter().enumerate() {
+                let tex = composer_thumb_texture(ui, data);
+                let frame = Frame::none()
+                    .fill(C_BG_INPUT)
+                    .stroke(Stroke::new(1.0, C_BORDER))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::same(0.0))
+                    .show(ui, |ui| {
+                        if let Some(tex) = tex {
+                            let mut sz = tex.size_vec2();
+                            if sz.y > 0.0 {
+                                sz *= THUMB_H / sz.y;
                             }
-                        });
-                });
+                            if sz.x > THUMB_MAX_W {
+                                sz *= THUMB_MAX_W / sz.x;
+                            }
+                            ui.add(Image::new((tex.id(), sz)).rounding(Rounding::same(8.0)));
+                        } else {
+                            let short = mime.strip_prefix("image/").unwrap_or(mime.as_str());
+                            ui.allocate_ui(egui::vec2(THUMB_H * 1.6, THUMB_H), |ui| {
+                                ui.centered_and_justified(|ui| {
+                                    ui.label(
+                                        RichText::new(short).size(FS_TINY).color(C_TEXT_MUTED),
+                                    );
+                                });
+                            });
+                        }
+                    });
+
+                // Corner remove (×) overlay positioned over the top-right of the thumbnail.
+                let rect = frame.response.rect;
+                let x_pos = egui::pos2(rect.right() - 18.0, rect.top() + 4.0);
+                egui::Area::new(Id::new(("composer_thumb_x", i)))
+                    .order(Order::Foreground)
+                    .fixed_pos(x_pos)
+                    .show(ui.ctx(), |ui| {
+                        if ui
+                            .add(
+                                Button::new(RichText::new("×").size(12.0).color(C_TEXT))
+                                    .min_size(egui::vec2(15.0, 15.0))
+                                    .fill(C_BG_MAIN)
+                                    .stroke(Stroke::new(1.0, C_BORDER))
+                                    .rounding(7.5),
+                            )
+                            .on_hover_text("Remove image")
+                            .clicked()
+                        {
+                            remove_idx = Some(i);
+                        }
+                    });
             }
         });
         if let Some(i) = remove_idx {
