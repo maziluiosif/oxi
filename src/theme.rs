@@ -25,33 +25,42 @@ pub fn icon_font() -> FontFamily {
     FontFamily::Name("icons".into())
 }
 
-// Cursor-like dark palette: near-black chat, slightly lifted sidebar, cool blue accents.
-pub const C_BG_MAIN: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0b);
-/// Sidebar column — a step above main chat (Cursor-like rail).
-pub const C_BG_SIDEBAR: Color32 = Color32::from_rgb(0x0f, 0x10, 0x12);
-pub const C_BG_ELEVATED: Color32 = Color32::from_rgb(0x17, 0x18, 0x1c);
+// Codex-style dark palette: neutral near-black surfaces, off-white ink, a single restrained
+// blue accent, and clean semantic diff colors (mirrors OpenAI's `codex-theme-v1` defaults).
+pub const C_BG_MAIN: Color32 = Color32::from_rgb(0x0f, 0x10, 0x12);
+/// Sidebar column — a hair darker than the chat surface for a calm, flat rail.
+pub const C_BG_SIDEBAR: Color32 = Color32::from_rgb(0x0b, 0x0c, 0x0d);
+pub const C_BG_ELEVATED: Color32 = Color32::from_rgb(0x18, 0x19, 0x1c);
 /// Second-level elevated surface (cards inside panels).
 pub const C_BG_ELEVATED_2: Color32 = Color32::from_rgb(0x1c, 0x1d, 0x22);
 /// Composer field surface.
-pub const C_BG_INPUT: Color32 = Color32::from_rgb(0x14, 0x15, 0x18);
-pub const C_BORDER: Color32 = Color32::from_rgb(0x2a, 0x2c, 0x32);
-pub const C_BORDER_SUBTLE: Color32 = Color32::from_rgb(0x1e, 0x20, 0x25);
-pub const C_BORDER_STRONG: Color32 = Color32::from_rgb(0x38, 0x3b, 0x43);
-pub const C_ACCENT: Color32 = Color32::from_rgb(0x63, 0xb3, 0xff);
-pub const C_TEXT: Color32 = Color32::from_rgb(0xec, 0xec, 0xf1);
-pub const C_TEXT_MUTED: Color32 = Color32::from_rgb(0x93, 0x95, 0xa0);
+pub const C_BG_INPUT: Color32 = Color32::from_rgb(0x14, 0x15, 0x17);
+pub const C_BORDER: Color32 = Color32::from_rgb(0x26, 0x28, 0x2c);
+pub const C_BORDER_SUBTLE: Color32 = Color32::from_rgb(0x1b, 0x1c, 0x1f);
+/// Codex interactive accent (`codex-theme-v1` accent), brightened slightly for dark surfaces.
+pub const C_ACCENT: Color32 = Color32::from_rgb(0x6c, 0xa2, 0xe0);
+/// Primary ink (`codex-theme-v1` ink).
+pub const C_TEXT: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
+pub const C_TEXT_MUTED: Color32 = Color32::from_rgb(0x8b, 0x8f, 0x99);
 pub const C_TEXT_FAINT: Color32 = Color32::from_rgb(0x6b, 0x6d, 0x78);
-/// Workspace / folder headers in the sidebar (Cursor-style dim label).
-pub const C_SIDEBAR_SECTION: Color32 = Color32::from_rgb(0x7a, 0x7d, 0x87);
-pub const C_USER_BUBBLE: Color32 = Color32::from_rgb(0x25, 0x27, 0x2d);
-/// Selected chat row (sidebar) — cool grey pill like Cursor’s list selection.
-pub const C_ROW_ACTIVE: Color32 = Color32::from_rgb(0x24, 0x29, 0x32);
+/// Workspace / folder headers in the sidebar (dim section label).
+pub const C_SIDEBAR_SECTION: Color32 = Color32::from_rgb(0x6d, 0x71, 0x7b);
+/// User message surface — a subtle, flat lift rather than a heavy chat bubble.
+pub const C_USER_BUBBLE: Color32 = Color32::from_rgb(0x1c, 0x1e, 0x22);
+/// Selected chat row (sidebar) — quiet neutral pill.
+pub const C_ROW_ACTIVE: Color32 = Color32::from_rgb(0x21, 0x24, 0x2a);
 /// Unselected row hover (sidebar list).
-pub const C_ROW_HOVER: Color32 = Color32::from_rgb(0x1a, 0x1c, 0x21);
+pub const C_ROW_HOVER: Color32 = Color32::from_rgb(0x18, 0x1a, 0x1e);
 /// Subtle success / positive color (connection ok, badges).
 pub const C_SUCCESS: Color32 = Color32::from_rgb(0x4a, 0xc8, 0x8c);
 /// Danger color for destructive actions.
 pub const C_DANGER: Color32 = Color32::from_rgb(0xe0, 0x6c, 0x6c);
+
+// Codex semantic diff colors (`codex-theme-v1.semanticColors`).
+pub const C_DIFF_ADD_FG: Color32 = Color32::from_rgb(0x99, 0xc7, 0x94);
+pub const C_DIFF_ADD_BG: Color32 = Color32::from_rgb(0x12, 0x24, 0x1b);
+pub const C_DIFF_DEL_FG: Color32 = Color32::from_rgb(0xec, 0x5f, 0x66);
+pub const C_DIFF_DEL_BG: Color32 = Color32::from_rgb(0x2c, 0x16, 0x18);
 /// Max width for message/composer column (left-aligned; extra space stays on the right).
 pub const CHAT_COLUMN_MAX: f32 = 720.0;
 
@@ -136,14 +145,14 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// Cursor-style dark theme: cool greys, subtle borders, blue-tinted selection.
+/// Codex-style dark theme: neutral near-black surfaces, subtle borders, a single blue accent.
 pub fn setup_style(ctx: &egui::Context) {
     install_fonts(ctx);
     let mut visuals = Visuals::dark();
     visuals.window_fill = C_BG_MAIN;
     visuals.panel_fill = C_BG_MAIN;
-    visuals.extreme_bg_color = Color32::from_rgb(0x0b, 0x0b, 0x0c);
-    visuals.faint_bg_color = Color32::from_rgb(0x18, 0x19, 0x1d);
+    visuals.extreme_bg_color = C_BG_INPUT;
+    visuals.faint_bg_color = Color32::from_rgb(0x16, 0x17, 0x1a);
     visuals.override_text_color = Some(C_TEXT);
     visuals.window_rounding = egui::Rounding::same(10.0);
     visuals.menu_rounding = egui::Rounding::same(8.0);
@@ -156,20 +165,21 @@ pub fn setup_style(ctx: &egui::Context) {
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, C_BORDER_SUBTLE);
     visuals.widgets.noninteractive.bg_fill = C_BG_ELEVATED;
     visuals.widgets.noninteractive.fg_stroke.color = C_TEXT_MUTED;
-    visuals.widgets.inactive.bg_fill = C_BG_ELEVATED;
-    visuals.widgets.inactive.weak_bg_fill = C_BG_ELEVATED;
+    visuals.widgets.inactive.bg_fill = Color32::from_rgb(0x20, 0x22, 0x26);
+    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(0x20, 0x22, 0x26);
     visuals.widgets.inactive.fg_stroke.color = C_TEXT;
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x23, 0x25, 0x2b);
-    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x23, 0x25, 0x2b);
-    visuals.widgets.active.bg_fill = Color32::from_rgb(0x2b, 0x2e, 0x36);
-    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(0x2b, 0x2e, 0x36);
-    visuals.widgets.open.bg_fill = Color32::from_rgb(0x22, 0x24, 0x2a);
-    visuals.selection.bg_fill = Color32::from_rgb(0x2a, 0x42, 0x60);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(0x55, 0x8b, 0xc2));
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x2a, 0x2c, 0x31);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x2a, 0x2c, 0x31);
+    visuals.widgets.active.bg_fill = Color32::from_rgb(0x30, 0x33, 0x39);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(0x30, 0x33, 0x39);
+    visuals.widgets.open.bg_fill = Color32::from_rgb(0x24, 0x26, 0x2b);
+    // Text selection uses a desaturated tint of the Codex accent.
+    visuals.selection.bg_fill = Color32::from_rgb(0x21, 0x35, 0x4c);
+    visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(0x3c, 0x66, 0x96));
     visuals.window_stroke = Stroke::new(1.0, C_BORDER_SUBTLE);
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, C_BORDER_SUBTLE);
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, C_BORDER);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, C_BORDER_STRONG);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x33, 0x36, 0x3c));
 
     let mut style = (*ctx.style()).clone();
     style.visuals = visuals;

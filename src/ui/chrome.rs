@@ -205,23 +205,17 @@ pub fn render_empty_state(ui: &mut Ui) {
         );
         ui.add_space(6.0);
         ui.label(
-            RichText::new("An AI coding agent running locally in your workspace.")
+            RichText::new("A coding agent that reads, edits, and runs code in your workspace.")
                 .size(FS_BODY)
                 .color(crate::theme::C_TEXT_MUTED),
         );
         ui.add_space(18.0);
 
         let hints = [
-            ("⚙", "Configure provider & model in Settings"),
-            ("📁", "Use \"Add workspace\" to set your project root"),
-            (
-                "🔧",
-                "Tools (read, write, bash, …) run inside the workspace",
-            ),
-            (
-                "⌨",
-                "Enter to send · Shift+Enter for newline · ↑/↓ for history",
-            ),
+            ("⚙", "Choose your provider and model in Settings"),
+            ("📁", "Add a workspace to set the project root"),
+            ("🔧", "Tools (read, write, bash, …) run inside the workspace"),
+            ("⌨", "Enter to send · Shift+Enter for a newline · ↑/↓ for history"),
             ("🖼", "Attach images with + or paste with Ctrl/Cmd+V"),
         ];
         for (icon, tip) in hints {

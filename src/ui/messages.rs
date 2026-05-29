@@ -18,8 +18,9 @@ use crate::model::{
 };
 use crate::theme::{
     animated_status_label, content_wrap_width, icon_font, tool_status_label, C_ACCENT,
-    C_BG_ELEVATED, C_BG_INPUT, C_BORDER, C_BORDER_SUBTLE, C_TEXT, C_TEXT_FAINT, C_TEXT_MUTED,
-    C_USER_BUBBLE, FS_BODY, FS_SMALL, FS_TINY,
+    C_BG_ELEVATED, C_BG_INPUT, C_BORDER, C_BORDER_SUBTLE, C_DIFF_ADD_BG, C_DIFF_ADD_FG,
+    C_DIFF_DEL_BG, C_DIFF_DEL_FG, C_TEXT, C_TEXT_FAINT, C_TEXT_MUTED, C_USER_BUBBLE, FS_BODY,
+    FS_SMALL, FS_TINY,
 };
 use crate::ui::preview_expand::{
     clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
@@ -99,11 +100,6 @@ fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
         ..Default::default()
     };
 
-    // Cursor-style muted green/red: saturated text over a low-alpha tint.
-    const ADD_TEXT: Color32 = Color32::from_rgb(0x86, 0xef, 0xac);
-    const ADD_BG: Color32 = Color32::from_rgba_premultiplied(0x10, 0x33, 0x22, 0xff);
-    const DEL_TEXT: Color32 = Color32::from_rgb(0xfc, 0xa5, 0xa5);
-    const DEL_BG: Color32 = Color32::from_rgba_premultiplied(0x35, 0x14, 0x18, 0xff);
     const CONTEXT_TEXT: Color32 = Color32::from_rgb(0x8d, 0x90, 0x9b);
 
     for (i, line) in lines.iter().enumerate() {
@@ -114,9 +110,9 @@ fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
         }
         let end = job.text.len();
         let (color, background) = if line.starts_with('+') {
-            (ADD_TEXT, ADD_BG)
+            (C_DIFF_ADD_FG, C_DIFF_ADD_BG)
         } else if line.starts_with('-') {
-            (DEL_TEXT, DEL_BG)
+            (C_DIFF_DEL_FG, C_DIFF_DEL_BG)
         } else {
             (CONTEXT_TEXT, Color32::TRANSPARENT)
         };
@@ -374,22 +370,22 @@ fn render_tool_pill(
     let running = tool_in_flight && is_last_in_run;
 
     let pill_bg = if has_error {
-        Color32::from_rgb(0x26, 0x13, 0x14)
+        Color32::from_rgb(0x22, 0x14, 0x15)
     } else {
-        C_BG_ELEVATED
+        Color32::from_rgb(0x15, 0x16, 0x19)
     };
     let pill_border = if has_error {
-        Color32::from_rgb(0x4b, 0x1e, 0x1f)
+        Color32::from_rgb(0x47, 0x20, 0x22)
     } else {
         C_BORDER_SUBTLE
     };
     let icon_color = if has_error {
-        Color32::from_rgb(0xff, 0x80, 0x80)
+        C_DIFF_DEL_FG
     } else {
         C_TEXT_FAINT
     };
     let name_color = if has_error {
-        Color32::from_rgb(0xff, 0xa0, 0xa0)
+        Color32::from_rgb(0xf0, 0x9a, 0x9d)
     } else {
         C_TEXT
     };
@@ -525,8 +521,8 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage, agent_ack:
             Frame::none()
                 .fill(C_USER_BUBBLE)
                 .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                .rounding(Rounding::same(12.0))
-                .inner_margin(Margin::symmetric(14.0, 10.0))
+                .rounding(Rounding::same(10.0))
+                .inner_margin(Margin::symmetric(12.0, 9.0))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     if !msg.text.is_empty() {
@@ -866,16 +862,16 @@ fn render_edit_tool_block(
         .unwrap_or((0, 0));
 
     let outer_border = if has_error {
-        Color32::from_rgb(0x4b, 0x1e, 0x1f)
+        Color32::from_rgb(0x4d, 0x21, 0x23)
     } else {
         C_BORDER_SUBTLE
     };
     let header_bg = if has_error {
-        Color32::from_rgb(0x22, 0x14, 0x14)
+        Color32::from_rgb(0x20, 0x14, 0x15)
     } else {
-        C_BG_ELEVATED
+        Color32::from_rgb(0x15, 0x16, 0x19)
     };
-    let diff_bg = Color32::from_rgb(0x0c, 0x0d, 0x10);
+    let diff_bg = Color32::from_rgb(0x0f, 0x10, 0x13);
 
     let collapse_id = Id::new((msg_idx, block_idx, "edit_diff_collapse"));
     let mut open = egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -924,7 +920,7 @@ fn render_edit_tool_block(
                             RichText::new(&display_path)
                                 .size(FS_SMALL)
                                 .color(if has_error {
-                                    Color32::from_rgb(0xff, 0xb0, 0xb0)
+                                    Color32::from_rgb(0xf0, 0x9a, 0x9d)
                                 } else {
                                     C_TEXT
                                 })
@@ -947,21 +943,21 @@ fn render_edit_tool_block(
                                 ui.label(
                                     RichText::new(format!("-{removed}"))
                                         .size(FS_TINY)
-                                        .color(Color32::from_rgb(0xfc, 0xa5, 0xa5))
+                                        .color(C_DIFF_DEL_FG)
                                         .monospace(),
                                 );
                                 ui.add_space(2.0);
                                 ui.label(
                                     RichText::new(format!("+{added}"))
                                         .size(FS_TINY)
-                                        .color(Color32::from_rgb(0x86, 0xef, 0xac))
+                                        .color(C_DIFF_ADD_FG)
                                         .monospace(),
                                 );
                             } else if has_error {
                                 ui.label(
                                     RichText::new("error")
                                         .size(FS_TINY)
-                                        .color(Color32::from_rgb(0xff, 0x80, 0x80)),
+                                        .color(C_DIFF_DEL_FG),
                                 );
                             }
                         });

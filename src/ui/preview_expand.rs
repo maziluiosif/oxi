@@ -42,7 +42,7 @@ pub fn clickable_expand_overlay(ui: &mut Ui, rect: Rect, persist_id: Id) {
         ui.painter().rect_stroke(
             rect,
             Rounding::same(8.0),
-            Stroke::new(1.0, Color32::from_rgb(0x4a, 0x4a, 0x52)),
+            Stroke::new(1.0, Color32::from_rgb(0x36, 0x39, 0x40)),
         );
     }
     if response.hovered()

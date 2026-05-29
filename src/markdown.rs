@@ -30,12 +30,12 @@ fn allocate_full_width_block(ui: &mut Ui, column_w: f32, add_contents: impl FnOn
     ui.allocate_ui_with_layout(vec2(w, 0.0), Layout::top_down(Align::Min), add_contents);
 }
 
-const BODY: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
-/// Cursor-style link blue (matches oxi `C_ACCENT`).
-const LINK: Color32 = Color32::from_rgb(0x5c, 0xb3, 0xff);
-const MUTED: Color32 = Color32::from_rgb(0x9d, 0x9d, 0xa4);
-const CODE_BG: Color32 = Color32::from_rgb(0x2e, 0x30, 0x36);
-const CODE_BLOCK_BG: Color32 = Color32::from_rgb(0x25, 0x25, 0x28);
+const BODY: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
+/// Link color (matches Codex `C_ACCENT`).
+const LINK: Color32 = Color32::from_rgb(0x6c, 0xa2, 0xe0);
+const MUTED: Color32 = Color32::from_rgb(0x8b, 0x8f, 0x99);
+const CODE_BG: Color32 = Color32::from_rgb(0x20, 0x22, 0x27);
+const CODE_BLOCK_BG: Color32 = Color32::from_rgb(0x15, 0x16, 0x19);
 const SZ_BODY: f32 = 13.5;
 /// Slightly smaller than proportional body so `code` does not read as oversized next to prose.
 const SZ_CODE_INLINE: f32 = 12.0;
@@ -206,7 +206,7 @@ fn render_raw_block(ui: &mut Ui, wrap_w: f32, label: &str, body: &str) {
     allocate_full_width_block(ui, wrap_w, |ui| {
         Frame::none()
             .fill(CODE_BLOCK_BG)
-            .stroke(Stroke::new(1.0, Color32::from_rgb(0x48, 0x48, 0x4e)))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(0x26, 0x28, 0x2c)))
             .rounding(Rounding::same(8.0))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -466,10 +466,10 @@ fn render_table(ui: &mut Ui, wrap_w: f32, column_count: usize, it: &mut ParserPe
         return;
     }
     let cols = column_count.max(1);
-    let grid = Color32::from_rgb(0x40, 0x40, 0x48);
-    let outer = Color32::from_rgb(0x48, 0x48, 0x4e);
-    let header_bg = Color32::from_rgb(0x2b, 0x2b, 0x30);
-    let body_bg = Color32::from_rgb(0x25, 0x25, 0x28);
+    let grid = Color32::from_rgb(0x24, 0x26, 0x2a);
+    let outer = Color32::from_rgb(0x26, 0x28, 0x2c);
+    let header_bg = Color32::from_rgb(0x1b, 0x1c, 0x20);
+    let body_bg = Color32::from_rgb(0x15, 0x16, 0x19);
     const CELL_PAD_X: f32 = 10.0;
     const CELL_PAD_Y: f32 = 8.0;
 
@@ -897,9 +897,9 @@ fn render_paragraph(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
 fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
     allocate_full_width_block(ui, wrap_w, |ui| {
         Frame::none()
-            .fill(Color32::from_rgb(0x1a, 0x1a, 0x1e))
+            .fill(Color32::from_rgb(0x15, 0x16, 0x1a))
             .rounding(Rounding::same(8.0))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(0x3a, 0x3a, 0x42)))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(0x29, 0x2b, 0x30)))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -946,7 +946,7 @@ fn render_fenced_block(
     allocate_full_width_block(ui, wrap_w, |ui| {
         let frame = Frame::none()
             .fill(CODE_BLOCK_BG)
-            .stroke(Stroke::new(1.0, Color32::from_rgb(0x48, 0x48, 0x4e)))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(0x26, 0x28, 0x2c)))
             .rounding(Rounding::same(8.0))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
