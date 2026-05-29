@@ -214,8 +214,14 @@ pub fn render_empty_state(ui: &mut Ui) {
         let hints = [
             ("⚙", "Choose your provider and model in Settings"),
             ("📁", "Add a workspace to set the project root"),
-            ("🔧", "Tools (read, write, bash, …) run inside the workspace"),
-            ("⌨", "Enter to send · Shift+Enter for a newline · ↑/↓ for history"),
+            (
+                "🔧",
+                "Tools (read, write, bash, …) run inside the workspace",
+            ),
+            (
+                "⌨",
+                "Enter to send · Shift+Enter for a newline · ↑/↓ for history",
+            ),
             ("🖼", "Attach images with + or paste with Ctrl/Cmd+V"),
         ];
         for (icon, tip) in hints {
