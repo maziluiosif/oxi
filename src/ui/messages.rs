@@ -512,44 +512,56 @@ fn has_visible_assistant_content(blocks: &[AssistantBlock], streaming: bool) -> 
     })
 }
 
-pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage, agent_ack: bool) {
+pub fn render_message(
+    ui: &mut Ui,
+    msg_idx: usize,
+    msg: &ChatMessage,
+    agent_ack: bool,
+) -> egui::Response {
     let col_w = content_wrap_width(ui);
 
     if msg.role == MsgRole::User {
-        ui.vertical(|ui| {
-            ui.set_width(col_w);
-            Frame::none()
-                .fill(C_USER_BUBBLE)
-                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                .rounding(Rounding::same(10.0))
-                .inner_margin(Margin::symmetric(12.0, 9.0))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    if !msg.text.is_empty() {
-                        ui.add(
-                            Label::new(
-                                RichText::new(&msg.text)
-                                    .size(FS_BODY)
-                                    .line_height(Some(21.0))
-                                    .color(C_TEXT),
-                            )
-                            .wrap()
-                            .selectable(true),
-                        );
-                    }
-                    if !msg.attachments.is_empty() {
+        let response = ui
+            .vertical(|ui| {
+                ui.set_width(col_w);
+                Frame::none()
+                    .fill(C_USER_BUBBLE)
+                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                    .rounding(Rounding::same(10.0))
+                    .inner_margin(Margin::symmetric(12.0, 9.0))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
                         if !msg.text.is_empty() {
-                            ui.add_space(6.0);
+                            ui.add(
+                                Label::new(
+                                    RichText::new(&msg.text)
+                                        .size(FS_BODY)
+                                        .line_height(Some(21.0))
+                                        .color(C_TEXT),
+                                )
+                                .wrap()
+                                .selectable(true),
+                            );
                         }
-                        render_user_attachments(ui, msg_idx, &msg.attachments);
-                    }
-                });
-        });
+                        if !msg.attachments.is_empty() {
+                            if !msg.text.is_empty() {
+                                ui.add_space(6.0);
+                            }
+                            render_user_attachments(ui, msg_idx, &msg.attachments);
+                        }
+                    });
+            })
+            .response;
         ui.add_space(8.0);
-        return;
+        return response;
     }
 
-    render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), agent_ack);
+    let response = ui
+        .vertical(|ui| {
+            render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), agent_ack);
+        })
+        .response;
+    response
 }
 
 fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttachment]) {
@@ -954,11 +966,7 @@ fn render_edit_tool_block(
                                         .monospace(),
                                 );
                             } else if has_error {
-                                ui.label(
-                                    RichText::new("error")
-                                        .size(FS_TINY)
-                                        .color(C_DIFF_DEL_FG),
-                                );
+                                ui.label(RichText::new("error").size(FS_TINY).color(C_DIFF_DEL_FG));
                             }
                         });
                     });

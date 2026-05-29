@@ -2,11 +2,14 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, Color32, Frame, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
+    self, Align, Button, Color32, Frame, Label, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
 };
 
 use crate::model::MsgRole;
-use crate::theme::{CHAT_COLUMN_MAX, C_BG_ELEVATED, C_BORDER_SUBTLE, C_TEXT_MUTED, FS_SMALL};
+use crate::theme::{
+    CHAT_COLUMN_MAX, C_BG_ELEVATED, C_BORDER_SUBTLE, C_TEXT, C_TEXT_MUTED, C_USER_BUBBLE, FS_BODY,
+    FS_SMALL,
+};
 use crate::ui::chrome::render_empty_state;
 use crate::ui::messages::{render_assistant_message_run, render_message};
 
@@ -97,7 +100,7 @@ impl OxiApp {
                     .last()
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming));
 
-        ScrollArea::vertical()
+        let scroll_output = ScrollArea::vertical()
             .max_width(scroll_outer_w)
             .id_salt(self.conv.chat_scroll_id)
             .max_height(transcript_h)
@@ -133,7 +136,10 @@ impl OxiApp {
                     // Apply instantly (no egui scroll animation): we feed a small per-frame delta
                     // every frame, so egui's built-in smoothing would re-ease each step and stutter.
                     // Our own time-based velocity already produces smooth motion.
-                    ui.scroll_with_delta_animation(sel_scroll, egui::style::ScrollAnimation::none());
+                    ui.scroll_with_delta_animation(
+                        sel_scroll,
+                        egui::style::ScrollAnimation::none(),
+                    );
                     if consume {
                         ui.ctx().input_mut(|i| {
                             i.smooth_scroll_delta = egui::Vec2::ZERO;
@@ -142,50 +148,100 @@ impl OxiApp {
                     ui.ctx().request_repaint();
                 }
 
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    if pad > 0.0 {
-                        ui.add_space(pad);
-                    }
-                    ui.vertical(|ui| {
-                        ui.set_width(col_w);
-                        let messages = &self.conv.workspaces[wi].sessions[si].messages;
-                        if messages.is_empty() {
-                            render_empty_state(ui);
-                        } else {
-                            let mut mi = 0;
-                            while mi < messages.len() {
-                                let msg = &messages[mi];
-                                if msg.role == MsgRole::Assistant {
-                                    let start = mi;
-                                    mi += 1;
-                                    while mi < messages.len()
-                                        && messages[mi].role == MsgRole::Assistant
-                                    {
-                                        mi += 1;
-                                    }
-                                    render_assistant_message_run(
-                                        ui,
-                                        start,
-                                        &messages[start..mi],
-                                        agent_ack,
-                                    );
-                                } else {
-                                    render_message(ui, mi, msg, agent_ack);
-                                    mi += 1;
-                                }
-                            }
+                let user_message_tops = ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        if pad > 0.0 {
+                            ui.add_space(pad);
                         }
-                    });
-                    if pad > 0.0 {
-                        ui.add_space(pad);
-                    }
-                });
+                        let user_message_tops = ui
+                            .vertical(|ui| {
+                                ui.set_width(col_w);
+                                let messages = &self.conv.workspaces[wi].sessions[si].messages;
+                                let mut user_message_tops: Vec<(usize, f32)> = Vec::new();
+                                if messages.is_empty() {
+                                    render_empty_state(ui);
+                                } else {
+                                    let mut mi = 0;
+                                    while mi < messages.len() {
+                                        let msg = &messages[mi];
+                                        if msg.role == MsgRole::Assistant {
+                                            let start = mi;
+                                            mi += 1;
+                                            while mi < messages.len()
+                                                && messages[mi].role == MsgRole::Assistant
+                                            {
+                                                mi += 1;
+                                            }
+                                            render_assistant_message_run(
+                                                ui,
+                                                start,
+                                                &messages[start..mi],
+                                                agent_ack,
+                                            );
+                                        } else {
+                                            let response = render_message(ui, mi, msg, agent_ack);
+                                            if msg.role == MsgRole::User {
+                                                user_message_tops.push((mi, response.rect.top()));
+                                            }
+                                            mi += 1;
+                                        }
+                                    }
+                                }
+                                user_message_tops
+                            })
+                            .inner;
+                        if pad > 0.0 {
+                            ui.add_space(pad);
+                        }
+                        user_message_tops
+                    })
+                    .inner;
 
                 if force_scroll_bottom && !user_has_selection {
                     ui.scroll_to_cursor(Some(Align::BOTTOM));
                 }
+
+                user_message_tops
             });
+
+        let sticky_user_text =
+            sticky_user_message_index(&scroll_output.inner, scroll_output.inner_rect.top())
+                .and_then(|idx| {
+                    self.conv.workspaces[wi].sessions[si]
+                        .messages
+                        .get(idx)
+                        .and_then(|msg| (!msg.text.is_empty()).then(|| msg.text.clone()))
+                });
+        if let Some(text) = sticky_user_text {
+            let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+            let pad = ((column_center_w - col_w) * 0.5).max(0.0);
+            let x = scroll_output.inner_rect.left() + pad;
+            let y = scroll_output.inner_rect.top() + 2.0;
+            egui::Area::new(ui.id().with("sticky_user_input"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(x, y))
+                .show(ui.ctx(), |ui| {
+                    ui.set_width(col_w);
+                    Frame::none()
+                        .fill(C_USER_BUBBLE)
+                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                        .rounding(Rounding::same(10.0))
+                        .inner_margin(Margin::symmetric(12.0, 7.0))
+                        .show(ui, |ui| {
+                            ui.set_width(col_w);
+                            ui.add(
+                                Label::new(
+                                    RichText::new(text)
+                                        .size(FS_BODY)
+                                        .line_height(Some(21.0))
+                                        .color(C_TEXT),
+                                )
+                                .wrap(),
+                            );
+                        });
+                });
+        }
 
         if show_sidebar_button {
             let pos = ui.min_rect().min + egui::vec2(0.0, 0.0);
@@ -217,6 +273,17 @@ impl OxiApp {
 
 /// Same idea as egui’s default click-vs-drag distance (~6px).
 const SELECTION_SCROLL_MIN_DRAG_PX: f32 = 6.0;
+
+fn sticky_user_message_index(
+    user_message_tops: &[(usize, f32)],
+    viewport_top: f32,
+) -> Option<usize> {
+    user_message_tops
+        .iter()
+        .rev()
+        .find(|(_, top)| *top <= viewport_top)
+        .map(|(idx, _)| *idx)
+}
 
 /// Vertical edge auto-scroll delta for the transcript while the user is dragging a text
 /// selection near the top/bottom of the viewport. Same sign convention as

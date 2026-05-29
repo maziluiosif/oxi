@@ -63,17 +63,10 @@ pub struct Session {
 
 pub fn make_session_title(text: &str) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut title = String::new();
-    for ch in normalized.chars().take(36) {
-        title.push(ch);
-    }
-    if normalized.chars().count() > 36 {
-        title.push('…');
-    }
-    if title.is_empty() {
+    if normalized.is_empty() {
         "New chat".to_string()
     } else {
-        title
+        normalized
     }
 }
 
@@ -430,11 +423,11 @@ mod tests {
     }
 
     #[test]
-    fn make_session_title_truncates_long_text() {
+    fn make_session_title_keeps_full_text() {
         let long = "a ".repeat(50);
         let title = make_session_title(&long);
-        assert!(title.chars().count() <= 37); // 36 + '…'
-        assert!(title.ends_with('…'));
+        assert_eq!(title, long.split_whitespace().collect::<Vec<_>>().join(" "));
+        assert!(!title.ends_with('…'));
     }
 
     #[test]
