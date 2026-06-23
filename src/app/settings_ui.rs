@@ -419,6 +419,7 @@ impl OxiApp {
                         LlmProviderKind::OpenRouter => "OpenRouter API key",
                         LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
                         LlmProviderKind::GitHubCopilot => "GitHub Copilot token / PAT",
+                        LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
                     })
                     .margin(Margin::symmetric(8.0, 5.0)),
             );

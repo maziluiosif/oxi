@@ -7,7 +7,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
 
 use super::copilot::copilot_x_initiator_from_openai_messages;
@@ -196,17 +196,20 @@ fn supports_extended_thinking(model: &str) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run_copilot_loop(
+#[allow(clippy::too_many_arguments)]
+pub async fn run_anthropic_loop(
     client: &reqwest::Client,
     base_url: &str,
     bearer_token: &str,
     model: &str,
+    extra_headers: &[(String, String)],
     openai_messages: &mut Vec<Value>,
     tools_openai: &[Value],
     cwd: &Path,
     enabled: &[bool; 7],
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
+    copilot_headers: bool,
 ) -> Result<(), String> {
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let anthropic_tools = to_anthropic_tools(tools_openai);
@@ -250,38 +253,47 @@ pub async fn run_copilot_loop(
             HeaderValue::from_static("2025-04-14"),
         );
         headers.insert(
-            reqwest::header::HeaderName::from_static("anthropic-dangerous-direct-browser-access"),
-            HeaderValue::from_static("true"),
-        );
-        headers.insert(
             reqwest::header::ACCEPT,
             HeaderValue::from_static("application/json"),
         );
-        headers.insert(
-            reqwest::header::USER_AGENT,
-            HeaderValue::from_static("GitHubCopilotChat/0.35.0"),
-        );
-        headers.insert(
-            reqwest::header::HeaderName::from_static("editor-version"),
-            HeaderValue::from_static("vscode/1.107.0"),
-        );
-        headers.insert(
-            reqwest::header::HeaderName::from_static("editor-plugin-version"),
-            HeaderValue::from_static("copilot-chat/0.35.0"),
-        );
-        headers.insert(
-            reqwest::header::HeaderName::from_static("copilot-integration-id"),
-            HeaderValue::from_static("vscode-chat"),
-        );
-        let initiator = copilot_x_initiator_from_openai_messages(openai_messages);
-        headers.insert(
-            reqwest::header::HeaderName::from_static("x-initiator"),
-            HeaderValue::from_static(initiator),
-        );
-        headers.insert(
-            reqwest::header::HeaderName::from_static("openai-intent"),
-            HeaderValue::from_static("conversation-edits"),
-        );
+        for (k, v) in extra_headers {
+            let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| e.to_string())?;
+            let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
+            headers.insert(name, val);
+        }
+        if copilot_headers {
+            headers.insert(
+                reqwest::header::HeaderName::from_static(
+                    "anthropic-dangerous-direct-browser-access",
+                ),
+                HeaderValue::from_static("true"),
+            );
+            headers.insert(
+                reqwest::header::USER_AGENT,
+                HeaderValue::from_static("GitHubCopilotChat/0.35.0"),
+            );
+            headers.insert(
+                reqwest::header::HeaderName::from_static("editor-version"),
+                HeaderValue::from_static("vscode/1.107.0"),
+            );
+            headers.insert(
+                reqwest::header::HeaderName::from_static("editor-plugin-version"),
+                HeaderValue::from_static("copilot-chat/0.35.0"),
+            );
+            headers.insert(
+                reqwest::header::HeaderName::from_static("copilot-integration-id"),
+                HeaderValue::from_static("vscode-chat"),
+            );
+            let initiator = copilot_x_initiator_from_openai_messages(openai_messages);
+            headers.insert(
+                reqwest::header::HeaderName::from_static("x-initiator"),
+                HeaderValue::from_static(initiator),
+            );
+            headers.insert(
+                reqwest::header::HeaderName::from_static("openai-intent"),
+                HeaderValue::from_static("conversation-edits"),
+            );
+        }
         let res = client
             .post(&url)
             .headers(headers)
@@ -462,6 +474,36 @@ pub async fn run_copilot_loop(
         break;
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_copilot_loop(
+    client: &reqwest::Client,
+    base_url: &str,
+    bearer_token: &str,
+    model: &str,
+    openai_messages: &mut Vec<Value>,
+    tools_openai: &[Value],
+    cwd: &Path,
+    enabled: &[bool; 7],
+    tx: &Sender<AgentEvent>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(), String> {
+    run_anthropic_loop(
+        client,
+        base_url,
+        bearer_token,
+        model,
+        &[],
+        openai_messages,
+        tools_openai,
+        cwd,
+        enabled,
+        tx,
+        cancel,
+        true,
+    )
+    .await
 }
 
 fn parse_anthropic_event(

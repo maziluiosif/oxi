@@ -89,13 +89,8 @@ impl OxiApp {
                     ui.vertical(|ui| {
                         ui.set_width((ui.available_width() - 126.0).max(80.0));
                         ui.add(
-                            Label::new(
-                                RichText::new("Chat")
-                                    .size(FS_SMALL)
-                                    .color(C_TEXT)
-                                    .strong(),
-                            )
-                            .truncate(),
+                            Label::new(RichText::new("Chat").size(FS_SMALL).color(C_TEXT).strong())
+                                .truncate(),
                         );
                         let profile = self
                             .conv
@@ -412,7 +407,6 @@ impl OxiApp {
                 if force_scroll_bottom && !user_has_selection {
                     ui.scroll_to_cursor(Some(Align::BOTTOM));
                 }
-
             });
 
         if self.conv.scroll_to_bottom_once {
