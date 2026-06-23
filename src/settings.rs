@@ -15,14 +15,17 @@ pub enum LlmProviderKind {
     GptCodex,
     /// GitHub Copilot (Anthropic-compatible Messages API at Copilot base URL).
     GitHubCopilot,
+    /// OpenCode Go subscription models (OpenAI/Anthropic-compatible endpoints).
+    OpenCodeGo,
 }
 
 impl LlmProviderKind {
-    pub const ALL: [LlmProviderKind; 4] = [
+    pub const ALL: [LlmProviderKind; 5] = [
         LlmProviderKind::OpenAi,
         LlmProviderKind::OpenRouter,
         LlmProviderKind::GptCodex,
         LlmProviderKind::GitHubCopilot,
+        LlmProviderKind::OpenCodeGo,
     ];
 
     pub fn default_base_url(&self) -> &'static str {
@@ -30,6 +33,7 @@ impl LlmProviderKind {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => "https://api.openai.com/v1",
             LlmProviderKind::OpenRouter => "https://openrouter.ai/api/v1",
             LlmProviderKind::GitHubCopilot => "https://api.individual.githubcopilot.com",
+            LlmProviderKind::OpenCodeGo => "https://opencode.ai/zen/go",
         }
     }
 
@@ -39,6 +43,7 @@ impl LlmProviderKind {
             LlmProviderKind::OpenRouter => "OpenRouter",
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::GitHubCopilot => "GitHub Copilot",
+            LlmProviderKind::OpenCodeGo => "OpenCode Go",
         }
     }
 
@@ -48,6 +53,7 @@ impl LlmProviderKind {
             LlmProviderKind::OpenRouter => "openai/gpt-4o-mini",
             LlmProviderKind::GptCodex => "gpt-4o-mini",
             LlmProviderKind::GitHubCopilot => "claude-sonnet-4",
+            LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
         }
     }
 }
@@ -133,6 +139,11 @@ impl Default for AppSettings {
                 LlmProviderKind::GitHubCopilot,
                 "Copilot default",
             ),
+            ProviderProfile::new(
+                "opencode-go-default",
+                LlmProviderKind::OpenCodeGo,
+                "OpenCode Go default",
+            ),
         ];
         Self {
             active_profile_id: "openai-default".to_string(),
@@ -188,6 +199,7 @@ impl AppSettings {
                     LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
                     LlmProviderKind::OpenRouter => old.openrouter_api_key,
                     LlmProviderKind::GitHubCopilot => old.copilot_api_key,
+                    LlmProviderKind::OpenCodeGo => String::new(),
                 },
                 openrouter_http_referer: old.openrouter_http_referer,
                 openrouter_title: old.openrouter_title,
@@ -203,6 +215,11 @@ impl AppSettings {
                 "copilot-default",
                 LlmProviderKind::GitHubCopilot,
                 "Copilot default",
+            ),
+            ProviderProfile::new(
+                "opencode-go-default",
+                LlmProviderKind::OpenCodeGo,
+                "OpenCode Go default",
             ),
         ];
         s.active_profile_id = "migrated-active".to_string();

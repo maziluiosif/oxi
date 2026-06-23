@@ -6,15 +6,15 @@ use std::hash::{Hash, Hasher};
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::text::{LayoutJob, LayoutSection, TextFormat, TextWrapping};
 use eframe::egui::{
-    self, Color32, FontId, Frame, Id, Image, Label, Margin, RichText, Rounding, ScrollArea,
-    Stroke, TextureOptions, Ui,
+    self, Color32, FontId, Frame, Id, Image, Label, Margin, RichText, Rounding, ScrollArea, Stroke,
+    TextureOptions, Ui,
 };
 
 use crate::markdown;
 use crate::model::{
     assistant_is_effectively_empty, build_assistant_block_groups, concat_thinking_blocks,
-    tool_breaks_explore_cluster, AssistantBlock, AssistantBlockGroup,
-    ChatMessage, MsgRole, UserAttachment,
+    tool_breaks_explore_cluster, AssistantBlock, AssistantBlockGroup, ChatMessage, MsgRole,
+    UserAttachment,
 };
 use crate::theme::{
     animated_status_label, content_wrap_width, icon_font, tool_status_label, C_ACCENT,
@@ -1495,7 +1495,15 @@ pub fn render_assistant_blocks(
         && blocks
             .iter()
             .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
-            .all(|b| matches!(b, AssistantBlock::Tool { is_error: Some(_), .. }))
+            .all(|b| {
+                matches!(
+                    b,
+                    AssistantBlock::Tool {
+                        is_error: Some(_),
+                        ..
+                    }
+                )
+            })
         && !has_activity_after_last_tool(blocks);
 
     let worked_end = trailing_answer_start(blocks);

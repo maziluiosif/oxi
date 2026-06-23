@@ -899,8 +899,10 @@ fn render_heading(ui: &mut Ui, wrap_w: f32, level: HeadingLevel, it: &mut Parser
     if matches!(level, HeadingLevel::H1 | HeadingLevel::H2) {
         allocate_full_width_block(ui, wrap_w, |ui| {
             ui.add_space(2.0);
-            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(0x27, 0x29, 0x30));
+            let (rect, _) =
+                ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 0.0, Color32::from_rgb(0x27, 0x29, 0x30));
         });
         ui.add_space(7.0);
     } else {
@@ -925,8 +927,10 @@ fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
                 ui.set_width(full_w);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    let (bar_rect, _) = ui.allocate_exact_size(vec2(3.0, 1.0), egui::Sense::hover());
-                    ui.painter().rect_filled(bar_rect, Rounding::same(2.0), QUOTE_ACCENT);
+                    let (bar_rect, _) =
+                        ui.allocate_exact_size(vec2(3.0, 1.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(bar_rect, Rounding::same(2.0), QUOTE_ACCENT);
                     ui.add_space(10.0);
                     ui.vertical(|ui| {
                         ui.add_space(8.0);
@@ -943,7 +947,13 @@ fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
                                     render_heading(ui, inner_w, level, it);
                                 }
                                 Event::Start(Tag::CodeBlock(kind)) => {
-                                    render_fenced_block(ui, inner_w, kind, it, ui.id().with("quote_fence"));
+                                    render_fenced_block(
+                                        ui,
+                                        inner_w,
+                                        kind,
+                                        it,
+                                        ui.id().with("quote_fence"),
+                                    );
                                 }
                                 _ => {}
                             }
@@ -1001,13 +1011,22 @@ fn render_fenced_block(
 
                 Frame::none()
                     .fill(CODE_BLOCK_HEADER_BG)
-                    .rounding(egui::Rounding { nw: 9.0, ne: 9.0, sw: 0.0, se: 0.0 })
+                    .rounding(egui::Rounding {
+                        nw: 9.0,
+                        ne: 9.0,
+                        sw: 0.0,
+                        se: 0.0,
+                    })
                     .inner_margin(Margin::symmetric(10.0, 5.0))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(RichText::new("●").size(7.0).color(Color32::from_rgb(0x78, 0x7d, 0x8a)));
+                            ui.label(
+                                RichText::new("●")
+                                    .size(7.0)
+                                    .color(Color32::from_rgb(0x78, 0x7d, 0x8a)),
+                            );
                             ui.label(
                                 RichText::new(lang.as_str())
                                     .size(SZ_TINY)
@@ -1028,7 +1047,12 @@ fn render_fenced_block(
 
                 Frame::none()
                     .fill(CODE_BLOCK_BG)
-                    .rounding(egui::Rounding { nw: 0.0, ne: 0.0, sw: 9.0, se: 9.0 })
+                    .rounding(egui::Rounding {
+                        nw: 0.0,
+                        ne: 0.0,
+                        sw: 9.0,
+                        se: 9.0,
+                    })
                     .inner_margin(Margin::symmetric(11.0, 9.0))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());

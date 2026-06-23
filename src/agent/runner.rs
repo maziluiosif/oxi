@@ -6,7 +6,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use crate::agent::anthropic::run_copilot_loop;
+use crate::agent::anthropic::{run_anthropic_loop, run_copilot_loop};
 use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
 use crate::agent::history::build_openai_messages;
@@ -107,6 +107,26 @@ fn configured_copilot_pat(profile: &ProviderProfile) -> Result<String, String> {
             "Sign in with GitHub (Copilot) OAuth or set a Copilot token in profile / COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN."
                 .into()
         })
+}
+
+fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
+    let key = profile.api_key.trim();
+    if !key.is_empty() {
+        return Ok(key.to_string());
+    }
+    std::env::var("OPENCODE_GO_API_KEY").or_else(|_| std::env::var("OPENCODE_API_KEY")).map_err(|_| {
+        "Set OpenCode Go API key in profile or OPENCODE_GO_API_KEY / OPENCODE_API_KEY in the environment."
+            .into()
+    })
+}
+
+fn opencode_go_model_uses_anthropic(model: &str) -> bool {
+    let m = model
+        .trim()
+        .strip_prefix("opencode-go/")
+        .unwrap_or(model.trim())
+        .to_ascii_lowercase();
+    m.starts_with("minimax-") || m.starts_with("qwen")
 }
 
 fn openrouter_extra_headers(profile: &ProviderProfile) -> Vec<(String, String)> {
@@ -343,6 +363,65 @@ pub fn spawn_agent_run(
                         false,
                     )
                     .await
+                }
+                LlmProviderKind::OpenCodeGo => {
+                    let key = match configured_opencode_go_key(&profile) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            finish_with_error(&tx, e);
+                            return;
+                        }
+                    };
+                    let base = profile.effective_base_url();
+                    let model = model
+                        .strip_prefix("opencode-go/")
+                        .unwrap_or(&model)
+                        .to_string();
+                    if opencode_go_model_uses_anthropic(&model) {
+                        // OpenCode Go exposes Anthropic-compatible models at
+                        // https://opencode.ai/zen/go/v1/messages. `run_anthropic_loop`
+                        // appends `/v1/messages`, so pass the base without `/v1`.
+                        let anthropic_base = base.trim_end_matches("/v1").to_string();
+                        run_anthropic_loop(
+                            &client,
+                            &anthropic_base,
+                            &key,
+                            &model,
+                            &[],
+                            &mut messages,
+                            &tools,
+                            cwd_ref,
+                            &settings.tools_enabled,
+                            &tx,
+                            &cancel,
+                            false,
+                        )
+                        .await
+                    } else {
+                        // OpenCode Go exposes OpenAI-compatible models at
+                        // https://opencode.ai/zen/go/v1/chat/completions. `run_chat_loop`
+                        // appends `/chat/completions`, so include `/v1` in the base.
+                        let chat_base = if base.trim_end_matches('/').ends_with("/v1") {
+                            base
+                        } else {
+                            format!("{}/v1", base.trim_end_matches('/'))
+                        };
+                        run_chat_loop(
+                            &client,
+                            &chat_base,
+                            &key,
+                            &model,
+                            &[],
+                            &mut messages,
+                            &tools,
+                            cwd_ref,
+                            &settings.tools_enabled,
+                            &tx,
+                            &cancel,
+                            false,
+                        )
+                        .await
+                    }
                 }
             };
             if let Err(e) = r {
