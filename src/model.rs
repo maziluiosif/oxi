@@ -114,7 +114,6 @@ pub enum AssistantBlockGroup {
     ExploringTools {
         range_start: usize,
         range_end: usize,
-        tool_indices: Vec<usize>,
     },
     Tool(usize),
 }
@@ -148,7 +147,6 @@ pub fn build_assistant_block_groups(blocks: &[AssistantBlock]) -> Vec<AssistantB
                 out.push(AssistantBlockGroup::ExploringTools {
                     range_start: cluster_start,
                     range_end: j,
-                    tool_indices,
                 });
                 i = j;
                 continue;
@@ -174,13 +172,6 @@ pub fn build_assistant_block_groups(blocks: &[AssistantBlock]) -> Vec<AssistantB
         }
     }
     out
-}
-
-pub fn estimate_thought_seconds(total_chars: usize) -> u32 {
-    if total_chars == 0 {
-        return 1;
-    }
-    ((total_chars as f32 / 400.0).ceil() as u32).clamp(1, 999)
 }
 
 #[allow(dead_code)]

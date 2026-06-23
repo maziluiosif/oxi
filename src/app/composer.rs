@@ -51,6 +51,14 @@ impl OxiApp {
         let pad = ((column_center_w - CHAT_COLUMN_MAX.min(column_center_w)) * 0.5).max(0.0);
         let can_send = !self.conv.input.trim().is_empty() || !self.conv.pending_images.is_empty();
 
+        let composer_hint = if self.conv.settings.active_profile().is_none() {
+            "Configure a provider in Settings to start…"
+        } else if self.conv.workspaces.is_empty() {
+            "Add a workspace first…"
+        } else {
+            "Ask oxi to edit, explain, inspect, or run code…"
+        };
+
         // Top-align the row so a parent `bottom_up` layout cannot vertically stretch/center the
         // block and shift the field off-screen.
         let row = ui.horizontal_top(|ui| {
@@ -78,7 +86,7 @@ impl OxiApp {
                         let te_output = TextEdit::multiline(&mut self.conv.input)
                             .desired_width(f32::INFINITY)
                             .desired_rows(1)
-                            .hint_text("Ask oxi to do anything…")
+                            .hint_text(composer_hint)
                             .frame(false)
                             .show(ui);
 
@@ -138,17 +146,26 @@ impl OxiApp {
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let active_session_streaming = self.active_waiting_response();
+            let no_profile = self.conv.settings.active_profile().is_none();
             let (fill, fg, enabled, icon, hover) = if active_session_streaming {
                 (C_TEXT, C_BG_MAIN, true, "■", "Stop generation")
+            } else if no_profile {
+                (
+                    Color32::from_rgb(0x22, 0x24, 0x28),
+                    C_TEXT_MUTED,
+                    false,
+                    "↑",
+                    "Configure an active provider profile in Settings",
+                )
             } else if can_send {
-                (C_TEXT, C_BG_MAIN, true, "↑", "Send")
+                (C_TEXT, C_BG_MAIN, true, "↑", "Send message")
             } else {
                 (
                     Color32::from_rgb(0x22, 0x24, 0x28),
                     C_TEXT_MUTED,
                     false,
                     "↑",
-                    "Message is empty",
+                    "Type a message or attach an image",
                 )
             };
             let clicked = ui

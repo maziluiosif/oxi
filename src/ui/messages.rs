@@ -6,14 +6,14 @@ use std::hash::{Hash, Hasher};
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::text::{LayoutJob, LayoutSection, TextFormat, TextWrapping};
 use eframe::egui::{
-    self, CollapsingHeader, Color32, FontId, Frame, Id, Image, Label, Margin, RichText, Rounding,
-    ScrollArea, Sense, Stroke, TextureOptions, Ui,
+    self, Color32, FontId, Frame, Id, Image, Label, Margin, RichText, Rounding, ScrollArea,
+    Stroke, TextureOptions, Ui,
 };
 
 use crate::markdown;
 use crate::model::{
     assistant_is_effectively_empty, build_assistant_block_groups, concat_thinking_blocks,
-    estimate_thought_seconds, tool_breaks_explore_cluster, AssistantBlock, AssistantBlockGroup,
+    tool_breaks_explore_cluster, AssistantBlock, AssistantBlockGroup,
     ChatMessage, MsgRole, UserAttachment,
 };
 use crate::theme::{
@@ -34,29 +34,13 @@ const MAX_VISIBLE_STREAMING_TOOL_PILLS: usize = 5;
 const TOOL_PILL_HEIGHT: f32 = 24.0;
 /// Vertical gap between consecutive pills.
 const TOOL_PILL_GAP: f32 = 3.0;
-/// Left inset for bodies inside Worked / Explored so nested content reads under the parent header.
-const NESTED_SECTION_INDENT: f32 = 12.0;
 
 struct ExploredClusterCtx<'a> {
     msg_idx: usize,
-    salt: usize,
     blocks: &'a [AssistantBlock],
     start: usize,
     end: usize,
-    tool_indices: &'a [usize],
     streaming: bool,
-}
-
-fn nest_under_collapsed_header<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.horizontal(|ui| {
-        ui.add_space(NESTED_SECTION_INDENT);
-        ui.vertical(|ui| {
-            ui.set_width(ui.available_width());
-            add_contents(ui)
-        })
-        .inner
-    })
-    .inner
 }
 
 fn monospace_wrapped_job(text: String, wrap_width: f32, color: Color32) -> LayoutJob {
@@ -80,6 +64,9 @@ fn diff_counts(diff: &str) -> (usize, usize) {
     let mut added = 0;
     let mut removed = 0;
     for line in diff.lines() {
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
         if line.starts_with('+') {
             added += 1;
         } else if line.starts_with('-') {
@@ -144,6 +131,136 @@ fn tool_path_from_args(args_summary: Option<&String>) -> Option<String> {
                 .and_then(|v| v.as_str())
                 .map(str::to_owned)
         })
+}
+
+fn short_path(path: &str, max_segments: usize) -> String {
+    let segs: Vec<&str> = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segs.len() > max_segments && max_segments > 0 {
+        let start = segs.len() - max_segments;
+        format!("…/{}", segs[start..].join("/"))
+    } else {
+        path.to_string()
+    }
+}
+
+fn command_preview(command: &str, max_chars: usize) -> String {
+    let first_line = command.lines().next().unwrap_or(command).trim();
+    let mut out: String = first_line.chars().take(max_chars).collect();
+    if first_line.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
+fn count_output_lines(output: &str) -> usize {
+    if output.trim().is_empty() {
+        0
+    } else {
+        output.lines().count().max(1)
+    }
+}
+
+fn tool_action_label(name: &str) -> &'static str {
+    match name {
+        "read" => "Read",
+        "write" => "Wrote",
+        "edit" => "Edited",
+        "bash" => "Ran",
+        "grep" => "Searched",
+        "find" => "Found files",
+        "ls" => "Listed",
+        _ => "Used",
+    }
+}
+
+fn tool_summary_text(
+    name: &str,
+    args_summary: Option<&String>,
+    output: &str,
+    diff: Option<&String>,
+    is_error: Option<bool>,
+    running: bool,
+) -> String {
+    if running {
+        let target = tool_short_arg(name, args_summary)
+            .map(|s| format!(" · {s}"))
+            .unwrap_or_default();
+        return format!("{}{}", tool_status_label(name), target);
+    }
+
+    let has_error = is_error == Some(true);
+    let action = if has_error {
+        "Failed"
+    } else {
+        tool_action_label(name)
+    };
+    let mut parts = vec![action.to_string()];
+
+    match name {
+        "bash" => {
+            if let Some(raw) = args_summary {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+                    if let Some(cmd) = v.get("command").and_then(|x| x.as_str()) {
+                        let p = command_preview(cmd, 42);
+                        if !p.is_empty() {
+                            parts.push(format!("`{p}`"));
+                        }
+                    }
+                }
+            }
+        }
+        "grep" => {
+            if let Some(raw) = args_summary {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+                    if let Some(pattern) = v.get("pattern").and_then(|x| x.as_str()) {
+                        parts.push(format!("`{}`", command_preview(pattern, 32)));
+                    }
+                    if let Some(path) = v.get("path").and_then(|x| x.as_str()) {
+                        if !path.is_empty() {
+                            parts.push(format!("in {}", short_path(path, 2)));
+                        }
+                    }
+                }
+            }
+        }
+        "read" | "write" | "edit" | "find" | "ls" => {
+            if let Some(path) = tool_path_from_args(args_summary) {
+                parts.push(short_path(&path, 2));
+            }
+        }
+        _ => {
+            if let Some(arg) = tool_short_arg(name, args_summary) {
+                parts.push(arg);
+            }
+        }
+    }
+
+    if let Some(diff_text) = diff.filter(|d| !d.trim().is_empty()) {
+        let (added, removed) = diff_counts(diff_text);
+        parts.push(format!("+{added} -{removed}"));
+    } else {
+        let lines = count_output_lines(output);
+        if lines > 0 {
+            parts.push(format!("{lines} line{}", if lines == 1 { "" } else { "s" }));
+        }
+    }
+
+    parts.join(" · ")
+}
+
+fn tool_state_badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32, stroke: Color32) {
+    Frame::none()
+        .fill(bg)
+        .stroke(Stroke::new(1.0, stroke))
+        .rounding(Rounding::same(999.0))
+        .inner_margin(Margin::symmetric(7.0, 2.0))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).size(FS_TINY).color(fg));
+        });
 }
 
 fn user_image_texture(
@@ -339,8 +456,8 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
 /// [ icon  ToolName  arg_scurt ]  cu o linie de output on-hover/expand.
 fn render_tool_pill(
     ui: &mut Ui,
-    msg_idx: usize,
-    block_idx: usize,
+    _msg_idx: usize,
+    _block_idx: usize,
     block: &AssistantBlock,
     streaming: bool,
     is_last_in_run: bool,
@@ -362,25 +479,31 @@ fn render_tool_pill(
     let has_error = *is_error == Some(true);
     let has_diff = diff.as_deref().is_some_and(|t| !t.trim().is_empty());
     let has_output = !output.trim().is_empty();
-    let has_body = has_diff || has_output;
     // A tool is "actively running" only while streaming AND it has not been finalized yet
     // (is_error is set by finalize_tool_run — None means still in-flight).
     // Additionally only the last pill in the visual run gets the spinner.
     let tool_in_flight = streaming && is_error.is_none() && !has_output && !has_diff;
     let running = tool_in_flight && is_last_in_run;
 
+    let status_done = !running && !has_error;
     let pill_bg = if has_error {
         Color32::from_rgb(0x22, 0x14, 0x15)
+    } else if running {
+        Color32::from_rgb(0x13, 0x18, 0x20)
     } else {
         Color32::from_rgb(0x15, 0x16, 0x19)
     };
     let pill_border = if has_error {
         Color32::from_rgb(0x47, 0x20, 0x22)
+    } else if running {
+        Color32::from_rgb(0x24, 0x35, 0x48)
     } else {
         C_BORDER_SUBTLE
     };
     let icon_color = if has_error {
         C_DIFF_DEL_FG
+    } else if running {
+        C_ACCENT
     } else {
         C_TEXT_FAINT
     };
@@ -389,14 +512,23 @@ fn render_tool_pill(
     } else {
         C_TEXT
     };
-    let arg_color = C_TEXT_MUTED;
+    let summary_color = if has_error {
+        Color32::from_rgb(0xf0, 0x9a, 0x9d)
+    } else {
+        C_TEXT_MUTED
+    };
 
     let icon = tool_icon(name);
-    let arg = tool_short_arg(name, args_summary.as_ref());
+    let summary = tool_summary_text(
+        name,
+        args_summary.as_ref(),
+        output,
+        diff.as_ref(),
+        *is_error,
+        running,
+    );
 
-    let state_tag = block_state_tag(streaming);
-
-    let draw_pill = |ui: &mut Ui, expanded: Option<bool>| {
+    let draw_pill = |ui: &mut Ui| {
         Frame::none()
             .fill(pill_bg)
             .stroke(Stroke::new(1.0, pill_border))
@@ -416,72 +548,53 @@ fn render_tool_pill(
                             .size(FS_SMALL)
                             .color(name_color),
                     );
-                    if let Some(ref a) = arg {
-                        ui.add(
-                            Label::new(
-                                RichText::new(a.as_str())
-                                    .size(FS_SMALL)
-                                    .color(arg_color)
-                                    .monospace(),
-                            )
-                            .truncate(),
-                        );
-                    }
+                    ui.add(
+                        Label::new(
+                            RichText::new(summary.as_str())
+                                .size(FS_SMALL)
+                                .color(summary_color)
+                                .monospace(),
+                        )
+                        .truncate(),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let Some(open) = expanded {
-                            ui.label(
-                                RichText::new(if open { "▾" } else { "▸" })
-                                    .size(FS_TINY)
-                                    .color(C_TEXT_FAINT),
-                            );
-                        }
                         if running {
                             ui.add(eframe::egui::Spinner::new().size(10.0).color(C_TEXT_MUTED));
+                            ui.add_space(4.0);
+                            tool_state_badge(
+                                ui,
+                                "running",
+                                C_ACCENT,
+                                Color32::from_rgb(0x10, 0x1b, 0x29),
+                                Color32::from_rgb(0x24, 0x35, 0x48),
+                            );
+                        } else if has_error {
+                            tool_state_badge(
+                                ui,
+                                "failed",
+                                C_DIFF_DEL_FG,
+                                Color32::from_rgb(0x2a, 0x15, 0x17),
+                                Color32::from_rgb(0x47, 0x20, 0x22),
+                            );
+                        } else if status_done {
+                            tool_state_badge(
+                                ui,
+                                "done",
+                                C_DIFF_ADD_FG,
+                                Color32::from_rgb(0x12, 0x20, 0x18),
+                                Color32::from_rgb(0x22, 0x3a, 0x2b),
+                            );
                         }
                     });
                 });
             });
     };
 
-    if !has_body && !has_error {
-        draw_pill(ui, None);
-        ui.add_space(3.0);
-        return;
-    }
+    draw_pill(ui);
 
-    let collapse_id = Id::new((msg_idx, block_idx, "tool_pill_collapse", state_tag));
-    let default_open = running;
-    let mut open = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        collapse_id,
-        default_open,
-    );
-
-    let header_response = Frame::none()
-        .show(ui, |ui| {
-            let response = ui
-                .scope(|ui| {
-                    ui.style_mut().interaction.selectable_labels = false;
-                    draw_pill(ui, Some(open.is_open()));
-                })
-                .response;
-            response
-        })
-        .inner;
-
-    if header_response.hovered() {
-        ui.ctx()
-            .set_cursor_icon(eframe::egui::CursorIcon::PointingHand);
-    }
-    if header_response.clicked() {
-        open.toggle(ui);
-    }
-
-    open.show_body_unindented(ui, |ui| {
-        nest_under_collapsed_header(ui, |ui| {
-            render_tool_block_details(ui, msg_idx, block_idx, block, streaming, false);
-        });
-    });
+    // Keep the transcript compact: the pill itself is the visible tool-call bubble.
+    // Do not render the raw tool output underneath it, otherwise each tool appears twice
+    // (once as the bubble and once again as normal text below it).
     ui.add_space(3.0);
 }
 
@@ -663,6 +776,7 @@ fn pseudo_diff_from_write_content(content: &str) -> String {
     out
 }
 
+#[allow(dead_code)]
 fn render_tool_block_details(
     ui: &mut Ui,
     msg_idx: usize,
@@ -672,7 +786,7 @@ fn render_tool_block_details(
     show_args_summary: bool,
 ) {
     let AssistantBlock::Tool {
-        name: _,
+        name,
         output,
         diff,
         args_summary,
@@ -687,6 +801,47 @@ fn render_tool_block_details(
     let tool_running = streaming && is_error.is_none();
     let has_diff = diff.as_deref().is_some_and(|text| !text.trim().is_empty());
     let has_output = !(output.trim().is_empty() || (is_edit_like_tool(block) && has_diff));
+
+    ui.horizontal_wrapped(|ui| {
+        if tool_running {
+            tool_state_badge(
+                ui,
+                "running",
+                C_ACCENT,
+                Color32::from_rgb(0x10, 0x1b, 0x29),
+                Color32::from_rgb(0x24, 0x35, 0x48),
+            );
+        } else if *is_error == Some(true) {
+            tool_state_badge(
+                ui,
+                "failed",
+                C_DIFF_DEL_FG,
+                Color32::from_rgb(0x2a, 0x15, 0x17),
+                Color32::from_rgb(0x47, 0x20, 0x22),
+            );
+        } else {
+            tool_state_badge(
+                ui,
+                "done",
+                C_DIFF_ADD_FG,
+                Color32::from_rgb(0x12, 0x20, 0x18),
+                Color32::from_rgb(0x22, 0x3a, 0x2b),
+            );
+        }
+        ui.label(
+            RichText::new(tool_summary_text(
+                name,
+                args_summary.as_ref(),
+                output,
+                diff.as_ref(),
+                *is_error,
+                tool_running,
+            ))
+            .size(FS_TINY)
+            .color(C_TEXT_MUTED),
+        );
+    });
+    ui.add_space(5.0);
 
     if show_args_summary && !(is_edit_like_tool(block) && has_diff) {
         if let Some(args) = args_summary {
@@ -854,18 +1009,6 @@ fn render_edit_tool_block(
     // Spinner only while the tool is truly in-flight: streaming + not finalized (is_error=None) + no diff yet
     let running = streaming && is_error.is_none() && !has_diff;
 
-    // Full path from args for the header; fallback to tool_short_arg
-    let file_path = tool_path_from_args(args_summary.as_ref()).unwrap_or_else(|| name.clone());
-    // Display: last 2 path segments so it fits without truncation most of the time
-    let display_path = {
-        let segs: Vec<&str> = file_path.trim_start_matches('/').split('/').collect();
-        if segs.len() > 2 {
-            format!("{}/{}", segs[segs.len() - 2], segs[segs.len() - 1])
-        } else {
-            file_path.clone()
-        }
-    };
-
     // Diff stats badge
     let (added, removed) = rendered_diff
         .as_deref()
@@ -875,23 +1018,21 @@ fn render_edit_tool_block(
 
     let outer_border = if has_error {
         Color32::from_rgb(0x4d, 0x21, 0x23)
+    } else if running {
+        Color32::from_rgb(0x24, 0x35, 0x48)
     } else {
         C_BORDER_SUBTLE
     };
     let header_bg = if has_error {
         Color32::from_rgb(0x20, 0x14, 0x15)
+    } else if running {
+        Color32::from_rgb(0x13, 0x18, 0x20)
     } else {
         Color32::from_rgb(0x15, 0x16, 0x19)
     };
     let diff_bg = Color32::from_rgb(0x0f, 0x10, 0x13);
 
-    let collapse_id = Id::new((msg_idx, block_idx, "edit_diff_collapse"));
-    let mut open = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        collapse_id,
-        true,
-    );
-    let is_open = open.is_open();
+    let is_open = true;
 
     // ── Outer frame wraps header + diff in one visual block ──────────────────
     Frame::none()
@@ -919,38 +1060,48 @@ fn render_edit_tool_block(
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
 
-                        let dot_color = if has_error {
-                            Color32::from_rgb(0xff, 0x80, 0x80)
-                        } else if running {
-                            C_ACCENT
-                        } else {
-                            C_TEXT_FAINT
-                        };
-                        ui.label(RichText::new("●").size(FS_TINY).color(dot_color));
+                        ui.label(
+                            RichText::new(tool_icon(name))
+                                .font(FontId::new(FS_SMALL + 0.5, icon_font()))
+                                .color(if has_error {
+                                    C_DIFF_DEL_FG
+                                } else if running {
+                                    C_ACCENT
+                                } else {
+                                    C_TEXT_FAINT
+                                }),
+                        );
 
                         ui.label(
-                            RichText::new(&display_path)
-                                .size(FS_SMALL)
-                                .color(if has_error {
-                                    Color32::from_rgb(0xf0, 0x9a, 0x9d)
-                                } else {
-                                    C_TEXT
-                                })
-                                .monospace()
-                                .strong(),
+                            RichText::new(tool_summary_text(
+                                name,
+                                args_summary.as_ref(),
+                                "",
+                                rendered_diff.as_ref(),
+                                *is_error,
+                                running,
+                            ))
+                            .size(FS_SMALL)
+                            .color(if has_error {
+                                Color32::from_rgb(0xf0, 0x9a, 0x9d)
+                            } else {
+                                C_TEXT
+                            })
+                            .monospace()
+                            .strong(),
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if has_diff {
-                                ui.label(
-                                    RichText::new(if is_open { "▾" } else { "▸" })
-                                        .size(FS_TINY)
-                                        .color(C_TEXT_FAINT),
-                                );
-                                ui.add_space(2.0);
-                            }
                             if running {
                                 ui.add(eframe::egui::Spinner::new().size(10.0).color(C_TEXT_MUTED));
+                                ui.add_space(4.0);
+                                tool_state_badge(
+                                    ui,
+                                    "running",
+                                    C_ACCENT,
+                                    Color32::from_rgb(0x10, 0x1b, 0x29),
+                                    Color32::from_rgb(0x24, 0x35, 0x48),
+                                );
                             } else if has_diff {
                                 ui.label(
                                     RichText::new(format!("-{removed}"))
@@ -965,54 +1116,56 @@ fn render_edit_tool_block(
                                         .color(C_DIFF_ADD_FG)
                                         .monospace(),
                                 );
+                                ui.add_space(4.0);
+                                tool_state_badge(
+                                    ui,
+                                    "done",
+                                    C_DIFF_ADD_FG,
+                                    Color32::from_rgb(0x12, 0x20, 0x18),
+                                    Color32::from_rgb(0x22, 0x3a, 0x2b),
+                                );
                             } else if has_error {
-                                ui.label(RichText::new("error").size(FS_TINY).color(C_DIFF_DEL_FG));
+                                tool_state_badge(
+                                    ui,
+                                    "failed",
+                                    C_DIFF_DEL_FG,
+                                    Color32::from_rgb(0x2a, 0x15, 0x17),
+                                    Color32::from_rgb(0x47, 0x20, 0x22),
+                                );
                             }
                         });
                     });
                 })
                 .response;
 
-            if has_diff && header_resp.interact(Sense::click()).clicked() {
-                open.toggle(ui);
-            }
-            if has_diff && header_resp.interact(Sense::hover()).hovered() {
-                ui.ctx()
-                    .set_cursor_icon(eframe::egui::CursorIcon::PointingHand);
-            }
+            let _ = header_resp;
 
             // ── Diff block ───────────────────────────────────────────────────
-            if has_diff {
-                open.show_body_unindented(ui, |ui| {
-                    if let Some(diff_text) =
-                        rendered_diff.as_deref().filter(|t| !t.trim().is_empty())
-                    {
-                        Frame::none()
-                            .fill(diff_bg)
-                            .rounding(eframe::egui::Rounding {
-                                nw: 0.0,
-                                ne: 0.0,
-                                sw: 8.0,
-                                se: 8.0,
-                            })
-                            .inner_margin(Margin::symmetric(10.0, 8.0))
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                let bubble_w = ui.available_width().max(40.0);
-                                let overflow = diff_text.lines().count() > EDIT_PREVIEW_LINES
-                                    || diff_text.len() > 2000;
-                                let preview = truncate_lines_preview(diff_text, EDIT_PREVIEW_LINES);
-                                render_static_preview_job_panel(
-                                    ui,
-                                    diff_bg,
-                                    diff_wrapped_job(&preview, bubble_w),
-                                    |inner| diff_wrapped_job(diff_text, inner),
-                                    expand_persist_id(Id::new((msg_idx, block_idx, "edit_diff"))),
-                                    overflow,
-                                );
-                            });
-                    }
-                });
+            if let Some(diff_text) = rendered_diff.as_deref().filter(|t| !t.trim().is_empty()) {
+                Frame::none()
+                    .fill(diff_bg)
+                    .rounding(eframe::egui::Rounding {
+                        nw: 0.0,
+                        ne: 0.0,
+                        sw: 8.0,
+                        se: 8.0,
+                    })
+                    .inner_margin(Margin::symmetric(10.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let bubble_w = ui.available_width().max(40.0);
+                        let overflow = diff_text.lines().count() > EDIT_PREVIEW_LINES
+                            || diff_text.len() > 2000;
+                        let preview = truncate_lines_preview(diff_text, EDIT_PREVIEW_LINES);
+                        render_static_preview_job_panel(
+                            ui,
+                            diff_bg,
+                            diff_wrapped_job(&preview, bubble_w),
+                            |inner| diff_wrapped_job(diff_text, inner),
+                            expand_persist_id(Id::new((msg_idx, block_idx, "edit_diff"))),
+                            overflow,
+                        );
+                    });
             }
         });
 
@@ -1183,105 +1336,13 @@ fn render_explored_tool_list(
 fn render_explored_cluster(ui: &mut Ui, ctx: ExploredClusterCtx<'_>) {
     let ExploredClusterCtx {
         msg_idx,
-        salt,
         blocks,
         start,
         end,
-        tool_indices,
         streaming,
     } = ctx;
 
-    let step_count = tool_indices.len();
-    let header_label = if streaming {
-        if let Some(&last) = tool_indices.last() {
-            if let AssistantBlock::Tool { name, .. } = &blocks[last] {
-                format!("{}…", tool_status_label(name))
-            } else {
-                "Working…".to_string()
-            }
-        } else {
-            "Working…".to_string()
-        }
-    } else {
-        format!("{step_count} tool calls")
-    };
-
-    // Keep the tools body always visible while streaming; limit it with an inner scroll window.
-    // After streaming ends, auto-expand to show all items. Manual fold/unfold still works only
-    // after the run is finished, so we don't hide the live tool stream by accident.
-    let collapse_id = Id::new((msg_idx, salt, "exploring_v2"));
-
-    let latch_id = Id::new((msg_idx, salt, "exploring_stream_latch"));
-    let was_streaming: bool = ui.ctx().data_mut(|d| d.get_temp(latch_id).unwrap_or(false));
-    ui.ctx().data_mut(|d| d.insert_temp(latch_id, streaming));
-    let just_finished = was_streaming && !streaming;
-
-    let mut open_state = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        collapse_id,
-        true,
-    );
-    if just_finished {
-        open_state.set_open(true);
-    }
-    let expanded = open_state.is_open();
-
-    let tool_count = blocks[start..end]
-        .iter()
-        .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
-        .count();
-    let needs_scroll = streaming && tool_count > MAX_VISIBLE_STREAMING_TOOL_PILLS;
-    let body_height = if needs_scroll {
-        (TOOL_PILL_HEIGHT + TOOL_PILL_GAP) * MAX_VISIBLE_STREAMING_TOOL_PILLS as f32
-    } else {
-        ((tool_count.max(1) as f32) * (TOOL_PILL_HEIGHT + TOOL_PILL_GAP)).max(TOOL_PILL_HEIGHT)
-    };
-
-    if streaming {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("▾").size(FS_TINY).color(C_TEXT_FAINT));
-            ui.label(
-                RichText::new(&header_label)
-                    .size(FS_TINY)
-                    .color(C_TEXT_FAINT),
-            );
-        });
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            let bar_rect = ui
-                .allocate_exact_size(eframe::egui::vec2(2.0, body_height), Sense::hover())
-                .0;
-            ui.painter()
-                .rect_filled(bar_rect, Rounding::same(1.0), C_BORDER_SUBTLE);
-            ui.add_space(8.0);
-            ui.vertical(|ui| {
-                ui.set_width(ui.available_width());
-                render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming, false);
-            });
-        });
-    } else {
-        let header_response = open_state.show_header(ui, |ui| {
-            ui.label(
-                RichText::new(&header_label)
-                    .size(FS_TINY)
-                    .color(C_TEXT_FAINT),
-            );
-        });
-        header_response.body_unindented(|ui| {
-            ui.horizontal(|ui| {
-                let bar_rect = ui
-                    .allocate_exact_size(eframe::egui::vec2(2.0, body_height), Sense::hover())
-                    .0;
-                ui.painter()
-                    .rect_filled(bar_rect, Rounding::same(1.0), C_BORDER_SUBTLE);
-                ui.add_space(8.0);
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming, expanded);
-                });
-            });
-        });
-    }
+    render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming, true);
     ui.add_space(4.0);
 }
 
@@ -1337,44 +1398,18 @@ fn trailing_answer_start(blocks: &[AssistantBlock]) -> usize {
     idx
 }
 
-fn has_worked_prefix(blocks: &[AssistantBlock], end: usize, streaming: bool) -> bool {
-    blocks[..end].iter().any(|block| match block {
-        AssistantBlock::Answer(text) => !text.trim().is_empty(),
-        AssistantBlock::Thinking(text) => !text.trim().is_empty(),
-        AssistantBlock::Tool { output, diff, .. } => {
-            streaming
-                || !output.trim().is_empty()
-                || diff
-                    .as_deref()
-                    .is_some_and(|diff_text| !diff_text.trim().is_empty())
-        }
+fn has_activity_after_last_tool(blocks: &[AssistantBlock]) -> bool {
+    let Some(last_tool_idx) = blocks
+        .iter()
+        .rposition(|block| matches!(block, AssistantBlock::Tool { .. }))
+    else {
+        return false;
+    };
+
+    blocks[last_tool_idx + 1..].iter().any(|block| match block {
+        AssistantBlock::Thinking(text) | AssistantBlock::Answer(text) => !text.trim().is_empty(),
+        AssistantBlock::Tool { .. } => false,
     })
-}
-
-fn format_work_duration(secs: u32) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else {
-        let mins = secs / 60;
-        let rem = secs % 60;
-        format!("{mins}m {rem:02}s")
-    }
-}
-
-fn worked_header_label(blocks: &[AssistantBlock]) -> String {
-    let thinking_chars: usize = blocks
-        .iter()
-        .map(|block| match block {
-            AssistantBlock::Thinking(text) => text.len(),
-            _ => 0,
-        })
-        .sum();
-    let tool_count = blocks
-        .iter()
-        .filter(|block| matches!(block, AssistantBlock::Tool { .. }))
-        .count() as u32;
-    let estimate = estimate_thought_seconds(thinking_chars) + tool_count;
-    format!("Worked for {}", format_work_duration(estimate.max(1)))
 }
 
 fn render_activity_range(
@@ -1412,20 +1447,16 @@ fn render_activity_range(
             AssistantBlockGroup::ExploringTools {
                 range_start,
                 range_end,
-                tool_indices,
             } => {
                 let rs = start + range_start;
                 let re = start + range_end;
-                let tools: Vec<usize> = tool_indices.iter().map(|&i| start + i).collect();
                 render_explored_cluster(
                     ui,
                     ExploredClusterCtx {
                         msg_idx,
-                        salt: rs,
                         blocks,
                         start: rs,
                         end: re,
-                        tool_indices: &tools,
                         streaming,
                     },
                 );
@@ -1454,57 +1485,23 @@ pub fn render_assistant_blocks(
         return;
     }
 
-    // If we have tool calls but all are finished and no answer text yet, the model is
-    // deciding what to do next (between tool calls or before writing the final answer).
-    // Show a subtle animated label so the UI does not look frozen.
-    let all_tools_done = streaming
+    // If we have tool calls but all are finished and no new thinking/answer text arrived
+    // after the latest tool, the model is deciding what to do next. Hide this as soon as
+    // reasoning or final text starts streaming so it does not overlap with "Thinking".
+    let planning_overlay = streaming
         && blocks
             .iter()
             .any(|b| matches!(b, AssistantBlock::Tool { .. }))
         && blocks
             .iter()
             .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
-            .all(|b| {
-                if let AssistantBlock::Tool { is_error, .. } = b {
-                    is_error.is_some()
-                } else {
-                    false
-                }
-            })
-        && !blocks
-            .iter()
-            .any(|b| matches!(b, AssistantBlock::Answer(t) if !t.trim().is_empty()));
-    let planning_overlay = all_tools_done;
+            .all(|b| matches!(b, AssistantBlock::Tool { is_error: Some(_), .. }))
+        && !has_activity_after_last_tool(blocks);
 
     let worked_end = trailing_answer_start(blocks);
-    if has_worked_prefix(blocks, worked_end, streaming) {
-        let header = worked_header_label(&blocks[..worked_end]);
-        // Stable id: do not key on streaming ("live"/"done") or egui creates a new header when the
-        // stream ends and `default_open(true)` re-expands Worked. Latch detects stream end to fold once.
-        let stream_latch_id = Id::new(("pi_worked_stream_latch", msg_idx));
-        let prev_streaming: bool = ui
-            .ctx()
-            .data_mut(|d| d.get_temp(stream_latch_id).unwrap_or(false));
-        let just_finished_stream = prev_streaming && !streaming;
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(stream_latch_id, streaming));
-        let worked_open = if just_finished_stream {
-            Some(false)
-        } else if streaming {
-            Some(true)
-        } else {
-            None
-        };
-        CollapsingHeader::new(RichText::new(header).size(FS_SMALL).color(C_TEXT_MUTED))
-            .id_salt((msg_idx, "worked"))
-            .default_open(false)
-            .open(worked_open)
-            .show_unindented(ui, |ui| {
-                nest_under_collapsed_header(ui, |ui| {
-                    render_activity_range(ui, msg_idx, blocks, 0, worked_end, streaming);
-                });
-            });
-        ui.add_space(8.0);
+    if worked_end > 0 {
+        render_activity_range(ui, msg_idx, blocks, 0, worked_end, streaming);
+        ui.add_space(4.0);
     }
 
     // "Planning next steps" overlay: shown while streaming, after tool calls all completed,

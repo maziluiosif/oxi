@@ -34,8 +34,11 @@ const BODY: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
 /// Link color (matches Codex `C_ACCENT`).
 const LINK: Color32 = Color32::from_rgb(0x6c, 0xa2, 0xe0);
 const MUTED: Color32 = Color32::from_rgb(0x8b, 0x8f, 0x99);
-const CODE_BG: Color32 = Color32::from_rgb(0x20, 0x22, 0x27);
-const CODE_BLOCK_BG: Color32 = Color32::from_rgb(0x15, 0x16, 0x19);
+const CODE_BG: Color32 = Color32::from_rgb(0x24, 0x26, 0x2d);
+const CODE_BLOCK_BG: Color32 = Color32::from_rgb(0x13, 0x14, 0x18);
+const CODE_BLOCK_HEADER_BG: Color32 = Color32::from_rgb(0x19, 0x1b, 0x21);
+const CODE_BLOCK_BORDER: Color32 = Color32::from_rgb(0x2a, 0x2d, 0x34);
+const QUOTE_ACCENT: Color32 = Color32::from_rgb(0x4f, 0x83, 0xc4);
 const SZ_BODY: f32 = 13.5;
 /// Slightly smaller than proportional body so `code` does not read as oversized next to prose.
 const SZ_CODE_INLINE: f32 = 12.0;
@@ -43,10 +46,12 @@ const SZ_CODE: f32 = 12.5;
 
 /// Lists are inset from body text so bullets do not sit flush on the column edge (Cursor-like).
 const LIST_BLOCK_MARGIN: f32 = 12.0;
-/// Additional left inset for each nested `<ul>` / `<ol>` level (must match CommonMark-style nesting).
-const LIST_NEST_STEP: f32 = 28.0;
-/// Extra indent when a nested unordered list sits inside an ordered list item (often under-indented in CM).
-const NEST_UL_UNDER_OL_EXTRA: f32 = 20.0;
+/// Left inset for a nested list, relative to the parent item text column.
+///
+/// Nested lists are rendered inside the parent item's content column, so applying the full
+/// root-list margin plus a depth multiplier here makes deeper items drift too far right and makes
+/// spacing look inconsistent between ordered/unordered combinations.
+const LIST_NESTED_MARGIN: f32 = 10.0;
 const LIST_BULLET_GAP: f32 = 8.0;
 const LIST_BULLET_COL_UNORD: f32 = 22.0;
 /// Wide enough for two-digit ordered markers (`10.`).
@@ -109,7 +114,7 @@ fn inline_text_format(size: f32, strong: u32, density: InlineDensity) -> TextFor
 fn inline_code_format(density: InlineDensity) -> TextFormat {
     let lh = density.line_height(SZ_BODY);
     let mut f = TextFormat::simple(
-        FontId::proportional(SZ_BODY - 0.25),
+        FontId::monospace(SZ_CODE_INLINE),
         Color32::from_rgb(0xe1, 0xe4, 0xea),
     );
     f.background = CODE_BG;
@@ -270,9 +275,10 @@ pub fn render_markdown(ui: &mut Ui, src: &str) {
             Event::Start(Tag::Heading { level, .. }) => {
                 render_heading(ui, wrap_w, level, &mut it);
             }
-            Event::Start(Tag::List(kind)) => render_list(ui, wrap_w, kind, 0, None, &mut it),
+            Event::Start(Tag::List(kind)) => render_list(ui, wrap_w, kind, 0, &mut it),
             Event::Start(Tag::CodeBlock(kind)) => {
-                let base = ui.id().with("md_fence").with(fence_idx);
+                let lang = code_block_language(&kind);
+                let base = ui.id().with("md_fence").with(fence_idx).with(&lang);
                 fence_idx += 1;
                 render_fenced_block(ui, wrap_w, kind, &mut it, base);
             }
@@ -545,21 +551,17 @@ fn render_list(
     list_row_w: f32,
     list_kind: Option<u64>,
     depth: u32,
-    parent_list_ordered: Option<bool>,
     it: &mut ParserPeek<'_>,
 ) {
     // Caller already consumed `Event::Start(Tag::List(..))`; next is `Item`.
     let mut num = list_kind.unwrap_or(1);
     let ordered = list_kind.is_some();
     let column_w = list_row_w.min(ui.max_rect().width()).max(48.0);
-    let nested_ul_under_ol = depth > 0 && parent_list_ordered == Some(true) && !ordered;
-    let block_left = LIST_BLOCK_MARGIN
-        + depth as f32 * LIST_NEST_STEP
-        + if nested_ul_under_ol {
-            NEST_UL_UNDER_OL_EXTRA
-        } else {
-            0.0
-        };
+    let block_left = if depth == 0 {
+        LIST_BLOCK_MARGIN
+    } else {
+        LIST_NESTED_MARGIN
+    };
     let bullet_col = if ordered {
         LIST_BULLET_COL_ORD
     } else {
@@ -627,9 +629,10 @@ fn render_list(
                                 Some(Event::Start(Tag::List(nested))) => {
                                     let k = *nested;
                                     it.next();
-                                    // Nested lists should inherit the full content width of the parent
-                                    // item; `render_list` applies the visual indent for the deeper depth.
-                                    render_list(ui, column_w, k, depth + 1, Some(ordered), it);
+                                    // Nested lists are already inside the parent item's text column. Keep
+                                    // their width/indent relative to that column so list-in-list spacing is
+                                    // stable instead of accumulating the outer list's marker offset again.
+                                    render_list(ui, text_w, k, depth + 1, it);
                                 }
                                 Some(Event::Start(Tag::Heading { .. })) => {
                                     if let Some(Event::Start(Tag::Heading { level, .. })) =
@@ -685,7 +688,7 @@ fn fmt_body(size: f32, strong: u32) -> TextFormat {
 
 fn fmt_code(line_height: f32) -> TextFormat {
     let mut f = TextFormat::simple(
-        FontId::proportional(SZ_BODY - 0.5),
+        FontId::monospace(SZ_CODE_INLINE),
         Color32::from_rgb(0xe8, 0xe8, 0xee),
     );
     f.background = CODE_BG;
@@ -838,6 +841,13 @@ fn selectable_job(ui: &mut Ui, job: LayoutJob) {
 }
 
 fn render_heading(ui: &mut Ui, wrap_w: f32, level: HeadingLevel, it: &mut ParserPeek<'_>) {
+    match level {
+        HeadingLevel::H1 => ui.add_space(8.0),
+        HeadingLevel::H2 => ui.add_space(6.0),
+        HeadingLevel::H3 => ui.add_space(4.0),
+        _ => ui.add_space(2.0),
+    }
+
     let size = match level {
         HeadingLevel::H1 => 18.5,
         HeadingLevel::H2 => 16.75,
@@ -886,7 +896,16 @@ fn render_heading(ui: &mut Ui, wrap_w: f32, level: HeadingLevel, it: &mut Parser
         }
     }
     selectable_job(ui, job);
-    ui.add_space(6.0);
+    if matches!(level, HeadingLevel::H1 | HeadingLevel::H2) {
+        allocate_full_width_block(ui, wrap_w, |ui| {
+            ui.add_space(2.0);
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(0x27, 0x29, 0x30));
+        });
+        ui.add_space(7.0);
+    } else {
+        ui.add_space(5.0);
+    }
 }
 
 fn render_paragraph(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
@@ -897,35 +916,62 @@ fn render_paragraph(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
 fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
     allocate_full_width_block(ui, wrap_w, |ui| {
         Frame::none()
-            .fill(Color32::from_rgb(0x15, 0x16, 0x1a))
+            .fill(Color32::from_rgb(0x15, 0x17, 0x1c))
             .rounding(Rounding::same(8.0))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(0x29, 0x2b, 0x30)))
-            .inner_margin(Margin::symmetric(10.0, 8.0))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(0x29, 0x2d, 0x35)))
+            .inner_margin(Margin::same(0.0))
             .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let inner_w = ui.available_width().max(32.0);
-                while let Some(ev) = it.next() {
-                    match ev {
-                        Event::End(TagEnd::BlockQuote(_)) => break,
-                        Event::Start(Tag::Paragraph) => render_paragraph(ui, inner_w, it),
-                        Event::Start(Tag::List(kind)) => {
-                            render_list(ui, inner_w, kind, 0, None, it)
+                let full_w = ui.available_width().max(48.0);
+                ui.set_width(full_w);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let (bar_rect, _) = ui.allocate_exact_size(vec2(3.0, 1.0), egui::Sense::hover());
+                    ui.painter().rect_filled(bar_rect, Rounding::same(2.0), QUOTE_ACCENT);
+                    ui.add_space(10.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(8.0);
+                        let inner_w = (full_w - 24.0).max(32.0);
+                        ui.set_width(inner_w);
+                        while let Some(ev) = it.next() {
+                            match ev {
+                                Event::End(TagEnd::BlockQuote(_)) => break,
+                                Event::Start(Tag::Paragraph) => render_paragraph(ui, inner_w, it),
+                                Event::Start(Tag::List(kind)) => {
+                                    render_list(ui, inner_w, kind, 0, it)
+                                }
+                                Event::Start(Tag::Heading { level, .. }) => {
+                                    render_heading(ui, inner_w, level, it);
+                                }
+                                Event::Start(Tag::CodeBlock(kind)) => {
+                                    render_fenced_block(ui, inner_w, kind, it, ui.id().with("quote_fence"));
+                                }
+                                _ => {}
+                            }
                         }
-                        Event::Start(Tag::Heading { level, .. }) => {
-                            render_heading(ui, inner_w, level, it);
-                        }
-                        _ => {}
-                    }
-                }
+                        ui.add_space(4.0);
+                    });
+                });
             });
     });
-    ui.add_space(6.0);
+    ui.add_space(7.0);
+}
+
+fn code_block_language(kind: &CodeBlockKind<'_>) -> String {
+    match kind {
+        CodeBlockKind::Fenced(info) => info
+            .split_whitespace()
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("code")
+            .to_string(),
+        CodeBlockKind::Indented => "code".to_string(),
+    }
 }
 
 fn render_fenced_block(
     ui: &mut Ui,
     wrap_w: f32,
-    _kind: CodeBlockKind<'_>,
+    kind: CodeBlockKind<'_>,
     it: &mut ParserPeek<'_>,
     block_base_id: Id,
 ) {
@@ -940,34 +986,70 @@ fn render_fenced_block(
     while buf.ends_with('\n') {
         buf.pop();
     }
-    const PREVIEW_LINES: usize = 10;
-    let overflows = buf.lines().count() > PREVIEW_LINES || buf.len() > 2000;
+    const PREVIEW_LINES: usize = 14;
+    let overflows = buf.lines().count() > PREVIEW_LINES || buf.len() > 2600;
     let persist_id = expand_persist_id(block_base_id);
+    let lang = code_block_language(&kind);
     allocate_full_width_block(ui, wrap_w, |ui| {
         let frame = Frame::none()
             .fill(CODE_BLOCK_BG)
-            .stroke(Stroke::new(1.0, Color32::from_rgb(0x26, 0x28, 0x2c)))
-            .rounding(Rounding::same(8.0))
-            .inner_margin(Margin::symmetric(10.0, 8.0))
+            .stroke(Stroke::new(1.0, CODE_BLOCK_BORDER))
+            .rounding(Rounding::same(9.0))
+            .inner_margin(Margin::same(0.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let inner = ui.available_width().max(40.0);
-                let text = if overflows && !is_expanded(ui, persist_id) {
-                    truncate_lines_preview(&buf, PREVIEW_LINES)
-                } else {
-                    buf.clone()
-                };
-                let job = LayoutJob::simple(
-                    text,
-                    FontId::monospace(SZ_CODE),
-                    Color32::from_rgb(0xcc, 0xcc, 0xd0),
-                    inner,
-                );
-                selectable_job(ui, job);
+
+                Frame::none()
+                    .fill(CODE_BLOCK_HEADER_BG)
+                    .rounding(egui::Rounding { nw: 9.0, ne: 9.0, sw: 0.0, se: 0.0 })
+                    .inner_margin(Margin::symmetric(10.0, 5.0))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(RichText::new("●").size(7.0).color(Color32::from_rgb(0x78, 0x7d, 0x8a)));
+                            ui.label(
+                                RichText::new(lang.as_str())
+                                    .size(SZ_TINY)
+                                    .color(MUTED)
+                                    .family(FontFamily::Monospace),
+                            );
+                            if overflows && !is_expanded(ui, persist_id) {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.label(
+                                        RichText::new("click to expand")
+                                            .size(SZ_TINY)
+                                            .color(Color32::from_rgb(0x6f, 0x74, 0x80)),
+                                    );
+                                });
+                            }
+                        });
+                    });
+
+                Frame::none()
+                    .fill(CODE_BLOCK_BG)
+                    .rounding(egui::Rounding { nw: 0.0, ne: 0.0, sw: 9.0, se: 9.0 })
+                    .inner_margin(Margin::symmetric(11.0, 9.0))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let inner = ui.available_width().max(40.0);
+                        let text = if overflows && !is_expanded(ui, persist_id) {
+                            truncate_lines_preview(&buf, PREVIEW_LINES)
+                        } else {
+                            buf.clone()
+                        };
+                        let job = LayoutJob::simple(
+                            text,
+                            FontId::monospace(SZ_CODE),
+                            Color32::from_rgb(0xd0, 0xd4, 0xdc),
+                            inner,
+                        );
+                        selectable_job(ui, job);
+                    });
             });
         if overflows {
             clickable_expand_overlay(ui, frame.response.rect, persist_id);
         }
     });
-    ui.add_space(6.0);
+    ui.add_space(8.0);
 }
