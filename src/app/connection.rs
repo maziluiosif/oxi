@@ -1,7 +1,3 @@
-use eframe::egui::Color32;
-
-use crate::theme::{C_ACCENT, C_SUCCESS};
-
 use super::{OxiApp, SessionKey};
 
 impl OxiApp {
@@ -25,13 +21,4 @@ impl OxiApp {
         self.drop_agent(key);
     }
 
-    pub(crate) fn connection_status(&self) -> (&'static str, Color32) {
-        if self.conn.connect_error.is_some() {
-            ("Error", Color32::from_rgb(0xff, 0x8a, 0x8a))
-        } else if self.any_waiting_response() {
-            ("Running", C_ACCENT)
-        } else {
-            ("Ready", C_SUCCESS)
-        }
-    }
 }

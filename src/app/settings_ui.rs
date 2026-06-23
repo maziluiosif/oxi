@@ -767,9 +767,9 @@ fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Response {
     let icon_col = if enabled { C_ACCENT } else { C_TEXT_FAINT };
     let top = rect.center().y - label_galley.rect.height() * 0.5;
     let icon_x = rect.left() + pad.x;
+    let label_x = icon_x + icon_galley.rect.width() + icon_gap;
     ui.painter()
         .galley(egui::pos2(icon_x, top), icon_galley, icon_col);
-    let label_x = icon_x + 14.0;
     ui.painter()
         .galley(egui::pos2(label_x, top), label_galley, text_col);
     if hovered {

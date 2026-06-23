@@ -7,10 +7,10 @@ use eframe::egui::{
 
 use crate::model::MsgRole;
 use crate::theme::{
-    CHAT_COLUMN_MAX, C_BG_ELEVATED, C_BORDER_SUBTLE, C_TEXT, C_TEXT_MUTED, C_USER_BUBBLE, FS_BODY,
-    FS_SMALL,
+    format_stream_elapsed, workspace_sidebar_label, CHAT_COLUMN_MAX, C_ACCENT, C_BG_ELEVATED,
+    C_BG_INPUT, C_BORDER_SUBTLE, C_ROW_HOVER, C_TEXT, C_TEXT_FAINT, C_TEXT_MUTED, FS_BODY,
+    FS_SMALL, FS_TINY,
 };
-use crate::ui::chrome::render_empty_state;
 use crate::ui::messages::{render_assistant_message_run, render_message};
 
 use super::OxiApp;
@@ -58,13 +58,229 @@ impl OxiApp {
         }
     }
 
+    pub(crate) fn render_chat_header(&mut self, ui: &mut Ui, column_center_w: f32) {
+        let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+        let pad = ((column_center_w - col_w) * 0.5).max(0.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if pad > 0.0 {
+                ui.add_space(pad);
+            }
+            ui.allocate_ui_with_layout(
+                egui::vec2(col_w, 38.0),
+                egui::Layout::left_to_right(Align::Center),
+                |ui| {
+                    if !self.conv.sidebar_open
+                        && ui
+                            .add_sized(
+                                [30.0, 28.0],
+                                Button::new(RichText::new("☰").size(14.0).color(C_TEXT_MUTED))
+                                    .fill(C_BG_ELEVATED)
+                                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                                    .rounding(8.0),
+                            )
+                            .on_hover_text("Show sidebar")
+                            .clicked()
+                    {
+                        self.conv.sidebar_open = true;
+                    }
+
+                    let workspace = workspace_sidebar_label(&self.active_workspace().root_path);
+                    ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 126.0).max(80.0));
+                        ui.add(
+                            Label::new(
+                                RichText::new("Chat")
+                                    .size(FS_SMALL)
+                                    .color(C_TEXT)
+                                    .strong(),
+                            )
+                            .truncate(),
+                        );
+                        let profile = self
+                            .conv
+                            .settings
+                            .active_profile()
+                            .map(|p| p.subtitle())
+                            .unwrap_or_else(|| "No active profile".to_string());
+                        ui.add(
+                            Label::new(
+                                RichText::new(format!("{workspace} · {profile}"))
+                                    .size(FS_TINY)
+                                    .color(C_TEXT_MUTED),
+                            )
+                            .truncate(),
+                        );
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add_sized(
+                                [96.0, 28.0],
+                                Button::new(RichText::new("＋  New").size(FS_SMALL).color(C_TEXT))
+                                    .fill(C_BG_ELEVATED)
+                                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                                    .rounding(8.0),
+                            )
+                            .on_hover_text("Start a new chat in this workspace")
+                            .clicked()
+                        {
+                            self.new_chat();
+                        }
+                        self.render_header_status_chip(ui);
+                    });
+                },
+            );
+            if pad > 0.0 {
+                ui.add_space(pad);
+            }
+        });
+    }
+
+    fn render_header_status_chip(&self, ui: &mut Ui) {
+        let (label, dot, hover) = if let Some(err) = self.active_stream_error() {
+            ("Error".to_string(), crate::theme::C_DANGER, err.to_string())
+        } else if self.active_waiting_response() {
+            let elapsed = self
+                .active_run_state()
+                .and_then(|s| s.stream_started_at)
+                .map(|t| format!(" · {}", format_stream_elapsed(t.elapsed())))
+                .unwrap_or_default();
+            (
+                format!("Running{elapsed}"),
+                C_ACCENT,
+                "Agent is working".to_string(),
+            )
+        } else {
+            (
+                "Ready".to_string(),
+                crate::theme::C_SUCCESS,
+                "Ready to send".to_string(),
+            )
+        };
+
+        Frame::none()
+            .fill(C_BG_INPUT)
+            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+            .rounding(Rounding::same(999.0))
+            .inner_margin(Margin::symmetric(9.0, 4.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    ui.label(RichText::new("●").size(8.0).color(dot));
+                    ui.label(RichText::new(label).size(FS_TINY).color(C_TEXT_MUTED));
+                });
+            })
+            .response
+            .on_hover_text(hover);
+    }
+
+    pub(crate) fn render_empty_state(&mut self, ui: &mut Ui) {
+        ui.add_space(44.0);
+        ui.set_max_width(520.0);
+        ui.vertical(|ui| {
+            ui.label(
+                RichText::new("What should oxi help with?")
+                    .size(22.0)
+                    .color(C_TEXT)
+                    .strong(),
+            );
+            ui.add_space(5.0);
+            ui.label(
+                RichText::new(
+                    "Start with a workspace task, inspect code, or configure your provider.",
+                )
+                .size(FS_BODY)
+                .color(C_TEXT_MUTED),
+            );
+            ui.add_space(18.0);
+
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add(
+                        Button::new(
+                            RichText::new("＋ Add workspace")
+                                .size(FS_SMALL)
+                                .color(C_TEXT),
+                        )
+                        .fill(C_BG_ELEVATED)
+                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                        .rounding(8.0),
+                    )
+                    .clicked()
+                {
+                    self.open_workspace_folder();
+                }
+                if ui
+                    .add(
+                        Button::new(
+                            RichText::new("⚙ Open settings")
+                                .size(FS_SMALL)
+                                .color(C_TEXT),
+                        )
+                        .fill(C_BG_ELEVATED)
+                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                        .rounding(8.0),
+                    )
+                    .clicked()
+                {
+                    self.conv.settings_open = true;
+                }
+            });
+
+            ui.add_space(20.0);
+            ui.label(
+                RichText::new("Try one of these")
+                    .size(FS_TINY)
+                    .color(C_TEXT_FAINT)
+                    .strong(),
+            );
+            ui.add_space(6.0);
+            let prompts = [
+                "Analyze this repo and suggest the highest-impact improvements",
+                "Find TODOs and risky code paths in this workspace",
+                "Explain how this project is structured",
+                "Run the tests and fix the first failing issue",
+            ];
+            for prompt in prompts {
+                let response = Frame::none()
+                    .fill(C_BG_INPUT)
+                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                    .rounding(Rounding::same(9.0))
+                    .inner_margin(Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("↗").size(FS_SMALL).color(C_ACCENT));
+                            ui.add_space(5.0);
+                            ui.label(RichText::new(prompt).size(FS_SMALL).color(C_TEXT));
+                        });
+                    })
+                    .response
+                    .interact(egui::Sense::click());
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    ui.painter().rect_stroke(
+                        response.rect,
+                        Rounding::same(9.0),
+                        Stroke::new(1.0, C_ROW_HOVER),
+                    );
+                }
+                if response.clicked() {
+                    self.conv.input = prompt.to_string();
+                }
+                ui.add_space(5.0);
+            }
+        });
+    }
+
     pub(crate) fn render_conversation(
         &mut self,
         ui: &mut Ui,
         column_center_w: f32,
         scroll_budget: f32,
+        bottom_overlay_h: f32,
     ) {
-        let show_sidebar_button = !self.conv.sidebar_open;
         let transcript_h = scroll_budget.max(40.0);
         let wi = self.conv.active_workspace;
         let si = self.conv.workspaces[wi].active;
@@ -100,7 +316,7 @@ impl OxiApp {
                     .last()
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming));
 
-        let scroll_output = ScrollArea::vertical()
+        ScrollArea::vertical()
             .max_width(scroll_outer_w)
             .id_salt(self.conv.chat_scroll_id)
             .max_height(transcript_h)
@@ -129,7 +345,7 @@ impl OxiApp {
                     }
                 });
 
-                ui.add_space(38.0);
+                ui.add_space(16.0);
 
                 let (sel_scroll, consume) = conversation_selection_scroll_delta(ui);
                 if sel_scroll != egui::Vec2::ZERO {
@@ -148,122 +364,56 @@ impl OxiApp {
                     ui.ctx().request_repaint();
                 }
 
-                let user_message_tops = ui
-                    .horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        if pad > 0.0 {
-                            ui.add_space(pad);
-                        }
-                        let user_message_tops = ui
-                            .vertical(|ui| {
-                                ui.set_width(col_w);
-                                let messages = &self.conv.workspaces[wi].sessions[si].messages;
-                                let mut user_message_tops: Vec<(usize, f32)> = Vec::new();
-                                if messages.is_empty() {
-                                    render_empty_state(ui);
-                                } else {
-                                    let mut mi = 0;
-                                    while mi < messages.len() {
-                                        let msg = &messages[mi];
-                                        if msg.role == MsgRole::Assistant {
-                                            let start = mi;
-                                            mi += 1;
-                                            while mi < messages.len()
-                                                && messages[mi].role == MsgRole::Assistant
-                                            {
-                                                mi += 1;
-                                            }
-                                            render_assistant_message_run(
-                                                ui,
-                                                start,
-                                                &messages[start..mi],
-                                                agent_ack,
-                                            );
-                                        } else {
-                                            let response = render_message(ui, mi, msg, agent_ack);
-                                            if msg.role == MsgRole::User {
-                                                user_message_tops.push((mi, response.rect.top()));
-                                            }
-                                            mi += 1;
-                                        }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if pad > 0.0 {
+                        ui.add_space(pad);
+                    }
+                    ui.vertical(|ui| {
+                        ui.set_width(col_w);
+                        let messages = &self.conv.workspaces[wi].sessions[si].messages;
+                        if messages.is_empty() {
+                            self.render_empty_state(ui);
+                        } else {
+                            let mut mi = 0;
+                            while mi < messages.len() {
+                                let msg = &messages[mi];
+                                if msg.role == MsgRole::Assistant {
+                                    let start = mi;
+                                    mi += 1;
+                                    while mi < messages.len()
+                                        && messages[mi].role == MsgRole::Assistant
+                                    {
+                                        mi += 1;
                                     }
+                                    render_assistant_message_run(
+                                        ui,
+                                        start,
+                                        &messages[start..mi],
+                                        agent_ack,
+                                    );
+                                } else {
+                                    render_message(ui, mi, msg, agent_ack);
+                                    mi += 1;
                                 }
-                                user_message_tops
-                            })
-                            .inner;
-                        if pad > 0.0 {
-                            ui.add_space(pad);
+                            }
                         }
-                        user_message_tops
-                    })
-                    .inner;
+                    });
+                    if pad > 0.0 {
+                        ui.add_space(pad);
+                    }
+                });
+
+                // The composer is floating over the transcript. Add scrollable tail padding so
+                // the last messages can move above/behind it instead of being permanently hidden
+                // at the bottom edge.
+                ui.add_space(bottom_overlay_h.max(0.0));
 
                 if force_scroll_bottom && !user_has_selection {
                     ui.scroll_to_cursor(Some(Align::BOTTOM));
                 }
 
-                user_message_tops
             });
-
-        let sticky_user_text =
-            sticky_user_message_index(&scroll_output.inner, scroll_output.inner_rect.top())
-                .and_then(|idx| {
-                    self.conv.workspaces[wi].sessions[si]
-                        .messages
-                        .get(idx)
-                        .and_then(|msg| (!msg.text.is_empty()).then(|| msg.text.clone()))
-                });
-        if let Some(text) = sticky_user_text {
-            let col_w = column_center_w.min(CHAT_COLUMN_MAX);
-            let pad = ((column_center_w - col_w) * 0.5).max(0.0);
-            let x = scroll_output.inner_rect.left() + pad;
-            let y = scroll_output.inner_rect.top() + 2.0;
-            egui::Area::new(ui.id().with("sticky_user_input"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(egui::pos2(x, y))
-                .show(ui.ctx(), |ui| {
-                    ui.set_width(col_w);
-                    Frame::none()
-                        .fill(C_USER_BUBBLE)
-                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                        .rounding(Rounding::same(10.0))
-                        .inner_margin(Margin::symmetric(12.0, 7.0))
-                        .show(ui, |ui| {
-                            ui.set_width(col_w);
-                            ui.add(
-                                Label::new(
-                                    RichText::new(text)
-                                        .size(FS_BODY)
-                                        .line_height(Some(21.0))
-                                        .color(C_TEXT),
-                                )
-                                .wrap(),
-                            );
-                        });
-                });
-        }
-
-        if show_sidebar_button {
-            let pos = ui.min_rect().min + egui::vec2(0.0, 0.0);
-            egui::Area::new(ui.id().with("show_sidebar_button"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(pos)
-                .show(ui.ctx(), |ui| {
-                    if ui
-                        .add_sized(
-                            [30.0, 28.0],
-                            Button::new(RichText::new("☰").size(14.0).color(C_TEXT_MUTED))
-                                .fill(C_BG_ELEVATED)
-                                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                                .rounding(8.0),
-                        )
-                        .on_hover_text("Show sidebar")
-                        .clicked()
-                    {
-                        self.conv.sidebar_open = true;
-                    }
-                });
-        }
 
         if self.conv.scroll_to_bottom_once {
             self.conv.scroll_to_bottom_once = false;
@@ -273,17 +423,6 @@ impl OxiApp {
 
 /// Same idea as egui’s default click-vs-drag distance (~6px).
 const SELECTION_SCROLL_MIN_DRAG_PX: f32 = 6.0;
-
-fn sticky_user_message_index(
-    user_message_tops: &[(usize, f32)],
-    viewport_top: f32,
-) -> Option<usize> {
-    user_message_tops
-        .iter()
-        .rev()
-        .find(|(_, top)| *top <= viewport_top)
-        .map(|(idx, _)| *idx)
-}
 
 /// Vertical edge auto-scroll delta for the transcript while the user is dragging a text
 /// selection near the top/bottom of the viewport. Same sign convention as

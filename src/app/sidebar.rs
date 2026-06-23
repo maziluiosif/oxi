@@ -2,8 +2,8 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, Color32, Frame, Layout, Margin, Order, RichText, Rounding, ScrollArea,
-    Sense, Stroke, Ui,
+    self, Align, Button, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense,
+    Stroke, Ui,
 };
 
 use crate::theme::{
@@ -19,7 +19,6 @@ use super::OxiApp;
 impl OxiApp {
     /// Sidebar list and controls.
     pub(crate) fn render_sidebar(&mut self, ui: &mut Ui) {
-        let (status_text, status_color) = self.connection_status();
         ui.set_min_width(ui.max_rect().width());
 
         // Top row: app title + collapse button
@@ -27,7 +26,7 @@ impl OxiApp {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.label(
                 RichText::new("oxi")
-                    .size(15.0)
+                    .size(16.0)
                     .color(crate::theme::C_TEXT)
                     .strong(),
             );
@@ -46,20 +45,13 @@ impl OxiApp {
             });
         });
 
-        // Subtle status line: connection status
-        ui.horizontal(|ui| {
-            ui.add_space(1.0);
-            ui.label(RichText::new("●").size(9.0).color(status_color));
-            ui.add_space(4.0);
-            ui.label(RichText::new(status_text).size(FS_TINY).color(C_TEXT_MUTED));
-        });
-        ui.add_space(10.0);
+        ui.add_space(8.0);
 
         sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
 
         ui.add_space(4.0);
         self.render_sidebar_add_workspace(ui);
-        ui.add_space(10.0);
+        ui.add_space(8.0);
 
         let scroll_h = (ui.available_height() - 38.0).max(48.0);
         ScrollArea::vertical()
@@ -147,29 +139,52 @@ impl OxiApp {
             ui.add_space(1.0);
 
             let chev = if folded { "▸" } else { "▾" };
-            let row_w = ui.available_width();
-            if ui
-                .add_sized(
-                    [row_w, 0.0],
-                    Button::new(
-                        RichText::new(format!("{chev}  {}", root_label.to_uppercase()))
-                            .size(FS_TINY)
-                            .color(C_SIDEBAR_SECTION),
+            ui.horizontal(|ui| {
+                let plus_w = if wi == self.conv.active_workspace {
+                    26.0
+                } else {
+                    0.0
+                };
+                let row_w = (ui.available_width() - plus_w).max(40.0);
+                if ui
+                    .add_sized(
+                        [row_w, 0.0],
+                        Button::new(
+                            RichText::new(format!("{chev}  {root_label}"))
+                                .size(FS_TINY)
+                                .color(C_SIDEBAR_SECTION),
+                        )
+                        .frame(false)
+                        .fill(Color32::TRANSPARENT)
+                        .min_size(egui::vec2(row_w, 22.0)),
                     )
-                    .frame(false)
-                    .fill(Color32::TRANSPARENT)
-                    .min_size(egui::vec2(row_w, 20.0)),
-                )
-                .on_hover_text("Fold or unfold chats. Each folder is a workspace (agent cwd).")
-                .clicked()
-            {
-                self.conv.workspaces[wi].sidebar_folded = !folded;
-            }
-            ui.add_space(2.0);
+                    .on_hover_text("Fold or unfold chats")
+                    .clicked()
+                {
+                    self.conv.workspaces[wi].sidebar_folded = !folded;
+                }
+                if wi == self.conv.active_workspace {
+                    if ui
+                        .add_sized(
+                            [22.0, 22.0],
+                            Button::new(RichText::new("＋").size(FS_TINY).color(C_TEXT_MUTED))
+                                .frame(false)
+                                .fill(Color32::TRANSPARENT),
+                        )
+                        .on_hover_text("New chat in this workspace")
+                        .clicked()
+                    {
+                        self.new_chat();
+                        sidebar_changed = true;
+                    }
+                }
+            });
+            ui.add_space(1.0);
             if folded {
                 continue;
             }
 
+            let mut visible_sessions = 0usize;
             for si in 0..n_sessions {
                 if sidebar_changed {
                     return;
@@ -180,6 +195,7 @@ impl OxiApp {
                 if !q.is_empty() && !session.title.to_lowercase().contains(&q) {
                     continue;
                 }
+                visible_sessions += 1;
                 let row_title = sidebar_session_title_display(&session.title);
                 ui.horizontal(|ui| {
                     ui.add_space(7.0);
@@ -189,8 +205,8 @@ impl OxiApp {
                             let selected = wi == self.conv.active_workspace && si == active_si;
                             let running = self.session_row_is_running(wi, si);
                             let title = row_title.clone();
-                            const ROW_INNER_H: f32 = 17.0;
-                            const ROW_VMARGIN: f32 = 1.0;
+                            const ROW_INNER_H: f32 = 20.0;
+                            const ROW_VMARGIN: f32 = 2.0;
                             let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(row_w, row_outer_h),
@@ -229,6 +245,18 @@ impl OxiApp {
                     return;
                 }
             }
+            if visible_sessions == 0 {
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    let msg = if q.is_empty() {
+                        "No chats yet"
+                    } else {
+                        "No chats found"
+                    };
+                    ui.label(RichText::new(msg).size(FS_TINY).color(C_TEXT_MUTED));
+                });
+                ui.add_space(4.0);
+            }
         }
     }
 
@@ -243,15 +271,15 @@ impl OxiApp {
         selected: bool,
         title: String,
     ) {
-        const ROW_INNER_H: f32 = 17.0;
-        const ROW_VMARGIN: f32 = 1.0;
+        const ROW_INNER_H: f32 = 20.0;
+        const ROW_VMARGIN: f32 = 2.0;
         const BULLET_GAP: f32 = 4.0;
         const SPINNER_GAP: f32 = 4.0;
 
         let inner = rect.shrink2(egui::vec2(3.0, ROW_VMARGIN));
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_min_width(inner.width());
-            let lead_w = 14.0;
+            let lead_w = if running { 0.0 } else { 14.0 };
             let time_w = if running { 40.0 } else { 0.0 };
             let spin_reserve = if running { 14.0 } else { 0.0 };
             let sx = ui.spacing().item_spacing.x;
@@ -262,7 +290,7 @@ impl OxiApp {
                 None
             };
             let fixed = lead_w
-                + BULLET_GAP
+                + if running { 0.0 } else { BULLET_GAP }
                 + if running { SPINNER_GAP } else { 0.0 }
                 + time_w
                 + spin_reserve
@@ -272,14 +300,16 @@ impl OxiApp {
 
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = sx;
-                ui.allocate_ui_with_layout(
-                    egui::vec2(lead_w, ROW_INNER_H),
-                    egui::Layout::left_to_right(Align::Center),
-                    |ui| {
-                        ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
-                    },
-                );
-                ui.add_space(BULLET_GAP);
+                if !running {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(lead_w, ROW_INNER_H),
+                        egui::Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                        },
+                    );
+                    ui.add_space(BULLET_GAP);
+                }
                 if running {
                     ui.allocate_ui_with_layout(
                         egui::vec2(spin_reserve, ROW_INNER_H),
@@ -318,32 +348,6 @@ impl OxiApp {
                 }
             });
         });
-    }
-
-    /// Top-right floating "New chat" button over the chat column.
-    pub(crate) fn render_floating_new_chat_button(&mut self, ui: &Ui, chat_panel: egui::Rect) {
-        const M: f32 = 10.0;
-        const BW: f32 = 110.0;
-        const BH: f32 = 28.0;
-        let pos = chat_panel.right_top() + egui::vec2(-M - BW, M);
-        egui::Area::new(ui.id().with("floating_new_chat"))
-            .order(Order::Foreground)
-            .fixed_pos(pos)
-            .show(ui.ctx(), |ui| {
-                if ui
-                    .add_sized(
-                        [BW, BH],
-                        Button::new(RichText::new("＋  New chat").size(FS_SMALL).color(C_TEXT))
-                            .fill(C_BG_ELEVATED)
-                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                            .rounding(8.0),
-                    )
-                    .on_hover_text("New chat tab in the active workspace.")
-                    .clicked()
-                {
-                    self.new_chat();
-                }
-            });
     }
 
     /// Central region manual split: sidebar | chat.
@@ -394,31 +398,52 @@ impl OxiApp {
                             bottom: CHAT_FRAME_BOTTOM,
                         })
                         .show(ui, |ui| {
-                            let chat_panel_rect = ui.max_rect();
                             let style = (*ui.ctx().style()).clone();
                             let column_center_w = crate::theme::chat_column_center_width(
                                 ui.available_width(),
                                 &style,
                             );
 
-                            // Top-down split: reserve composer height from the last frame so the
-                            // transcript never overlaps or pushes the input below the clip rect.
+                            const HEADER_H: f32 = 38.0;
+                            const HEADER_GAP: f32 = 6.0;
+                            self.render_chat_header(ui, column_center_w);
+                            ui.add_space(HEADER_GAP);
+
+                            // Floating composer: the transcript uses the full remaining height,
+                            // while the input is painted as an overlay pinned to the bottom of the
+                            // chat column. The transcript adds matching tail padding internally so
+                            // bottom content can still be scrolled into view.
                             const COMPOSER_GAP: f32 = 8.0;
-                            let composer_reserve =
+                            let composer_overlay_h =
                                 (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
                             let conversation_h =
-                                (ui.available_height() - composer_reserve).max(48.0);
+                                (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                            let chat_rect = ui.max_rect();
                             ui.allocate_ui_with_layout(
                                 egui::vec2(ui.available_width(), conversation_h),
                                 egui::Layout::top_down(egui::Align::Min),
                                 |ui| {
-                                    self.render_conversation(ui, column_center_w, conversation_h);
+                                    self.render_conversation(
+                                        ui,
+                                        column_center_w,
+                                        conversation_h,
+                                        composer_overlay_h,
+                                    );
                                 },
                             );
-                            ui.add_space(COMPOSER_GAP);
-                            self.render_composer(ui, column_center_w);
 
-                            self.render_floating_new_chat_button(ui, chat_panel_rect);
+                            let composer_h = self.conv.composer_measured_full_h.max(80.0);
+                            let composer_top = chat_rect.bottom() - composer_h;
+                            let composer_rect = egui::Rect::from_min_size(
+                                egui::pos2(chat_rect.left(), composer_top),
+                                egui::vec2(chat_rect.width(), composer_h),
+                            );
+                            ui.allocate_new_ui(
+                                egui::UiBuilder::new().max_rect(composer_rect),
+                                |ui| {
+                                    self.render_composer(ui, column_center_w);
+                                },
+                            );
                         });
                     ui.expand_to_include_rect(ui.max_rect());
                 },

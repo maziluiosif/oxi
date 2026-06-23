@@ -192,37 +192,34 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
     response
 }
 
+#[allow(dead_code)]
 pub fn render_empty_state(ui: &mut Ui) {
-    ui.add_space(32.0);
-    ui.set_max_width(520.0);
+    ui.add_space(48.0);
+    ui.set_max_width(480.0);
 
     ui.vertical(|ui| {
         ui.label(
             RichText::new("oxi")
-                .size(24.0)
+                .size(22.0)
                 .color(crate::theme::C_TEXT)
                 .strong(),
         );
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         ui.label(
             RichText::new("A coding agent that reads, edits, and runs code in your workspace.")
                 .size(FS_BODY)
                 .color(crate::theme::C_TEXT_MUTED),
         );
-        ui.add_space(18.0);
+        ui.add_space(24.0);
 
         let hints = [
-            ("⚙", "Choose your provider and model in Settings"),
-            ("📁", "Add a workspace to set the project root"),
+            ("＋", "Add a workspace to set the project root"),
+            ("⚙", "Pick your provider and model in Settings"),
             (
-                "🔧",
-                "Tools (read, write, bash, …) run inside the workspace",
+                "↑",
+                "Enter to send · Shift+Enter for newline · ↑/↓ for history",
             ),
-            (
-                "⌨",
-                "Enter to send · Shift+Enter for a newline · ↑/↓ for history",
-            ),
-            ("🖼", "Attach images with + or paste with Ctrl/Cmd+V"),
+            ("🖼", "Paste images with Ctrl/Cmd+V or click + to attach"),
         ];
         for (icon, tip) in hints {
             ui.horizontal(|ui| {
@@ -232,10 +229,10 @@ pub fn render_empty_state(ui: &mut Ui) {
                         .size(FS_SMALL)
                         .color(crate::theme::C_TEXT_MUTED),
                 );
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 ui.label(RichText::new(tip).size(FS_SMALL).color(C_TEXT_MUTED));
             });
-            ui.add_space(5.0);
+            ui.add_space(4.0);
         }
     });
 }
