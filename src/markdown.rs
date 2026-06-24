@@ -7,12 +7,12 @@ use std::hash::{Hash, Hasher};
 use base64::Engine as _;
 use eframe::egui::text::{LayoutJob, TextFormat};
 use eframe::egui::{
-    vec2, Align, Color32, FontFamily, FontId, Frame, Hyperlink, Id, Image, Layout, Margin,
-    RichText, Rounding, Stroke, Ui,
+    vec2, Align, FontFamily, FontId, Frame, Hyperlink, Id, Image, Layout, Margin, RichText,
+    Rounding, Stroke, Ui,
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::theme::content_wrap_width;
+use crate::theme::*;
 use crate::ui::preview_expand::{
     clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
 };
@@ -30,15 +30,8 @@ fn allocate_full_width_block(ui: &mut Ui, column_w: f32, add_contents: impl FnOn
     ui.allocate_ui_with_layout(vec2(w, 0.0), Layout::top_down(Align::Min), add_contents);
 }
 
-const BODY: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
-/// Link color (matches Codex `C_ACCENT`).
-const LINK: Color32 = Color32::from_rgb(0x6c, 0xa2, 0xe0);
-const MUTED: Color32 = Color32::from_rgb(0x8b, 0x8f, 0x99);
-const CODE_BG: Color32 = Color32::from_rgb(0x24, 0x26, 0x2d);
-const CODE_BLOCK_BG: Color32 = Color32::from_rgb(0x13, 0x14, 0x18);
-const CODE_BLOCK_HEADER_BG: Color32 = Color32::from_rgb(0x19, 0x1b, 0x21);
-const CODE_BLOCK_BORDER: Color32 = Color32::from_rgb(0x2a, 0x2d, 0x34);
-const QUOTE_ACCENT: Color32 = Color32::from_rgb(0x4f, 0x83, 0xc4);
+// Markdown colors live in the active theme palette (see `theme::Palette`); accessed
+// through the `c_*` / `c_md_*` functions so they track the selected theme.
 const SZ_BODY: f32 = 13.5;
 /// Slightly smaller than proportional body so `code` does not read as oversized next to prose.
 const SZ_CODE_INLINE: f32 = 12.0;
@@ -100,9 +93,9 @@ impl InlineDensity {
 
 fn inline_text_format(size: f32, strong: u32, density: InlineDensity) -> TextFormat {
     let color = if strong > 0 {
-        Color32::from_rgb(0xee, 0xee, 0xf4)
+        c_text_strong()
     } else {
-        BODY
+        c_text()
     };
     let lh = density.line_height(size);
     let mut f = TextFormat::simple(FontId::proportional(size), color);
@@ -113,11 +106,8 @@ fn inline_text_format(size: f32, strong: u32, density: InlineDensity) -> TextFor
 
 fn inline_code_format(density: InlineDensity) -> TextFormat {
     let lh = density.line_height(SZ_BODY);
-    let mut f = TextFormat::simple(
-        FontId::monospace(SZ_CODE_INLINE),
-        Color32::from_rgb(0xe1, 0xe4, 0xea),
-    );
-    f.background = CODE_BG;
+    let mut f = TextFormat::simple(FontId::monospace(SZ_CODE_INLINE), c_md_code_fg());
+    f.background = c_md_code_bg();
     f.line_height = Some(lh);
     f.valign = Align::Center;
     f
@@ -171,7 +161,7 @@ fn render_markdown_inline_image(
             RichText::new(format!("![{alt}]({dest_url})"))
                 .monospace()
                 .size(SZ_CODE_INLINE)
-                .color(MUTED),
+                .color(c_text_muted()),
         );
         ui.add_space(4.0);
         return;
@@ -210,8 +200,8 @@ fn consume_until_end(it: &mut ParserPeek<'_>, end: TagEnd) {
 fn render_raw_block(ui: &mut Ui, wrap_w: f32, label: &str, body: &str) {
     allocate_full_width_block(ui, wrap_w, |ui| {
         Frame::none()
-            .fill(CODE_BLOCK_BG)
-            .stroke(Stroke::new(1.0, Color32::from_rgb(0x26, 0x28, 0x2c)))
+            .fill(c_md_code_block_bg())
+            .stroke(Stroke::new(1.0, c_border()))
             .rounding(Rounding::same(8.0))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -220,14 +210,14 @@ fn render_raw_block(ui: &mut Ui, wrap_w: f32, label: &str, body: &str) {
                 ui.label(
                     RichText::new(label)
                         .size(SZ_TINY)
-                        .color(MUTED)
+                        .color(c_text_muted())
                         .family(FontFamily::Proportional),
                 );
                 ui.add_space(4.0);
                 let job = LayoutJob::simple(
                     body.to_string(),
                     FontId::monospace(SZ_CODE),
-                    Color32::from_rgb(0xcc, 0xcc, 0xd0),
+                    c_text_muted(),
                     inner,
                 );
                 selectable_job(ui, job);
@@ -252,10 +242,7 @@ fn render_html_block(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
 }
 
 fn append_inline_fallback(job: &mut LayoutJob, wrap_w: f32, s: &str, line_height: f32) {
-    let mut f = TextFormat::simple(
-        FontId::monospace(SZ_CODE_INLINE),
-        Color32::from_rgb(0xc8, 0xc8, 0xd0),
-    );
+    let mut f = TextFormat::simple(FontId::monospace(SZ_CODE_INLINE), c_md_code_fg());
     f.line_height = Some(line_height);
     f.valign = Align::Center;
     job.append(s, 0.0, f);
@@ -472,10 +459,10 @@ fn render_table(ui: &mut Ui, wrap_w: f32, column_count: usize, it: &mut ParserPe
         return;
     }
     let cols = column_count.max(1);
-    let grid = Color32::from_rgb(0x24, 0x26, 0x2a);
-    let outer = Color32::from_rgb(0x26, 0x28, 0x2c);
-    let header_bg = Color32::from_rgb(0x1b, 0x1c, 0x20);
-    let body_bg = Color32::from_rgb(0x15, 0x16, 0x19);
+    let grid = c_md_code_block_border();
+    let outer = c_border();
+    let header_bg = c_md_code_block_header_bg();
+    let body_bg = c_md_code_block_bg();
     const CELL_PAD_X: f32 = 10.0;
     const CELL_PAD_Y: f32 = 8.0;
 
@@ -484,7 +471,7 @@ fn render_table(ui: &mut Ui, wrap_w: f32, column_count: usize, it: &mut ParserPe
         let cell_w = table_w / cols as f32;
 
         Frame::none()
-            .fill(CODE_BLOCK_BG)
+            .fill(c_md_code_block_bg())
             .stroke(Stroke::new(1.0, outer))
             .rounding(Rounding::same(8.0))
             .inner_margin(Margin::same(0.0))
@@ -600,7 +587,7 @@ fn render_list(
                         |ui| {
                             ui.label(
                                 RichText::new(bullet)
-                                    .color(MUTED)
+                                    .color(c_text_muted())
                                     .size(SZ_BODY)
                                     .family(FontFamily::Proportional),
                             );
@@ -675,9 +662,9 @@ fn render_list(
 
 fn fmt_body(size: f32, strong: u32) -> TextFormat {
     let color = if strong > 0 {
-        Color32::from_rgb(0xee, 0xee, 0xf4)
+        c_text_strong()
     } else {
-        BODY
+        c_text()
     };
     let lh = (size * 1.35).max(16.0);
     let mut f = TextFormat::simple(FontId::proportional(size), color);
@@ -687,11 +674,8 @@ fn fmt_body(size: f32, strong: u32) -> TextFormat {
 }
 
 fn fmt_code(line_height: f32) -> TextFormat {
-    let mut f = TextFormat::simple(
-        FontId::monospace(SZ_CODE_INLINE),
-        Color32::from_rgb(0xe8, 0xe8, 0xee),
-    );
-    f.background = CODE_BG;
+    let mut f = TextFormat::simple(FontId::monospace(SZ_CODE_INLINE), c_md_code_fg());
+    f.background = c_md_code_bg();
     f.line_height = Some(line_height);
     f.valign = Align::Center;
     f
@@ -726,7 +710,7 @@ fn render_inline_until(
             Event::Text(t) => {
                 let mut tf = inline_text_format(SZ_BODY, bold, density);
                 if strike > 0 {
-                    tf.strikethrough = Stroke::new(1.0, BODY);
+                    tf.strikethrough = Stroke::new(1.0, c_text());
                 }
                 job.append(t.as_ref(), 0.0, tf);
             }
@@ -770,7 +754,7 @@ fn render_inline_until(
                     }
                 }
                 ui.add(Hyperlink::from_label_and_url(
-                    RichText::new(label).color(LINK).size(SZ_BODY),
+                    RichText::new(label).color(c_accent()).size(SZ_BODY),
                     dest,
                 ));
                 ui.add_space(2.0);
@@ -902,7 +886,7 @@ fn render_heading(ui: &mut Ui, wrap_w: f32, level: HeadingLevel, it: &mut Parser
             let (rect, _) =
                 ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
             ui.painter()
-                .rect_filled(rect, 0.0, Color32::from_rgb(0x27, 0x29, 0x30));
+                .rect_filled(rect, 0.0, c_md_code_block_border());
         });
         ui.add_space(7.0);
     } else {
@@ -918,9 +902,9 @@ fn render_paragraph(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
 fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
     allocate_full_width_block(ui, wrap_w, |ui| {
         Frame::none()
-            .fill(Color32::from_rgb(0x15, 0x17, 0x1c))
+            .fill(c_md_code_block_bg())
             .rounding(Rounding::same(8.0))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(0x29, 0x2d, 0x35)))
+            .stroke(Stroke::new(1.0, c_md_code_block_border()))
             .inner_margin(Margin::same(0.0))
             .show(ui, |ui| {
                 let full_w = ui.available_width().max(48.0);
@@ -930,7 +914,7 @@ fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
                     let (bar_rect, _) =
                         ui.allocate_exact_size(vec2(3.0, 1.0), egui::Sense::hover());
                     ui.painter()
-                        .rect_filled(bar_rect, Rounding::same(2.0), QUOTE_ACCENT);
+                        .rect_filled(bar_rect, Rounding::same(2.0), c_md_quote_accent());
                     ui.add_space(10.0);
                     ui.vertical(|ui| {
                         ui.add_space(8.0);
@@ -1002,15 +986,15 @@ fn render_fenced_block(
     let lang = code_block_language(&kind);
     allocate_full_width_block(ui, wrap_w, |ui| {
         let frame = Frame::none()
-            .fill(CODE_BLOCK_BG)
-            .stroke(Stroke::new(1.0, CODE_BLOCK_BORDER))
+            .fill(c_md_code_block_bg())
+            .stroke(Stroke::new(1.0, c_md_code_block_border()))
             .rounding(Rounding::same(9.0))
             .inner_margin(Margin::same(0.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
 
                 Frame::none()
-                    .fill(CODE_BLOCK_HEADER_BG)
+                    .fill(c_md_code_block_header_bg())
                     .rounding(egui::Rounding {
                         nw: 9.0,
                         ne: 9.0,
@@ -1022,15 +1006,11 @@ fn render_fenced_block(
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(
-                                RichText::new("●")
-                                    .size(7.0)
-                                    .color(Color32::from_rgb(0x78, 0x7d, 0x8a)),
-                            );
+                            ui.label(RichText::new("●").size(7.0).color(c_text_muted()));
                             ui.label(
                                 RichText::new(lang.as_str())
                                     .size(SZ_TINY)
-                                    .color(MUTED)
+                                    .color(c_text_muted())
                                     .family(FontFamily::Monospace),
                             );
                             if overflows && !is_expanded(ui, persist_id) {
@@ -1038,7 +1018,7 @@ fn render_fenced_block(
                                     ui.label(
                                         RichText::new("click to expand")
                                             .size(SZ_TINY)
-                                            .color(Color32::from_rgb(0x6f, 0x74, 0x80)),
+                                            .color(c_text_faint()),
                                     );
                                 });
                             }
@@ -1046,7 +1026,7 @@ fn render_fenced_block(
                     });
 
                 Frame::none()
-                    .fill(CODE_BLOCK_BG)
+                    .fill(c_md_code_block_bg())
                     .rounding(egui::Rounding {
                         nw: 0.0,
                         ne: 0.0,
@@ -1065,7 +1045,7 @@ fn render_fenced_block(
                         let job = LayoutJob::simple(
                             text,
                             FontId::monospace(SZ_CODE),
-                            Color32::from_rgb(0xd0, 0xd4, 0xdc),
+                            c_md_code_fg(),
                             inner,
                         );
                         selectable_job(ui, job);
