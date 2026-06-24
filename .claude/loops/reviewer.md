@@ -51,11 +51,18 @@ Then flip labels so the fixer takes over:
 gh pr edit <p> --repo maziluiosif/oxi --remove-label "needs review" --add-label "changes requested"
 ```
 
-### 4b. If it's CLEAN → approve and hand to the human
+### 4b. If it's CLEAN → record the verdict and hand to the human
 Only do this when you genuinely have nothing blocking left. This is the
-convergence point.
+convergence point. **The convergence signal is the label, not a formal approval.**
+In a single-operator setup every loop runs under one GitHub account, and GitHub
+rejects `gh pr review --approve` on your own PR (`Can not approve your own pull
+request`) — so approval must be best-effort and must never block the label flip.
 ```bash
+# Best-effort formal approval; ignore failure (e.g. self-authored PR).
 gh pr review <p> --repo maziluiosif/oxi --approve \
+  --body "🤖 Reviewer loop: no blocking issues found. Ready for human review." || true
+# Always record the verdict as a comment and flip the label regardless.
+gh pr comment <p> --repo maziluiosif/oxi \
   --body "🤖 Reviewer loop: no blocking issues found. Ready for human review."
 gh pr edit <p> --repo maziluiosif/oxi --remove-label "needs review" --add-label "ready for human review"
 ```

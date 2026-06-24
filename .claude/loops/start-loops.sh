@@ -65,8 +65,9 @@ launch() {
   local title="$1" file="$2"
   local prompt="/loop ${INTERVAL}Read .claude/loops/${file} and execute exactly one full pass, then stop until the next tick."
   # Command run inside the new Terminal window. Single-quote the prompt so the
-  # shell passes it to claude verbatim; the prompt contains no single quotes.
-  local shell_cmd="cd ${REPO_DIR} && claude '${prompt}'"
+  # shell passes it to claude verbatim (the prompt contains no single quotes),
+  # and single-quote the repo path so spaces / metacharacters survive the cd.
+  local shell_cmd="cd '${REPO_DIR}' && claude '${prompt}'"
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "[${title}]"

@@ -35,9 +35,9 @@ the main checkout's working tree.
 - Read the issue body carefully; treat it as the spec.
 - Implement the change fully. Match the surrounding code style.
 - Keep the change scoped to what the issue asks. If the issue is ambiguous or
-  impossible, do NOT guess wildly — instead post a comment on the issue explaining
-  the blocker, relabel it back to `ready` is wrong (it'd loop forever); instead
-  remove `in progress` and add a `question` label, then stop the pass.
+  impossible, do NOT guess wildly. Do NOT relabel it back to `ready` (it would
+  loop forever); instead remove `in progress`, add a `question` label, comment the
+  blocker on the issue, and stop the pass.
 
 ### 5. Verify locally (these mirror CI — all must pass)
 ```bash
