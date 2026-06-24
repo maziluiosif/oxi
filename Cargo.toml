@@ -1,6 +1,6 @@
 [package]
 name = "oxi"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Standalone coding agent chat UI (Rust + egui; OpenAI-compatible LLMs + local tools)"
 license = "MIT"
