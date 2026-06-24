@@ -1,6 +1,6 @@
 use super::file_ops::{make_unified_diff, truncate_out};
 use super::shell_search::validate_bash_command;
-use super::{resolve_under_cwd, run_tool, tool_definitions_json, MAX_TOOL_OUTPUT_CHARS};
+use super::{paths::resolve_under_cwd, run_tool, tool_definitions_json, MAX_TOOL_OUTPUT_CHARS};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
