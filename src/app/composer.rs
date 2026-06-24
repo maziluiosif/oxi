@@ -51,14 +51,6 @@ impl OxiApp {
         let pad = ((column_center_w - CHAT_COLUMN_MAX.min(column_center_w)) * 0.5).max(0.0);
         let can_send = !self.conv.input.trim().is_empty() || !self.conv.pending_images.is_empty();
 
-        let composer_hint = if self.conv.settings.active_profile().is_none() {
-            "Configure a provider in Settings to start…"
-        } else if self.conv.workspaces.is_empty() {
-            "Add a workspace first…"
-        } else {
-            "Ask oxi to edit, explain, inspect, or run code…"
-        };
-
         // Top-align the row so a parent `bottom_up` layout cannot vertically stretch/center the
         // block and shift the field off-screen.
         let row = ui.horizontal_top(|ui| {
@@ -86,7 +78,6 @@ impl OxiApp {
                         let te_output = TextEdit::multiline(&mut self.conv.input)
                             .desired_width(f32::INFINITY)
                             .desired_rows(1)
-                            .hint_text(composer_hint)
                             .frame(false)
                             .show(ui);
 
