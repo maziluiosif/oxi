@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    # Skip the run triggered by our own release-bump commit, to avoid a loop.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    outputs:
+      released: ${{ steps.gen.outputs.released }}
+      version: ${{ steps.gen.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate changelog and bump version
+        id: gen
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: anthropic/claude-haiku-4.5
+        run: python .github/scripts/release_changelog.py
+
+      - name: Commit, tag and push
+        if: steps.gen.outputs.released == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md Cargo.toml Cargo.lock
+          git commit -m "chore(release): v${{ steps.gen.outputs.version }}"
+          git tag "v${{ steps.gen.outputs.version }}"
+          git push origin HEAD:master
+          git push origin "v${{ steps.gen.outputs.version }}"
+
+      - name: Upload release notes
+        if: steps.gen.outputs.released == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release_notes.md
+
+  build:
+    needs: changelog
+    if: needs.changelog.outputs.released == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: oxi-macos-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: oxi-linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: oxi-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.changelog.outputs.version }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libgl1-mesa-dev
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          bin="target/${{ matrix.target }}/release/oxi"
+          tar -czf "${{ matrix.name }}.tar.gz" -C "$(dirname "$bin")" oxi
+          ls -la "${{ matrix.name }}.tar.gz"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/oxi.exe" -DestinationPath "${{ matrix.name }}.zip"
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.changelog.outputs.version }}
+          name: v${{ needs.changelog.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            ${{ matrix.name }}.tar.gz
+            ${{ matrix.name }}.zip
+          fail_on_unmatched_files: false
