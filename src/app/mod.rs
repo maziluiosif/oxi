@@ -67,7 +67,7 @@ impl OxiApp {
                 input_history_index: None,
                 input_history_draft: String::new(),
                 sidebar_open: true,
-                sidebar_width: 168.0,
+                sidebar_width: settings.sidebar_width,
                 settings,
                 settings_open: false,
                 settings_tab: state::SettingsTab::default(),
