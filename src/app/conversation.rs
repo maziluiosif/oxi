@@ -7,11 +7,7 @@ use eframe::egui::{
 
 use crate::agent::ApprovalDecision;
 use crate::model::MsgRole;
-use crate::theme::{
-    format_stream_elapsed, workspace_sidebar_label, CHAT_COLUMN_MAX, C_ACCENT, C_BG_ELEVATED,
-    C_BG_INPUT, C_BORDER_SUBTLE, C_ROW_HOVER, C_TEXT, C_TEXT_FAINT, C_TEXT_MUTED, FS_BODY,
-    FS_SMALL, FS_TINY,
-};
+use crate::theme::*;
 use crate::ui::messages::{render_assistant_message_run, render_message};
 
 use super::{OxiApp, PendingApproval};
@@ -65,7 +61,7 @@ impl OxiApp {
     fn render_approval_card(&mut self, ui: &mut Ui, pa: PendingApproval) {
         Frame::none()
             .fill(Color32::from_rgb(0x16, 0x20, 0x2e))
-            .stroke(Stroke::new(1.0, C_ACCENT))
+            .stroke(Stroke::new(1.0, c_accent()))
             .rounding(Rounding::same(6.0))
             .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -73,7 +69,7 @@ impl OxiApp {
                 ui.label(
                     RichText::new(format!("Approve `{}`?", pa.name))
                         .size(FS_SMALL)
-                        .color(C_TEXT)
+                        .color(c_text())
                         .strong(),
                 );
                 if !pa.summary.is_empty() {
@@ -81,7 +77,7 @@ impl OxiApp {
                     ui.label(
                         RichText::new(&pa.summary)
                             .size(FS_TINY)
-                            .color(C_TEXT_MUTED)
+                            .color(c_text_muted())
                             .monospace(),
                     );
                 }
@@ -89,8 +85,8 @@ impl OxiApp {
                 ui.horizontal(|ui| {
                     if ui
                         .add(
-                            Button::new(RichText::new("Approve").size(FS_SMALL).color(C_TEXT))
-                                .fill(C_ACCENT)
+                            Button::new(RichText::new("Approve").size(FS_SMALL).color(c_text()))
+                                .fill(c_accent())
                                 .rounding(6.0)
                                 .min_size(egui::vec2(0.0, 26.0)),
                         )
@@ -100,11 +96,13 @@ impl OxiApp {
                     }
                     if ui
                         .add(
-                            Button::new(RichText::new("Approve rest").size(FS_SMALL).color(C_TEXT))
-                                .fill(C_BG_ELEVATED)
-                                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                                .rounding(6.0)
-                                .min_size(egui::vec2(0.0, 26.0)),
+                            Button::new(
+                                RichText::new("Approve rest").size(FS_SMALL).color(c_text()),
+                            )
+                            .fill(c_bg_elevated())
+                            .stroke(Stroke::new(1.0, c_border_subtle()))
+                            .rounding(6.0)
+                            .min_size(egui::vec2(0.0, 26.0)),
                         )
                         .on_hover_text("Run this and auto-approve the rest of this turn")
                         .clicked()
@@ -118,8 +116,8 @@ impl OxiApp {
                                     .size(FS_SMALL)
                                     .color(Color32::from_rgb(0xff, 0xb0, 0xb0)),
                             )
-                            .fill(C_BG_ELEVATED)
-                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                            .fill(c_bg_elevated())
+                            .stroke(Stroke::new(1.0, c_border_subtle()))
                             .rounding(6.0)
                             .min_size(egui::vec2(0.0, 26.0)),
                         )
@@ -148,9 +146,9 @@ impl OxiApp {
                         && ui
                             .add_sized(
                                 [30.0, 28.0],
-                                Button::new(RichText::new("☰").size(14.0).color(C_TEXT_MUTED))
-                                    .fill(C_BG_ELEVATED)
-                                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                                Button::new(RichText::new("☰").size(14.0).color(c_text_muted()))
+                                    .fill(c_bg_elevated())
+                                    .stroke(Stroke::new(1.0, c_border_subtle()))
                                     .rounding(8.0),
                             )
                             .on_hover_text("Show sidebar")
@@ -163,8 +161,13 @@ impl OxiApp {
                     ui.vertical(|ui| {
                         ui.set_width((ui.available_width() - 126.0).max(80.0));
                         ui.add(
-                            Label::new(RichText::new("Chat").size(FS_SMALL).color(C_TEXT).strong())
-                                .truncate(),
+                            Label::new(
+                                RichText::new("Chat")
+                                    .size(FS_SMALL)
+                                    .color(c_text())
+                                    .strong(),
+                            )
+                            .truncate(),
                         );
                         let profile = self
                             .conv
@@ -176,7 +179,7 @@ impl OxiApp {
                             Label::new(
                                 RichText::new(format!("{workspace} · {profile}"))
                                     .size(FS_TINY)
-                                    .color(C_TEXT_MUTED),
+                                    .color(c_text_muted()),
                             )
                             .truncate(),
                         );
@@ -186,10 +189,12 @@ impl OxiApp {
                         if ui
                             .add_sized(
                                 [96.0, 28.0],
-                                Button::new(RichText::new("＋  New").size(FS_SMALL).color(C_TEXT))
-                                    .fill(C_BG_ELEVATED)
-                                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                                    .rounding(8.0),
+                                Button::new(
+                                    RichText::new("＋  New").size(FS_SMALL).color(c_text()),
+                                )
+                                .fill(c_bg_elevated())
+                                .stroke(Stroke::new(1.0, c_border_subtle()))
+                                .rounding(8.0),
                             )
                             .on_hover_text("Start a new chat in this workspace")
                             .clicked()
@@ -208,7 +213,11 @@ impl OxiApp {
 
     fn render_header_status_chip(&self, ui: &mut Ui) {
         let (label, dot, hover) = if let Some(err) = self.active_stream_error() {
-            ("Error".to_string(), crate::theme::C_DANGER, err.to_string())
+            (
+                "Error".to_string(),
+                crate::theme::c_danger(),
+                err.to_string(),
+            )
         } else if self.active_waiting_response() {
             let elapsed = self
                 .active_run_state()
@@ -217,27 +226,27 @@ impl OxiApp {
                 .unwrap_or_default();
             (
                 format!("Running{elapsed}"),
-                C_ACCENT,
+                c_accent(),
                 "Agent is working".to_string(),
             )
         } else {
             (
                 "Ready".to_string(),
-                crate::theme::C_SUCCESS,
+                crate::theme::c_success(),
                 "Ready to send".to_string(),
             )
         };
 
         Frame::none()
-            .fill(C_BG_INPUT)
-            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+            .fill(c_bg_input())
+            .stroke(Stroke::new(1.0, c_border_subtle()))
             .rounding(Rounding::same(999.0))
             .inner_margin(Margin::symmetric(9.0, 4.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
                     ui.label(RichText::new("●").size(8.0).color(dot));
-                    ui.label(RichText::new(label).size(FS_TINY).color(C_TEXT_MUTED));
+                    ui.label(RichText::new(label).size(FS_TINY).color(c_text_muted()));
                 });
             })
             .response
@@ -251,7 +260,7 @@ impl OxiApp {
             ui.label(
                 RichText::new("What should oxi help with?")
                     .size(22.0)
-                    .color(C_TEXT)
+                    .color(c_text())
                     .strong(),
             );
             ui.add_space(5.0);
@@ -260,7 +269,7 @@ impl OxiApp {
                     "Start with a workspace task, inspect code, or configure your provider.",
                 )
                 .size(FS_BODY)
-                .color(C_TEXT_MUTED),
+                .color(c_text_muted()),
             );
             ui.add_space(18.0);
 
@@ -270,10 +279,10 @@ impl OxiApp {
                         Button::new(
                             RichText::new("＋ Add workspace")
                                 .size(FS_SMALL)
-                                .color(C_TEXT),
+                                .color(c_text()),
                         )
-                        .fill(C_BG_ELEVATED)
-                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                        .fill(c_bg_elevated())
+                        .stroke(Stroke::new(1.0, c_border_subtle()))
                         .rounding(8.0),
                     )
                     .clicked()
@@ -285,10 +294,10 @@ impl OxiApp {
                         Button::new(
                             RichText::new("⚙ Open settings")
                                 .size(FS_SMALL)
-                                .color(C_TEXT),
+                                .color(c_text()),
                         )
-                        .fill(C_BG_ELEVATED)
-                        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                        .fill(c_bg_elevated())
+                        .stroke(Stroke::new(1.0, c_border_subtle()))
                         .rounding(8.0),
                     )
                     .clicked()
@@ -301,7 +310,7 @@ impl OxiApp {
             ui.label(
                 RichText::new("Try one of these")
                     .size(FS_TINY)
-                    .color(C_TEXT_FAINT)
+                    .color(c_text_faint())
                     .strong(),
             );
             ui.add_space(6.0);
@@ -313,16 +322,16 @@ impl OxiApp {
             ];
             for prompt in prompts {
                 let response = Frame::none()
-                    .fill(C_BG_INPUT)
-                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                    .fill(c_bg_input())
+                    .stroke(Stroke::new(1.0, c_border_subtle()))
                     .rounding(Rounding::same(9.0))
                     .inner_margin(Margin::symmetric(12.0, 8.0))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("↗").size(FS_SMALL).color(C_ACCENT));
+                            ui.label(RichText::new("↗").size(FS_SMALL).color(c_accent()));
                             ui.add_space(5.0);
-                            ui.label(RichText::new(prompt).size(FS_SMALL).color(C_TEXT));
+                            ui.label(RichText::new(prompt).size(FS_SMALL).color(c_text()));
                         });
                     })
                     .response
@@ -332,7 +341,7 @@ impl OxiApp {
                     ui.painter().rect_stroke(
                         response.rect,
                         Rounding::same(9.0),
-                        Stroke::new(1.0, C_ROW_HOVER),
+                        Stroke::new(1.0, c_row_hover()),
                     );
                 }
                 if response.clicked() {

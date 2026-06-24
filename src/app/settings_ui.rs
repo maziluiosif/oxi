@@ -7,11 +7,7 @@ use eframe::egui::{
 
 use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
 use crate::settings::{LlmProviderKind, ALL_TOOL_NAMES};
-use crate::theme::{
-    C_ACCENT, C_BG_ELEVATED, C_BG_ELEVATED_2, C_BG_MAIN, C_BG_SIDEBAR, C_BORDER, C_BORDER_SUBTLE,
-    C_ROW_ACTIVE, C_ROW_HOVER, C_SUCCESS, C_TEXT, C_TEXT_FAINT, C_TEXT_MUTED, FS_BODY, FS_SMALL,
-    FS_TINY, SIDEBAR_RESIZE_SEP_W,
-};
+use crate::theme::*;
 use crate::ui::chrome::{
     card_frame, field_label, ghost_button, hairline, nested_card_frame, pill_tab, primary_button,
     settings_caption, settings_nav_row, settings_section_title,
@@ -40,7 +36,7 @@ impl OxiApp {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     Frame::none()
-                        .fill(C_BG_SIDEBAR)
+                        .fill(c_bg_sidebar())
                         .inner_margin(Margin {
                             left: 12.0,
                             right: 10.0,
@@ -60,7 +56,7 @@ impl OxiApp {
             ui.painter().vline(
                 boundary_x,
                 egui::Rangef::new(ui.min_rect().top(), ui.min_rect().top() + full_h),
-                Stroke::new(1.0, C_BORDER_SUBTLE),
+                Stroke::new(1.0, c_border_subtle()),
             );
             ui.add_space(SIDEBAR_RESIZE_SEP_W);
 
@@ -68,7 +64,7 @@ impl OxiApp {
                 egui::vec2(ui.available_width(), full_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    Frame::none().fill(C_BG_MAIN).show(ui, |ui| {
+                    Frame::none().fill(c_bg_main()).show(ui, |ui| {
                         self.render_settings_header(ui);
                         ScrollArea::vertical()
                             .id_salt("settings_page_scroll")
@@ -103,7 +99,7 @@ impl OxiApp {
 
     fn render_settings_header(&mut self, ui: &mut Ui) {
         Frame::none()
-            .fill(C_BG_MAIN)
+            .fill(c_bg_main())
             .inner_margin(Margin {
                 left: 36.0,
                 right: 24.0,
@@ -112,21 +108,28 @@ impl OxiApp {
             })
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Settings").size(20.0).color(C_TEXT).strong());
+                    ui.label(
+                        RichText::new("Settings")
+                            .size(20.0)
+                            .color(c_text())
+                            .strong(),
+                    );
                     ui.add_space(10.0);
                     ui.label(
                         RichText::new("Preferences for oxi")
                             .size(FS_SMALL)
-                            .color(C_TEXT_MUTED),
+                            .color(c_text_muted()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui
                             .add(
                                 Button::new(
-                                    RichText::new("✕  Close").size(FS_SMALL).color(C_TEXT_MUTED),
+                                    RichText::new("✕  Close")
+                                        .size(FS_SMALL)
+                                        .color(c_text_muted()),
                                 )
-                                .fill(C_BG_ELEVATED)
-                                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                                .fill(c_bg_elevated())
+                                .stroke(Stroke::new(1.0, c_border_subtle()))
                                 .rounding(7.0)
                                 .min_size(egui::vec2(0.0, 26.0)),
                             )
@@ -141,7 +144,7 @@ impl OxiApp {
         ui.painter().hline(
             ui.min_rect().x_range(),
             ui.cursor().min.y,
-            Stroke::new(1.0, C_BORDER_SUBTLE),
+            Stroke::new(1.0, c_border_subtle()),
         );
     }
 
@@ -153,7 +156,7 @@ impl OxiApp {
                 Button::new(
                     RichText::new("←  Back to chat")
                         .size(FS_SMALL)
-                        .color(C_TEXT_MUTED),
+                        .color(c_text_muted()),
                 )
                 .frame(false)
                 .fill(Color32::TRANSPARENT),
@@ -192,16 +195,16 @@ impl OxiApp {
                         .unwrap_or("settings.json")
                 ))
                 .size(FS_TINY)
-                .color(C_TEXT_FAINT)
+                .color(c_text_faint())
                 .monospace(),
             );
             ui.horizontal(|ui| {
-                ui.label(RichText::new("●").size(FS_TINY).color(C_SUCCESS));
+                ui.label(RichText::new("●").size(FS_TINY).color(c_success()));
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("Auto-saved")
                         .size(FS_TINY)
-                        .color(C_TEXT_MUTED),
+                        .color(c_text_muted()),
                 );
             });
             ui.add_space(2.0);
@@ -240,7 +243,7 @@ impl OxiApp {
             ui.label(
                 RichText::new(format!("{} profiles", provider.label()))
                     .size(FS_BODY)
-                    .color(C_TEXT)
+                    .color(c_text())
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -270,13 +273,13 @@ impl OxiApp {
                 ui.label(
                     RichText::new("No profiles for this provider yet.")
                         .size(FS_SMALL)
-                        .color(C_TEXT_MUTED),
+                        .color(c_text_muted()),
                 );
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("Click \"+ Add profile\" above to create one.")
                         .size(FS_TINY)
-                        .color(C_TEXT_FAINT),
+                        .color(c_text_faint()),
                 );
             });
             ui.add_space(12.0);
@@ -322,7 +325,7 @@ impl OxiApp {
                     &mut require_approval,
                     RichText::new("Ask before running bash / write / edit")
                         .size(FS_SMALL)
-                        .color(C_TEXT),
+                        .color(c_text()),
                 )
                 .on_hover_text(
                     "When on, the agent pauses for your approval before each mutating tool call.",
@@ -339,7 +342,40 @@ impl OxiApp {
                  OAuth still takes precedence where available.",
             )
             .size(FS_TINY)
-            .color(C_TEXT_FAINT),
+            .color(c_text_faint()),
+        );
+
+        // Appearance section
+        ui.add_space(8.0);
+        hairline(ui);
+        ui.add_space(18.0);
+        settings_section_title(
+            ui,
+            "Appearance",
+            Some("Switch the color theme. Built-in themes plus any custom themes found on disk."),
+        );
+        card_frame().show(ui, |ui| {
+            let themes = crate::theme::available_themes();
+            let current = self.conv.settings.theme_id.clone();
+            settings_caption(ui, "Theme");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for t in &themes {
+                    if pill_tab(ui, &t.name, t.id == current) && t.id != current {
+                        self.conv.settings.theme_id = t.id.clone();
+                        crate::theme::apply_theme(ui.ctx(), &t.id);
+                    }
+                }
+            });
+        });
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new(format!(
+                "Add a custom theme by dropping a <name>.json file in {}.",
+                crate::theme::custom_themes_dir().display()
+            ))
+            .size(FS_TINY)
+            .color(c_text_faint()),
         );
     }
 
@@ -353,7 +389,7 @@ impl OxiApp {
         card_frame().show(ui, |ui| {
             // Header: status dot, name editor, "Active" pill, delete
             ui.horizontal(|ui| {
-                let dot_col = if selected { C_ACCENT } else { C_TEXT_FAINT };
+                let dot_col = if selected { c_accent() } else { c_text_faint() };
                 ui.label(RichText::new("●").size(FS_BODY).color(dot_col));
                 ui.add_space(4.0);
 
@@ -367,7 +403,7 @@ impl OxiApp {
                 ui.label(
                     RichText::new(prov.label())
                         .size(FS_TINY)
-                        .color(C_TEXT_MUTED),
+                        .color(c_text_muted()),
                 );
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -383,11 +419,13 @@ impl OxiApp {
                         active_pill(ui, "Active");
                     } else if ui
                         .add(
-                            Button::new(RichText::new("Make active").size(FS_SMALL).color(C_TEXT))
-                                .fill(C_BG_ELEVATED_2)
-                                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                                .rounding(7.0)
-                                .min_size(egui::vec2(0.0, 26.0)),
+                            Button::new(
+                                RichText::new("Make active").size(FS_SMALL).color(c_text()),
+                            )
+                            .fill(c_bg_elevated_2())
+                            .stroke(Stroke::new(1.0, c_border_subtle()))
+                            .rounding(7.0)
+                            .min_size(egui::vec2(0.0, 26.0)),
                         )
                         .on_hover_text("Use this profile for new chats")
                         .clicked()
@@ -490,7 +528,7 @@ impl OxiApp {
         ui.label(
             RichText::new("Tip: changes are saved automatically.")
                 .size(FS_TINY)
-                .color(C_TEXT_FAINT),
+                .color(c_text_faint()),
         );
     }
 
@@ -504,7 +542,7 @@ impl OxiApp {
                 ui.label(
                     RichText::new("ChatGPT / Codex OAuth")
                         .size(FS_BODY)
-                        .color(C_TEXT)
+                        .color(c_text())
                         .strong(),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -519,7 +557,7 @@ impl OxiApp {
             ui.label(
                 RichText::new("Browser + localhost:1455 callback")
                     .size(FS_TINY)
-                    .color(C_TEXT_FAINT),
+                    .color(c_text_faint()),
             );
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -531,7 +569,7 @@ impl OxiApp {
                                 .size(FS_SMALL)
                                 .color(Color32::WHITE),
                         )
-                        .fill(C_ACCENT)
+                        .fill(c_accent())
                         .stroke(Stroke::NONE)
                         .rounding(7.0)
                         .min_size(egui::vec2(0.0, 28.0)),
@@ -542,9 +580,9 @@ impl OxiApp {
                 }
                 if ui
                     .add_enabled(signed_in, {
-                        Button::new(RichText::new("Sign out").size(FS_SMALL).color(C_TEXT))
-                            .fill(C_BG_ELEVATED_2)
-                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                        Button::new(RichText::new("Sign out").size(FS_SMALL).color(c_text()))
+                            .fill(c_bg_elevated_2())
+                            .stroke(Stroke::new(1.0, c_border_subtle()))
                             .rounding(7.0)
                             .min_size(egui::vec2(0.0, 28.0))
                     })
@@ -558,7 +596,7 @@ impl OxiApp {
             });
             if let Some(ref msg) = self.conv.oauth_last_message {
                 ui.add_space(6.0);
-                ui.label(RichText::new(msg).size(FS_TINY).color(C_TEXT_MUTED));
+                ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
             }
         });
     }
@@ -597,33 +635,33 @@ impl OxiApp {
 fn active_pill(ui: &mut Ui, text: &str) {
     Frame::none()
         .fill(Color32::from_rgba_unmultiplied(
-            C_ACCENT.r(),
-            C_ACCENT.g(),
-            C_ACCENT.b(),
+            c_accent().r(),
+            c_accent().g(),
+            c_accent().b(),
             32,
         ))
         .stroke(Stroke::new(
             1.0,
-            Color32::from_rgba_unmultiplied(C_ACCENT.r(), C_ACCENT.g(), C_ACCENT.b(), 90),
+            Color32::from_rgba_unmultiplied(c_accent().r(), c_accent().g(), c_accent().b(), 90),
         ))
         .rounding(999.0)
         .inner_margin(Margin::symmetric(10.0, 3.0))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).size(FS_TINY).color(C_ACCENT).strong());
+            ui.label(RichText::new(text).size(FS_TINY).color(c_accent()).strong());
         });
 }
 
 fn inactive_pill(ui: &mut Ui, text: &str) {
     Frame::none()
-        .fill(C_BG_ELEVATED_2)
-        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+        .fill(c_bg_elevated_2())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
         .rounding(999.0)
         .inner_margin(Margin::symmetric(10.0, 3.0))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(text)
                     .size(FS_TINY)
-                    .color(C_TEXT_MUTED)
+                    .color(c_text_muted())
                     .strong(),
             );
         });
@@ -634,10 +672,10 @@ fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Response {
     let label_fid = egui::FontId::proportional(FS_SMALL);
     let label_galley = ui
         .painter()
-        .layout_no_wrap(name.to_string(), label_fid.clone(), C_TEXT);
+        .layout_no_wrap(name.to_string(), label_fid.clone(), c_text());
     let icon_galley = ui
         .painter()
-        .layout_no_wrap(icon.to_string(), label_fid.clone(), C_ACCENT);
+        .layout_no_wrap(icon.to_string(), label_fid.clone(), c_accent());
 
     let pad = egui::vec2(12.0, 6.0);
     let icon_gap = 8.0;
@@ -648,19 +686,19 @@ fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let (fill, stroke_col, text_col) = if enabled && hovered {
-        (C_ROW_ACTIVE, C_BORDER, C_TEXT)
+        (c_row_active(), c_border(), c_text())
     } else if enabled {
-        (C_ROW_ACTIVE, C_BORDER_SUBTLE, C_TEXT)
+        (c_row_active(), c_border_subtle(), c_text())
     } else if hovered {
-        (C_ROW_HOVER, C_BORDER_SUBTLE, C_TEXT_MUTED)
+        (c_row_hover(), c_border_subtle(), c_text_muted())
     } else {
-        (C_BG_ELEVATED_2, C_BORDER_SUBTLE, C_TEXT_MUTED)
+        (c_bg_elevated_2(), c_border_subtle(), c_text_muted())
     };
     let r = Rounding::same(999.0);
     ui.painter().rect_filled(rect, r, fill);
     ui.painter()
         .rect_stroke(rect, r, Stroke::new(1.0, stroke_col));
-    let icon_col = if enabled { C_ACCENT } else { C_TEXT_FAINT };
+    let icon_col = if enabled { c_accent() } else { c_text_faint() };
     let top = rect.center().y - label_galley.rect.height() * 0.5;
     let icon_x = rect.left() + pad.x;
     let label_x = icon_x + icon_galley.rect.width() + icon_gap;

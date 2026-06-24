@@ -6,12 +6,7 @@ use eframe::egui::{
     Stroke, Ui,
 };
 
-use crate::theme::{
-    format_stream_elapsed, sidebar_session_title_display, small_spinner, workspace_sidebar_label,
-    CHAT_FRAME_BOTTOM, CHAT_FRAME_TOP, CHAT_VIEW_MARGIN_LEFT, CHAT_VIEW_MARGIN_RIGHT, C_ACCENT,
-    C_BG_ELEVATED, C_BG_MAIN, C_BG_SIDEBAR, C_BORDER, C_BORDER_SUBTLE, C_ROW_ACTIVE, C_ROW_HOVER,
-    C_SIDEBAR_SECTION, C_TEXT, C_TEXT_MUTED, FS_SMALL, FS_TINY, SIDEBAR_RESIZE_SEP_W,
-};
+use crate::theme::*;
 use crate::ui::chrome::sidebar_text_field;
 
 use super::OxiApp;
@@ -27,13 +22,13 @@ impl OxiApp {
             ui.label(
                 RichText::new("oxi")
                     .size(16.0)
-                    .color(crate::theme::C_TEXT)
+                    .color(crate::theme::c_text())
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add(
-                        Button::new(RichText::new("⇤").size(FS_SMALL).color(C_SIDEBAR_SECTION))
+                        Button::new(RichText::new("⇤").size(FS_SMALL).color(c_sidebar_section()))
                             .frame(false)
                             .fill(Color32::TRANSPARENT),
                     )
@@ -68,9 +63,9 @@ impl OxiApp {
         if ui
             .add_sized(
                 [ui.available_width(), 30.0],
-                Button::new(RichText::new("⚙   Settings").size(FS_SMALL).color(C_TEXT))
-                    .fill(C_BG_ELEVATED)
-                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                Button::new(RichText::new("⚙   Settings").size(FS_SMALL).color(c_text()))
+                    .fill(c_bg_elevated())
+                    .stroke(Stroke::new(1.0, c_border_subtle()))
                     .rounding(8.0),
             )
             .on_hover_text("Open settings")
@@ -88,28 +83,39 @@ impl OxiApp {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, H), Sense::click());
         let hovered = response.hovered();
         let fill = if hovered {
-            Color32::from_rgb(0x1f, 0x21, 0x26)
+            c_row_hover()
         } else {
-            C_BG_ELEVATED
+            c_bg_elevated()
         };
         let rounding = Rounding::same(R);
         ui.painter().rect_filled(rect, rounding, fill);
         ui.painter().rect_stroke(
             rect,
             rounding,
-            Stroke::new(1.0, if hovered { C_BORDER } else { C_BORDER_SUBTLE }),
+            Stroke::new(
+                1.0,
+                if hovered {
+                    c_border()
+                } else {
+                    c_border_subtle()
+                },
+            ),
         );
         ui.allocate_new_ui(
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
             |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.label(RichText::new("＋").size(FS_SMALL).color(if hovered {
-                        C_ACCENT
+                        c_accent()
                     } else {
-                        C_TEXT_MUTED
+                        c_text_muted()
                     }));
                     ui.add_space(6.0);
-                    ui.label(RichText::new("Add workspace").size(FS_SMALL).color(C_TEXT));
+                    ui.label(
+                        RichText::new("Add workspace")
+                            .size(FS_SMALL)
+                            .color(c_text()),
+                    );
                 });
             },
         );
@@ -152,7 +158,7 @@ impl OxiApp {
                         Button::new(
                             RichText::new(format!("{chev}  {root_label}"))
                                 .size(FS_TINY)
-                                .color(C_SIDEBAR_SECTION),
+                                .color(c_sidebar_section()),
                         )
                         .frame(false)
                         .fill(Color32::TRANSPARENT)
@@ -167,7 +173,7 @@ impl OxiApp {
                     && ui
                         .add_sized(
                             [22.0, 22.0],
-                            Button::new(RichText::new("＋").size(FS_TINY).color(C_TEXT_MUTED))
+                            Button::new(RichText::new("＋").size(FS_TINY).color(c_text_muted()))
                                 .frame(false)
                                 .fill(Color32::TRANSPARENT),
                         )
@@ -213,9 +219,9 @@ impl OxiApp {
                             );
                             let hovered = response.hovered();
                             let fill = if selected {
-                                C_ROW_ACTIVE
+                                c_row_active()
                             } else if hovered {
-                                C_ROW_HOVER
+                                c_row_hover()
                             } else {
                                 Color32::TRANSPARENT
                             };
@@ -252,7 +258,7 @@ impl OxiApp {
                     } else {
                         "No chats found"
                     };
-                    ui.label(RichText::new(msg).size(FS_TINY).color(C_TEXT_MUTED));
+                    ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
                 });
                 ui.add_space(4.0);
             }
@@ -295,7 +301,7 @@ impl OxiApp {
                 + spin_reserve
                 + sx * if running { 4.0 } else { 2.0 };
             let title_w = (ui.available_width() - fixed).max(24.0);
-            let bullet_col = if selected { C_ACCENT } else { C_TEXT_MUTED };
+            let bullet_col = if selected { c_accent() } else { c_text_muted() };
 
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = sx;
@@ -325,9 +331,11 @@ impl OxiApp {
                     |ui| {
                         use eframe::egui::Label;
                         ui.add(
-                            Label::new(RichText::new(title.as_str()).size(FS_SMALL).color(C_TEXT))
-                                .truncate()
-                                .halign(Align::LEFT),
+                            Label::new(
+                                RichText::new(title.as_str()).size(FS_SMALL).color(c_text()),
+                            )
+                            .truncate()
+                            .halign(Align::LEFT),
                         );
                     },
                 );
@@ -339,7 +347,7 @@ impl OxiApp {
                             ui.label(
                                 RichText::new(s)
                                     .size(FS_TINY)
-                                    .color(C_TEXT_MUTED)
+                                    .color(c_text_muted())
                                     .monospace(),
                             );
                         },
@@ -366,7 +374,7 @@ impl OxiApp {
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         Frame::none()
-                            .fill(C_BG_SIDEBAR)
+                            .fill(c_bg_sidebar())
                             .inner_margin(Margin {
                                 left: 8.0,
                                 right: 6.0,
@@ -389,7 +397,7 @@ impl OxiApp {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     Frame::none()
-                        .fill(C_BG_MAIN)
+                        .fill(c_bg_main())
                         .inner_margin(Margin {
                             left: CHAT_VIEW_MARGIN_LEFT,
                             right: CHAT_VIEW_MARGIN_RIGHT,
@@ -477,7 +485,7 @@ impl OxiApp {
         ui.painter().vline(
             boundary_x,
             sep_rect.y_range(),
-            Stroke::new(1.0, crate::theme::C_BORDER_SUBTLE),
+            Stroke::new(1.0, crate::theme::c_border_subtle()),
         );
     }
 }
