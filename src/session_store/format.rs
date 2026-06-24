@@ -162,6 +162,28 @@ mod tests {
     }
 
     #[test]
+    fn session_file_stem_normal_json_path() {
+        let p = Path::new("/tmp/my-session.json");
+        assert_eq!(session_file_stem_or_generated(p), "my-session");
+    }
+
+    #[test]
+    fn session_file_stem_missing_falls_back_to_generated() {
+        // A path that terminates in `..` has no file stem, so it falls back.
+        let p = Path::new("/tmp/..");
+        let stem = session_file_stem_or_generated(p);
+        assert!(!stem.is_empty());
+    }
+
+    #[test]
+    fn session_file_stem_whitespace_only_falls_back_to_generated() {
+        let p = Path::new("/tmp/   .json");
+        let stem = session_file_stem_or_generated(p);
+        assert!(!stem.is_empty());
+        assert_ne!(stem.trim(), "");
+    }
+
+    #[test]
     fn user_message_to_json_plain_text() {
         let msg = ChatMessage {
             role: MsgRole::User,

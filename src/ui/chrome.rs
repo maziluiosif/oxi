@@ -5,15 +5,12 @@ use eframe::egui::{
     Sense, Stroke, TextEdit, Ui,
 };
 
-use crate::theme::{
-    C_ACCENT, C_BG_ELEVATED, C_BG_ELEVATED_2, C_BG_INPUT, C_BORDER, C_BORDER_SUBTLE, C_ROW_ACTIVE,
-    C_ROW_HOVER, C_TEXT, C_TEXT_FAINT, C_TEXT_MUTED, FS_BODY, FS_SMALL, FS_TINY,
-};
+use crate::theme::*;
 
 pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
     Frame::none()
-        .fill(C_BG_INPUT)
-        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+        .fill(c_bg_input())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
         .rounding(7.0)
         .inner_margin(Margin::symmetric(8.0, 4.0))
         .show(ui, |ui| {
@@ -34,7 +31,7 @@ pub fn settings_caption(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text.to_uppercase())
             .size(FS_TINY)
-            .color(C_TEXT_FAINT)
+            .color(c_text_faint())
             .strong(),
     );
     ui.add_space(2.0);
@@ -42,10 +39,10 @@ pub fn settings_caption(ui: &mut Ui, text: &str) {
 
 /// Primary section title inside a panel.
 pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) {
-    ui.label(RichText::new(title).size(17.0).color(C_TEXT).strong());
+    ui.label(RichText::new(title).size(17.0).color(c_text()).strong());
     if let Some(sub) = subtitle {
         ui.add_space(2.0);
-        ui.label(RichText::new(sub).size(FS_SMALL).color(C_TEXT_MUTED));
+        ui.label(RichText::new(sub).size(FS_SMALL).color(c_text_muted()));
     }
     ui.add_space(10.0);
 }
@@ -53,8 +50,8 @@ pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) 
 /// A card frame used to group related settings. Matches the elevated background + subtle border.
 pub fn card_frame() -> Frame {
     Frame::none()
-        .fill(C_BG_ELEVATED)
-        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+        .fill(c_bg_elevated())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
         .rounding(10.0)
         .inner_margin(Margin::symmetric(14.0, 12.0))
 }
@@ -62,8 +59,8 @@ pub fn card_frame() -> Frame {
 /// Slightly elevated card variant — used for nested sub-cards inside a panel.
 pub fn nested_card_frame() -> Frame {
     Frame::none()
-        .fill(C_BG_ELEVATED_2)
-        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+        .fill(c_bg_elevated_2())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
         .rounding(8.0)
         .inner_margin(Margin::symmetric(10.0, 8.0))
 }
@@ -71,7 +68,7 @@ pub fn nested_card_frame() -> Frame {
 /// Single-line label → value field row used on settings panels.
 pub fn field_label(ui: &mut Ui, text: &str) {
     ui.add_space(6.0);
-    ui.label(RichText::new(text).size(FS_TINY).color(C_TEXT_MUTED));
+    ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
     ui.add_space(2.0);
 }
 
@@ -82,7 +79,7 @@ pub fn hairline(ui: &mut Ui) {
     ui.painter().hline(
         rect.x_range(),
         rect.center().y,
-        Stroke::new(1.0, C_BORDER_SUBTLE),
+        Stroke::new(1.0, c_border_subtle()),
     );
 }
 
@@ -91,7 +88,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     let text_size = FS_SMALL;
     let galley =
         ui.painter()
-            .layout_no_wrap(label.to_string(), FontId::proportional(text_size), C_TEXT);
+            .layout_no_wrap(label.to_string(), FontId::proportional(text_size), c_text());
     let pad = egui::vec2(14.0, 6.0);
     let size = egui::vec2(
         galley.rect.width() + pad.x * 2.0,
@@ -100,14 +97,14 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let (fill, stroke, text_color) = if selected {
-        (C_ROW_ACTIVE, Stroke::new(1.0, C_BORDER), C_TEXT)
+        (c_row_active(), Stroke::new(1.0, c_border()), c_text())
     } else if hovered {
-        (C_ROW_HOVER, Stroke::new(1.0, C_BORDER_SUBTLE), C_TEXT)
+        (c_row_hover(), Stroke::new(1.0, c_border_subtle()), c_text())
     } else {
         (
             Color32::TRANSPARENT,
-            Stroke::new(1.0, C_BORDER_SUBTLE),
-            C_TEXT_MUTED,
+            Stroke::new(1.0, c_border_subtle()),
+            c_text_muted(),
         )
     };
     let r = Rounding::same(999.0);
@@ -128,7 +125,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
 pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
     let rich = RichText::new(label).size(FS_SMALL).color(Color32::WHITE);
     let btn = egui::Button::new(rich)
-        .fill(C_ACCENT)
+        .fill(c_accent())
         .stroke(Stroke::NONE)
         .rounding(7.0)
         .min_size(egui::vec2(0.0, 26.0));
@@ -138,13 +135,13 @@ pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
 /// Neutral secondary button — used for Sign out, Delete, etc. (with `danger` color swap).
 pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
     let color = if danger {
-        crate::theme::C_DANGER
+        crate::theme::c_danger()
     } else {
-        C_TEXT
+        c_text()
     };
     let btn = egui::Button::new(RichText::new(label).size(FS_SMALL).color(color))
-        .fill(C_BG_ELEVATED_2)
-        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+        .fill(c_bg_elevated_2())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
         .rounding(7.0)
         .min_size(egui::vec2(0.0, 26.0));
     ui.add(btn)
@@ -157,26 +154,29 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
     let (rect, response) = ui.allocate_exact_size(egui::vec2(row_w, h), Sense::click());
     let hovered = response.hovered();
     let fill = if selected {
-        C_ROW_ACTIVE
+        c_row_active()
     } else if hovered {
-        C_ROW_HOVER
+        c_row_hover()
     } else {
         Color32::TRANSPARENT
     };
     ui.painter().rect_filled(rect, Rounding::same(7.0), fill);
     if selected {
-        ui.painter()
-            .rect_stroke(rect, Rounding::same(7.0), Stroke::new(1.0, C_BORDER_SUBTLE));
+        ui.painter().rect_stroke(
+            rect,
+            Rounding::same(7.0),
+            Stroke::new(1.0, c_border_subtle()),
+        );
     }
-    let text_color = if selected { C_TEXT } else { C_TEXT_MUTED };
+    let text_color = if selected { c_text() } else { c_text_muted() };
     ui.allocate_new_ui(
         egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
         |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.label(RichText::new(icon).size(FS_BODY).color(if selected {
-                    C_ACCENT
+                    c_accent()
                 } else {
-                    C_TEXT_FAINT
+                    c_text_faint()
                 }));
                 ui.add_space(8.0);
                 ui.add(
