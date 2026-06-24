@@ -27,12 +27,6 @@ mod tests;
 
 pub use definitions::tool_definitions_json;
 
-/// Resolve an existing `user_path` under `cwd`; rejects paths that escape `cwd`.
-///
-/// Re-exported for the public `tools` API; internal modules call `paths::resolve_under_cwd` directly.
-#[allow(unused_imports)]
-pub use paths::resolve_under_cwd;
-
 pub fn run_tool(cwd: &Path, name: &str, args: &Value, enabled: &[bool; 7]) -> ToolResult {
     let idx = ALL_TOOL_NAMES.iter().position(|n| *n == name);
     let Some(i) = idx else {
