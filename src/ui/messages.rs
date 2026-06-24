@@ -16,11 +16,7 @@ use crate::model::{
     tool_breaks_explore_cluster, AssistantBlock, AssistantBlockGroup, ChatMessage, MsgRole,
     UserAttachment,
 };
-use crate::theme::{
-    animated_status_label, content_wrap_width, icon_font, tool_status_label, C_ACCENT,
-    C_BG_ELEVATED, C_BORDER, C_BORDER_SUBTLE, C_DIFF_ADD_BG, C_DIFF_ADD_FG, C_DIFF_DEL_BG,
-    C_DIFF_DEL_FG, C_TEXT, C_TEXT_FAINT, C_TEXT_MUTED, C_USER_BUBBLE, FS_BODY, FS_SMALL, FS_TINY,
-};
+use crate::theme::*;
 use crate::ui::preview_expand::{
     clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
 };
@@ -96,9 +92,9 @@ fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
         }
         let end = job.text.len();
         let (color, background) = if line.starts_with('+') {
-            (C_DIFF_ADD_FG, C_DIFF_ADD_BG)
+            (c_diff_add_fg(), c_diff_add_bg())
         } else if line.starts_with('-') {
-            (C_DIFF_DEL_FG, C_DIFF_DEL_BG)
+            (c_diff_del_fg(), c_diff_del_bg())
         } else {
             (CONTEXT_TEXT, Color32::TRANSPARENT)
         };
@@ -326,7 +322,7 @@ fn render_expandable_monospace_panel(
 ) {
     let frame = Frame::none()
         .fill(panel_fill)
-        .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+        .stroke(Stroke::new(1.0, c_border_subtle()))
         .rounding(Rounding::same(8.0))
         .inner_margin(Margin::symmetric(10.0, 7.0))
         .show(ui, |ui| {
@@ -359,7 +355,7 @@ fn render_static_preview_job_panel(
 ) {
     let frame = Frame::none()
         .fill(panel_fill)
-        .stroke(Stroke::new(1.0, C_BORDER))
+        .stroke(Stroke::new(1.0, c_border()))
         .rounding(Rounding::same(8.0))
         .inner_margin(Margin::symmetric(8.0, 5.0))
         .show(ui, |ui| {
@@ -497,24 +493,24 @@ fn render_tool_pill(
     } else if running {
         Color32::from_rgb(0x24, 0x35, 0x48)
     } else {
-        C_BORDER_SUBTLE
+        c_border_subtle()
     };
     let icon_color = if has_error {
-        C_DIFF_DEL_FG
+        c_diff_del_fg()
     } else if running {
-        C_ACCENT
+        c_accent()
     } else {
-        C_TEXT_FAINT
+        c_text_faint()
     };
     let name_color = if has_error {
         Color32::from_rgb(0xf0, 0x9a, 0x9d)
     } else {
-        C_TEXT
+        c_text()
     };
     let summary_color = if has_error {
         Color32::from_rgb(0xf0, 0x9a, 0x9d)
     } else {
-        C_TEXT_MUTED
+        c_text_muted()
     };
 
     let icon = tool_icon(name);
@@ -558,12 +554,16 @@ fn render_tool_pill(
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if running {
-                            ui.add(eframe::egui::Spinner::new().size(10.0).color(C_TEXT_MUTED));
+                            ui.add(
+                                eframe::egui::Spinner::new()
+                                    .size(10.0)
+                                    .color(c_text_muted()),
+                            );
                             ui.add_space(4.0);
                             tool_state_badge(
                                 ui,
                                 "running",
-                                C_ACCENT,
+                                c_accent(),
                                 Color32::from_rgb(0x10, 0x1b, 0x29),
                                 Color32::from_rgb(0x24, 0x35, 0x48),
                             );
@@ -571,7 +571,7 @@ fn render_tool_pill(
                             tool_state_badge(
                                 ui,
                                 "failed",
-                                C_DIFF_DEL_FG,
+                                c_diff_del_fg(),
                                 Color32::from_rgb(0x2a, 0x15, 0x17),
                                 Color32::from_rgb(0x47, 0x20, 0x22),
                             );
@@ -579,7 +579,7 @@ fn render_tool_pill(
                             tool_state_badge(
                                 ui,
                                 "done",
-                                C_DIFF_ADD_FG,
+                                c_diff_add_fg(),
                                 Color32::from_rgb(0x12, 0x20, 0x18),
                                 Color32::from_rgb(0x22, 0x3a, 0x2b),
                             );
@@ -637,8 +637,8 @@ pub fn render_message(
             .vertical(|ui| {
                 ui.set_width(col_w);
                 Frame::none()
-                    .fill(C_USER_BUBBLE)
-                    .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                    .fill(c_user_bubble())
+                    .stroke(Stroke::new(1.0, c_border_subtle()))
                     .rounding(Rounding::same(10.0))
                     .inner_margin(Margin::symmetric(12.0, 9.0))
                     .show(ui, |ui| {
@@ -649,7 +649,7 @@ pub fn render_message(
                                     RichText::new(&msg.text)
                                         .size(FS_BODY)
                                         .line_height(Some(21.0))
-                                        .color(C_TEXT),
+                                        .color(c_text()),
                                 )
                                 .wrap()
                                 .selectable(true),
@@ -693,7 +693,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                         // Wrap in a subtle rounded frame
                         Frame::none()
                             .rounding(Rounding::same(8.0))
-                            .stroke(Stroke::new(1.0, C_BORDER))
+                            .stroke(Stroke::new(1.0, c_border()))
                             .show(ui, |ui| {
                                 ui.add(Image::new((tex.id(), sz)));
                             });
@@ -707,7 +707,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                                 ui.label(
                                     RichText::new(format!("📎 {mime}"))
                                         .size(FS_TINY)
-                                        .color(C_TEXT_MUTED),
+                                        .color(c_text_muted()),
                                 );
                             });
                     }
@@ -841,7 +841,7 @@ fn render_edit_tool_block(
     } else if running {
         Color32::from_rgb(0x24, 0x35, 0x48)
     } else {
-        C_BORDER_SUBTLE
+        c_border_subtle()
     };
     let header_bg = if has_error {
         Color32::from_rgb(0x20, 0x14, 0x15)
@@ -884,11 +884,11 @@ fn render_edit_tool_block(
                             RichText::new(tool_icon(name))
                                 .font(FontId::new(FS_SMALL + 0.5, icon_font()))
                                 .color(if has_error {
-                                    C_DIFF_DEL_FG
+                                    c_diff_del_fg()
                                 } else if running {
-                                    C_ACCENT
+                                    c_accent()
                                 } else {
-                                    C_TEXT_FAINT
+                                    c_text_faint()
                                 }),
                         );
 
@@ -905,7 +905,7 @@ fn render_edit_tool_block(
                             .color(if has_error {
                                 Color32::from_rgb(0xf0, 0x9a, 0x9d)
                             } else {
-                                C_TEXT
+                                c_text()
                             })
                             .monospace()
                             .strong(),
@@ -913,12 +913,16 @@ fn render_edit_tool_block(
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if running {
-                                ui.add(eframe::egui::Spinner::new().size(10.0).color(C_TEXT_MUTED));
+                                ui.add(
+                                    eframe::egui::Spinner::new()
+                                        .size(10.0)
+                                        .color(c_text_muted()),
+                                );
                                 ui.add_space(4.0);
                                 tool_state_badge(
                                     ui,
                                     "running",
-                                    C_ACCENT,
+                                    c_accent(),
                                     Color32::from_rgb(0x10, 0x1b, 0x29),
                                     Color32::from_rgb(0x24, 0x35, 0x48),
                                 );
@@ -926,21 +930,21 @@ fn render_edit_tool_block(
                                 ui.label(
                                     RichText::new(format!("-{removed}"))
                                         .size(FS_TINY)
-                                        .color(C_DIFF_DEL_FG)
+                                        .color(c_diff_del_fg())
                                         .monospace(),
                                 );
                                 ui.add_space(2.0);
                                 ui.label(
                                     RichText::new(format!("+{added}"))
                                         .size(FS_TINY)
-                                        .color(C_DIFF_ADD_FG)
+                                        .color(c_diff_add_fg())
                                         .monospace(),
                                 );
                                 ui.add_space(4.0);
                                 tool_state_badge(
                                     ui,
                                     "done",
-                                    C_DIFF_ADD_FG,
+                                    c_diff_add_fg(),
                                     Color32::from_rgb(0x12, 0x20, 0x18),
                                     Color32::from_rgb(0x22, 0x3a, 0x2b),
                                 );
@@ -948,7 +952,7 @@ fn render_edit_tool_block(
                                 tool_state_badge(
                                     ui,
                                     "failed",
-                                    C_DIFF_DEL_FG,
+                                    c_diff_del_fg(),
                                     Color32::from_rgb(0x2a, 0x15, 0x17),
                                     Color32::from_rgb(0x47, 0x20, 0x22),
                                 );
@@ -1147,7 +1151,7 @@ fn render_explored_tool_list(
             ui.label(
                 RichText::new(format!("+{hidden} earlier tool calls"))
                     .size(FS_TINY)
-                    .color(C_TEXT_MUTED),
+                    .color(c_text_muted()),
             );
         }
     }
@@ -1184,7 +1188,7 @@ fn render_thinking_group_block(
     let overflow = combined.lines().count() > BLOCK_PREVIEW_LINES;
     render_expandable_monospace_panel(
         ui,
-        C_BG_ELEVATED,
+        c_bg_elevated(),
         BLOCK_PREVIEW_LINES,
         expand_persist_id(Id::new((
             msg_idx,
@@ -1194,7 +1198,7 @@ fn render_thinking_group_block(
         ))),
         overflow,
         combined.as_str(),
-        C_TEXT_MUTED,
+        c_text_muted(),
     );
     ui.add_space(8.0);
 }

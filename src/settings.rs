@@ -108,6 +108,10 @@ pub struct AppSettings {
     /// Persisted width of the main app/sidebar split.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
+    /// Active color theme id (see [`crate::theme`]: `dark`, `light`, `midnight`, or
+    /// `custom:<name>`). Falls back to the default theme if unknown.
+    #[serde(default = "default_theme_id")]
+    pub theme_id: String,
 }
 
 fn default_require_approval() -> bool {
@@ -116,6 +120,10 @@ fn default_require_approval() -> bool {
 
 fn default_sidebar_width() -> f32 {
     168.0
+}
+
+fn default_theme_id() -> String {
+    crate::theme::DEFAULT_THEME_ID.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +162,7 @@ impl Default for AppSettings {
             tools_enabled: [true; 7],
             require_approval: default_require_approval(),
             sidebar_width: default_sidebar_width(),
+            theme_id: default_theme_id(),
         }
     }
 }
