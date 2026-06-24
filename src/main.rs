@@ -9,7 +9,6 @@ mod settings;
 mod theme;
 mod ui;
 
-use crate::theme::setup_style;
 use app::OxiApp;
 use eframe::egui::IconData;
 
@@ -39,9 +38,11 @@ fn main() -> eframe::Result<()> {
         "oxi",
         options,
         Box::new(|cc| {
-            setup_style(&cc.egui_ctx);
+            let app = OxiApp::new();
+            // Apply the persisted theme (installs fonts + builds egui visuals).
+            theme::apply_theme(&cc.egui_ctx, &app.conv.settings.theme_id);
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(OxiApp::new()) as Box<dyn eframe::App>)
+            Ok(Box::new(app) as Box<dyn eframe::App>)
         }),
     )
 }
