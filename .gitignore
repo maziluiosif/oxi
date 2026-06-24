@@ -1,2 +1,11 @@
 target/
 .DS_Store
+
+# Claude Code local / machine-specific state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/skills/
+
+# Installed agent skills (vendored locally, not part of this repo)
+.agents/
+skills-lock.json
