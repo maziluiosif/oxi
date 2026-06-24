@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: release
@@ -52,6 +53,28 @@ jobs:
         with:
           name: release-notes
           path: release_notes.md
+
+  sync-dev:
+    needs: changelog
+    if: needs.changelog.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open (or reuse) a sync PR master -> dev and auto-merge it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="v${{ needs.changelog.outputs.version }}"
+          pr=$(gh pr list --base dev --head master --state open --json number -q '.[0].number')
+          if [ -z "$pr" ]; then
+            gh pr create --base dev --head master \
+              --title "chore: sync release $ver back to dev" \
+              --body "Brings the \`$ver\` changelog entry and version bump from master into dev."
+            pr=$(gh pr list --base dev --head master --state open --json number -q '.[0].number')
+          fi
+          # Merge once CI on the PR is green (auto-merge); harmless if it can merge now.
+          gh pr merge "$pr" --auto --merge || echo "Could not enable auto-merge; merge the sync PR manually."
 
   build:
     needs: changelog
