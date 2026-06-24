@@ -44,9 +44,31 @@ convergence, at which point the reviewer tags the PR `ready for human review`.
 
 ## How to run
 
-Open **three** Claude Code terminals/sessions in this repo, one per loop. In each,
-run the matching `/loop` command. Pick an interval that suits you (the example uses
-a self-paced loop; you can also pass an interval like `/loop 10m ...`).
+### Quick start (macOS)
+
+The `start-loops.sh` launcher opens one Terminal window per loop, each starting a
+Claude Code session already seeded with the right `/loop` prompt. Requires macOS
+and the [`claude`](https://claude.com/claude-code) CLI on your `PATH`.
+
+```bash
+# self-paced loops (each loop picks its own cadence)
+.claude/loops/start-loops.sh
+
+# fixed cadence — every loop ticks on the given interval
+.claude/loops/start-loops.sh 10m
+
+# print what would launch without opening anything
+.claude/loops/start-loops.sh --dry-run
+```
+
+That's it — three windows titled `oxi · implementer`, `oxi · reviewer`, and
+`oxi · fixer` start up. Then feed the system (see below).
+
+### Manual (any platform)
+
+Or open **three** Claude Code terminals/sessions in this repo yourself, one per
+loop, and run the matching `/loop` command in each. Pick an interval that suits you
+(these examples are self-paced; you can also pass an interval like `/loop 10m ...`).
 
 ```
 # Terminal 1 — implementer
