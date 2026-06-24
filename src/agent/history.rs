@@ -144,7 +144,10 @@ fn value_char_len(v: &Value) -> usize {
 /// Drop oldest turns until the total character count (system + turns) fits the budget,
 /// while always keeping at least `MIN_KEEP_TURNS` pairs from the end.
 fn trim_to_budget(turns: &mut Vec<Value>, system_len: usize) {
-    let total: usize = system_len + turns.iter().map(value_char_len).sum::<usize>();
+    // Serialize each turn exactly once and cache its length; the previous version
+    // re-serialized every value during the drop loop (up to 2× the work on large histories).
+    let lens: Vec<usize> = turns.iter().map(value_char_len).collect();
+    let total: usize = system_len + lens.iter().sum::<usize>();
     if total <= CONTEXT_CHAR_BUDGET {
         return;
     }
@@ -156,14 +159,14 @@ fn trim_to_budget(turns: &mut Vec<Value>, system_len: usize) {
     // Drop from the front until we're under budget or we've reached the protected tail.
     let mut drop_until = 0usize;
     let mut running = total;
-    for (i, v) in turns.iter().enumerate() {
+    for (i, len) in lens.iter().enumerate() {
         if i >= keep_from {
             break;
         }
         if running <= CONTEXT_CHAR_BUDGET {
             break;
         }
-        running = running.saturating_sub(value_char_len(v));
+        running = running.saturating_sub(*len);
         drop_until = i + 1;
     }
 

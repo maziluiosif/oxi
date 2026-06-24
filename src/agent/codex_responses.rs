@@ -9,8 +9,9 @@ use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
 
+use super::approval::ApprovalGate;
 use super::events::AgentEvent;
-use super::tools::run_tool;
+use super::tools::{run_tool, ToolResult};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -368,6 +369,7 @@ pub async fn run_codex_responses_loop(
     enabled: &[bool; 7],
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
+    gate: &mut ApprovalGate,
 ) -> Result<(), String> {
     let url = resolve_codex_post_url(base_url);
     let rtools = responses_tools(tools);
@@ -561,7 +563,14 @@ pub async fn run_codex_responses_loop(
                         tool_call_id: tc.id.clone(),
                         args: Some(tc.args.clone()),
                     });
-                    let result = run_tool(cwd, &tc.name, &tc.args, enabled);
+                    let result = match gate.request(tx, cancel, &tc.name, &tc.args) {
+                        Ok(()) => run_tool(cwd, &tc.name, &tc.args, enabled),
+                        Err(reason) => ToolResult {
+                            output: reason,
+                            is_error: true,
+                            diff: None,
+                        },
+                    };
                     let text = result.output.clone();
                     let is_err = result.is_error;
                     let _ = tx.send(AgentEvent::ToolOutput {

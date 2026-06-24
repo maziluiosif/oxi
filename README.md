@@ -1,5 +1,7 @@
 # oxi
 
+[![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
+
 `oxi` is a local desktop coding-agent chat app built in Rust with **egui/eframe**.
 It runs as a **single native binary** and combines:
 
@@ -8,7 +10,7 @@ It runs as a **single native binary** and combines:
 - built-in workspace tools
 - local session persistence per workspace
 - configurable provider profiles
-- optional OAuth for Codex and GitHub Copilot
+- optional OAuth for Codex
 
 The repository builds the native `oxi` desktop app.
 
@@ -149,7 +151,7 @@ The current code supports these provider kinds:
 - **OpenAI**
 - **OpenRouter**
 - **GPT Codex**
-- **GitHub Copilot**
+- **OpenCode Go**
 
 ### OpenAI
 
@@ -198,53 +200,24 @@ Two runtime modes exist:
    - uses OpenAI-compatible chat completions
    - authenticates with profile API key or `OPENAI_API_KEY`
 
-### GitHub Copilot
+### OpenCode Go
 
 Defaults:
 
-- base URL for token/PAT mode: `https://api.individual.githubcopilot.com`
-- default model: `claude-sonnet-4`
+- base URL: `https://opencode.ai/zen/go`
+- default model: `kimi-k2.7-code`
 
-Two runtime modes exist:
+Authentication fallback order:
 
-1. **OAuth mode**
-   - uses GitHub device flow
-   - exchanges the GitHub token for a Copilot API token
-   - can derive an enterprise API base URL from the OAuth response
+- profile API key
+- `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY`
 
-2. **token/PAT fallback mode**
-   - uses the profile token or one of:
-     - `COPILOT_GITHUB_TOKEN`
-     - `GH_TOKEN`
-     - `GITHUB_TOKEN`
+Backend selection is model-dependent:
 
-Copilot backend selection is model-dependent:
-
-- `claude-*` → Anthropic Messages API path
-- `o*` / `gpt-5*` style models → Responses API path
+- `minimax-*` / `qwen*` → Anthropic Messages API path
 - everything else → chat-completions-style path
 
-Current limitation:
-
-- Copilot models that require the **Responses API** are detected, but not yet implemented in `oxi`
-
-Implementation note:
-
-- Copilot requests set `X-Initiator` based on message flow so tool-follow-up turns are treated as agent turns
-
 ## OAuth flows
-
-### GitHub Copilot OAuth
-
-Implemented via GitHub device flow.
-
-Behavior visible in code:
-
-- the app opens the browser to the verification URL
-- the UI shows the device code
-- optional enterprise hostname is supported
-- tokens are stored in `oauth.json`
-- the Copilot API token is refreshed automatically before expiry
 
 ### ChatGPT / Codex OAuth
 
@@ -353,7 +326,7 @@ target/release/oxi
 | OpenRouter referer | `OPENROUTER_HTTP_REFERER` |
 | OpenRouter title | `OPENROUTER_TITLE` |
 | Codex fallback auth | `OPENAI_API_KEY` |
-| Copilot fallback auth | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` |
+| OpenCode Go auth | `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY` |
 
 ## System prompt behavior
 
@@ -381,7 +354,6 @@ Based on the current source code:
 
 - `bash` safety checks are basic and not a real sandbox
 - tool execution can modify files inside the selected workspace
-- Copilot Responses API models are not yet implemented
 - OAuth tokens are stored as JSON on disk
 - workspace path protections apply to file-based tools, but you should still use the app on trusted repositories
 - long conversations are trimmed heuristically by character budget, not exact tokenizer counts

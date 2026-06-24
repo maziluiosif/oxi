@@ -22,7 +22,8 @@ mod streaming;
 mod task_runner;
 
 pub use state::{
-    ConnectionState, ConversationState, RunState, SessionKey, SessionRunState, Workspace,
+    ConnectionState, ConversationState, PendingApproval, RunState, SessionKey, SessionRunState,
+    Workspace,
 };
 
 pub struct OxiApp {
@@ -71,9 +72,7 @@ impl OxiApp {
                 settings_open: false,
                 settings_tab: state::SettingsTab::default(),
                 settings_provider_tab: crate::settings::LlmProviderKind::OpenAi,
-                copilot_enterprise_domain: String::new(),
                 oauth_busy: false,
-                oauth_device_copilot: None,
                 oauth_last_message: None,
                 composer_measured_text_h: 0.0,
                 composer_measured_full_h: 0.0,
@@ -123,6 +122,22 @@ impl OxiApp {
     pub(crate) fn active_stream_error(&self) -> Option<&str> {
         self.active_run_state()
             .and_then(|state| state.stream_error.as_deref())
+    }
+
+    pub(crate) fn active_pending_approval(&self) -> Option<PendingApproval> {
+        self.active_run_state()
+            .and_then(|state| state.pending_approval.clone())
+    }
+
+    /// Send an approval decision for the active session's pending tool call and clear it.
+    pub(crate) fn respond_to_approval(&mut self, decision: crate::agent::ApprovalDecision) {
+        let key = self.active_session_key();
+        if let Some(run) = self.flow.sessions.get_mut(&key) {
+            if let Some(tx) = &run.approval_tx {
+                let _ = tx.send(decision);
+            }
+            run.pending_approval = None;
+        }
     }
 
     pub(crate) fn active_waiting_response(&self) -> bool {

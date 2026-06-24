@@ -5,7 +5,7 @@ use eframe::egui::{
     Stroke, TextEdit, Ui,
 };
 
-use crate::oauth::{clear_codex, clear_copilot, load_oauth_store, save_oauth_store, OAuthUiMsg};
+use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
 use crate::settings::{LlmProviderKind, ALL_TOOL_NAMES};
 use crate::theme::{
     C_ACCENT, C_BG_ELEVATED, C_BG_ELEVATED_2, C_BG_MAIN, C_BG_SIDEBAR, C_BORDER, C_BORDER_SUBTLE,
@@ -288,16 +288,9 @@ impl OxiApp {
         }
 
         // Provider OAuth (single section below cards, for clarity)
-        match provider {
-            LlmProviderKind::GitHubCopilot => {
-                self.render_copilot_oauth_section(ui);
-                ui.add_space(10.0);
-            }
-            LlmProviderKind::GptCodex => {
-                self.render_codex_oauth_section(ui);
-                ui.add_space(10.0);
-            }
-            _ => {}
+        if provider == LlmProviderKind::GptCodex {
+            self.render_codex_oauth_section(ui);
+            ui.add_space(10.0);
         }
 
         // Tools section
@@ -320,6 +313,24 @@ impl OxiApp {
                     }
                 }
             });
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
+            let mut require_approval = self.conv.settings.require_approval;
+            if ui
+                .checkbox(
+                    &mut require_approval,
+                    RichText::new("Ask before running bash / write / edit")
+                        .size(FS_SMALL)
+                        .color(C_TEXT),
+                )
+                .on_hover_text(
+                    "When on, the agent pauses for your approval before each mutating tool call.",
+                )
+                .changed()
+            {
+                self.conv.settings.require_approval = require_approval;
+            }
         });
         ui.add_space(10.0);
         ui.label(
@@ -418,7 +429,6 @@ impl OxiApp {
                         LlmProviderKind::OpenAi => "OpenAI API key",
                         LlmProviderKind::OpenRouter => "OpenRouter API key",
                         LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
-                        LlmProviderKind::GitHubCopilot => "GitHub Copilot token / PAT",
                         LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
                     })
                     .margin(Margin::symmetric(8.0, 5.0)),
@@ -485,93 +495,6 @@ impl OxiApp {
     }
 
     // ── OAuth sections ────────────────────────────────────────────────────────
-
-    pub(crate) fn render_copilot_oauth_section(&mut self, ui: &mut Ui) {
-        let oauth = load_oauth_store();
-        let signed_in = oauth.github_copilot.is_some();
-        card_frame().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("GitHub Copilot OAuth")
-                        .size(FS_BODY)
-                        .color(C_TEXT)
-                        .strong(),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if signed_in {
-                        active_pill(ui, "Signed in");
-                    } else {
-                        inactive_pill(ui, "Signed out");
-                    }
-                });
-            });
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new(format!(
-                    "Tokens stored in {}",
-                    crate::oauth::oauth_config_path().display()
-                ))
-                .size(FS_TINY)
-                .color(C_TEXT_FAINT),
-            );
-            ui.add_space(10.0);
-
-            field_label(ui, "Optional Enterprise hostname (blank = github.com)");
-            ui.add(
-                TextEdit::singleline(&mut self.conv.copilot_enterprise_domain)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("e.g. company.ghe.com")
-                    .margin(Margin::symmetric(8.0, 5.0)),
-            );
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        !self.conv.oauth_busy,
-                        Button::new(
-                            RichText::new("Sign in with GitHub")
-                                .size(FS_SMALL)
-                                .color(Color32::WHITE),
-                        )
-                        .fill(C_ACCENT)
-                        .stroke(Stroke::NONE)
-                        .rounding(7.0)
-                        .min_size(egui::vec2(0.0, 28.0)),
-                    )
-                    .clicked()
-                {
-                    self.spawn_github_oauth(ui.ctx());
-                }
-                if ui
-                    .add_enabled(signed_in, {
-                        Button::new(RichText::new("Sign out").size(FS_SMALL).color(C_TEXT))
-                            .fill(C_BG_ELEVATED_2)
-                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
-                            .rounding(7.0)
-                            .min_size(egui::vec2(0.0, 28.0))
-                    })
-                    .clicked()
-                {
-                    let mut s = load_oauth_store();
-                    clear_copilot(&mut s);
-                    let _ = save_oauth_store(&s);
-                    self.conv.oauth_last_message = Some("Signed out GitHub Copilot.".into());
-                }
-            });
-            if let Some((ref url, ref code)) = self.conv.oauth_device_copilot {
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(format!("Open {url}\nEnter code: {code}"))
-                        .size(FS_TINY)
-                        .color(C_ACCENT),
-                );
-            }
-            if let Some(ref msg) = self.conv.oauth_last_message {
-                ui.add_space(6.0);
-                ui.label(RichText::new(msg).size(FS_TINY).color(C_TEXT_MUTED));
-            }
-        });
-    }
 
     pub(crate) fn render_codex_oauth_section(&mut self, ui: &mut Ui) {
         let oauth = load_oauth_store();
@@ -641,34 +564,6 @@ impl OxiApp {
     }
 
     // ── OAuth spawn helpers ───────────────────────────────────────────────────
-
-    fn spawn_github_oauth(&mut self, ctx: &egui::Context) {
-        if self.conv.oauth_busy {
-            return;
-        }
-        self.conv.oauth_busy = true;
-        self.conv.oauth_last_message = None;
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.conn.oauth_rx = Some(rx);
-        let ctx = ctx.clone();
-        let ent = self.conv.copilot_enterprise_domain.clone();
-        spawn_async_task(
-            {
-                let tx = tx.clone();
-                let ctx = ctx.clone();
-                move |err| {
-                    let _ = tx.send(OAuthUiMsg::GitHubDone(Err(err)));
-                    ctx.request_repaint();
-                }
-            },
-            move |rt| {
-                let tx2 = tx.clone();
-                let r = rt.block_on(crate::oauth::login_github_copilot(&ent, tx2));
-                let _ = tx.send(OAuthUiMsg::GitHubDone(r));
-                ctx.request_repaint();
-            },
-        );
-    }
 
     fn spawn_codex_oauth(&mut self, ctx: &egui::Context) {
         if self.conv.oauth_busy {
