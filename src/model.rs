@@ -174,40 +174,6 @@ pub fn build_assistant_block_groups(blocks: &[AssistantBlock]) -> Vec<AssistantB
     out
 }
 
-#[allow(dead_code)]
-pub fn bash_command_tokens(blocks: &[AssistantBlock], indices: &[usize]) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    for &idx in indices.iter().take(4) {
-        let AssistantBlock::Tool { args_summary, .. } = &blocks[idx] else {
-            continue;
-        };
-        let Some(raw) = args_summary else {
-            continue;
-        };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
-            continue;
-        };
-        let cmd = v
-            .get("command")
-            .and_then(|x| x.as_str())
-            .or_else(|| v.as_str());
-        let Some(cmd) = cmd else {
-            continue;
-        };
-        let token = cmd
-            .split_whitespace()
-            .next()
-            .unwrap_or(cmd)
-            .chars()
-            .take(16)
-            .collect::<String>();
-        if !token.is_empty() && !parts.contains(&token) {
-            parts.push(token);
-        }
-    }
-    parts.join(", ")
-}
-
 pub fn concat_thinking_blocks(blocks: &[AssistantBlock], indices: &[usize]) -> String {
     let mut s = String::new();
     for &i in indices {
@@ -267,24 +233,6 @@ pub fn set_tool_output_on_blocks(
         full_output_path: None,
         output_truncated: truncated,
     });
-}
-
-#[allow(dead_code)]
-pub fn tool_compact_header(name: &str, output: &str) -> String {
-    let preview = output
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .map(str::trim)
-        .unwrap_or("");
-    let mut p: String = preview.chars().take(56).collect();
-    if preview.chars().count() > 56 {
-        p.push('…');
-    }
-    if p.is_empty() {
-        format!("{name} · …")
-    } else {
-        format!("{name} · {p}")
-    }
 }
 
 #[cfg(test)]
@@ -495,38 +443,5 @@ mod tests {
     fn concat_thinking_blocks_empty() {
         let result = concat_thinking_blocks(&[], &[]);
         assert!(result.is_empty());
-    }
-
-    #[test]
-    fn tool_compact_header_basic() {
-        let header = tool_compact_header("read", "File: src/main.rs\nLines 1-10");
-        assert!(header.starts_with("read"));
-        assert!(header.contains("File:"));
-    }
-
-    #[test]
-    fn tool_compact_header_empty_output() {
-        let header = tool_compact_header("bash", "");
-        assert_eq!(header, "bash · …");
-    }
-
-    #[test]
-    fn bash_command_tokens_extracts_first_words() {
-        let blocks = vec![AssistantBlock::Tool {
-            tool_call_id: "a".into(),
-            name: "bash".into(),
-            args_summary: Some(
-                r#"{"command": "cargo build"}
-"#
-                .into(),
-            ),
-            output: String::new(),
-            diff: None,
-            is_error: None,
-            full_output_path: None,
-            output_truncated: false,
-        }];
-        let tokens = bash_command_tokens(&blocks, &[0]);
-        assert_eq!(tokens, "cargo");
     }
 }
