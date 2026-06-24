@@ -13,18 +13,15 @@ pub enum LlmProviderKind {
     OpenRouter,
     /// GPT Codex family via OpenAI Chat Completions (`api.openai.com`).
     GptCodex,
-    /// GitHub Copilot (Anthropic-compatible Messages API at Copilot base URL).
-    GitHubCopilot,
     /// OpenCode Go subscription models (OpenAI/Anthropic-compatible endpoints).
     OpenCodeGo,
 }
 
 impl LlmProviderKind {
-    pub const ALL: [LlmProviderKind; 5] = [
+    pub const ALL: [LlmProviderKind; 4] = [
         LlmProviderKind::OpenAi,
         LlmProviderKind::OpenRouter,
         LlmProviderKind::GptCodex,
-        LlmProviderKind::GitHubCopilot,
         LlmProviderKind::OpenCodeGo,
     ];
 
@@ -32,7 +29,6 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => "https://api.openai.com/v1",
             LlmProviderKind::OpenRouter => "https://openrouter.ai/api/v1",
-            LlmProviderKind::GitHubCopilot => "https://api.individual.githubcopilot.com",
             LlmProviderKind::OpenCodeGo => "https://opencode.ai/zen/go",
         }
     }
@@ -42,7 +38,6 @@ impl LlmProviderKind {
             LlmProviderKind::OpenAi => "OpenAI",
             LlmProviderKind::OpenRouter => "OpenRouter",
             LlmProviderKind::GptCodex => "GPT Codex",
-            LlmProviderKind::GitHubCopilot => "GitHub Copilot",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
         }
     }
@@ -52,7 +47,6 @@ impl LlmProviderKind {
             LlmProviderKind::OpenAi => "gpt-4o-mini",
             LlmProviderKind::OpenRouter => "openai/gpt-4o-mini",
             LlmProviderKind::GptCodex => "gpt-4o-mini",
-            LlmProviderKind::GitHubCopilot => "claude-sonnet-4",
             LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
         }
     }
@@ -108,6 +102,13 @@ pub struct AppSettings {
     /// Single editable system prompt template.
     pub system_prompt: String,
     pub tools_enabled: [bool; 7],
+    /// Require explicit user approval before each mutating tool (`bash` / `write` / `edit`).
+    #[serde(default = "default_require_approval")]
+    pub require_approval: bool,
+}
+
+fn default_require_approval() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,7 +119,6 @@ struct LegacyAppSettings {
     pub system_prompt: String,
     pub openai_api_key: String,
     pub openrouter_api_key: String,
-    pub copilot_api_key: String,
     pub openrouter_http_referer: String,
     pub openrouter_title: String,
     pub tools_enabled: [bool; 7],
@@ -135,11 +135,6 @@ impl Default for AppSettings {
             ),
             ProviderProfile::new("codex-default", LlmProviderKind::GptCodex, "Codex default"),
             ProviderProfile::new(
-                "copilot-default",
-                LlmProviderKind::GitHubCopilot,
-                "Copilot default",
-            ),
-            ProviderProfile::new(
                 "opencode-go-default",
                 LlmProviderKind::OpenCodeGo,
                 "OpenCode Go default",
@@ -150,6 +145,7 @@ impl Default for AppSettings {
             profiles,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
             tools_enabled: [true; 7],
+            require_approval: default_require_approval(),
         }
     }
 }
@@ -198,7 +194,6 @@ impl AppSettings {
                 api_key: match provider {
                     LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
                     LlmProviderKind::OpenRouter => old.openrouter_api_key,
-                    LlmProviderKind::GitHubCopilot => old.copilot_api_key,
                     LlmProviderKind::OpenCodeGo => String::new(),
                 },
                 openrouter_http_referer: old.openrouter_http_referer,
@@ -211,11 +206,6 @@ impl AppSettings {
                 "OpenRouter default",
             ),
             ProviderProfile::new("codex-default", LlmProviderKind::GptCodex, "Codex default"),
-            ProviderProfile::new(
-                "copilot-default",
-                LlmProviderKind::GitHubCopilot,
-                "Copilot default",
-            ),
             ProviderProfile::new(
                 "opencode-go-default",
                 LlmProviderKind::OpenCodeGo,

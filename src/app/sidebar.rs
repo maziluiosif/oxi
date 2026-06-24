@@ -163,8 +163,8 @@ impl OxiApp {
                 {
                     self.conv.workspaces[wi].sidebar_folded = !folded;
                 }
-                if wi == self.conv.active_workspace {
-                    if ui
+                if wi == self.conv.active_workspace
+                    && ui
                         .add_sized(
                             [22.0, 22.0],
                             Button::new(RichText::new("＋").size(FS_TINY).color(C_TEXT_MUTED))
@@ -173,10 +173,9 @@ impl OxiApp {
                         )
                         .on_hover_text("New chat in this workspace")
                         .clicked()
-                    {
-                        self.new_chat();
-                        sidebar_changed = true;
-                    }
+                {
+                    self.new_chat();
+                    sidebar_changed = true;
                 }
             });
             ui.add_space(1.0);

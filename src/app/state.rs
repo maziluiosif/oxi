@@ -2,15 +2,23 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::Instant;
 
 use eframe::egui;
 
-use crate::agent::AgentEvent;
+use crate::agent::{AgentEvent, ApprovalDecision};
 use crate::model::Session;
 use crate::settings::AppSettings;
+
+/// A mutating tool call awaiting the user's approve/deny decision.
+#[derive(Clone)]
+pub struct PendingApproval {
+    pub name: String,
+    /// Human-readable summary of what the tool will do (e.g. the bash command or target path).
+    pub summary: String,
+}
 
 /// Active section in the settings window (sidebar).
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -38,6 +46,10 @@ pub struct SessionKey {
 pub struct SessionRunState {
     pub agent_rx: Option<Receiver<AgentEvent>>,
     pub cancel_agent: Option<Arc<AtomicBool>>,
+    /// Back-channel to approve/deny mutating tool calls for this run.
+    pub approval_tx: Option<Sender<ApprovalDecision>>,
+    /// A mutating tool call currently waiting on the user.
+    pub pending_approval: Option<PendingApproval>,
     pub waiting_response: bool,
     pub stream_started_at: Option<Instant>,
     pub agent_ack: bool,
@@ -50,6 +62,8 @@ impl SessionRunState {
             c.store(true, Ordering::SeqCst);
         }
         self.agent_rx = None;
+        self.approval_tx = None;
+        self.pending_approval = None;
     }
 
     pub fn reset_after_disconnect(&mut self) {
@@ -102,10 +116,7 @@ pub struct ConversationState {
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
     pub settings_provider_tab: crate::settings::LlmProviderKind,
-    /// GitHub Enterprise hostname (optional) for Copilot device login.
-    pub copilot_enterprise_domain: String,
     pub oauth_busy: bool,
-    pub oauth_device_copilot: Option<(String, String)>,
     pub oauth_last_message: Option<String>,
     /// Measured height of the composer TextEdit from the previous frame.
     pub composer_measured_text_h: f32,

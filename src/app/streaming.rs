@@ -270,10 +270,13 @@ impl OxiApp {
         };
         let settings = self.conv.settings.clone();
         let (tx, rx) = std::sync::mpsc::channel();
+        let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let _join = spawn_agent_run(settings, cwd, chat, tx, cancel.clone());
+        let _join = spawn_agent_run(settings, cwd, chat, tx, approval_rx, cancel.clone());
         let run = self.run_state_mut(key);
         run.agent_rx = Some(rx);
+        run.approval_tx = Some(approval_tx);
+        run.pending_approval = None;
         run.cancel_agent = Some(cancel);
         Ok(())
     }
@@ -298,5 +301,7 @@ impl OxiApp {
         run.agent_ack = false;
         run.cancel_agent = None;
         run.agent_rx = None;
+        run.approval_tx = None;
+        run.pending_approval = None;
     }
 }

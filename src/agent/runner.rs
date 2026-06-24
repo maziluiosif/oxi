@@ -2,11 +2,12 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use crate::agent::anthropic::{run_anthropic_loop, run_copilot_loop};
+use crate::agent::anthropic::run_anthropic_loop;
+use crate::agent::approval::{ApprovalDecision, ApprovalGate};
 use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
 use crate::agent::history::build_openai_messages;
@@ -14,66 +15,12 @@ use crate::agent::openai::run_chat_loop;
 use crate::agent::prompt::build_system_prompt;
 use crate::agent::tools::tool_definitions_json;
 use crate::model::ChatMessage;
-use crate::oauth::{
-    ensure_codex_access_token, ensure_copilot_token, get_copilot_api_base_url, load_oauth_store,
-};
+use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{AppSettings, LlmProviderKind, ProviderProfile};
 
 fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
     let _ = tx.send(AgentEvent::StreamError(msg.into()));
     let _ = tx.send(AgentEvent::AgentEnd);
-}
-
-fn copilot_chat_extra_headers() -> Vec<(String, String)> {
-    vec![
-        (
-            "User-Agent".to_string(),
-            "GitHubCopilotChat/0.35.0".to_string(),
-        ),
-        ("Editor-Version".to_string(), "vscode/1.107.0".to_string()),
-        (
-            "Editor-Plugin-Version".to_string(),
-            "copilot-chat/0.35.0".to_string(),
-        ),
-        (
-            "Copilot-Integration-Id".to_string(),
-            "vscode-chat".to_string(),
-        ),
-        (
-            "Openai-Intent".to_string(),
-            "conversation-edits".to_string(),
-        ),
-    ]
-}
-
-/// Which Copilot backend API to use for a given model id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CopilotApi {
-    /// Anthropic Messages API (Claude family).
-    Anthropic,
-    /// OpenAI Responses API (o-series, gpt-5+).
-    Responses,
-    /// Standard OpenAI Chat Completions streaming.
-    Chat,
-}
-
-fn copilot_model_api(model: &str) -> CopilotApi {
-    let m = model.trim().to_ascii_lowercase();
-    // Anthropic: any claude-* model
-    if m.starts_with("claude-") {
-        return CopilotApi::Anthropic;
-    }
-    // OpenAI Responses API: o-series reasoning models and gpt-5+
-    // Covers: o1, o1-mini, o1-preview, o3, o3-mini, o4-mini, gpt-5, gpt-5-turbo, …
-    let responses_prefixes = ["o1", "o2", "o3", "o4", "o5", "gpt-5"];
-    if responses_prefixes
-        .iter()
-        .any(|p| m.starts_with(p) && m[p.len()..].starts_with(|c: char| !c.is_alphabetic()))
-        || m.starts_with("gpt-5")
-    {
-        return CopilotApi::Responses;
-    }
-    CopilotApi::Chat
 }
 
 fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
@@ -93,20 +40,6 @@ fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String
     std::env::var("OPENROUTER_API_KEY").map_err(|_| {
         "Set OpenRouter API key in profile or OPENROUTER_API_KEY in the environment.".into()
     })
-}
-
-fn configured_copilot_pat(profile: &ProviderProfile) -> Result<String, String> {
-    let key = profile.api_key.trim();
-    if !key.is_empty() {
-        return Ok(key.to_string());
-    }
-    std::env::var("COPILOT_GITHUB_TOKEN")
-        .or_else(|_| std::env::var("GH_TOKEN"))
-        .or_else(|_| std::env::var("GITHUB_TOKEN"))
-        .map_err(|_| {
-            "Sign in with GitHub (Copilot) OAuth or set a Copilot token in profile / COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN."
-                .into()
-        })
 }
 
 fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
@@ -156,6 +89,7 @@ pub fn spawn_agent_run(
     cwd: PathBuf,
     chat_for_history: Vec<ChatMessage>,
     tx: Sender<AgentEvent>,
+    approval_rx: Receiver<ApprovalDecision>,
     cancel: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
@@ -190,76 +124,9 @@ pub fn spawn_agent_run(
                 }
             };
             let mut oauth = load_oauth_store();
+            let mut gate = ApprovalGate::new(settings.require_approval, approval_rx);
 
             let r = match profile.provider {
-                LlmProviderKind::GitHubCopilot => {
-                    let (token, base) = if oauth.github_copilot.is_some() {
-                        match ensure_copilot_token(&client, &mut oauth).await {
-                            Ok(t) => {
-                                let b = get_copilot_api_base_url(
-                                    &t,
-                                    oauth
-                                        .github_copilot
-                                        .as_ref()
-                                        .and_then(|r| r.enterprise_domain.as_deref()),
-                                );
-                                (t, b)
-                            }
-                            Err(e) => {
-                                finish_with_error(&tx, e);
-                                return;
-                            }
-                        }
-                    } else {
-                        match configured_copilot_pat(&profile) {
-                            Ok(t) => (t, profile.effective_base_url()),
-                            Err(e) => {
-                                finish_with_error(&tx, e);
-                                return;
-                            }
-                        }
-                    };
-
-                    match copilot_model_api(&model) {
-                        CopilotApi::Anthropic => {
-                            run_copilot_loop(
-                                &client,
-                                &base,
-                                &token,
-                                &model,
-                                &mut messages,
-                                &tools,
-                                cwd_ref,
-                                &settings.tools_enabled,
-                                &tx,
-                                &cancel,
-                            )
-                            .await
-                        }
-                        CopilotApi::Chat => {
-                            run_chat_loop(
-                                &client,
-                                &base,
-                                &token,
-                                &model,
-                                &copilot_chat_extra_headers(),
-                                &mut messages,
-                                &tools,
-                                cwd_ref,
-                                &settings.tools_enabled,
-                                &tx,
-                                &cancel,
-                                true,
-                            )
-                            .await
-                        }
-                        CopilotApi::Responses => Err(format!(
-                            "GitHub Copilot model `{model}` requires the Responses API, \
-                                 which is not yet implemented in oxi. \
-                                 Try a Claude / GPT-4o / Gemini Copilot model instead."
-                        )),
-                    }
-                }
                 LlmProviderKind::GptCodex => {
                     if oauth.openai_codex.is_some() {
                         let creds = match ensure_codex_access_token(&client, &mut oauth).await {
@@ -286,6 +153,7 @@ pub fn spawn_agent_run(
                             &settings.tools_enabled,
                             &tx,
                             &cancel,
+                            &mut gate,
                         )
                         .await
                     } else {
@@ -309,7 +177,7 @@ pub fn spawn_agent_run(
                             &settings.tools_enabled,
                             &tx,
                             &cancel,
-                            false,
+                            &mut gate,
                         )
                         .await
                     }
@@ -335,7 +203,7 @@ pub fn spawn_agent_run(
                         &settings.tools_enabled,
                         &tx,
                         &cancel,
-                        false,
+                        &mut gate,
                     )
                     .await
                 }
@@ -360,7 +228,7 @@ pub fn spawn_agent_run(
                         &settings.tools_enabled,
                         &tx,
                         &cancel,
-                        false,
+                        &mut gate,
                     )
                     .await
                 }
@@ -394,7 +262,7 @@ pub fn spawn_agent_run(
                             &settings.tools_enabled,
                             &tx,
                             &cancel,
-                            false,
+                            &mut gate,
                         )
                         .await
                     } else {
@@ -418,7 +286,7 @@ pub fn spawn_agent_run(
                             &settings.tools_enabled,
                             &tx,
                             &cancel,
-                            false,
+                            &mut gate,
                         )
                         .await
                     }
@@ -432,4 +300,69 @@ pub fn spawn_agent_run(
             }
         });
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opencode_go_anthropic_models() {
+        assert!(opencode_go_model_uses_anthropic("minimax-01"));
+        assert!(opencode_go_model_uses_anthropic("qwen-max"));
+        assert!(opencode_go_model_uses_anthropic("qwen2.5-coder"));
+    }
+
+    #[test]
+    fn opencode_go_strips_provider_prefix() {
+        assert!(opencode_go_model_uses_anthropic("opencode-go/minimax-text"));
+        assert!(opencode_go_model_uses_anthropic("opencode-go/qwen-max"));
+        assert!(!opencode_go_model_uses_anthropic(
+            "opencode-go/kimi-k2.7-code"
+        ));
+    }
+
+    #[test]
+    fn opencode_go_normalizes_case_and_whitespace() {
+        assert!(opencode_go_model_uses_anthropic("  MiniMax-01  "));
+        assert!(opencode_go_model_uses_anthropic("QWEN-MAX"));
+    }
+
+    #[test]
+    fn opencode_go_chat_models_are_not_anthropic() {
+        assert!(!opencode_go_model_uses_anthropic("kimi-k2.7-code"));
+        assert!(!opencode_go_model_uses_anthropic("gpt-4o-mini"));
+        assert!(!opencode_go_model_uses_anthropic(""));
+    }
+
+    fn profile_with_key(key: &str) -> ProviderProfile {
+        let mut p = ProviderProfile::new("t", LlmProviderKind::OpenAi, "t");
+        p.api_key = key.to_string();
+        p
+    }
+
+    #[test]
+    fn configured_key_prefers_profile_value() {
+        // A non-empty profile key is returned regardless of environment.
+        assert_eq!(
+            configured_openai_key(&profile_with_key("sk-profile")).unwrap(),
+            "sk-profile"
+        );
+        assert_eq!(
+            configured_openrouter_key(&profile_with_key("or-profile")).unwrap(),
+            "or-profile"
+        );
+        assert_eq!(
+            configured_opencode_go_key(&profile_with_key("og-profile")).unwrap(),
+            "og-profile"
+        );
+    }
+
+    #[test]
+    fn configured_key_trims_whitespace() {
+        assert_eq!(
+            configured_openai_key(&profile_with_key("  sk-padded  ")).unwrap(),
+            "sk-padded"
+        );
+    }
 }

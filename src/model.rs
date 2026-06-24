@@ -325,11 +325,9 @@ mod tests {
         assert_eq!(g.len(), 1);
         match &g[0] {
             AssistantBlockGroup::ExploringTools {
-                tool_indices,
                 range_start,
                 range_end,
             } => {
-                assert_eq!(tool_indices.len(), 3);
                 assert_eq!(*range_start, 0);
                 assert_eq!(*range_end, 3);
             }
@@ -349,11 +347,9 @@ mod tests {
         assert_eq!(g.len(), 1);
         match &g[0] {
             AssistantBlockGroup::ExploringTools {
-                tool_indices,
                 range_start,
                 range_end,
             } => {
-                assert_eq!(tool_indices, &vec![0, 2, 3]);
                 assert_eq!(*range_start, 0);
                 assert_eq!(*range_end, 4);
             }
@@ -482,22 +478,6 @@ mod tests {
     fn tool_breaks_explore_cluster_non_edit() {
         let t = tool("id", "read");
         assert!(!tool_breaks_explore_cluster(&t));
-    }
-
-    #[test]
-    fn estimate_thought_seconds_zero() {
-        assert_eq!(estimate_thought_seconds(0), 1);
-    }
-
-    #[test]
-    fn estimate_thought_seconds_normal() {
-        assert_eq!(estimate_thought_seconds(400), 1);
-        assert_eq!(estimate_thought_seconds(800), 2);
-    }
-
-    #[test]
-    fn estimate_thought_seconds_capped_at_999() {
-        assert_eq!(estimate_thought_seconds(1_000_000), 999);
     }
 
     #[test]

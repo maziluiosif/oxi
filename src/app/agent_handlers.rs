@@ -1,11 +1,28 @@
 //! Consume local [`AgentEvent`](crate::agent::AgentEvent) stream.
 
 use eframe::egui;
+use serde_json::Value;
 
 use crate::agent::AgentEvent;
 use crate::oauth::OAuthUiMsg;
 
-use super::{OxiApp, SessionKey};
+use super::{OxiApp, PendingApproval, SessionKey};
+
+/// Build a short human-readable summary of a pending tool call for the approval prompt.
+fn approval_summary(name: &str, args: &Option<Value>) -> String {
+    let Some(args) = args else {
+        return name.to_string();
+    };
+    let field = match name {
+        "bash" => "command",
+        "write" | "edit" => "path",
+        _ => "",
+    };
+    args.get(field)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
 
 impl OxiApp {
     pub(crate) fn drain_agent(&mut self, ctx: &egui::Context) {
@@ -61,17 +78,6 @@ impl OxiApp {
         loop {
             match rx.try_recv() {
                 Ok(msg) => match msg {
-                    OAuthUiMsg::GitHubDevice { url, user_code } => {
-                        self.conv.oauth_device_copilot = Some((url, user_code));
-                    }
-                    OAuthUiMsg::GitHubDone(r) => {
-                        self.conv.oauth_busy = false;
-                        self.conv.oauth_device_copilot = None;
-                        self.conv.oauth_last_message = Some(match r {
-                            Ok(()) => "GitHub Copilot: signed in.".to_string(),
-                            Err(e) => format!("GitHub Copilot OAuth: {e}"),
-                        });
-                    }
                     OAuthUiMsg::CodexOpenBrowser { url } => {
                         self.conv.oauth_last_message = Some(format!(
                             "Complete sign-in in the browser (or check port 1455). {url}"
@@ -123,6 +129,10 @@ impl OxiApp {
                     Some(tool_call_id.as_str())
                 };
                 self.start_tool_block(key, &name, id, args.as_ref());
+            }
+            AgentEvent::ApprovalRequest { name, args } => {
+                let summary = approval_summary(&name, &args);
+                self.run_state_mut(key).pending_approval = Some(PendingApproval { name, summary });
             }
             AgentEvent::ToolOutput {
                 tool_call_id,

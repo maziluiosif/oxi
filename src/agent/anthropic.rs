@@ -1,4 +1,4 @@
-//! Anthropic Messages API streaming (GitHub Copilot uses the same wire format at a custom `base_url`).
+//! Anthropic Messages API streaming (used by OpenCode Go's Anthropic-compatible models).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -10,9 +10,9 @@ use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
 
-use super::copilot::copilot_x_initiator_from_openai_messages;
+use super::approval::ApprovalGate;
 use super::events::AgentEvent;
-use super::tools::run_tool;
+use super::tools::{run_tool, ToolResult};
 
 #[derive(Default, Clone)]
 struct ToolUseAccum {
@@ -196,7 +196,6 @@ fn supports_extended_thinking(model: &str) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub async fn run_anthropic_loop(
     client: &reqwest::Client,
     base_url: &str,
@@ -209,7 +208,7 @@ pub async fn run_anthropic_loop(
     enabled: &[bool; 7],
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
-    copilot_headers: bool,
+    gate: &mut ApprovalGate,
 ) -> Result<(), String> {
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let anthropic_tools = to_anthropic_tools(tools_openai);
@@ -260,39 +259,6 @@ pub async fn run_anthropic_loop(
             let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| e.to_string())?;
             let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
             headers.insert(name, val);
-        }
-        if copilot_headers {
-            headers.insert(
-                reqwest::header::HeaderName::from_static(
-                    "anthropic-dangerous-direct-browser-access",
-                ),
-                HeaderValue::from_static("true"),
-            );
-            headers.insert(
-                reqwest::header::USER_AGENT,
-                HeaderValue::from_static("GitHubCopilotChat/0.35.0"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("editor-version"),
-                HeaderValue::from_static("vscode/1.107.0"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("editor-plugin-version"),
-                HeaderValue::from_static("copilot-chat/0.35.0"),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("copilot-integration-id"),
-                HeaderValue::from_static("vscode-chat"),
-            );
-            let initiator = copilot_x_initiator_from_openai_messages(openai_messages);
-            headers.insert(
-                reqwest::header::HeaderName::from_static("x-initiator"),
-                HeaderValue::from_static(initiator),
-            );
-            headers.insert(
-                reqwest::header::HeaderName::from_static("openai-intent"),
-                HeaderValue::from_static("conversation-edits"),
-            );
         }
         let res = client
             .post(&url)
@@ -441,7 +407,14 @@ pub async fn run_anthropic_loop(
                         tool_call_id: tc.id.clone(),
                         args: Some(tc.args.clone()),
                     });
-                    let result = run_tool(cwd, &tc.name, &tc.args, enabled);
+                    let result = match gate.request(tx, cancel, &tc.name, &tc.args) {
+                        Ok(()) => run_tool(cwd, &tc.name, &tc.args, enabled),
+                        Err(reason) => ToolResult {
+                            output: reason,
+                            is_error: true,
+                            diff: None,
+                        },
+                    };
                     let text = result.output.clone();
                     let is_err = result.is_error;
                     let _ = tx.send(AgentEvent::ToolOutput {
@@ -474,36 +447,6 @@ pub async fn run_anthropic_loop(
         break;
     }
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn run_copilot_loop(
-    client: &reqwest::Client,
-    base_url: &str,
-    bearer_token: &str,
-    model: &str,
-    openai_messages: &mut Vec<Value>,
-    tools_openai: &[Value],
-    cwd: &Path,
-    enabled: &[bool; 7],
-    tx: &Sender<AgentEvent>,
-    cancel: &Arc<AtomicBool>,
-) -> Result<(), String> {
-    run_anthropic_loop(
-        client,
-        base_url,
-        bearer_token,
-        model,
-        &[],
-        openai_messages,
-        tools_openai,
-        cwd,
-        enabled,
-        tx,
-        cancel,
-        true,
-    )
-    .await
 }
 
 fn parse_anthropic_event(

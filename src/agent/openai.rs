@@ -10,9 +10,9 @@ use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
 
-use super::copilot::copilot_x_initiator_from_openai_messages;
+use super::approval::ApprovalGate;
 use super::events::AgentEvent;
-use super::tools::run_tool;
+use super::tools::{run_tool, ToolResult};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -34,7 +34,7 @@ pub async fn run_chat_loop(
     enabled: &[bool; 7],
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
-    copilot_dynamic_x_initiator: bool,
+    gate: &mut ApprovalGate,
 ) -> Result<(), String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut round = 0u32;
@@ -66,13 +66,6 @@ pub async fn run_chat_loop(
             let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| e.to_string())?;
             let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
             headers.insert(name, val);
-        }
-        if copilot_dynamic_x_initiator {
-            let initiator = copilot_x_initiator_from_openai_messages(messages);
-            headers.insert(
-                HeaderName::from_static("x-initiator"),
-                HeaderValue::from_static(initiator),
-            );
         }
         let res = client
             .post(&url)
@@ -229,14 +222,21 @@ pub async fn run_chat_loop(
                         }));
                     }
                 } else {
-                    // Mutating tool: run sequentially
+                    // Mutating tool: request approval, then run sequentially.
                     let tc = &parsed[i];
                     let _ = tx.send(AgentEvent::ToolStart {
                         name: tc.name.clone(),
                         tool_call_id: tc.id.clone(),
                         args: Some(tc.args.clone()),
                     });
-                    let result = run_tool(cwd, &tc.name, &tc.args, enabled);
+                    let result = match gate.request(tx, cancel, &tc.name, &tc.args) {
+                        Ok(()) => run_tool(cwd, &tc.name, &tc.args, enabled),
+                        Err(reason) => ToolResult {
+                            output: reason,
+                            is_error: true,
+                            diff: None,
+                        },
+                    };
                     let text = result.output.clone();
                     let is_err = result.is_error;
                     let _ = tx.send(AgentEvent::ToolOutput {

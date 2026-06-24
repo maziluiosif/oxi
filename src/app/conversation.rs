@@ -5,6 +5,7 @@ use eframe::egui::{
     self, Align, Button, Color32, Frame, Label, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
 };
 
+use crate::agent::ApprovalDecision;
 use crate::model::MsgRole;
 use crate::theme::{
     format_stream_elapsed, workspace_sidebar_label, CHAT_COLUMN_MAX, C_ACCENT, C_BG_ELEVATED,
@@ -13,7 +14,7 @@ use crate::theme::{
 };
 use crate::ui::messages::{render_assistant_message_run, render_message};
 
-use super::OxiApp;
+use super::{OxiApp, PendingApproval};
 
 impl OxiApp {
     /// Error banner rendered above the transcript.
@@ -56,6 +57,79 @@ impl OxiApp {
                 });
             ui.add_space(4.0);
         }
+    }
+
+    /// Approve/deny prompt for a mutating tool call (`bash` / `write` / `edit`).
+    /// Rendered at the bottom of the transcript (above the floating composer) so it stays in
+    /// view while the run is paused — `stick_to_bottom` keeps the tail visible during a run.
+    fn render_approval_card(&mut self, ui: &mut Ui, pa: PendingApproval) {
+        Frame::none()
+            .fill(Color32::from_rgb(0x16, 0x20, 0x2e))
+            .stroke(Stroke::new(1.0, C_ACCENT))
+            .rounding(Rounding::same(6.0))
+            .inner_margin(Margin::symmetric(10.0, 8.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new(format!("Approve `{}`?", pa.name))
+                        .size(FS_SMALL)
+                        .color(C_TEXT)
+                        .strong(),
+                );
+                if !pa.summary.is_empty() {
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(&pa.summary)
+                            .size(FS_TINY)
+                            .color(C_TEXT_MUTED)
+                            .monospace(),
+                    );
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            Button::new(RichText::new("Approve").size(FS_SMALL).color(C_TEXT))
+                                .fill(C_ACCENT)
+                                .rounding(6.0)
+                                .min_size(egui::vec2(0.0, 26.0)),
+                        )
+                        .clicked()
+                    {
+                        self.respond_to_approval(ApprovalDecision::Approve);
+                    }
+                    if ui
+                        .add(
+                            Button::new(RichText::new("Approve rest").size(FS_SMALL).color(C_TEXT))
+                                .fill(C_BG_ELEVATED)
+                                .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                                .rounding(6.0)
+                                .min_size(egui::vec2(0.0, 26.0)),
+                        )
+                        .on_hover_text("Run this and auto-approve the rest of this turn")
+                        .clicked()
+                    {
+                        self.respond_to_approval(ApprovalDecision::ApproveRest);
+                    }
+                    if ui
+                        .add(
+                            Button::new(
+                                RichText::new("Deny")
+                                    .size(FS_SMALL)
+                                    .color(Color32::from_rgb(0xff, 0xb0, 0xb0)),
+                            )
+                            .fill(C_BG_ELEVATED)
+                            .stroke(Stroke::new(1.0, C_BORDER_SUBTLE))
+                            .rounding(6.0)
+                            .min_size(egui::vec2(0.0, 26.0)),
+                        )
+                        .clicked()
+                    {
+                        self.respond_to_approval(ApprovalDecision::Deny);
+                    }
+                });
+            });
+        ui.add_space(4.0);
     }
 
     pub(crate) fn render_chat_header(&mut self, ui: &mut Ui, column_center_w: f32) {
@@ -398,6 +472,25 @@ impl OxiApp {
                         ui.add_space(pad);
                     }
                 });
+
+                // Pending approval prompt: shown at the tail of the transcript so it is visible
+                // just above the floating composer while the agent run is blocked on the user.
+                if let Some(pa) = self.active_pending_approval() {
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        if pad > 0.0 {
+                            ui.add_space(pad);
+                        }
+                        ui.vertical(|ui| {
+                            ui.set_width(col_w);
+                            self.render_approval_card(ui, pa);
+                        });
+                        if pad > 0.0 {
+                            ui.add_space(pad);
+                        }
+                    });
+                }
 
                 // The composer is floating over the transcript. Add scrollable tail padding so
                 // the last messages can move above/behind it instead of being permanently hidden

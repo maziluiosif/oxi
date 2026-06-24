@@ -14,6 +14,11 @@ pub enum AgentEvent {
         tool_call_id: String,
         args: Option<Value>,
     },
+    /// A mutating tool (`bash` / `write` / `edit`) is waiting for the user to approve or deny it.
+    ApprovalRequest {
+        name: String,
+        args: Option<Value>,
+    },
     ToolOutput {
         tool_call_id: String,
         text: String,
