@@ -95,7 +95,7 @@ impl ProviderProfile {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub active_profile_id: String,
     pub profiles: Vec<ProviderProfile>,
@@ -105,10 +105,17 @@ pub struct AppSettings {
     /// Require explicit user approval before each mutating tool (`bash` / `write` / `edit`).
     #[serde(default = "default_require_approval")]
     pub require_approval: bool,
+    /// Persisted width of the main app/sidebar split.
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: f32,
 }
 
 fn default_require_approval() -> bool {
     true
+}
+
+fn default_sidebar_width() -> f32 {
+    168.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +153,7 @@ impl Default for AppSettings {
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
             tools_enabled: [true; 7],
             require_approval: default_require_approval(),
+            sidebar_width: default_sidebar_width(),
         }
     }
 }
@@ -220,6 +228,10 @@ impl AppSettings {
         if self.system_prompt.trim().is_empty() {
             self.system_prompt = crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string();
         }
+        if !self.sidebar_width.is_finite() || self.sidebar_width <= 0.0 {
+            self.sidebar_width = default_sidebar_width();
+        }
+        self.sidebar_width = self.sidebar_width.clamp(120.0, 520.0);
         if self.profiles.is_empty() {
             *self = Self::default();
             return;
