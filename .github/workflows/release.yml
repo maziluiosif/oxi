@@ -118,8 +118,20 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        env:
+          OXI_VERSION: ${{ needs.changelog.outputs.version }}
+        run: |
+          bin="target/${{ matrix.target }}/release/oxi"
+          # Wrap the binary in a proper .app bundle so Finder launches the GUI
+          # directly (no Terminal window, correct icon).
+          bash scripts/bundle-macos.sh "$bin" dist
+          tar -czf "${{ matrix.name }}.tar.gz" -C dist oxi.app
+          ls -la "${{ matrix.name }}.tar.gz"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
         run: |
           bin="target/${{ matrix.target }}/release/oxi"
           tar -czf "${{ matrix.name }}.tar.gz" -C "$(dirname "$bin")" oxi
