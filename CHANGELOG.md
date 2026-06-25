@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-25
+
+### Fixed
+- macOS release now ships as a proper .app bundle with icon instead of requiring Terminal
+
+
 ## [0.4.0] - 2026-06-24
 
 ### Added
@@ -61,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/maziluiosif/oxi/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/maziluiosif/oxi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/maziluiosif/oxi/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/maziluiosif/oxi/releases/tag/v0.2.0
