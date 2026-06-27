@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-27
+
+### Added
+- Web search and web fetch tools for agents to query SearXNG instances and fetch URLs
+- Text size (UI density) setting with Compact, Normal, and Comfortable options
+- Full Noto Emoji font for improved emoji rendering
+
+### Changed
+- Unified typography scale across UI with consistent font sizes (H1 20 / H2 17 / H3 15 / body 14 / small 12.5 / tiny 11.5 / code 13)
+- Inline code now uses surrounding prose font and size for proper baseline alignment
+- User and assistant body text now use the same font size
+- Consistent line-height (1.35) for all flowing prose including list items
+- Tool configuration migrated from fixed array to Vec<bool> for extensibility
+- egui text styles overridden to match unified typography scale
+
+
 ## [0.4.1] - 2026-06-25
 
 ### Fixed
@@ -67,7 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/maziluiosif/oxi/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/maziluiosif/oxi/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/maziluiosif/oxi/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/maziluiosif/oxi/compare/v0.2.0...v0.3.0

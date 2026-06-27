@@ -2719,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "oxi"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
