@@ -4,10 +4,10 @@ use serde_json::Value;
 
 use crate::settings::ALL_TOOL_NAMES;
 
-pub fn tool_definitions_json(enabled: &[bool; 7]) -> Vec<Value> {
+pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
     let mut out = Vec::new();
     for (i, name) in ALL_TOOL_NAMES.iter().enumerate() {
-        if !enabled[i] {
+        if !enabled.get(i).copied().unwrap_or(false) {
             continue;
         }
         let def = match *name {
@@ -125,6 +125,36 @@ pub fn tool_definitions_json(enabled: &[bool; 7]) -> Vec<Value> {
                             "path": { "type": "string" },
                             "limit": { "type": "integer" }
                         }
+                    }
+                }
+            }),
+            "web_search" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "Search the web via a SearXNG instance. Returns a list of titles, URLs, and snippets. Use web_fetch to read a result in full.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string", "description": "Search query" },
+                            "count": { "type": "integer", "description": "Max results to return (1-20, default 8)" }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            }),
+            "web_fetch" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "web_fetch",
+                    "description": "Fetch a URL over HTTP(S) and return its content as readable text (HTML is stripped to plain text).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": { "type": "string", "description": "Absolute http:// or https:// URL" },
+                            "max_chars": { "type": "integer", "description": "Max characters to return (optional)" }
+                        },
+                        "required": ["url"]
                     }
                 }
             }),
