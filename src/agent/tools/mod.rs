@@ -21,13 +21,22 @@ mod definitions;
 mod file_ops;
 mod paths;
 mod shell_search;
+mod web;
 
 #[cfg(test)]
 mod tests;
 
 pub use definitions::tool_definitions_json;
 
-pub fn run_tool(cwd: &Path, name: &str, args: &Value, enabled: &[bool; 7]) -> ToolResult {
+/// Runtime configuration passed to [`run_tool`]: which tools are enabled (one flag per entry in
+/// [`ALL_TOOL_NAMES`]) plus any tool-specific settings such as the SearXNG endpoint.
+#[derive(Clone, Debug)]
+pub struct ToolEnv {
+    pub enabled: Vec<bool>,
+    pub web_search_url: String,
+}
+
+pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResult {
     let idx = ALL_TOOL_NAMES.iter().position(|n| *n == name);
     let Some(i) = idx else {
         return ToolResult {
@@ -36,7 +45,7 @@ pub fn run_tool(cwd: &Path, name: &str, args: &Value, enabled: &[bool; 7]) -> To
             diff: None,
         };
     };
-    if !enabled[i] {
+    if !env.enabled.get(i).copied().unwrap_or(false) {
         return ToolResult {
             output: format!("Tool {name} is disabled in settings"),
             is_error: true,
@@ -53,6 +62,8 @@ pub fn run_tool(cwd: &Path, name: &str, args: &Value, enabled: &[bool; 7]) -> To
                 "grep" => shell_search::tool_grep(cwd, args),
                 "find" => shell_search::tool_find(cwd, args),
                 "ls" => shell_search::tool_ls(cwd, args),
+                "web_search" => web::tool_web_search(&env.web_search_url, args),
+                "web_fetch" => web::tool_web_fetch(args),
                 _ => Err(paths::err("unknown tool")),
             };
             match result {

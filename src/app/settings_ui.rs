@@ -334,6 +334,24 @@ impl OxiApp {
             {
                 self.conv.settings.require_approval = require_approval;
             }
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("SearXNG URL (web_search)")
+                    .size(FS_SMALL)
+                    .color(c_text()),
+            );
+            ui.add_space(4.0);
+            ui.add(
+                TextEdit::singleline(&mut self.conv.settings.searxng_url)
+                    .hint_text("https://search.mac-mini")
+                    .desired_width(f32::INFINITY),
+            )
+            .on_hover_text(
+                "Base URL of the SearXNG instance queried by the web_search tool. \
+                 Its JSON output format must be enabled (search.formats: [html, json]).",
+            );
         });
         ui.add_space(10.0);
         ui.label(

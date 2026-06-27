@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use super::approval::ApprovalGate;
 use super::events::AgentEvent;
-use super::tools::{run_tool, ToolResult};
+use super::tools::{run_tool, ToolEnv, ToolResult};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -366,7 +366,7 @@ pub async fn run_codex_responses_loop(
     messages: &mut Vec<Value>,
     tools: &[Value],
     cwd: &Path,
-    enabled: &[bool; 7],
+    env: &ToolEnv,
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
     gate: &mut ApprovalGate,
@@ -488,7 +488,12 @@ pub async fn run_codex_responses_loop(
             }
             messages.push(msg);
             // Execute tool calls in parallel where safe.
-            let is_readonly = |name: &str| matches!(name, "read" | "grep" | "find" | "ls");
+            let is_readonly = |name: &str| {
+                matches!(
+                    name,
+                    "read" | "grep" | "find" | "ls" | "web_search" | "web_fetch"
+                )
+            };
             struct ToolCallP {
                 id: String,
                 name: String,
@@ -529,9 +534,9 @@ pub async fn run_codex_responses_loop(
                         let cwd_owned = cwd.to_path_buf();
                         let name = tc.name.clone();
                         let args = tc.args.clone();
-                        let enabled_copy = *enabled;
+                        let env_copy = env.clone();
                         handles.push(tokio::task::spawn_blocking(move || {
-                            run_tool(&cwd_owned, &name, &args, &enabled_copy)
+                            run_tool(&cwd_owned, &name, &args, &env_copy)
                         }));
                     }
                     for (j, handle) in handles.into_iter().enumerate() {
@@ -564,7 +569,7 @@ pub async fn run_codex_responses_loop(
                         args: Some(tc.args.clone()),
                     });
                     let result = match gate.request(tx, cancel, &tc.name, &tc.args) {
-                        Ok(()) => run_tool(cwd, &tc.name, &tc.args, enabled),
+                        Ok(()) => run_tool(cwd, &tc.name, &tc.args, env),
                         Err(reason) => ToolResult {
                             output: reason,
                             is_error: true,

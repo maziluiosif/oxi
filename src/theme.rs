@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 const NOTO_SANS_REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
 const UBUNTU_MONO_REGULAR: &[u8] = include_bytes!("../assets/fonts/UbuntuMono-R.ttf");
 const APPLE_SYMBOLS: &[u8] = include_bytes!("../assets/fonts/AppleSymbols.ttf");
+/// Monochrome Noto Emoji (outline). egui/eframe renders glyphs single-channel, so emoji show
+/// as black-and-white outlines rather than in color, but this covers the full emoji range
+/// instead of the small subset bundled with egui's defaults.
+const NOTO_EMOJI: &[u8] = include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf");
 const SYMBOLS_NERD_FONT_MONO: &[u8] =
     include_bytes!("../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
 
@@ -519,6 +523,9 @@ fn install_fonts(ctx: &egui::Context) {
         "apple_symbols".to_string(),
         FontData::from_static(APPLE_SYMBOLS),
     );
+    fonts
+        .font_data
+        .insert("noto_emoji".to_string(), FontData::from_static(NOTO_EMOJI));
     fonts.font_data.insert(
         "symbols_nerd_font_mono".to_string(),
         FontData::from_static(SYMBOLS_NERD_FONT_MONO),
@@ -526,11 +533,14 @@ fn install_fonts(ctx: &egui::Context) {
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     proportional.insert(0, "noto_sans".to_string());
+    // Prefer full Noto Emoji over egui's trimmed default emoji font for glyph coverage.
+    proportional.insert(1, "noto_emoji".to_string());
     proportional.push("apple_symbols".to_string());
 
     let monospace = fonts.families.entry(FontFamily::Monospace).or_default();
     monospace.insert(0, "ubuntu_mono".to_string());
     monospace.push("noto_sans".to_string());
+    monospace.push("noto_emoji".to_string());
     monospace.push("apple_symbols".to_string());
 
     // Dedicated icon family — used only for tool pill glyphs.

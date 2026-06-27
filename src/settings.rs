@@ -52,7 +52,17 @@ impl LlmProviderKind {
     }
 }
 
-pub const ALL_TOOL_NAMES: [&str; 7] = ["read", "write", "edit", "bash", "grep", "find", "ls"];
+pub const ALL_TOOL_NAMES: [&str; 9] = [
+    "read",
+    "write",
+    "edit",
+    "bash",
+    "grep",
+    "find",
+    "ls",
+    "web_search",
+    "web_fetch",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderProfile {
@@ -101,7 +111,14 @@ pub struct AppSettings {
     pub profiles: Vec<ProviderProfile>,
     /// Single editable system prompt template.
     pub system_prompt: String,
-    pub tools_enabled: [bool; 7],
+    /// One flag per entry in [`ALL_TOOL_NAMES`]. Stored as a `Vec` so older settings files
+    /// with fewer tools still deserialize; [`AppSettings::normalize`] resizes it to the
+    /// current tool count, enabling any newly-added tools by default.
+    #[serde(default = "default_tools_enabled")]
+    pub tools_enabled: Vec<bool>,
+    /// Base URL of the SearXNG instance used by the `web_search` tool.
+    #[serde(default = "default_searxng_url")]
+    pub searxng_url: String,
     /// Require explicit user approval before each mutating tool (`bash` / `write` / `edit`).
     #[serde(default = "default_require_approval")]
     pub require_approval: bool,
@@ -116,6 +133,14 @@ pub struct AppSettings {
 
 fn default_require_approval() -> bool {
     true
+}
+
+fn default_tools_enabled() -> Vec<bool> {
+    vec![true; ALL_TOOL_NAMES.len()]
+}
+
+fn default_searxng_url() -> String {
+    "https://search.mac-mini".to_string()
 }
 
 fn default_sidebar_width() -> f32 {
@@ -159,7 +184,8 @@ impl Default for AppSettings {
             active_profile_id: "openai-default".to_string(),
             profiles,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
-            tools_enabled: [true; 7],
+            tools_enabled: default_tools_enabled(),
+            searxng_url: default_searxng_url(),
             require_approval: default_require_approval(),
             sidebar_width: default_sidebar_width(),
             theme_id: default_theme_id(),
@@ -200,7 +226,7 @@ impl AppSettings {
         } else {
             old.system_prompt
         };
-        s.tools_enabled = old.tools_enabled;
+        s.tools_enabled = old.tools_enabled.to_vec();
         s.profiles = vec![
             ProviderProfile {
                 id: "migrated-active".to_string(),
@@ -234,6 +260,14 @@ impl AppSettings {
     }
 
     fn normalize(&mut self) {
+        // Resize to the current tool count: older settings files have fewer flags, and any
+        // newly-added tools default to enabled.
+        if self.tools_enabled.len() != ALL_TOOL_NAMES.len() {
+            self.tools_enabled.resize(ALL_TOOL_NAMES.len(), true);
+        }
+        if self.searxng_url.trim().is_empty() {
+            self.searxng_url = default_searxng_url();
+        }
         if self.system_prompt.trim().is_empty() {
             self.system_prompt = crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string();
         }
@@ -459,12 +493,35 @@ mod tests {
     #[test]
     fn tools_enabled_default_all_true() {
         let s = AppSettings::default();
+        assert_eq!(s.tools_enabled.len(), ALL_TOOL_NAMES.len());
         assert!(s.tools_enabled.iter().all(|&t| t));
     }
 
     #[test]
-    fn all_tool_names_has_seven() {
-        assert_eq!(ALL_TOOL_NAMES.len(), 7);
+    fn all_tool_names_has_expected_tools() {
+        assert_eq!(ALL_TOOL_NAMES.len(), 9);
         assert!(ALL_TOOL_NAMES.contains(&"bash"));
+        assert!(ALL_TOOL_NAMES.contains(&"web_search"));
+        assert!(ALL_TOOL_NAMES.contains(&"web_fetch"));
+    }
+
+    #[test]
+    fn normalize_pads_short_tools_enabled() {
+        let json = r#"{
+            "active_profile_id": "openai-default",
+            "profiles": [{"id":"openai-default","name":"x","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}],
+            "system_prompt": "hi",
+            "tools_enabled": [true, false, true, true, true, true, true]
+        }"#;
+        let mut s: AppSettings = serde_json::from_str(json).unwrap();
+        s.normalize();
+        assert_eq!(s.tools_enabled.len(), ALL_TOOL_NAMES.len());
+        // Pre-existing flags are preserved.
+        assert!(!s.tools_enabled[1]);
+        // Newly-added tools default to enabled.
+        assert!(s.tools_enabled[7]);
+        assert!(s.tools_enabled[8]);
+        // Missing searxng_url falls back to the default.
+        assert_eq!(s.searxng_url, default_searxng_url());
     }
 }

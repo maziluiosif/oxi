@@ -29,6 +29,8 @@ From the current codebase, it supports:
   - `grep`
   - `find`
   - `ls`
+  - `web_search`
+  - `web_fetch`
 - streaming assistant output with structured UI blocks
 - configurable provider **profiles** with per-profile model and auth settings
 - local persistence for settings, OAuth tokens, and chat sessions
@@ -74,6 +76,8 @@ The agent can call these tools when enabled in Settings:
 | `grep` | Search regex text in files under the workspace |
 | `find` | Find files matching a glob pattern |
 | `ls` | List directory entries |
+| `web_search` | Search the web through a configured SearXNG instance |
+| `web_fetch` | Fetch a URL and return its content as readable text |
 
 Behavior confirmed in `src/agent/tools/`:
 
@@ -84,6 +88,9 @@ Behavior confirmed in `src/agent/tools/`:
 - `grep` skips `.git`, `target`, and `node_modules`
 - `find` also skips `.git`, `target`, and `node_modules`
 - `grep`, `find`, and `ls` have result caps
+- `web_search` queries the SearXNG JSON API (configure the URL in Settings → Tools; its JSON format must be enabled)
+- `web_fetch` only accepts `http://` / `https://` URLs and strips HTML to plain text
+- `web_search` and `web_fetch` run as read-only tools (no approval prompt)
 - tool output is truncated when too large
 - `bash` defaults to a 15s timeout and is capped at 30s
 - `bash` blocks only a small deny-list of risky command substrings, not full sandboxing
@@ -364,6 +371,7 @@ Based on the current source code:
 - `src/agent/tools/mod.rs` — built-in tool dispatch and shared limits
 - `src/agent/tools/file_ops.rs` — `read` / `write` / `edit` and diff generation
 - `src/agent/tools/shell_search.rs` — `bash` / `grep` / `find` / `ls`
+- `src/agent/tools/web.rs` — `web_search` (SearXNG) / `web_fetch` (URL → text)
 - `src/agent/runner.rs` — provider selection, auth fallback, and run orchestration
 - `src/agent/history.rs` — conversation-to-provider message conversion and context trimming
 - `src/agent/prompt.rs` — system prompt construction
