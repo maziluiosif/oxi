@@ -110,7 +110,7 @@ impl OxiApp {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Settings")
-                            .size(20.0)
+                            .size(FS_H1)
                             .color(c_text())
                             .strong(),
                     );
@@ -334,6 +334,24 @@ impl OxiApp {
             {
                 self.conv.settings.require_approval = require_approval;
             }
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("SearXNG URL (web_search)")
+                    .size(FS_SMALL)
+                    .color(c_text()),
+            );
+            ui.add_space(4.0);
+            ui.add(
+                TextEdit::singleline(&mut self.conv.settings.searxng_url)
+                    .hint_text("https://search.mac-mini")
+                    .desired_width(f32::INFINITY),
+            )
+            .on_hover_text(
+                "Base URL of the SearXNG instance queried by the web_search tool. \
+                 Its JSON output format must be enabled (search.formats: [html, json]).",
+            );
         });
         ui.add_space(10.0);
         ui.label(
@@ -364,6 +382,19 @@ impl OxiApp {
                     if pill_tab(ui, &t.name, t.id == current) && t.id != current {
                         self.conv.settings.theme_id = t.id.clone();
                         crate::theme::apply_theme(ui.ctx(), &t.id);
+                    }
+                }
+            });
+
+            ui.add_space(12.0);
+            let current_density = self.conv.settings.ui_density;
+            settings_caption(ui, "Text size");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for d in crate::settings::UiDensity::ALL {
+                    if pill_tab(ui, d.label(), d == current_density) && d != current_density {
+                        self.conv.settings.ui_density = d;
+                        ui.ctx().set_zoom_factor(d.zoom_factor());
                     }
                 }
             });
