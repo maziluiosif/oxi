@@ -608,11 +608,26 @@ pub fn setup_style(ctx: &egui::Context) {
     // Route egui's default text styles through the shared scale so widgets without an explicit
     // size (composer input, combo boxes, default buttons) stay uniform with the rest of the UI.
     style.text_styles = [
-        (egui::TextStyle::Heading, FontId::new(FS_H2, FontFamily::Proportional)),
-        (egui::TextStyle::Body, FontId::new(FS_BODY, FontFamily::Proportional)),
-        (egui::TextStyle::Monospace, FontId::new(FS_CODE, FontFamily::Monospace)),
-        (egui::TextStyle::Button, FontId::new(FS_BODY, FontFamily::Proportional)),
-        (egui::TextStyle::Small, FontId::new(FS_SMALL, FontFamily::Proportional)),
+        (
+            egui::TextStyle::Heading,
+            FontId::new(FS_H2, FontFamily::Proportional),
+        ),
+        (
+            egui::TextStyle::Body,
+            FontId::new(FS_BODY, FontFamily::Proportional),
+        ),
+        (
+            egui::TextStyle::Monospace,
+            FontId::new(FS_CODE, FontFamily::Monospace),
+        ),
+        (
+            egui::TextStyle::Button,
+            FontId::new(FS_BODY, FontFamily::Proportional),
+        ),
+        (
+            egui::TextStyle::Small,
+            FontId::new(FS_SMALL, FontFamily::Proportional),
+        ),
     ]
     .into();
     style.interaction.selectable_labels = false;
