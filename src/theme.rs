@@ -14,13 +14,24 @@ use serde::{Deserialize, Serialize};
 const NOTO_SANS_REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
 const UBUNTU_MONO_REGULAR: &[u8] = include_bytes!("../assets/fonts/UbuntuMono-R.ttf");
 const APPLE_SYMBOLS: &[u8] = include_bytes!("../assets/fonts/AppleSymbols.ttf");
+/// Monochrome Noto Emoji (outline). egui/eframe renders glyphs single-channel, so emoji show
+/// as black-and-white outlines rather than in color, but this covers the full emoji range
+/// instead of the small subset bundled with egui's defaults.
+const NOTO_EMOJI: &[u8] = include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf");
 const SYMBOLS_NERD_FONT_MONO: &[u8] =
     include_bytes!("../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
 
-/// App-wide type scale (slightly larger for readability).
-pub const FS_BODY: f32 = 14.5;
-pub const FS_SMALL: f32 = 12.75;
-pub const FS_TINY: f32 = 11.75;
+/// App-wide type scale — single source of truth for every text size in the UI.
+/// Headings step down 20 → 17 → 15; body is 14; secondary text 12.5 / 11.5; code 13.
+/// Keep all `.size(...)` / `FontId` text sizes routed through these so the app stays uniform.
+pub const FS_H1: f32 = 20.0;
+pub const FS_H2: f32 = 17.0;
+pub const FS_H3: f32 = 15.0;
+pub const FS_BODY: f32 = 14.0;
+pub const FS_SMALL: f32 = 12.5;
+pub const FS_TINY: f32 = 11.5;
+/// Monospace code (blocks). Inline code matches the size of the surrounding prose/heading.
+pub const FS_CODE: f32 = 13.0;
 
 /// [`FontFamily`] for Nerd Font icon glyphs used in tool pills.
 /// Using a named family keeps PUA codepoints out of the normal text fallback chains.
@@ -519,6 +530,9 @@ fn install_fonts(ctx: &egui::Context) {
         "apple_symbols".to_string(),
         FontData::from_static(APPLE_SYMBOLS),
     );
+    fonts
+        .font_data
+        .insert("noto_emoji".to_string(), FontData::from_static(NOTO_EMOJI));
     fonts.font_data.insert(
         "symbols_nerd_font_mono".to_string(),
         FontData::from_static(SYMBOLS_NERD_FONT_MONO),
@@ -526,11 +540,14 @@ fn install_fonts(ctx: &egui::Context) {
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     proportional.insert(0, "noto_sans".to_string());
+    // Prefer full Noto Emoji over egui's trimmed default emoji font for glyph coverage.
+    proportional.insert(1, "noto_emoji".to_string());
     proportional.push("apple_symbols".to_string());
 
     let monospace = fonts.families.entry(FontFamily::Monospace).or_default();
     monospace.insert(0, "ubuntu_mono".to_string());
     monospace.push("noto_sans".to_string());
+    monospace.push("noto_emoji".to_string());
     monospace.push("apple_symbols".to_string());
 
     // Dedicated icon family — used only for tool pill glyphs.
@@ -588,6 +605,31 @@ pub fn setup_style(ctx: &egui::Context) {
 
     let mut style = (*ctx.style()).clone();
     style.visuals = visuals;
+    // Route egui's default text styles through the shared scale so widgets without an explicit
+    // size (composer input, combo boxes, default buttons) stay uniform with the rest of the UI.
+    style.text_styles = [
+        (
+            egui::TextStyle::Heading,
+            FontId::new(FS_H2, FontFamily::Proportional),
+        ),
+        (
+            egui::TextStyle::Body,
+            FontId::new(FS_BODY, FontFamily::Proportional),
+        ),
+        (
+            egui::TextStyle::Monospace,
+            FontId::new(FS_CODE, FontFamily::Monospace),
+        ),
+        (
+            egui::TextStyle::Button,
+            FontId::new(FS_BODY, FontFamily::Proportional),
+        ),
+        (
+            egui::TextStyle::Small,
+            FontId::new(FS_SMALL, FontFamily::Proportional),
+        ),
+    ]
+    .into();
     style.interaction.selectable_labels = false;
     style.spacing.item_spacing = egui::vec2(6.0, 3.0);
     style.spacing.button_padding = egui::vec2(8.0, 4.0);

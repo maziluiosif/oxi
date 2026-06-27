@@ -21,7 +21,7 @@ impl OxiApp {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.label(
                 RichText::new("oxi")
-                    .size(16.0)
+                    .size(FS_H3)
                     .color(crate::theme::c_text())
                     .strong(),
             );
