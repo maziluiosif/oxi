@@ -21,10 +21,17 @@ const NOTO_EMOJI: &[u8] = include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf"
 const SYMBOLS_NERD_FONT_MONO: &[u8] =
     include_bytes!("../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
 
-/// App-wide type scale (slightly larger for readability).
-pub const FS_BODY: f32 = 14.5;
-pub const FS_SMALL: f32 = 12.75;
-pub const FS_TINY: f32 = 11.75;
+/// App-wide type scale — single source of truth for every text size in the UI.
+/// Headings step down 20 → 17 → 15; body is 14; secondary text 12.5 / 11.5; code 13.
+/// Keep all `.size(...)` / `FontId` text sizes routed through these so the app stays uniform.
+pub const FS_H1: f32 = 20.0;
+pub const FS_H2: f32 = 17.0;
+pub const FS_H3: f32 = 15.0;
+pub const FS_BODY: f32 = 14.0;
+pub const FS_SMALL: f32 = 12.5;
+pub const FS_TINY: f32 = 11.5;
+/// Monospace code (blocks). Inline code matches the size of the surrounding prose/heading.
+pub const FS_CODE: f32 = 13.0;
 
 /// [`FontFamily`] for Nerd Font icon glyphs used in tool pills.
 /// Using a named family keeps PUA codepoints out of the normal text fallback chains.
@@ -598,6 +605,16 @@ pub fn setup_style(ctx: &egui::Context) {
 
     let mut style = (*ctx.style()).clone();
     style.visuals = visuals;
+    // Route egui's default text styles through the shared scale so widgets without an explicit
+    // size (composer input, combo boxes, default buttons) stay uniform with the rest of the UI.
+    style.text_styles = [
+        (egui::TextStyle::Heading, FontId::new(FS_H2, FontFamily::Proportional)),
+        (egui::TextStyle::Body, FontId::new(FS_BODY, FontFamily::Proportional)),
+        (egui::TextStyle::Monospace, FontId::new(FS_CODE, FontFamily::Monospace)),
+        (egui::TextStyle::Button, FontId::new(FS_BODY, FontFamily::Proportional)),
+        (egui::TextStyle::Small, FontId::new(FS_SMALL, FontFamily::Proportional)),
+    ]
+    .into();
     style.interaction.selectable_labels = false;
     style.spacing.item_spacing = egui::vec2(6.0, 3.0);
     style.spacing.button_padding = egui::vec2(8.0, 4.0);

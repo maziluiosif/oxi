@@ -39,7 +39,7 @@ pub fn settings_caption(ui: &mut Ui, text: &str) {
 
 /// Primary section title inside a panel.
 pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) {
-    ui.label(RichText::new(title).size(17.0).color(c_text()).strong());
+    ui.label(RichText::new(title).size(FS_H2).color(c_text()).strong());
     if let Some(sub) = subtitle {
         ui.add_space(2.0);
         ui.label(RichText::new(sub).size(FS_SMALL).color(c_text_muted()));
