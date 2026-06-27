@@ -105,6 +105,42 @@ impl ProviderProfile {
     }
 }
 
+/// Overall text/UI density. Applied via egui's zoom factor so fonts and spacing scale together
+/// and the layout stays coherent at every step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UiDensity {
+    Compact,
+    #[default]
+    Normal,
+    Comfortable,
+}
+
+impl UiDensity {
+    pub const ALL: [UiDensity; 3] = [
+        UiDensity::Compact,
+        UiDensity::Normal,
+        UiDensity::Comfortable,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            UiDensity::Compact => "Compact",
+            UiDensity::Normal => "Normal",
+            UiDensity::Comfortable => "Comfortable",
+        }
+    }
+
+    /// egui zoom factor relative to the base 14px scale (Normal = 1.0).
+    pub fn zoom_factor(self) -> f32 {
+        match self {
+            UiDensity::Compact => 0.96,
+            UiDensity::Normal => 1.0,
+            UiDensity::Comfortable => 1.04,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     pub active_profile_id: String,
@@ -129,6 +165,9 @@ pub struct AppSettings {
     /// `custom:<name>`). Falls back to the default theme if unknown.
     #[serde(default = "default_theme_id")]
     pub theme_id: String,
+    /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
+    #[serde(default)]
+    pub ui_density: UiDensity,
 }
 
 fn default_require_approval() -> bool {
@@ -189,6 +228,7 @@ impl Default for AppSettings {
             require_approval: default_require_approval(),
             sidebar_width: default_sidebar_width(),
             theme_id: default_theme_id(),
+            ui_density: UiDensity::Normal,
         }
     }
 }

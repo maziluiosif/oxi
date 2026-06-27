@@ -32,10 +32,12 @@ fn allocate_full_width_block(ui: &mut Ui, column_w: f32, add_contents: impl FnOn
 
 // Markdown colors live in the active theme palette (see `theme::Palette`); accessed
 // through the `c_*` / `c_md_*` functions so they track the selected theme.
-const SZ_BODY: f32 = 13.5;
-/// Slightly smaller than proportional body so `code` does not read as oversized next to prose.
-const SZ_CODE_INLINE: f32 = 12.0;
-const SZ_CODE: f32 = 12.5;
+// All markdown sizes route through the shared type scale in `theme` (FS_*) so prose, code,
+// and headings stay uniform with the rest of the app.
+const SZ_BODY: f32 = FS_BODY;
+/// Floor for raw-HTML / math fallbacks shown in monospace; real inline `code` matches prose.
+const SZ_CODE_INLINE: f32 = FS_CODE;
+const SZ_CODE: f32 = FS_CODE;
 
 /// Lists are inset from body text so bullets do not sit flush on the column edge (Cursor-like).
 const LIST_BLOCK_MARGIN: f32 = 12.0;
@@ -84,9 +86,11 @@ enum InlineDensity {
 
 impl InlineDensity {
     fn line_height(self, size: f32) -> f32 {
+        // One line-height for all flowing prose (paragraphs and list items) so a wrapped list
+        // line matches a wrapped paragraph line. List compactness comes from the inter-item gap
+        // (`LIST_GAP_AFTER_ITEM`) and the zero tail below, not from a tighter line-height.
         match self {
-            InlineDensity::Normal => (size * 1.35).max(16.0),
-            InlineDensity::ListItem => (size * 1.10).max(13.5),
+            InlineDensity::Normal | InlineDensity::ListItem => (size * 1.35).max(16.0),
         }
     }
 }
@@ -105,15 +109,19 @@ fn inline_text_format(size: f32, strong: u32, density: InlineDensity) -> TextFor
 }
 
 fn inline_code_format(density: InlineDensity) -> TextFormat {
+    // Use the same proportional font and size as the surrounding prose so inline code shares
+    // its exact baseline — the monospace font's much shorter ascent (Ubuntu Mono ~0.83 vs
+    // Noto Sans ~1.07) made code glyphs ride above the text line. The code styling now comes
+    // from the background tint and color, not a different typeface.
     let lh = density.line_height(SZ_BODY);
-    let mut f = TextFormat::simple(FontId::monospace(SZ_CODE_INLINE), c_md_code_fg());
+    let mut f = TextFormat::simple(FontId::proportional(SZ_BODY), c_md_code_fg());
     f.background = c_md_code_bg();
     f.line_height = Some(lh);
     f.valign = Align::Center;
     f
 }
 
-const SZ_TINY: f32 = 12.0;
+const SZ_TINY: f32 = FS_TINY;
 
 #[inline]
 fn inline_image_uri_id(uri: &str) -> u64 {
@@ -781,7 +789,12 @@ fn render_inline_until(
                 render_markdown_inline_image(ui, wrap_w, dest_url.as_ref(), alt.trim(), false);
             }
             Event::Html(t) | Event::InlineHtml(t) => {
-                append_inline_fallback(&mut job, wrap_w, t.as_ref(), density.line_height(SZ_BODY));
+                append_inline_fallback(
+                    &mut job,
+                    wrap_w,
+                    t.as_ref(),
+                    density.line_height(SZ_CODE_INLINE),
+                );
             }
             Event::FootnoteReference(t) => {
                 let s = format!("[^{}]", t);
@@ -833,11 +846,11 @@ fn render_heading(ui: &mut Ui, wrap_w: f32, level: HeadingLevel, it: &mut Parser
     }
 
     let size = match level {
-        HeadingLevel::H1 => 18.5,
-        HeadingLevel::H2 => 16.75,
-        HeadingLevel::H3 => 15.0,
-        HeadingLevel::H4 => 14.0,
-        HeadingLevel::H5 | HeadingLevel::H6 => 13.25,
+        HeadingLevel::H1 => FS_H1,
+        HeadingLevel::H2 => FS_H2,
+        HeadingLevel::H3 => FS_H3,
+        HeadingLevel::H4 => FS_BODY,
+        HeadingLevel::H5 | HeadingLevel::H6 => FS_CODE,
     };
     let mut job = LayoutJob::default();
     set_job_wrap(&mut job, wrap_w);
@@ -855,10 +868,10 @@ fn render_heading(ui: &mut Ui, wrap_w: f32, level: HeadingLevel, it: &mut Parser
                 job.append(t.as_ref(), 0.0, fmt_body(size, strong));
             }
             Event::Code(c) => {
-                let lh = line_height_for_body_size(size);
-                let code_px = (size - 2.25).max(SZ_CODE_INLINE);
-                let mut f = fmt_code(lh);
-                f.font_id = FontId::monospace(code_px);
+                // Match the heading's proportional font and size so inline code shares its
+                // baseline; the monospace font's shorter ascent otherwise makes code ride high.
+                let mut f = fmt_code(line_height_for_body_size(size));
+                f.font_id = FontId::proportional(size);
                 job.append(c.as_ref(), 0.0, f);
             }
             Event::SoftBreak => {

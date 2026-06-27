@@ -110,7 +110,7 @@ impl OxiApp {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Settings")
-                            .size(20.0)
+                            .size(FS_H1)
                             .color(c_text())
                             .strong(),
                     );
@@ -382,6 +382,19 @@ impl OxiApp {
                     if pill_tab(ui, &t.name, t.id == current) && t.id != current {
                         self.conv.settings.theme_id = t.id.clone();
                         crate::theme::apply_theme(ui.ctx(), &t.id);
+                    }
+                }
+            });
+
+            ui.add_space(12.0);
+            let current_density = self.conv.settings.ui_density;
+            settings_caption(ui, "Text size");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for d in crate::settings::UiDensity::ALL {
+                    if pill_tab(ui, d.label(), d == current_density) && d != current_density {
+                        self.conv.settings.ui_density = d;
+                        ui.ctx().set_zoom_factor(d.zoom_factor());
                     }
                 }
             });
