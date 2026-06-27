@@ -648,7 +648,7 @@ pub fn render_message(
                                 Label::new(
                                     RichText::new(&msg.text)
                                         .size(FS_BODY)
-                                        .line_height(Some(21.0))
+                                        .line_height(Some(FS_BODY * 1.35))
                                         .color(c_text()),
                                 )
                                 .wrap()

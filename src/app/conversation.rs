@@ -259,7 +259,7 @@ impl OxiApp {
         ui.vertical(|ui| {
             ui.label(
                 RichText::new("What should oxi help with?")
-                    .size(22.0)
+                    .size(FS_H1)
                     .color(c_text())
                     .strong(),
             );
