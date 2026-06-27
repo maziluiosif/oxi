@@ -1,6 +1,9 @@
 use super::file_ops::{make_unified_diff, truncate_out};
 use super::shell_search::validate_bash_command;
-use super::{paths::resolve_under_cwd, run_tool, tool_definitions_json, MAX_TOOL_OUTPUT_CHARS};
+use super::{
+    paths::resolve_under_cwd, run_tool, tool_definitions_json, ToolEnv, MAX_TOOL_OUTPUT_CHARS,
+};
+use crate::settings::ALL_TOOL_NAMES;
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -16,8 +19,11 @@ fn temp_workspace(name: &str) -> PathBuf {
     path
 }
 
-fn all_enabled() -> [bool; 7] {
-    [true; 7]
+fn all_enabled() -> ToolEnv {
+    ToolEnv {
+        enabled: vec![true; ALL_TOOL_NAMES.len()],
+        web_search_url: "https://search.invalid".to_string(),
+    }
 }
 
 // ─── resolve_under_cwd ───────────────────────────────────────────────
@@ -544,7 +550,7 @@ fn run_tool_unknown_tool() {
 fn run_tool_disabled_tool() {
     let cwd = temp_workspace("disabled");
     let mut enabled = all_enabled();
-    enabled[0] = false; // disable "read"
+    enabled.enabled[0] = false; // disable "read"
     let res = run_tool(&cwd, "read", &json!({"path": "x"}), &enabled);
     assert!(res.is_error);
     assert!(res.output.contains("disabled"));
@@ -554,12 +560,14 @@ fn run_tool_disabled_tool() {
 
 #[test]
 fn tool_definitions_all_enabled() {
-    let defs = tool_definitions_json(&all_enabled());
-    assert_eq!(defs.len(), 7);
+    let defs = tool_definitions_json(&all_enabled().enabled);
+    assert_eq!(defs.len(), ALL_TOOL_NAMES.len());
     let names: Vec<&str> = defs
         .iter()
         .filter_map(|d| d.get("function")?.get("name")?.as_str())
         .collect();
+    assert!(names.contains(&"web_search"));
+    assert!(names.contains(&"web_fetch"));
     assert!(names.contains(&"read"));
     assert!(names.contains(&"bash"));
     assert!(names.contains(&"ls"));
@@ -567,7 +575,7 @@ fn tool_definitions_all_enabled() {
 
 #[test]
 fn tool_definitions_some_disabled() {
-    let mut enabled = [false; 7];
+    let mut enabled = vec![false; ALL_TOOL_NAMES.len()];
     enabled[0] = true; // only "read"
     let defs = tool_definitions_json(&enabled);
     assert_eq!(defs.len(), 1);
