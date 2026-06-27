@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use super::approval::ApprovalGate;
 use super::events::AgentEvent;
-use super::tools::{run_tool, ToolResult};
+use super::tools::{run_tool, ToolEnv, ToolResult};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -31,7 +31,7 @@ pub async fn run_chat_loop(
     messages: &mut Vec<Value>,
     tools: &[Value],
     cwd: &Path,
-    enabled: &[bool; 7],
+    env: &ToolEnv,
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
     gate: &mut ApprovalGate,
@@ -147,7 +147,12 @@ pub async fn run_chat_loop(
             // Execute tool calls in parallel where safe.
             // Mutating tools (write, edit, bash) are run sequentially to avoid races.
             // Read-only tools (read, grep, find, ls) can run concurrently.
-            let is_readonly = |name: &str| matches!(name, "read" | "grep" | "find" | "ls");
+            let is_readonly = |name: &str| {
+                matches!(
+                    name,
+                    "read" | "grep" | "find" | "ls" | "web_search" | "web_fetch"
+                )
+            };
 
             // Split into consecutive groups: each group is either all-readonly (parallel) or a single mutating call.
             struct ToolCall {
@@ -193,9 +198,9 @@ pub async fn run_chat_loop(
                         let cwd_owned = cwd.to_path_buf();
                         let name = tc.name.clone();
                         let args = tc.args.clone();
-                        let enabled_copy = *enabled;
+                        let env_copy = env.clone();
                         handles.push(tokio::task::spawn_blocking(move || {
-                            run_tool(&cwd_owned, &name, &args, &enabled_copy)
+                            run_tool(&cwd_owned, &name, &args, &env_copy)
                         }));
                     }
                     // Collect results in order
@@ -230,7 +235,7 @@ pub async fn run_chat_loop(
                         args: Some(tc.args.clone()),
                     });
                     let result = match gate.request(tx, cancel, &tc.name, &tc.args) {
-                        Ok(()) => run_tool(cwd, &tc.name, &tc.args, enabled),
+                        Ok(()) => run_tool(cwd, &tc.name, &tc.args, env),
                         Err(reason) => ToolResult {
                             output: reason,
                             is_error: true,

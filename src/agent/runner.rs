@@ -13,7 +13,7 @@ use crate::agent::events::AgentEvent;
 use crate::agent::history::build_openai_messages;
 use crate::agent::openai::run_chat_loop;
 use crate::agent::prompt::build_system_prompt;
-use crate::agent::tools::tool_definitions_json;
+use crate::agent::tools::{tool_definitions_json, ToolEnv};
 use crate::model::ChatMessage;
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{AppSettings, LlmProviderKind, ProviderProfile};
@@ -112,6 +112,10 @@ pub fn spawn_agent_run(
             let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
             let mut messages = build_openai_messages(&system, &chat_for_history);
             let tools = tool_definitions_json(&settings.tools_enabled);
+            let tool_env = ToolEnv {
+                enabled: settings.tools_enabled.clone(),
+                web_search_url: settings.searxng_url.clone(),
+            };
             let model = profile.model_id.clone();
             let client = match reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
@@ -150,7 +154,7 @@ pub fn spawn_agent_run(
                             &mut messages,
                             &tools,
                             cwd_ref,
-                            &settings.tools_enabled,
+                            &tool_env,
                             &tx,
                             &cancel,
                             &mut gate,
@@ -174,7 +178,7 @@ pub fn spawn_agent_run(
                             &mut messages,
                             &tools,
                             cwd_ref,
-                            &settings.tools_enabled,
+                            &tool_env,
                             &tx,
                             &cancel,
                             &mut gate,
@@ -200,7 +204,7 @@ pub fn spawn_agent_run(
                         &mut messages,
                         &tools,
                         cwd_ref,
-                        &settings.tools_enabled,
+                        &tool_env,
                         &tx,
                         &cancel,
                         &mut gate,
@@ -225,7 +229,7 @@ pub fn spawn_agent_run(
                         &mut messages,
                         &tools,
                         cwd_ref,
-                        &settings.tools_enabled,
+                        &tool_env,
                         &tx,
                         &cancel,
                         &mut gate,
@@ -259,7 +263,7 @@ pub fn spawn_agent_run(
                             &mut messages,
                             &tools,
                             cwd_ref,
-                            &settings.tools_enabled,
+                            &tool_env,
                             &tx,
                             &cancel,
                             &mut gate,
@@ -283,7 +287,7 @@ pub fn spawn_agent_run(
                             &mut messages,
                             &tools,
                             cwd_ref,
-                            &settings.tools_enabled,
+                            &tool_env,
                             &tx,
                             &cancel,
                             &mut gate,
