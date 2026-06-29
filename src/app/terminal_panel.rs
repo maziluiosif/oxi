@@ -44,8 +44,7 @@ impl OxiApp {
 
     fn render_terminal_resize_handle(&mut self, ui: &mut egui::Ui) {
         let full_w = ui.available_width();
-        let (rect, resp) =
-            ui.allocate_exact_size(egui::vec2(full_w, RESIZE_H), Sense::drag());
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(full_w, RESIZE_H), Sense::drag());
         if resp.hovered() || resp.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
         }

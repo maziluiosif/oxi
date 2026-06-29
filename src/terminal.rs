@@ -266,10 +266,10 @@ impl TerminalSession {
         let cols = self.cols;
         let rows = self.rows;
         let cell_at = |pos: Pos2| -> (u16, u16) {
-            let col = (((pos.x - rect.left()) / cell_w).floor() as i32)
-                .clamp(0, cols as i32 - 1) as u16;
-            let row = (((pos.y - rect.top()) / cell_h).floor() as i32)
-                .clamp(0, rows as i32 - 1) as u16;
+            let col =
+                (((pos.x - rect.left()) / cell_w).floor() as i32).clamp(0, cols as i32 - 1) as u16;
+            let row =
+                (((pos.y - rect.top()) / cell_h).floor() as i32).clamp(0, rows as i32 - 1) as u16;
             (col, row)
         };
 
@@ -446,14 +446,9 @@ impl TerminalSession {
             let (crow, ccol) = screen.cursor_position();
             let cx = rect.left() + ccol as f32 * cell_w;
             let cy = rect.top() + crow as f32 * cell_h;
-            let cursor_rect =
-                Rect::from_min_size(egui::pos2(cx, cy), egui::vec2(cell_w, cell_h));
+            let cursor_rect = Rect::from_min_size(egui::pos2(cx, cy), egui::vec2(cell_w, cell_h));
             if focused {
-                painter.rect_filled(
-                    cursor_rect,
-                    0.0,
-                    theme::c_accent().linear_multiply(0.55),
-                );
+                painter.rect_filled(cursor_rect, 0.0, theme::c_accent().linear_multiply(0.55));
             } else {
                 painter.rect_stroke(cursor_rect, 0.0, Stroke::new(1.0, theme::c_accent()));
             }
@@ -505,7 +500,14 @@ fn encode_mouse(
         _ => {
             let cb_out = if pressed { cb } else { (cb & !0b11) | 0b11 };
             let clamp = |v: u32| (v.min(223) as u8).saturating_add(32);
-            vec![0x1b, b'[', b'M', cb_out.saturating_add(32), clamp(cx), clamp(cy)]
+            vec![
+                0x1b,
+                b'[',
+                b'M',
+                cb_out.saturating_add(32),
+                clamp(cx),
+                clamp(cy),
+            ]
         }
     }
 }

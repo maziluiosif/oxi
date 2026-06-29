@@ -19,8 +19,8 @@ mod settings_ui;
 mod sidebar;
 mod state;
 mod streaming;
-mod terminal_panel;
 mod task_runner;
+mod terminal_panel;
 
 pub use state::{
     ConnectionState, ConversationState, PendingApproval, RunState, SessionKey, SessionRunState,

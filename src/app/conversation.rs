@@ -206,13 +206,11 @@ impl OxiApp {
                         if ui
                             .add_sized(
                                 [34.0, 28.0],
-                                Button::new(
-                                    RichText::new(">_").size(FS_SMALL).color(if term_on {
-                                        c_accent()
-                                    } else {
-                                        c_text()
-                                    }),
-                                )
+                                Button::new(RichText::new(">_").size(FS_SMALL).color(if term_on {
+                                    c_accent()
+                                } else {
+                                    c_text()
+                                }))
                                 .fill(c_bg_elevated())
                                 .stroke(Stroke::new(1.0, c_border_subtle()))
                                 .rounding(8.0),
