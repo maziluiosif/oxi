@@ -40,7 +40,11 @@ pub fn context_char_budget_from_tokens(context_tokens: usize) -> usize {
     chars.max(8_192)
 }
 
-pub fn build_openai_messages(system: &str, chat: &[ChatMessage], context_char_budget: usize) -> Vec<Value> {
+pub fn build_openai_messages(
+    system: &str,
+    chat: &[ChatMessage],
+    context_char_budget: usize,
+) -> Vec<Value> {
     let system_msg = json!({ "role": "system", "content": system });
 
     // Build all candidate turn JSON values first.

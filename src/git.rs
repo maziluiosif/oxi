@@ -74,7 +74,10 @@ pub enum GitOp {
     Checkout(String),
     NewBranch(String),
     ShowCommit(String),
-    ShowDiff { path: String, staged: bool },
+    ShowDiff {
+        path: String,
+        staged: bool,
+    },
     ClearDiff,
     Pull,
     Push,
@@ -108,16 +111,10 @@ impl GitChannels {
     }
 }
 
-fn git_worker(
-    cwd: String,
-    op_rx: Receiver<GitOp>,
-    snap_tx: Sender<GitState>,
-    ctx: egui::Context,
-) {
+fn git_worker(cwd: String, op_rx: Receiver<GitOp>, snap_tx: Sender<GitState>, ctx: egui::Context) {
     use std::cell::RefCell;
     // The worktree root the worker shells out in; can change via `SetCwd`.
-    let root_cell: RefCell<String> =
-        RefCell::new(git_root(&cwd).unwrap_or_else(|| cwd.clone()));
+    let root_cell: RefCell<String> = RefCell::new(git_root(&cwd).unwrap_or_else(|| cwd.clone()));
 
     // Initial busy marker the UI shows while the first snapshot is being built.
     let init = GitState {
@@ -220,7 +217,10 @@ fn list_branches(root: &str) -> Vec<String> {
     if !ok {
         return Vec::new();
     }
-    out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+    out.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
 fn ahead_behind(root: &str, branch: &str) -> (usize, usize) {
@@ -228,7 +228,10 @@ fn ahead_behind(root: &str, branch: &str) -> (usize, usize) {
         return (0, 0);
     }
     // @{u} works only when an upstream is configured.
-    let (ok, out) = git(root, &["rev-list", "--left-right", "--count", "@{u}...HEAD"]);
+    let (ok, out) = git(
+        root,
+        &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
+    );
     if !ok {
         return (0, 0);
     }
@@ -270,9 +273,8 @@ fn parse_porcelain(root: &str) -> (Vec<GitEntry>, Vec<GitEntry>) {
         let x = token.as_bytes()[0] as char;
         let y = token.as_bytes()[1] as char;
         let rest = &token[3..];
-        let conflict = matches!(x, 'U' | 'A' | 'D') && matches!(y, 'U' | 'A' | 'D')
-            || x == 'U'
-            || y == 'U';
+        let conflict =
+            matches!(x, 'U' | 'A' | 'D') && matches!(y, 'U' | 'A' | 'D') || x == 'U' || y == 'U';
 
         // Rename: old path is `rest`, new path is the next token.
         let (path, _consumed_extra) = if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
@@ -316,7 +318,16 @@ fn parse_log(root: &str) -> Vec<GitCommit> {
     let sep = "%x01"; // SOH record separator
     let field_sep = "%x02"; // STX
     let format = format!("%H{field_sep}%ad{field_sep}%an{field_sep}%s{sep}");
-    let (_ok, out) = git(root, &["log", "-n", "60", "--date=short", &format!("--pretty={format}")]);
+    let (_ok, out) = git(
+        root,
+        &[
+            "log",
+            "-n",
+            "60",
+            "--date=short",
+            &format!("--pretty={format}"),
+        ],
+    );
     let mut entries = Vec::new();
     for rec in out.split('\u{1}') {
         let rec = rec.trim_start_matches('\u{2}');
@@ -379,11 +390,7 @@ fn truncate(s: &str, max: usize) -> String {
 /// Build a full snapshot of the repository. If `after_op` was a mutating op we
 /// may carry its error message. `diff_path` lets us refresh the on-screen diff
 /// after the working tree changed.
-fn snapshot(
-    root: &str,
-    diff_pref: Option<(String, bool)>,
-    error: Option<String>,
-) -> GitState {
+fn snapshot(root: &str, diff_pref: Option<(String, bool)>, error: Option<String>) -> GitState {
     snapshot_with(root, diff_pref, None, error)
 }
 /// Like [`snapshot`] but with an optional precomputed (title, text) diff that replaces
@@ -411,17 +418,21 @@ fn snapshot_with(
         Some(preset)
     } else {
         diff_pref.as_ref().map(|(p, staged)| {
-        let untracked = !staged && unstaged.iter().any(|e| e.status == '?' && e.path == *p);
-        let text = if *staged {
-            show_diff(root, p, true)
-        } else if untracked {
-            untracked_full(root, p)
-        } else {
-            show_diff(root, p, false)
-        };
-        let title = if *staged { format!("Staged: {p}") } else { p.clone() };
-        (title, text)
-    })
+            let untracked = !staged && unstaged.iter().any(|e| e.status == '?' && e.path == *p);
+            let text = if *staged {
+                show_diff(root, p, true)
+            } else if untracked {
+                untracked_full(root, p)
+            } else {
+                show_diff(root, p, false)
+            };
+            let title = if *staged {
+                format!("Staged: {p}")
+            } else {
+                p.clone()
+            };
+            (title, text)
+        })
     };
 
     let current_diff_path = diff_pref.as_ref().map(|(p, _)| p.clone());
@@ -477,8 +488,7 @@ fn handle_op(root: &str, op: GitOp) -> GitState {
                 // We must classify each path; easiest: do both a checkout and a clean.
                 // To be safe, only `clean` untracked ones.
                 let is_untracked = {
-                    let (_ok, out) =
-                        git(root, &["status", "--porcelain=v1", "--", p]);
+                    let (_ok, out) = git(root, &["status", "--porcelain=v1", "--", p]);
                     out.starts_with("??")
                 };
                 if is_untracked {
@@ -530,7 +540,10 @@ fn handle_op(root: &str, op: GitOp) -> GitState {
             if hash.is_empty() {
                 return snapshot(root, None, error);
             }
-            let (ok, out) = git(root, &["show", "--no-color", "--patch", "--stat=200", &hash]);
+            let (ok, out) = git(
+                root,
+                &["show", "--no-color", "--patch", "--stat=200", &hash],
+            );
             if ok {
                 let text = truncate(&out, MAX_DIFF_CHARS);
                 let title = format!("Commit {hash}");
@@ -561,7 +574,10 @@ fn handle_op(root: &str, op: GitOp) -> GitState {
                 let (bok, branch) = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]);
                 let branch = branch.trim();
                 if !bok || branch.is_empty() || branch == "HEAD" {
-                    (false, "Cannot determine the current branch to push.".to_string())
+                    (
+                        false,
+                        "Cannot determine the current branch to push.".to_string(),
+                    )
                 } else {
                     git(root, &["push", "--set-upstream", "origin", branch])
                 }

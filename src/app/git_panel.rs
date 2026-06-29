@@ -48,7 +48,11 @@ impl OxiApp {
             return;
         }
         let cwd = self.active_workspace().root_path.clone();
-        let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::SetCwd(cwd)));
+        let _ = self
+            .conv
+            .git_tx
+            .as_ref()
+            .map(|t| t.send(GitOp::SetCwd(cwd)));
     }
 
     /// Make sure the git worker thread exists and is rooted at the active workspace.
@@ -101,9 +105,8 @@ impl OxiApp {
             return;
         };
         let system_prompt = self.conv.settings.commit_msg_system_prompt.clone();
-        let user_prompt = format!(
-            "Write a git commit message for the following diff.\n\n```diff\n{diff}\n```"
-        );
+        let user_prompt =
+            format!("Write a git commit message for the following diff.\n\n```diff\n{diff}\n```");
         let (rx, _handle) = crate::agent::spawn_completion(crate::agent::CompleteRequest {
             profile,
             system_prompt,
@@ -248,12 +251,7 @@ impl OxiApp {
     fn render_git_header(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(
-                RichText::new("⎇")
-                    .size(FS_H3)
-                    .color(c_accent())
-                    .strong(),
-            );
+            ui.label(RichText::new("⎇").size(FS_H3).color(c_accent()).strong());
             ui.label(
                 RichText::new("Source Control")
                     .size(FS_H3)
@@ -355,13 +353,15 @@ impl OxiApp {
             ] {
                 let selected = self.conv.git_tab == tab;
                 let n = match tab {
-                    GitTab::Changes => {
-                        self.conv.git.staged.len() + self.conv.git.unstaged.len()
-                    }
+                    GitTab::Changes => self.conv.git.staged.len() + self.conv.git.unstaged.len(),
                     GitTab::Branches => self.conv.git.branches.len(),
                     GitTab::History => self.conv.git.log.len(),
                 };
-                let label = if n > 0 { format!("{label} {n}") } else { label.to_string() };
+                let label = if n > 0 {
+                    format!("{label} {n}")
+                } else {
+                    label.to_string()
+                };
                 if crate::ui::chrome::pill_tab(ui, &label, selected) {
                     self.conv.git_tab = tab;
                 }
@@ -398,7 +398,11 @@ impl OxiApp {
                 self.request(GitOp::Commit(msg));
                 self.conv.git_commit_message.clear();
             }
-            let gen_label = if gen_active { "Generating…" } else { "✨ Generate" };
+            let gen_label = if gen_active {
+                "Generating…"
+            } else {
+                "✨ Generate"
+            };
             let gen_resp = ui
                 .add_enabled_ui(!gen_active, |ui| {
                     crate::ui::chrome::ghost_button(ui, gen_label, false)
@@ -463,10 +467,7 @@ impl OxiApp {
         }
 
         let available_h = ui.available_height();
-        let (staged, unstaged) = (
-            self.conv.git.staged.clone(),
-            self.conv.git.unstaged.clone(),
-        );
+        let (staged, unstaged) = (self.conv.git.staged.clone(), self.conv.git.unstaged.clone());
         ScrollArea::vertical()
             .id_salt("git_changes_scroll")
             .max_height(available_h)
@@ -490,13 +491,7 @@ impl OxiApp {
             });
     }
 
-    fn render_section(
-        &mut self,
-        ui: &mut Ui,
-        title: &str,
-        entries: &[GitEntry],
-        staged: bool,
-    ) {
+    fn render_section(&mut self, ui: &mut Ui, title: &str, entries: &[GitEntry], staged: bool) {
         ui.label(
             RichText::new(title.to_uppercase())
                 .size(FS_TINY)
@@ -521,8 +516,7 @@ impl OxiApp {
         _total: usize,
     ) {
         let full_w = ui.available_width();
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(full_w, 22.0), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 22.0), Sense::click());
         let hovered = response.hovered();
 
         // Selection highlight if this is the currently-viewed diff.
@@ -628,12 +622,7 @@ impl OxiApp {
 
     fn render_git_diff(&mut self, ui: &mut Ui, title: &str, diff_text: &str) {
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(title)
-                    .size(FS_TINY)
-                    .color(c_text())
-                    .strong(),
-            );
+            ui.label(RichText::new(title).size(FS_TINY).color(c_text()).strong());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add(
@@ -776,10 +765,13 @@ impl OxiApp {
 
     fn render_commit_row(&mut self, ui: &mut Ui, commit: &crate::git::GitCommit) {
         let full_w = ui.available_width();
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(full_w, 40.0), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 40.0), Sense::click());
         let hovered = response.hovered();
-        let fill = if hovered { c_row_hover() } else { Color32::TRANSPARENT };
+        let fill = if hovered {
+            c_row_hover()
+        } else {
+            Color32::TRANSPARENT
+        };
         ui.painter().rect_filled(rect, Rounding::same(5.0), fill);
         ui.allocate_new_ui(
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(8.0, 4.0))),
@@ -804,12 +796,9 @@ impl OxiApp {
                     });
                     ui.add_space(1.0);
                     ui.label(
-                        RichText::new(format!(
-                            "{} · {}",
-                            commit.author, commit.date
-                        ))
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
+                        RichText::new(format!("{} · {}", commit.author, commit.date))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
                     );
                 });
             },
@@ -824,9 +813,12 @@ impl OxiApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             response.on_hover_ui(|ui| {
                 ui.label(
-                    RichText::new(format!("{}\n{} · {}\n\nClick: show full diff · Right-click: copy hash", commit.message, commit.author, commit.date))
-                        .size(FS_SMALL)
-                        .color(c_text()),
+                    RichText::new(format!(
+                        "{}\n{} · {}\n\nClick: show full diff · Right-click: copy hash",
+                        commit.message, commit.author, commit.date
+                    ))
+                    .size(FS_SMALL)
+                    .color(c_text()),
                 );
             });
         }

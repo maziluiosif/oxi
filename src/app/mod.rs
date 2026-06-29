@@ -24,8 +24,8 @@ mod task_runner;
 mod terminal_panel;
 
 pub use state::{
-    ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState,
-    SessionKey, SessionRunState, Workspace,
+    ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState, SessionKey,
+    SessionRunState, Workspace,
 };
 
 pub struct OxiApp {
