@@ -159,7 +159,7 @@ impl OxiApp {
 
                     let workspace = workspace_sidebar_label(&self.active_workspace().root_path);
                     ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 126.0).max(80.0));
+                        ui.set_width((ui.available_width() - 172.0).max(80.0));
                         ui.add(
                             Label::new(
                                 RichText::new("Chat")
@@ -219,6 +219,27 @@ impl OxiApp {
                             .clicked()
                         {
                             self.toggle_terminal();
+                        }
+                        ui.add_space(6.0);
+                        let git_on = self.conv.git_open;
+                        if ui
+                            .add_sized(
+                                [34.0, 28.0],
+                                Button::new(
+                                    RichText::new("⎇").size(FS_SMALL).color(if git_on {
+                                        c_accent()
+                                    } else {
+                                        c_text()
+                                    }),
+                                )
+                                .fill(c_bg_elevated())
+                                .stroke(Stroke::new(1.0, c_border_subtle()))
+                                .rounding(8.0),
+                            )
+                            .on_hover_text("Toggle source-control (git) panel")
+                            .clicked()
+                        {
+                            self.toggle_git_panel();
                         }
                         self.render_header_status_chip(ui);
                     });

@@ -126,4 +126,16 @@ pub struct ConversationState {
     pub composer_measured_text_h: f32,
     /// Full height of the composer row (from the previous frame) for splitting transcript vs input.
     pub composer_measured_full_h: f32,
+    /// Source-control (git) panel visibility and width (persisted in settings).
+    pub git_open: bool,
+    pub git_width: f32,
+    pub git_tab: crate::app::git_panel::GitTab,
+    pub git: crate::git::GitState,
+    pub git_commit_message: String,
+    pub git_new_branch: String,
+    /// Git worker request channel. Responses arrive on `git_rx`; drained each frame.
+    pub git_tx: Option<std::sync::mpsc::Sender<crate::git::GitOp>>,
+    pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
+    /// egui context used for the git worker so it can request repaints.
+    pub git_ctx: eframe::egui::Context,
 }
