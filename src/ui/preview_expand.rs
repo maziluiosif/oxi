@@ -20,6 +20,25 @@ pub fn truncate_lines_preview(s: &str, max_lines: usize) -> String {
     preview
 }
 
+/// Last `max_lines` lines; prepends a `…` line when the source continues. Used for live
+/// streaming panels (e.g. the thinking bubble) so the newest text is always visible while
+/// the model is reasoning, instead of the now-stale first lines.
+pub fn truncate_lines_tail_preview(s: &str, max_lines: usize) -> String {
+    let all: Vec<&str> = s.lines().collect();
+    let truncated = all.len() > max_lines;
+    let tail: Vec<&str> = if truncated {
+        all[all.len() - max_lines..].to_vec()
+    } else {
+        all
+    };
+    let mut preview = tail.join("\n");
+    if truncated {
+        // Keep the leading ellipsis above the (already joined) tail.
+        preview = format!("…\n{}", preview);
+    }
+    preview
+}
+
 pub fn expand_persist_id(base: Id) -> Id {
     base.with("full")
 }
@@ -52,5 +71,35 @@ pub fn clickable_expand_overlay(ui: &mut Ui, rect: Rect, persist_id: Id) {
         })
     {
         toggle_expanded(ui, persist_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tail_preview_shows_last_lines_with_leading_ellipsis() {
+        let s = "1\n2\n3\n4\n5\n6";
+        assert_eq!(truncate_lines_tail_preview(s, 3), "…\n4\n5\n6");
+    }
+
+    #[test]
+    fn tail_preview_under_limit_shows_full_text() {
+        let s = "1\n2\n3";
+        assert_eq!(truncate_lines_tail_preview(s, 5), "1\n2\n3");
+    }
+
+    #[test]
+    fn tail_preview_exact_boundary_no_ellipsis() {
+        let s = "1\n2\n3";
+        assert_eq!(truncate_lines_tail_preview(s, 3), "1\n2\n3");
+    }
+
+    #[test]
+    fn head_preview_unchanged() {
+        // sanity: the existing head truncation still behaves as before.
+        let s = "1\n2\n3\n4\n5\n6";
+        assert_eq!(truncate_lines_preview(s, 3), "1\n2\n3\n…");
     }
 }

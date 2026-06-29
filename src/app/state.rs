@@ -24,8 +24,9 @@ pub struct PendingApproval {
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
     #[default]
-    Profiles,
-    Prompt,
+    Providers,
+    Agent,
+    Appearance,
 }
 
 /// One project root and its chat tabs.
