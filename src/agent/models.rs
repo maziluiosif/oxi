@@ -68,8 +68,8 @@ pub async fn fetch_models(
         let snippet: String = text.chars().take(300).collect();
         return Err(format!("models HTTP {status}: {snippet}"));
     }
-    let parsed: ListModelsResponse = serde_json::from_str(&text)
-        .map_err(|e| format!("models parse failed: {e}"))?;
+    let parsed: ListModelsResponse =
+        serde_json::from_str(&text).map_err(|e| format!("models parse failed: {e}"))?;
     let mut models = parsed.data;
     models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
@@ -79,7 +79,13 @@ pub async fn fetch_models(
 /// (`opencode/`, `openai/`, `openrouter/`, `anthropic/`, `opencode-go/`).
 fn normalize_model_key(model: &str) -> String {
     let mut m = model.trim().to_ascii_lowercase();
-    for prefix in ["opencode-go/", "opencode/", "openrouter/", "openai/", "anthropic/"] {
+    for prefix in [
+        "opencode-go/",
+        "opencode/",
+        "openrouter/",
+        "openai/",
+        "anthropic/",
+    ] {
         if let Some(rest) = m.strip_prefix(prefix) {
             m = rest.to_string();
             break;
@@ -227,7 +233,10 @@ mod tests {
         // "gpt-4o" exact match first
         assert_eq!(context_window_for_model("gpt-4o"), Some(128_000));
         // "gpt-4o-mini" exact entry wins
-        assert_eq!(context_window_for_model("gpt-4o-mini-2024-07-18"), Some(128_000));
+        assert_eq!(
+            context_window_for_model("gpt-4o-mini-2024-07-18"),
+            Some(128_000)
+        );
     }
 
     #[test]
@@ -243,6 +252,9 @@ mod tests {
             serde_json::from_str(body).expect("opencode go models must parse");
         let mut ids: Vec<String> = parsed.data.into_iter().map(|m| m.id).collect();
         ids.sort();
-        assert_eq!(ids, vec!["glm-5.2", "kimi-k2.7-code", "minimax-m3", "qwen3.7-max"]);
+        assert_eq!(
+            ids,
+            vec!["glm-5.2", "kimi-k2.7-code", "minimax-m3", "qwen3.7-max"]
+        );
     }
 }

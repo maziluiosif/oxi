@@ -588,7 +588,11 @@ impl OxiApp {
             // Model id ─ with dropdown of models fetched from the provider's /v1/models.
             field_label(ui, "Model id");
             let pid = self.conv.settings.profiles[idx].id.clone();
-            let have = self.conv.fetched_models.get(&pid).is_some_and(|f| !f.models.is_empty());
+            let have = self
+                .conv
+                .fetched_models
+                .get(&pid)
+                .is_some_and(|f| !f.models.is_empty());
             ui.horizontal(|ui| {
                 if have {
                     let fetched = self
@@ -607,17 +611,11 @@ impl OxiApp {
                         .selected_text(label)
                         .width(ui.available_width() - 30.0)
                         .show_ui(ui, |ui| {
-                            if !current.is_empty()
-                                && fetched.iter().all(|x| x != &current)
-                            {
-                                let _ =
-                                    ui.selectable_label(false, format!("{current} (custom)"));
+                            if !current.is_empty() && fetched.iter().all(|x| x != &current) {
+                                let _ = ui.selectable_label(false, format!("{current} (custom)"));
                             }
                             for m in &fetched {
-                                if ui
-                                    .selectable_label(*m == current, m.clone())
-                                    .clicked()
-                                {
+                                if ui.selectable_label(*m == current, m.clone()).clicked() {
                                     self.conv.settings.profiles[idx].model_id = m.clone();
                                 }
                             }
@@ -649,7 +647,11 @@ impl OxiApp {
                 if let Some(e) = &f.error {
                     ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
                 } else if f.loading {
-                    ui.label(RichText::new("Loading models…").size(FS_TINY).color(c_text_muted()));
+                    ui.label(
+                        RichText::new("Loading models…")
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
                 } else if !f.models.is_empty() {
                     ui.label(
                         RichText::new(format!("{} models available", f.models.len()))
@@ -677,7 +679,12 @@ impl OxiApp {
                         parsed.and_then(|n| if n > 0 { Some(n) } else { None });
                 }
                 if ui
-                    .add(egui::Button::new("Auto").fill(c_bg_elevated_2()).stroke(Stroke::new(1.0, c_border_subtle())).rounding(7.0))
+                    .add(
+                        egui::Button::new("Auto")
+                            .fill(c_bg_elevated_2())
+                            .stroke(Stroke::new(1.0, c_border_subtle()))
+                            .rounding(7.0),
+                    )
                     .on_hover_text("Resolve context window from the model catalog")
                     .clicked()
                 {
@@ -922,12 +929,7 @@ impl OxiApp {
                         return;
                     }
                 };
-                let r = rt.block_on(crate::agent::fetch_models(
-                    &client,
-                    &base,
-                    &key,
-                    &extra,
-                ));
+                let r = rt.block_on(crate::agent::fetch_models(&client, &base, &key, &extra));
                 let r = r.map(|ms| ms.into_iter().map(|m| m.id).collect::<Vec<_>>());
                 let _ = tx.send(ModelFetchMsg {
                     profile_id,
@@ -946,10 +948,12 @@ fn resolve_fetch_key(profile: &ProviderProfile) -> Result<String, String> {
         return Ok(key.to_string());
     }
     match profile.provider {
-        LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => std::env::var("OPENAI_API_KEY")
-            .map_err(|_| "Set an API key to list models.".into()),
-        LlmProviderKind::OpenRouter => std::env::var("OPENROUTER_API_KEY")
-            .map_err(|_| "Set an API key to list models.".into()),
+        LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => {
+            std::env::var("OPENAI_API_KEY").map_err(|_| "Set an API key to list models.".into())
+        }
+        LlmProviderKind::OpenRouter => {
+            std::env::var("OPENROUTER_API_KEY").map_err(|_| "Set an API key to list models.".into())
+        }
         // OpenCode Go exposes the model list without auth.
         LlmProviderKind::OpenCodeGo => Ok(String::new()),
     }

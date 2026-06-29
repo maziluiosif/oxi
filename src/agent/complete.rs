@@ -102,13 +102,22 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             let key = configured_openai_key(&profile)?;
             let base = profile.effective_base_url();
             run_chat_loop(
-                &client, &base, &key, &model, &[], &mut messages, &tools,
+                &client,
+                &base,
+                &key,
+                &model,
+                &[],
+                &mut messages,
+                &tools,
                 std::path::Path::new("."),
                 &crate::agent::tools::ToolEnv {
                     enabled: Vec::new(),
                     web_search_url: String::new(),
                 },
-                &agent_tx, &cancel, &mut gate, max_rounds,
+                &agent_tx,
+                &cancel,
+                &mut gate,
+                max_rounds,
             )
             .await
         }
@@ -116,14 +125,22 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             let key = configured_openrouter_key(&profile)?;
             let base = profile.effective_base_url();
             run_chat_loop(
-                &client, &base, &key, &model, &openrouter_extra_headers(&profile),
-                &mut messages, &tools,
+                &client,
+                &base,
+                &key,
+                &model,
+                &openrouter_extra_headers(&profile),
+                &mut messages,
+                &tools,
                 std::path::Path::new("."),
                 &crate::agent::tools::ToolEnv {
                     enabled: Vec::new(),
                     web_search_url: String::new(),
                 },
-                &agent_tx, &cancel, &mut gate, max_rounds,
+                &agent_tx,
+                &cancel,
+                &mut gate,
+                max_rounds,
             )
             .await
         }
@@ -137,26 +154,44 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     profile.effective_base_url()
                 };
                 run_codex_responses_loop(
-                    &client, &base, &creds.0, &creds.1, &model, &mut messages, &tools,
+                    &client,
+                    &base,
+                    &creds.0,
+                    &creds.1,
+                    &model,
+                    &mut messages,
+                    &tools,
                     std::path::Path::new("."),
                     &crate::agent::tools::ToolEnv {
                         enabled: Vec::new(),
                         web_search_url: String::new(),
                     },
-                    &agent_tx, &cancel, &mut gate, max_rounds,
+                    &agent_tx,
+                    &cancel,
+                    &mut gate,
+                    max_rounds,
                 )
                 .await
             } else {
                 let key = configured_openai_key(&profile)?;
                 let base = profile.effective_base_url();
                 run_chat_loop(
-                    &client, &base, &key, &model, &[], &mut messages, &tools,
+                    &client,
+                    &base,
+                    &key,
+                    &model,
+                    &[],
+                    &mut messages,
+                    &tools,
                     std::path::Path::new("."),
                     &crate::agent::tools::ToolEnv {
                         enabled: Vec::new(),
                         web_search_url: String::new(),
                     },
-                    &agent_tx, &cancel, &mut gate, max_rounds,
+                    &agent_tx,
+                    &cancel,
+                    &mut gate,
+                    max_rounds,
                 )
                 .await
             }
@@ -164,17 +199,29 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         LlmProviderKind::OpenCodeGo => {
             let key = configured_opencode_go_key(&profile)?;
             let base = profile.effective_base_url();
-            let model = model.strip_prefix("opencode-go/").unwrap_or(&model).to_string();
+            let model = model
+                .strip_prefix("opencode-go/")
+                .unwrap_or(&model)
+                .to_string();
             if opencode_go_model_uses_anthropic(&model) {
                 let anthropic_base = base.trim_end_matches("/v1").to_string();
                 run_anthropic_loop(
-                    &client, &anthropic_base, &key, &model, &[], &mut messages, &tools,
+                    &client,
+                    &anthropic_base,
+                    &key,
+                    &model,
+                    &[],
+                    &mut messages,
+                    &tools,
                     std::path::Path::new("."),
                     &crate::agent::tools::ToolEnv {
                         enabled: Vec::new(),
                         web_search_url: String::new(),
                     },
-                    &agent_tx, &cancel, &mut gate, max_rounds,
+                    &agent_tx,
+                    &cancel,
+                    &mut gate,
+                    max_rounds,
                 )
                 .await
             } else {
@@ -184,13 +231,22 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     format!("{}/v1", base.trim_end_matches('/'))
                 };
                 run_chat_loop(
-                    &client, &chat_base, &key, &model, &[], &mut messages, &tools,
+                    &client,
+                    &chat_base,
+                    &key,
+                    &model,
+                    &[],
+                    &mut messages,
+                    &tools,
                     std::path::Path::new("."),
                     &crate::agent::tools::ToolEnv {
                         enabled: Vec::new(),
                         web_search_url: String::new(),
                     },
-                    &agent_tx, &cancel, &mut gate, max_rounds,
+                    &agent_tx,
+                    &cancel,
+                    &mut gate,
+                    max_rounds,
                 )
                 .await
             }
@@ -199,7 +255,9 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
 
     // The agent producer side is done; drop the sender so the collector finishes.
     drop(agent_tx);
-    let collected = collector.await.map_err(|e| format!("collector join: {e}"))??;
+    let collected = collector
+        .await
+        .map_err(|e| format!("collector join: {e}"))??;
 
     if let Err(e) = r {
         if cancel.load(Ordering::SeqCst) {
@@ -218,23 +276,19 @@ async fn collect_deltas(
     max_chars: Option<usize>,
 ) -> Result<String, String> {
     let mut out = String::new();
-    loop {
-        match rx.recv() {
-            Ok(ev) => match ev {
-                AgentEvent::TextDelta(d) => {
-                    out.push_str(&d);
-                    let _ = tx.send(CompleteEvent::Delta(d));
-                    if let Some(cap) = max_chars {
-                        if out.chars().count() >= cap {
-                            break;
-                        }
+    while let Ok(ev) = rx.recv() {
+        match ev {
+            AgentEvent::TextDelta(d) => {
+                out.push_str(&d);
+                let _ = tx.send(CompleteEvent::Delta(d));
+                if let Some(cap) = max_chars {
+                    if out.chars().count() >= cap {
+                        break;
                     }
                 }
-                AgentEvent::StreamError(e) => return Err(e),
-                _ => {}
-            },
-            // The producer side was dropped — no more deltas are coming.
-            Err(_) => break,
+            }
+            AgentEvent::StreamError(e) => return Err(e),
+            _ => {}
         }
     }
     Ok(out)

@@ -508,11 +508,10 @@ impl OxiApp {
         if sep.dragged() {
             // Dragging the left edge left (negative dx) grows the panel.
             let dx = ui.input(|i| i.pointer.delta().x);
-            self.conv.git_width =
-                (self.conv.git_width - dx).clamp(
-                    crate::app::git_panel::GIT_W_MIN,
-                    crate::app::git_panel::GIT_W_MAX,
-                );
+            self.conv.git_width = (self.conv.git_width - dx).clamp(
+                crate::app::git_panel::GIT_W_MIN,
+                crate::app::git_panel::GIT_W_MAX,
+            );
             self.conv.settings.git_width = self.conv.git_width;
         }
         if sep.drag_stopped() {
@@ -526,8 +525,11 @@ impl OxiApp {
         } else {
             c_border_subtle()
         };
-        ui.painter()
-            .vline(sep_rect.center().x, sep_rect.y_range(), Stroke::new(1.0, col));
+        ui.painter().vline(
+            sep_rect.center().x,
+            sep_rect.y_range(),
+            Stroke::new(1.0, col),
+        );
     }
 
     fn render_sidebar_resize_sep(&mut self, ui: &mut Ui, full_h: f32, min_w: f32, max_w: f32) {

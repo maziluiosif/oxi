@@ -119,8 +119,7 @@ impl ProviderProfile {
                 return cw;
             }
         }
-        crate::agent::models::context_window_for_model(&self.model_id)
-            .unwrap_or(fallback_default)
+        crate::agent::models::context_window_for_model(&self.model_id).unwrap_or(fallback_default)
     }
 }
 

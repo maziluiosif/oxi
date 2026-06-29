@@ -111,7 +111,8 @@ pub fn spawn_agent_run(
             };
             let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
             let context_tokens = profile.effective_context_window(settings.context_window_default);
-            let context_budget = crate::agent::history::context_char_budget_from_tokens(context_tokens);
+            let context_budget =
+                crate::agent::history::context_char_budget_from_tokens(context_tokens);
             let max_rounds = settings.max_tool_rounds;
             let mut messages = build_openai_messages(&system, &chat_for_history, context_budget);
             let tools = tool_definitions_json(&settings.tools_enabled);

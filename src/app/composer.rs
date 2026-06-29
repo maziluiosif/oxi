@@ -255,8 +255,12 @@ impl OxiApp {
                         .show_ui(ui, |ui| {
                             for m in &fetched {
                                 if ui.selectable_label(m == &current, m.clone()).clicked() {
-                                    if let Some(p) =
-                                        self.conv.settings.profiles.iter_mut().find(|pp| pp.id == pid)
+                                    if let Some(p) = self
+                                        .conv
+                                        .settings
+                                        .profiles
+                                        .iter_mut()
+                                        .find(|pp| pp.id == pid)
                                     {
                                         p.model_id = m.clone();
                                     }
