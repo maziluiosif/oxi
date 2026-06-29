@@ -151,6 +151,14 @@ pub struct ConversationState {
     pub git: crate::git::GitState,
     pub git_commit_message: String,
     pub git_new_branch: String,
+    /// Set while a commit-message generation is in flight: we've asked the git worker for
+    /// the diff and are waiting for it to come back so we can kick off the LLM completion.
+    pub commit_gen_pending: bool,
+    /// Receiver for the in-flight commit-message completion (deltas + terminal Done).
+    /// `Some` while generating; cleared when the run finishes.
+    pub commit_gen_rx: Option<std::sync::mpsc::Receiver<crate::agent::CompleteEvent>>,
+    /// Last commit-generation error, shown inline under the composer until the next run.
+    pub commit_gen_error: Option<String>,
     /// Git worker request channel. Responses arrive on `git_rx`; drained each frame.
     pub git_tx: Option<std::sync::mpsc::Sender<crate::git::GitOp>>,
     pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,

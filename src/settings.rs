@@ -206,6 +206,14 @@ pub struct AppSettings {
     /// match is found. Defaults to 128k (safe across all current providers).
     #[serde(default = "default_context_window")]
     pub context_window_default: usize,
+    /// Profile id used by the "generate commit message" feature. Empty = use the active
+    /// profile. Must reference an existing [`ProviderProfile`] id; unknown ids fall back
+    /// to the active profile at use time.
+    #[serde(default)]
+    pub commit_msg_profile_id: String,
+    /// System prompt for the "generate commit message" feature.
+    #[serde(default = "default_commit_msg_system_prompt")]
+    pub commit_msg_system_prompt: String,
 }
 
 fn default_require_approval() -> bool {
@@ -219,6 +227,20 @@ fn default_max_tool_rounds() -> u32 {
 fn default_context_window() -> usize {
     128_000
 }
+
+fn default_commit_msg_system_prompt() -> String {
+    DEFAULT_COMMIT_MSG_SYSTEM_PROMPT.to_string()
+}
+
+/// Default system prompt for the "generate commit message" feature.
+pub const DEFAULT_COMMIT_MSG_SYSTEM_PROMPT: &str =
+    "You generate concise, well-formed git commit messages from a staged/unstaged diff. \
+     Rules:\n\
+     - Output ONLY the commit message, no preamble, no code fences, no explanations.\n\
+     - Start with a single imperative subject line up to ~50 characters, lowercase where natural.\n\
+     - If the change is non-trivial, add a blank line then a short body (bullet points OK) wrapping at ~72 chars.\n\
+     - Do not mention the diff itself, file counts, or that this was AI-generated.\n\
+     - Follow Conventional Commits (e.g. feat:, fix:, refactor:, docs:, chore:) when it fits.";
 
 fn default_tools_enabled() -> Vec<bool> {
     vec![true; ALL_TOOL_NAMES.len()]
@@ -293,6 +315,8 @@ impl Default for AppSettings {
             ui_density: UiDensity::Normal,
             max_tool_rounds: default_max_tool_rounds(),
             context_window_default: default_context_window(),
+            commit_msg_profile_id: String::new(),
+            commit_msg_system_prompt: default_commit_msg_system_prompt(),
         }
     }
 }
@@ -376,6 +400,9 @@ impl AppSettings {
         if self.system_prompt.trim().is_empty() {
             self.system_prompt = crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string();
         }
+        if self.commit_msg_system_prompt.trim().is_empty() {
+            self.commit_msg_system_prompt = default_commit_msg_system_prompt();
+        }
         if !self.sidebar_width.is_finite() || self.sidebar_width <= 0.0 {
             self.sidebar_width = default_sidebar_width();
         }
@@ -432,6 +459,21 @@ impl AppSettings {
         self.profiles
             .iter()
             .find(|p| p.id == self.active_profile_id)
+    }
+
+    /// Profile used by the "generate commit message" feature. Falls back to the active
+    /// profile when no explicit id is configured or the stored id no longer exists.
+    pub fn commit_msg_profile(&self) -> Option<&ProviderProfile> {
+        if !self.commit_msg_profile_id.trim().is_empty() {
+            if let Some(p) = self
+                .profiles
+                .iter()
+                .find(|p| p.id == self.commit_msg_profile_id)
+            {
+                return Some(p);
+            }
+        }
+        self.active_profile()
     }
 
     pub fn set_active_profile(&mut self, id: impl AsRef<str>) {

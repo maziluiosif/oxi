@@ -124,7 +124,7 @@ impl OxiApp {
                         if ui
                             .add(
                                 Button::new(
-                                    RichText::new("✕  Close")
+                                    RichText::new("×  Close")
                                         .size(FS_SMALL)
                                         .color(c_text_muted()),
                                 )
@@ -172,9 +172,9 @@ impl OxiApp {
         ui.add_space(4.0);
 
         let items = [
-            (SettingsTab::Providers, "✦", "Models & providers"),
-            (SettingsTab::Agent, "✎", "Agent"),
-            (SettingsTab::Appearance, "◐", "Appearance"),
+            (SettingsTab::Providers, ICON_PROVIDERS, "Models & providers"),
+            (SettingsTab::Agent, ICON_AGENT, "Agent"),
+            (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
         ];
         for (tab, icon, label) in items {
             let selected = self.conv.settings_tab == tab;
@@ -421,6 +421,58 @@ impl OxiApp {
                     .hint_text(crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT),
             );
         });
+
+        // Commit-message generator section
+        ui.add_space(16.0);
+        settings_caption(ui, "Commit message generator");
+        ui.add_space(4.0);
+        card_frame().show(ui, |ui| {
+            ui.label(
+                RichText::new(
+                    "The ✨ Generate button in the git panel drafts a commit message from \
+                     the staged diff. Pick which provider profile it uses and its own system \
+                     prompt, kept separate from the agent prompt above.",
+                )
+                .size(FS_TINY)
+                .color(c_text_muted()),
+            );
+
+            ui.add_space(8.0);
+            settings_caption(ui, "Model profile");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let current = self.conv.settings.commit_msg_profile_id.clone();
+                if pill_tab(ui, "Active profile", current.trim().is_empty())
+                    && !current.trim().is_empty()
+                {
+                    self.conv.settings.commit_msg_profile_id.clear();
+                }
+                let profiles: Vec<(String, String)> = self
+                    .conv
+                    .settings
+                    .profiles
+                    .iter()
+                    .map(|p| (p.id.clone(), p.name.clone()))
+                    .collect();
+                for (id, name) in profiles {
+                    if pill_tab(ui, &name, id == current) && id != current {
+                        self.conv.settings.commit_msg_profile_id = id;
+                    }
+                }
+            });
+
+            ui.add_space(10.0);
+            settings_caption(ui, "System prompt");
+            ui.add_space(4.0);
+            ui.add(
+                TextEdit::multiline(&mut self.conv.settings.commit_msg_system_prompt)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(8)
+                    .margin(Margin::symmetric(8.0, 6.0))
+                    .hint_text(crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT),
+            );
+        });
+
         ui.add_space(8.0);
         ui.label(
             RichText::new("Tip: changes are saved automatically.")
@@ -940,14 +992,15 @@ fn inactive_pill(ui: &mut Ui, text: &str) {
 }
 
 fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Response {
-    let icon = if enabled { "✓" } else { "·" };
+    let icon = if enabled { ICON_CHECK } else { "·" };
     let label_fid = egui::FontId::proportional(FS_SMALL);
+    let icon_fid = egui::FontId::new(FS_SMALL, icon_font());
     let label_galley = ui
         .painter()
         .layout_no_wrap(name.to_string(), label_fid.clone(), c_text());
     let icon_galley = ui
         .painter()
-        .layout_no_wrap(icon.to_string(), label_fid.clone(), c_accent());
+        .layout_no_wrap(icon.to_string(), icon_fid, c_accent());
 
     let pad = egui::vec2(12.0, 6.0);
     let icon_gap = 8.0;

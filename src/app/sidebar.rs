@@ -146,15 +146,17 @@ impl OxiApp {
 
             let chev = if folded { "▸" } else { "▾" };
             ui.horizontal(|ui| {
-                let plus_w = if wi == self.conv.active_workspace {
-                    26.0
+                ui.spacing_mut().item_spacing.x = 2.0;
+                const ROW_H: f32 = 22.0;
+                const PLUS_W: f32 = 22.0;
+                let plus_reserved = if wi == self.conv.active_workspace {
+                    PLUS_W + 2.0
                 } else {
                     0.0
                 };
-                let row_w = (ui.available_width() - plus_w).max(40.0);
+                let row_w = (ui.available_width() - plus_reserved).max(40.0);
                 if ui
-                    .add_sized(
-                        [row_w, 0.0],
+                    .add(
                         Button::new(
                             RichText::new(format!("{chev}  {root_label}"))
                                 .size(FS_TINY)
@@ -162,7 +164,7 @@ impl OxiApp {
                         )
                         .frame(false)
                         .fill(Color32::TRANSPARENT)
-                        .min_size(egui::vec2(row_w, 22.0)),
+                        .min_size(egui::vec2(row_w, ROW_H)),
                     )
                     .on_hover_text("Fold or unfold chats")
                     .clicked()
@@ -171,11 +173,11 @@ impl OxiApp {
                 }
                 if wi == self.conv.active_workspace
                     && ui
-                        .add_sized(
-                            [22.0, 22.0],
+                        .add(
                             Button::new(RichText::new("＋").size(FS_TINY).color(c_text_muted()))
                                 .frame(false)
-                                .fill(Color32::TRANSPARENT),
+                                .fill(Color32::TRANSPARENT)
+                                .min_size(egui::vec2(PLUS_W, ROW_H)),
                         )
                         .on_hover_text("New chat in this workspace")
                         .clicked()

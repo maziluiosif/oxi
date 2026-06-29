@@ -23,7 +23,7 @@ fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
     let _ = tx.send(AgentEvent::AgentEnd);
 }
 
-fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -32,7 +32,7 @@ fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
         .map_err(|_| "Set OpenAI API key in profile or OPENAI_API_KEY, or sign in with ChatGPT (Codex) OAuth.".into())
 }
 
-fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -42,7 +42,7 @@ fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String
     })
 }
 
-fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -53,7 +53,7 @@ fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, Strin
     })
 }
 
-fn opencode_go_model_uses_anthropic(model: &str) -> bool {
+pub(super) fn opencode_go_model_uses_anthropic(model: &str) -> bool {
     let m = model
         .trim()
         .strip_prefix("opencode-go/")

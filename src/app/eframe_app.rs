@@ -16,6 +16,7 @@ impl eframe::App for OxiApp {
         self.drain_oauth(ctx);
         self.bind_git_ctx(ctx);
         self.drain_git(ctx);
+        self.drain_commit_gen(ctx);
         let any_assistant_streaming = self.conv.workspaces.iter().any(|w| {
             w.sessions.iter().any(|s| {
                 s.messages

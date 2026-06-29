@@ -173,7 +173,7 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
         egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
         |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.label(RichText::new(icon).size(FS_BODY).color(if selected {
+                ui.label(RichText::new(icon).size(FS_BODY).font(FontId::new(FS_BODY, icon_font())).color(if selected {
                     c_accent()
                 } else {
                     c_text_faint()
