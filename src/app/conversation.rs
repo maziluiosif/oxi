@@ -201,6 +201,27 @@ impl OxiApp {
                         {
                             self.new_chat();
                         }
+                        ui.add_space(6.0);
+                        let term_on = self.conv.terminal_open;
+                        if ui
+                            .add_sized(
+                                [34.0, 28.0],
+                                Button::new(
+                                    RichText::new(">_").size(FS_SMALL).color(if term_on {
+                                        c_accent()
+                                    } else {
+                                        c_text()
+                                    }),
+                                )
+                                .fill(c_bg_elevated())
+                                .stroke(Stroke::new(1.0, c_border_subtle()))
+                                .rounding(8.0),
+                            )
+                            .on_hover_text("Toggle terminal panel")
+                            .clicked()
+                        {
+                            self.toggle_terminal();
+                        }
                         self.render_header_status_chip(ui);
                     });
                 },
