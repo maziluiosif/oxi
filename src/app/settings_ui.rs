@@ -172,8 +172,9 @@ impl OxiApp {
         ui.add_space(4.0);
 
         let items = [
-            (SettingsTab::Profiles, "⚙", "Profiles & models"),
-            (SettingsTab::Prompt, "✎", "System prompt"),
+            (SettingsTab::Providers, "✦", "Models & providers"),
+            (SettingsTab::Agent, "✎", "Agent"),
+            (SettingsTab::Appearance, "◐", "Appearance"),
         ];
         for (tab, icon, label) in items {
             let selected = self.conv.settings_tab == tab;
@@ -213,15 +214,16 @@ impl OxiApp {
 
     fn render_settings_body(&mut self, ui: &mut Ui) {
         match self.conv.settings_tab {
-            SettingsTab::Profiles => self.render_settings_profiles_panel(ui),
-            SettingsTab::Prompt => self.render_settings_system_prompt_panel(ui),
+            SettingsTab::Providers => self.render_settings_providers_panel(ui),
+            SettingsTab::Agent => self.render_settings_agent_panel(ui),
+            SettingsTab::Appearance => self.render_settings_appearance_panel(ui),
         }
     }
 
-    fn render_settings_profiles_panel(&mut self, ui: &mut Ui) {
+    fn render_settings_providers_panel(&mut self, ui: &mut Ui) {
         settings_section_title(
             ui,
-            "Profiles & models",
+            "Models & providers",
             Some("Configure LLM providers, API keys, and the default model."),
         );
 
@@ -292,19 +294,33 @@ impl OxiApp {
 
         // Provider OAuth (single section below cards, for clarity)
         if provider == LlmProviderKind::GptCodex {
+            ui.add_space(6.0);
+            settings_caption(ui, "OAuth");
+            ui.add_space(6.0);
             self.render_codex_oauth_section(ui);
             ui.add_space(10.0);
         }
 
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(
+                "If a profile key is empty, the app falls back to environment variables. \
+                 OAuth still takes precedence where available.",
+            )
+            .size(FS_TINY)
+            .color(c_text_faint()),
+        );
+    }
+
+    fn render_settings_agent_panel(&mut self, ui: &mut Ui) {
         // Tools section
-        ui.add_space(8.0);
-        hairline(ui);
-        ui.add_space(18.0);
         settings_section_title(
             ui,
-            "Tools",
-            Some("Enable or disable the tools the agent is allowed to call."),
+            "Agent",
+            Some("Control which tools the agent can call, approval behavior, and web search."),
         );
+        settings_caption(ui, "Tools");
+        ui.add_space(4.0);
         card_frame().show(ui, |ui| {
             let n = ALL_TOOL_NAMES.len();
             ui.horizontal_wrapped(|ui| {
@@ -334,9 +350,13 @@ impl OxiApp {
             {
                 self.conv.settings.require_approval = require_approval;
             }
-            ui.add_space(10.0);
-            hairline(ui);
-            ui.add_space(8.0);
+        });
+
+        // Web search section
+        ui.add_space(16.0);
+        settings_caption(ui, "Web search");
+        ui.add_space(4.0);
+        card_frame().show(ui, |ui| {
             ui.label(
                 RichText::new("SearXNG URL (web_search)")
                     .size(FS_SMALL)
@@ -353,20 +373,37 @@ impl OxiApp {
                  Its JSON output format must be enabled (search.formats: [html, json]).",
             );
         });
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(
-                "If a profile key is empty, the app falls back to environment variables. \
-                 OAuth still takes precedence where available.",
-            )
-            .size(FS_TINY)
-            .color(c_text_faint()),
-        );
 
-        // Appearance section
+        // System prompt section
+        ui.add_space(16.0);
+        settings_caption(ui, "System prompt");
+        ui.add_space(4.0);
+        card_frame().show(ui, |ui| {
+            ui.label(
+                RichText::new(
+                    "Single editable prompt. Use {tools_list} to inject the currently enabled tools.",
+                )
+                .size(FS_TINY)
+                .color(c_text_muted()),
+            );
+            ui.add_space(4.0);
+            ui.add(
+                TextEdit::multiline(&mut self.conv.settings.system_prompt)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(20)
+                    .margin(Margin::symmetric(8.0, 6.0))
+                    .hint_text(crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT),
+            );
+        });
         ui.add_space(8.0);
-        hairline(ui);
-        ui.add_space(18.0);
+        ui.label(
+            RichText::new("Tip: changes are saved automatically.")
+                .size(FS_TINY)
+                .color(c_text_faint()),
+        );
+    }
+
+    fn render_settings_appearance_panel(&mut self, ui: &mut Ui) {
         settings_section_title(
             ui,
             "Appearance",
@@ -536,31 +573,6 @@ impl OxiApp {
             let id = self.conv.settings.profiles[idx].id.clone();
             self.conv.settings.remove_profile(&id);
         }
-    }
-
-    fn render_settings_system_prompt_panel(&mut self, ui: &mut Ui) {
-        settings_section_title(
-            ui,
-            "System prompt",
-            Some("Single editable prompt. Use {tools_list} to inject the currently enabled tools."),
-        );
-
-        card_frame().show(ui, |ui| {
-            settings_caption(ui, "System prompt template");
-            ui.add(
-                TextEdit::multiline(&mut self.conv.settings.system_prompt)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(20)
-                    .margin(Margin::symmetric(8.0, 6.0))
-                    .hint_text(crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT),
-            );
-        });
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("Tip: changes are saved automatically.")
-                .size(FS_TINY)
-                .color(c_text_faint()),
-        );
     }
 
     // ── OAuth sections ────────────────────────────────────────────────────────
