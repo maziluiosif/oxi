@@ -75,6 +75,11 @@ pub struct ProviderProfile {
     pub api_key: String,
     pub openrouter_http_referer: String,
     pub openrouter_title: String,
+    /// Optional explicit context window in tokens for this model/profile.
+    /// `None` (or `0`) = auto: look it up from the built-in model catalog, then fall
+    /// back to a conservative default. Set to a number to override the history trim budget.
+    #[serde(default)]
+    pub context_window: Option<usize>,
 }
 
 impl ProviderProfile {
@@ -88,6 +93,7 @@ impl ProviderProfile {
             api_key: String::new(),
             openrouter_http_referer: String::new(),
             openrouter_title: String::new(),
+            context_window: None,
         }
     }
 
@@ -102,6 +108,19 @@ impl ProviderProfile {
 
     pub fn subtitle(&self) -> String {
         format!("{} · {}", self.provider.label(), self.model_id)
+    }
+
+    /// Resolve the effective context window in tokens for this profile.
+    ///
+    /// Order: explicit profile override > built-in catalog > provider/model default.
+    pub fn effective_context_window(&self, fallback_default: usize) -> usize {
+        if let Some(cw) = self.context_window {
+            if cw > 0 {
+                return cw;
+            }
+        }
+        crate::agent::models::context_window_for_model(&self.model_id)
+            .unwrap_or(fallback_default)
     }
 }
 
@@ -180,10 +199,25 @@ pub struct AppSettings {
     /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
     #[serde(default)]
     pub ui_density: UiDensity,
+    /// Maximum number of agent tool rounds per run. `0` means unlimited. Default unlimited.
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: u32,
+    /// Fallback context window in tokens used when no per-profile override and no catalog
+    /// match is found. Defaults to 128k (safe across all current providers).
+    #[serde(default = "default_context_window")]
+    pub context_window_default: usize,
 }
 
 fn default_require_approval() -> bool {
     true
+}
+
+fn default_max_tool_rounds() -> u32 {
+    0
+}
+
+fn default_context_window() -> usize {
+    128_000
 }
 
 fn default_tools_enabled() -> Vec<bool> {
@@ -257,6 +291,8 @@ impl Default for AppSettings {
             git_width: default_git_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
+            max_tool_rounds: default_max_tool_rounds(),
+            context_window_default: default_context_window(),
         }
     }
 }
@@ -309,6 +345,7 @@ impl AppSettings {
                 },
                 openrouter_http_referer: old.openrouter_http_referer,
                 openrouter_title: old.openrouter_title,
+                context_window: None,
             },
             ProviderProfile::new("openai-default", LlmProviderKind::OpenAi, "OpenAI default"),
             ProviderProfile::new(
@@ -365,6 +402,17 @@ impl AppSettings {
             if profile.model_id.trim().is_empty() {
                 profile.model_id = profile.provider.default_model_id().to_string();
             }
+            if let Some(cw) = profile.context_window {
+                if cw > 0 {
+                    profile.context_window = Some(cw);
+                } else {
+                    // 0/null means "auto".
+                    profile.context_window = None;
+                }
+            }
+        }
+        if self.context_window_default == 0 {
+            self.context_window_default = default_context_window();
         }
         if self.active_profile().is_none() {
             self.active_profile_id = self.profiles[0].id.clone();

@@ -24,8 +24,8 @@ mod task_runner;
 mod terminal_panel;
 
 pub use state::{
-    ConnectionState, ConversationState, PendingApproval, RunState, SessionKey, SessionRunState,
-    Workspace,
+    ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState,
+    SessionKey, SessionRunState, Workspace,
 };
 
 pub struct OxiApp {
@@ -93,6 +93,8 @@ impl OxiApp {
                 git_tx: None,
                 git_rx: None,
                 git_ctx: eframe::egui::Context::default(),
+                fetched_models: std::collections::HashMap::new(),
+                model_rx: None,
             },
             terminal: None,
         };
