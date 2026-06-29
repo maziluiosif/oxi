@@ -6,6 +6,7 @@ mod model;
 mod oauth;
 mod session_store;
 mod settings;
+mod terminal;
 mod theme;
 mod ui;
 

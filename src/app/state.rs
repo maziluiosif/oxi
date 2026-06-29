@@ -113,6 +113,9 @@ pub struct ConversationState {
     pub input_history_draft: String,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
+    /// Bottom terminal panel visibility and height (persisted in settings).
+    pub terminal_open: bool,
+    pub terminal_height: f32,
     pub settings: AppSettings,
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
