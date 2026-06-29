@@ -356,6 +356,7 @@ fn render_expandable_monospace_panel_tail(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_expandable_monospace_panel_with(
     ui: &mut Ui,
     panel_fill: Color32,
