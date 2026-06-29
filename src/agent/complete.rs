@@ -1,0 +1,295 @@
+//! One-shot LLM text completion (no tools) used for the "generate commit message" button.
+//!
+//! Reuses the streaming chat/Anthropic/Codex loop implementations, but with no tool
+//! definitions and a single round, so the model just returns plain text. Deltas are
+//! streamed back over the channel, followed by a terminal [`CompleteEvent::Done`].
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+
+use serde_json::{json, Value};
+
+use crate::agent::anthropic::run_anthropic_loop;
+use crate::agent::approval::ApprovalGate;
+use crate::agent::codex_responses::run_codex_responses_loop;
+use crate::agent::events::AgentEvent;
+use crate::agent::openai::run_chat_loop;
+use crate::agent::runner::{
+    configured_openai_key, configured_opencode_go_key, configured_openrouter_key,
+    opencode_go_model_uses_anthropic, openrouter_extra_headers,
+};
+use crate::oauth::{ensure_codex_access_token, load_oauth_store};
+use crate::settings::{LlmProviderKind, ProviderProfile};
+
+/// One streaming event from a completion run.
+#[derive(Debug)]
+pub enum CompleteEvent {
+    /// Incremental generated text.
+    Delta(String),
+    /// Terminal event: `Ok` carries the full accumulated text, `Err` carries a message.
+    Done(Result<String, String>),
+}
+
+/// Request payload for a one-shot completion.
+pub struct CompleteRequest {
+    pub profile: ProviderProfile,
+    pub system_prompt: String,
+    pub user_prompt: String,
+    /// Optional max output characters before we stop early (used to keep commit
+    /// messages short). `None` = no cap.
+    pub max_chars: Option<usize>,
+}
+
+/// Spawn a background completion. The returned [`Receiver`] yields deltas and a final
+/// [`CompleteEvent::Done`]. Cancelling is not exposed (the run finishes in one round);
+/// the handle stays alive until the worker thread exits.
+pub fn spawn_completion(req: CompleteRequest) -> (Receiver<CompleteEvent>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<CompleteEvent>();
+    let handle = std::thread::spawn(move || run(req, tx));
+    (rx, handle)
+}
+
+fn run(req: CompleteRequest, tx: Sender<CompleteEvent>) {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = tx.send(CompleteEvent::Done(Err(format!("tokio: {e}"))));
+            return;
+        }
+    };
+    rt.block_on(async move {
+        let result = run_async(req, &tx).await;
+        let _ = tx.send(CompleteEvent::Done(result));
+    });
+}
+
+async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<String, String> {
+    let CompleteRequest {
+        profile,
+        system_prompt,
+        user_prompt,
+        max_chars,
+    } = req;
+
+    let model = profile.model_id.clone();
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return Err(e.to_string()),
+    };
+
+    // No tools, no approval, single round.
+    let tools: Vec<Value> = Vec::new();
+    let mut messages: Vec<Value> = vec![
+        json!({ "role": "system", "content": system_prompt }),
+        json!({ "role": "user", "content": user_prompt }),
+    ];
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (_approval_tx, approval_rx) = mpsc::channel();
+    let mut gate = ApprovalGate::new(false, approval_rx);
+    let max_rounds = 1;
+
+    // Bridge agent events into completion deltas.
+    let (agent_tx, agent_rx) = mpsc::channel::<AgentEvent>();
+    let collector = tokio::spawn(collect_deltas(agent_rx, tx.clone(), max_chars));
+
+    let r = match profile.provider {
+        LlmProviderKind::OpenAi => {
+            let key = configured_openai_key(&profile)?;
+            let base = profile.effective_base_url();
+            run_chat_loop(
+                &client,
+                &base,
+                &key,
+                &model,
+                &[],
+                &mut messages,
+                &tools,
+                std::path::Path::new("."),
+                &crate::agent::tools::ToolEnv {
+                    enabled: Vec::new(),
+                    web_search_url: String::new(),
+                },
+                &agent_tx,
+                &cancel,
+                &mut gate,
+                max_rounds,
+            )
+            .await
+        }
+        LlmProviderKind::OpenRouter => {
+            let key = configured_openrouter_key(&profile)?;
+            let base = profile.effective_base_url();
+            run_chat_loop(
+                &client,
+                &base,
+                &key,
+                &model,
+                &openrouter_extra_headers(&profile),
+                &mut messages,
+                &tools,
+                std::path::Path::new("."),
+                &crate::agent::tools::ToolEnv {
+                    enabled: Vec::new(),
+                    web_search_url: String::new(),
+                },
+                &agent_tx,
+                &cancel,
+                &mut gate,
+                max_rounds,
+            )
+            .await
+        }
+        LlmProviderKind::GptCodex => {
+            let mut oauth = load_oauth_store();
+            if oauth.openai_codex.is_some() {
+                let creds = ensure_codex_access_token(&client, &mut oauth).await?;
+                let base = if profile.base_url.trim().is_empty() {
+                    "https://chatgpt.com/backend-api".to_string()
+                } else {
+                    profile.effective_base_url()
+                };
+                run_codex_responses_loop(
+                    &client,
+                    &base,
+                    &creds.0,
+                    &creds.1,
+                    &model,
+                    &mut messages,
+                    &tools,
+                    std::path::Path::new("."),
+                    &crate::agent::tools::ToolEnv {
+                        enabled: Vec::new(),
+                        web_search_url: String::new(),
+                    },
+                    &agent_tx,
+                    &cancel,
+                    &mut gate,
+                    max_rounds,
+                )
+                .await
+            } else {
+                let key = configured_openai_key(&profile)?;
+                let base = profile.effective_base_url();
+                run_chat_loop(
+                    &client,
+                    &base,
+                    &key,
+                    &model,
+                    &[],
+                    &mut messages,
+                    &tools,
+                    std::path::Path::new("."),
+                    &crate::agent::tools::ToolEnv {
+                        enabled: Vec::new(),
+                        web_search_url: String::new(),
+                    },
+                    &agent_tx,
+                    &cancel,
+                    &mut gate,
+                    max_rounds,
+                )
+                .await
+            }
+        }
+        LlmProviderKind::OpenCodeGo => {
+            let key = configured_opencode_go_key(&profile)?;
+            let base = profile.effective_base_url();
+            let model = model
+                .strip_prefix("opencode-go/")
+                .unwrap_or(&model)
+                .to_string();
+            if opencode_go_model_uses_anthropic(&model) {
+                let anthropic_base = base.trim_end_matches("/v1").to_string();
+                run_anthropic_loop(
+                    &client,
+                    &anthropic_base,
+                    &key,
+                    &model,
+                    &[],
+                    &mut messages,
+                    &tools,
+                    std::path::Path::new("."),
+                    &crate::agent::tools::ToolEnv {
+                        enabled: Vec::new(),
+                        web_search_url: String::new(),
+                    },
+                    &agent_tx,
+                    &cancel,
+                    &mut gate,
+                    max_rounds,
+                )
+                .await
+            } else {
+                let chat_base = if base.trim_end_matches('/').ends_with("/v1") {
+                    base
+                } else {
+                    format!("{}/v1", base.trim_end_matches('/'))
+                };
+                run_chat_loop(
+                    &client,
+                    &chat_base,
+                    &key,
+                    &model,
+                    &[],
+                    &mut messages,
+                    &tools,
+                    std::path::Path::new("."),
+                    &crate::agent::tools::ToolEnv {
+                        enabled: Vec::new(),
+                        web_search_url: String::new(),
+                    },
+                    &agent_tx,
+                    &cancel,
+                    &mut gate,
+                    max_rounds,
+                )
+                .await
+            }
+        }
+    };
+
+    // The agent producer side is done; drop the sender so the collector finishes.
+    drop(agent_tx);
+    let collected = collector
+        .await
+        .map_err(|e| format!("collector join: {e}"))??;
+
+    if let Err(e) = r {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("Cancelled".to_string());
+        }
+        return Err(e);
+    }
+    Ok(collected)
+}
+
+/// Consume [`AgentEvent`]s and forward text deltas to the completion channel,
+/// accumulating the full text. Honors an optional character cap by stopping early.
+async fn collect_deltas(
+    rx: mpsc::Receiver<AgentEvent>,
+    tx: Sender<CompleteEvent>,
+    max_chars: Option<usize>,
+) -> Result<String, String> {
+    let mut out = String::new();
+    while let Ok(ev) = rx.recv() {
+        match ev {
+            AgentEvent::TextDelta(d) => {
+                out.push_str(&d);
+                let _ = tx.send(CompleteEvent::Delta(d));
+                if let Some(cap) = max_chars {
+                    if out.chars().count() >= cap {
+                        break;
+                    }
+                }
+            }
+            AgentEvent::StreamError(e) => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(out)
+}

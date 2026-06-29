@@ -75,6 +75,11 @@ pub struct ProviderProfile {
     pub api_key: String,
     pub openrouter_http_referer: String,
     pub openrouter_title: String,
+    /// Optional explicit context window in tokens for this model/profile.
+    /// `None` (or `0`) = auto: look it up from the built-in model catalog, then fall
+    /// back to a conservative default. Set to a number to override the history trim budget.
+    #[serde(default)]
+    pub context_window: Option<usize>,
 }
 
 impl ProviderProfile {
@@ -88,6 +93,7 @@ impl ProviderProfile {
             api_key: String::new(),
             openrouter_http_referer: String::new(),
             openrouter_title: String::new(),
+            context_window: None,
         }
     }
 
@@ -102,6 +108,18 @@ impl ProviderProfile {
 
     pub fn subtitle(&self) -> String {
         format!("{} · {}", self.provider.label(), self.model_id)
+    }
+
+    /// Resolve the effective context window in tokens for this profile.
+    ///
+    /// Order: explicit profile override > built-in catalog > provider/model default.
+    pub fn effective_context_window(&self, fallback_default: usize) -> usize {
+        if let Some(cw) = self.context_window {
+            if cw > 0 {
+                return cw;
+            }
+        }
+        crate::agent::models::context_window_for_model(&self.model_id).unwrap_or(fallback_default)
     }
 }
 
@@ -167,6 +185,12 @@ pub struct AppSettings {
     /// Whether the bottom terminal panel is shown.
     #[serde(default)]
     pub terminal_open: bool,
+    /// Whether the right source-control (git) panel is shown.
+    #[serde(default)]
+    pub git_open: bool,
+    /// Persisted width of the right git panel.
+    #[serde(default = "default_git_width")]
+    pub git_width: f32,
     /// Active color theme id (see [`crate::theme`]: `dark`, `light`, `midnight`, or
     /// `custom:<name>`). Falls back to the default theme if unknown.
     #[serde(default = "default_theme_id")]
@@ -174,11 +198,48 @@ pub struct AppSettings {
     /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
     #[serde(default)]
     pub ui_density: UiDensity,
+    /// Maximum number of agent tool rounds per run. `0` means unlimited. Default unlimited.
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: u32,
+    /// Fallback context window in tokens used when no per-profile override and no catalog
+    /// match is found. Defaults to 128k (safe across all current providers).
+    #[serde(default = "default_context_window")]
+    pub context_window_default: usize,
+    /// Profile id used by the "generate commit message" feature. Empty = use the active
+    /// profile. Must reference an existing [`ProviderProfile`] id; unknown ids fall back
+    /// to the active profile at use time.
+    #[serde(default)]
+    pub commit_msg_profile_id: String,
+    /// System prompt for the "generate commit message" feature.
+    #[serde(default = "default_commit_msg_system_prompt")]
+    pub commit_msg_system_prompt: String,
 }
 
 fn default_require_approval() -> bool {
     true
 }
+
+fn default_max_tool_rounds() -> u32 {
+    0
+}
+
+fn default_context_window() -> usize {
+    128_000
+}
+
+fn default_commit_msg_system_prompt() -> String {
+    DEFAULT_COMMIT_MSG_SYSTEM_PROMPT.to_string()
+}
+
+/// Default system prompt for the "generate commit message" feature.
+pub const DEFAULT_COMMIT_MSG_SYSTEM_PROMPT: &str =
+    "You generate concise, well-formed git commit messages from a staged/unstaged diff. \
+     Rules:\n\
+     - Output ONLY the commit message, no preamble, no code fences, no explanations.\n\
+     - Start with a single imperative subject line up to ~50 characters, lowercase where natural.\n\
+     - If the change is non-trivial, add a blank line then a short body (bullet points OK) wrapping at ~72 chars.\n\
+     - Do not mention the diff itself, file counts, or that this was AI-generated.\n\
+     - Follow Conventional Commits (e.g. feat:, fix:, refactor:, docs:, chore:) when it fits.";
 
 fn default_tools_enabled() -> Vec<bool> {
     vec![true; ALL_TOOL_NAMES.len()]
@@ -194,6 +255,10 @@ fn default_sidebar_width() -> f32 {
 
 fn default_terminal_height() -> f32 {
     260.0
+}
+
+fn default_git_width() -> f32 {
+    360.0
 }
 
 /// Clamp bounds for the bottom terminal panel height.
@@ -243,8 +308,14 @@ impl Default for AppSettings {
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),
             terminal_open: false,
+            git_open: false,
+            git_width: default_git_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
+            max_tool_rounds: default_max_tool_rounds(),
+            context_window_default: default_context_window(),
+            commit_msg_profile_id: String::new(),
+            commit_msg_system_prompt: default_commit_msg_system_prompt(),
         }
     }
 }
@@ -297,6 +368,7 @@ impl AppSettings {
                 },
                 openrouter_http_referer: old.openrouter_http_referer,
                 openrouter_title: old.openrouter_title,
+                context_window: None,
             },
             ProviderProfile::new("openai-default", LlmProviderKind::OpenAi, "OpenAI default"),
             ProviderProfile::new(
@@ -327,6 +399,9 @@ impl AppSettings {
         if self.system_prompt.trim().is_empty() {
             self.system_prompt = crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string();
         }
+        if self.commit_msg_system_prompt.trim().is_empty() {
+            self.commit_msg_system_prompt = default_commit_msg_system_prompt();
+        }
         if !self.sidebar_width.is_finite() || self.sidebar_width <= 0.0 {
             self.sidebar_width = default_sidebar_width();
         }
@@ -353,6 +428,17 @@ impl AppSettings {
             if profile.model_id.trim().is_empty() {
                 profile.model_id = profile.provider.default_model_id().to_string();
             }
+            if let Some(cw) = profile.context_window {
+                if cw > 0 {
+                    profile.context_window = Some(cw);
+                } else {
+                    // 0/null means "auto".
+                    profile.context_window = None;
+                }
+            }
+        }
+        if self.context_window_default == 0 {
+            self.context_window_default = default_context_window();
         }
         if self.active_profile().is_none() {
             self.active_profile_id = self.profiles[0].id.clone();
@@ -372,6 +458,21 @@ impl AppSettings {
         self.profiles
             .iter()
             .find(|p| p.id == self.active_profile_id)
+    }
+
+    /// Profile used by the "generate commit message" feature. Falls back to the active
+    /// profile when no explicit id is configured or the stored id no longer exists.
+    pub fn commit_msg_profile(&self) -> Option<&ProviderProfile> {
+        if !self.commit_msg_profile_id.trim().is_empty() {
+            if let Some(p) = self
+                .profiles
+                .iter()
+                .find(|p| p.id == self.commit_msg_profile_id)
+            {
+                return Some(p);
+            }
+        }
+        self.active_profile()
     }
 
     pub fn set_active_profile(&mut self, id: impl AsRef<str>) {

@@ -209,6 +209,7 @@ pub async fn run_anthropic_loop(
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
     gate: &mut ApprovalGate,
+    max_rounds: u32,
 ) -> Result<(), String> {
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let anthropic_tools = to_anthropic_tools(tools_openai);
@@ -222,8 +223,8 @@ pub async fn run_anthropic_loop(
             break;
         }
         round += 1;
-        if round > 64 {
-            return Err("Too many tool rounds".into());
+        if max_rounds != 0 && round > max_rounds {
+            return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
         let (system, anth_msgs) = to_anthropic_messages(openai_messages, cache_control.clone());
         let _ = tx.send(AgentEvent::AgentStart);

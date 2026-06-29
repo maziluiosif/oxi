@@ -146,15 +146,17 @@ impl OxiApp {
 
             let chev = if folded { "▸" } else { "▾" };
             ui.horizontal(|ui| {
-                let plus_w = if wi == self.conv.active_workspace {
-                    26.0
+                ui.spacing_mut().item_spacing.x = 2.0;
+                const ROW_H: f32 = 22.0;
+                const PLUS_W: f32 = 22.0;
+                let plus_reserved = if wi == self.conv.active_workspace {
+                    PLUS_W + 2.0
                 } else {
                     0.0
                 };
-                let row_w = (ui.available_width() - plus_w).max(40.0);
+                let row_w = (ui.available_width() - plus_reserved).max(40.0);
                 if ui
-                    .add_sized(
-                        [row_w, 0.0],
+                    .add(
                         Button::new(
                             RichText::new(format!("{chev}  {root_label}"))
                                 .size(FS_TINY)
@@ -162,7 +164,7 @@ impl OxiApp {
                         )
                         .frame(false)
                         .fill(Color32::TRANSPARENT)
-                        .min_size(egui::vec2(row_w, 22.0)),
+                        .min_size(egui::vec2(row_w, ROW_H)),
                     )
                     .on_hover_text("Fold or unfold chats")
                     .clicked()
@@ -171,11 +173,11 @@ impl OxiApp {
                 }
                 if wi == self.conv.active_workspace
                     && ui
-                        .add_sized(
-                            [22.0, 22.0],
+                        .add(
                             Button::new(RichText::new("＋").size(FS_TINY).color(c_text_muted()))
                                 .frame(false)
-                                .fill(Color32::TRANSPARENT),
+                                .fill(Color32::TRANSPARENT)
+                                .min_size(egui::vec2(PLUS_W, ROW_H)),
                         )
                         .on_hover_text("New chat in this workspace")
                         .clicked()
@@ -392,8 +394,18 @@ impl OxiApp {
                 self.render_sidebar_resize_sep(ui, full_h, SIDEBAR_W_MIN, SIDEBAR_W_MAX);
             }
 
+            let git_open = self.conv.git_open;
+            let git_w = if git_open {
+                self.conv.git_width.clamp(
+                    crate::app::git_panel::GIT_W_MIN,
+                    crate::app::git_panel::GIT_W_MAX,
+                )
+            } else {
+                0.0
+            };
+            let chat_w = (ui.available_width() - git_w).max(60.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), full_h),
+                egui::vec2(chat_w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     Frame::none()
@@ -455,7 +467,69 @@ impl OxiApp {
                     ui.expand_to_include_rect(ui.max_rect());
                 },
             );
+
+            // Right git panel
+            if git_open {
+                self.render_git_resize_sep(ui, full_h);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(git_w, full_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_height(full_h);
+                        Frame::none()
+                            .fill(c_bg_sidebar())
+                            .inner_margin(Margin {
+                                left: 0.0,
+                                right: 0.0,
+                                top: 0.0,
+                                bottom: 0.0,
+                            })
+                            .show(ui, |ui| {
+                                self.render_git_panel(ui, full_h);
+                            });
+                        ui.expand_to_include_rect(ui.max_rect());
+                    },
+                );
+            }
         });
+    }
+
+    fn render_git_resize_sep(&mut self, ui: &mut Ui, full_h: f32) {
+        const SEP_W: f32 = 6.0;
+        let boundary_x = ui.cursor().min.x;
+        let sep_rect = egui::Rect::from_min_max(
+            egui::pos2(boundary_x - SEP_W * 0.5, ui.min_rect().top()),
+            egui::pos2(boundary_x + SEP_W * 0.5, ui.min_rect().top() + full_h),
+        );
+        let sep = ui.interact(sep_rect, ui.id().with("git_sep"), Sense::drag());
+        if sep.hovered() || sep.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if sep.dragged() {
+            // Dragging the left edge left (negative dx) grows the panel.
+            let dx = ui.input(|i| i.pointer.delta().x);
+            self.conv.git_width = (self.conv.git_width - dx).clamp(
+                crate::app::git_panel::GIT_W_MIN,
+                crate::app::git_panel::GIT_W_MAX,
+            );
+            self.conv.settings.git_width = self.conv.git_width;
+        }
+        if sep.drag_stopped() {
+            if let Err(e) = self.conv.settings.save() {
+                self.run_state_mut(self.active_session_key()).stream_error =
+                    Some(format!("Save settings: {e}"));
+            }
+        }
+        let col = if sep.hovered() || sep.dragged() {
+            c_accent()
+        } else {
+            c_border_subtle()
+        };
+        ui.painter().vline(
+            sep_rect.center().x,
+            sep_rect.y_range(),
+            Stroke::new(1.0, col),
+        );
     }
 
     fn render_sidebar_resize_sep(&mut self, ui: &mut Ui, full_h: f32, min_w: f32, max_w: f32) {

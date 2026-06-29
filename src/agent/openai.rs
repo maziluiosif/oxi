@@ -35,6 +35,7 @@ pub async fn run_chat_loop(
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
     gate: &mut ApprovalGate,
+    max_rounds: u32,
 ) -> Result<(), String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut round = 0u32;
@@ -44,8 +45,8 @@ pub async fn run_chat_loop(
             break;
         }
         round += 1;
-        if round > 64 {
-            return Err("Too many tool rounds".into());
+        if max_rounds != 0 && round > max_rounds {
+            return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
         let _ = tx.send(AgentEvent::AgentStart);
         let body = json!({

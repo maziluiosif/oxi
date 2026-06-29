@@ -23,7 +23,7 @@ fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
     let _ = tx.send(AgentEvent::AgentEnd);
 }
 
-fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -32,7 +32,7 @@ fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
         .map_err(|_| "Set OpenAI API key in profile or OPENAI_API_KEY, or sign in with ChatGPT (Codex) OAuth.".into())
 }
 
-fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -42,7 +42,7 @@ fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String
     })
 }
 
-fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -53,7 +53,7 @@ fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, Strin
     })
 }
 
-fn opencode_go_model_uses_anthropic(model: &str) -> bool {
+pub(super) fn opencode_go_model_uses_anthropic(model: &str) -> bool {
     let m = model
         .trim()
         .strip_prefix("opencode-go/")
@@ -62,7 +62,7 @@ fn opencode_go_model_uses_anthropic(model: &str) -> bool {
     m.starts_with("minimax-") || m.starts_with("qwen")
 }
 
-fn openrouter_extra_headers(profile: &ProviderProfile) -> Vec<(String, String)> {
+pub fn openrouter_extra_headers(profile: &ProviderProfile) -> Vec<(String, String)> {
     let mut h = Vec::new();
     let referer = if profile.openrouter_http_referer.trim().is_empty() {
         std::env::var("OPENROUTER_HTTP_REFERER").ok()
@@ -110,7 +110,11 @@ pub fn spawn_agent_run(
                 }
             };
             let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
-            let mut messages = build_openai_messages(&system, &chat_for_history);
+            let context_tokens = profile.effective_context_window(settings.context_window_default);
+            let context_budget =
+                crate::agent::history::context_char_budget_from_tokens(context_tokens);
+            let max_rounds = settings.max_tool_rounds;
+            let mut messages = build_openai_messages(&system, &chat_for_history, context_budget);
             let tools = tool_definitions_json(&settings.tools_enabled);
             let tool_env = ToolEnv {
                 enabled: settings.tools_enabled.clone(),
@@ -158,6 +162,7 @@ pub fn spawn_agent_run(
                             &tx,
                             &cancel,
                             &mut gate,
+                            max_rounds,
                         )
                         .await
                     } else {
@@ -182,6 +187,7 @@ pub fn spawn_agent_run(
                             &tx,
                             &cancel,
                             &mut gate,
+                            max_rounds,
                         )
                         .await
                     }
@@ -208,6 +214,7 @@ pub fn spawn_agent_run(
                         &tx,
                         &cancel,
                         &mut gate,
+                        max_rounds,
                     )
                     .await
                 }
@@ -233,6 +240,7 @@ pub fn spawn_agent_run(
                         &tx,
                         &cancel,
                         &mut gate,
+                        max_rounds,
                     )
                     .await
                 }
@@ -267,6 +275,7 @@ pub fn spawn_agent_run(
                             &tx,
                             &cancel,
                             &mut gate,
+                            max_rounds,
                         )
                         .await
                     } else {
@@ -291,6 +300,7 @@ pub fn spawn_agent_run(
                             &tx,
                             &cancel,
                             &mut gate,
+                            max_rounds,
                         )
                         .await
                     }

@@ -220,6 +220,56 @@ impl OxiApp {
                     }
                 });
         });
+
+        // Second row: model picker for the active profile, populated from the fetched model list.
+        if let Some(p) = self.conv.settings.active_profile() {
+            let pid = p.id.clone();
+            let fetched = self
+                .conv
+                .fetched_models
+                .get(&pid)
+                .map(|f| f.models.clone())
+                .unwrap_or_default();
+            let current = p.model_id.clone();
+            if !fetched.is_empty() {
+                ui.scope(|ui| {
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                    widgets.inactive.bg_stroke = Stroke::NONE;
+                    widgets.hovered.weak_bg_fill = c_row_hover();
+                    widgets.hovered.bg_stroke = Stroke::NONE;
+                    widgets.active.weak_bg_fill = c_row_hover();
+                    widgets.active.bg_stroke = Stroke::NONE;
+                    widgets.open.weak_bg_fill = c_row_hover();
+                    widgets.open.bg_stroke = Stroke::NONE;
+
+                    let label = if current.is_empty() {
+                        "(custom)".to_string()
+                    } else {
+                        current.clone()
+                    };
+                    ComboBox::from_id_salt("active_model_combo")
+                        .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
+                        .width(190.0)
+                        .show_ui(ui, |ui| {
+                            for m in &fetched {
+                                if ui.selectable_label(m == &current, m.clone()).clicked() {
+                                    if let Some(p) = self
+                                        .conv
+                                        .settings
+                                        .profiles
+                                        .iter_mut()
+                                        .find(|pp| pp.id == pid)
+                                    {
+                                        p.model_id = m.clone();
+                                    }
+                                }
+                            }
+                        });
+                });
+            }
+        }
     }
 
     /// Image attachment thumbnails shown at the top of the composer, each with a
