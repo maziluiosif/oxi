@@ -547,7 +547,25 @@ fn handle_op(root: &str, op: GitOp) -> GitState {
             }
         }
         GitOp::Push => {
-            let (ok, out) = git(root, &["push"]);
+            // A brand-new branch has no upstream yet, so a bare `git push` fails with
+            // "no upstream branch". Detect that and push with `--set-upstream origin
+            // <branch>` so the branch publishes and starts tracking in one shot.
+            let has_upstream = git(
+                root,
+                &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            )
+            .0;
+            let (ok, out) = if has_upstream {
+                git(root, &["push"])
+            } else {
+                let (bok, branch) = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]);
+                let branch = branch.trim();
+                if !bok || branch.is_empty() || branch == "HEAD" {
+                    (false, "Cannot determine the current branch to push.".to_string())
+                } else {
+                    git(root, &["push", "--set-upstream", "origin", branch])
+                }
+            };
             if !ok {
                 error = Some(out.trim().to_string());
             }
