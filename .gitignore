@@ -9,3 +9,4 @@ target/
 # Installed agent skills (vendored locally, not part of this repo)
 .agents/
 skills-lock.json
+oxi.app/
