@@ -167,6 +167,12 @@ pub struct AppSettings {
     /// Whether the bottom terminal panel is shown.
     #[serde(default)]
     pub terminal_open: bool,
+    /// Whether the right source-control (git) panel is shown.
+    #[serde(default)]
+    pub git_open: bool,
+    /// Persisted width of the right git panel.
+    #[serde(default = "default_git_width")]
+    pub git_width: f32,
     /// Active color theme id (see [`crate::theme`]: `dark`, `light`, `midnight`, or
     /// `custom:<name>`). Falls back to the default theme if unknown.
     #[serde(default = "default_theme_id")]
@@ -194,6 +200,10 @@ fn default_sidebar_width() -> f32 {
 
 fn default_terminal_height() -> f32 {
     260.0
+}
+
+fn default_git_width() -> f32 {
+    360.0
 }
 
 /// Clamp bounds for the bottom terminal panel height.
@@ -243,6 +253,8 @@ impl Default for AppSettings {
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),
             terminal_open: false,
+            git_open: false,
+            git_width: default_git_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
         }

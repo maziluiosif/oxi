@@ -13,6 +13,7 @@ mod composer;
 mod connection;
 mod conversation;
 mod eframe_app;
+mod git_panel;
 mod input_history;
 mod sessions;
 mod settings_ui;
@@ -40,6 +41,8 @@ impl OxiApp {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let root_path = cwd.to_string_lossy().to_string();
         let settings = AppSettings::load();
+        let git_open = settings.git_open;
+        let git_width = settings.git_width;
         let sessions = Self::initial_workspace_sessions(&root_path, false);
         let mut app = Self {
             conn: ConnectionState {
@@ -81,9 +84,20 @@ impl OxiApp {
                 oauth_last_message: None,
                 composer_measured_text_h: 0.0,
                 composer_measured_full_h: 0.0,
+                git_open,
+                git_width,
+                git_tab: crate::app::git_panel::GitTab::default(),
+                git: crate::git::GitState::default(),
+                git_commit_message: String::new(),
+                git_new_branch: String::new(),
+                git_tx: None,
+                git_rx: None,
+                git_ctx: eframe::egui::Context::default(),
             },
             terminal: None,
         };
+        // The constructor doesn't have an egui::Context yet; it's bound on the first
+        // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
         app.ensure_active_session_loaded();
         app
     }
@@ -227,6 +241,7 @@ impl OxiApp {
         self.conv.active_workspace = workspace_idx;
         self.conv.scroll_to_bottom_once = true;
         self.ensure_active_session_loaded();
+        self.refresh_git_cwd();
     }
 
     pub(crate) fn select_session_in_workspace(&mut self, workspace_idx: usize, session_idx: usize) {
