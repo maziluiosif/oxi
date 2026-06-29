@@ -6,7 +6,7 @@ use eframe::egui::{
 };
 
 use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
-use crate::settings::{LlmProviderKind, ALL_TOOL_NAMES};
+use crate::settings::{LlmProviderKind, ProviderProfile, ALL_TOOL_NAMES};
 use crate::theme::*;
 use crate::ui::chrome::{
     card_frame, field_label, ghost_button, hairline, nested_card_frame, pill_tab, primary_button,
@@ -15,7 +15,7 @@ use crate::ui::chrome::{
 
 use super::state::SettingsTab;
 use super::task_runner::spawn_async_task;
-use super::OxiApp;
+use super::{ModelFetchMsg, OxiApp};
 
 const SETTINGS_CONTENT_MAX: f32 = 820.0;
 
@@ -350,6 +350,32 @@ impl OxiApp {
             {
                 self.conv.settings.require_approval = require_approval;
             }
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
+            field_label(ui, "Max tool calls per run (0 = unlimited)");
+            let mut max_rounds = self.conv.settings.max_tool_rounds.to_string();
+            let resp = ui.add(
+                TextEdit::singleline(&mut max_rounds)
+                    .desired_width(180.0)
+                    .hint_text("0")
+                    .margin(Margin::symmetric(8.0, 5.0)),
+            );
+            if resp.changed() {
+                let trimmed = max_rounds.trim();
+                if trimmed.is_empty() {
+                    self.conv.settings.max_tool_rounds = 0;
+                } else if let Ok(n) = trimmed.parse::<u32>() {
+                    self.conv.settings.max_tool_rounds = n;
+                }
+            }
+            ui.label(
+                RichText::new(
+                    "Caps the number of tool-call rounds in a single agent run. 0 disables the cap (unlimited, the default).",
+                )
+                .size(FS_TINY)
+                .color(c_text_muted()),
+            );
         });
 
         // Web search section
@@ -507,14 +533,110 @@ impl OxiApp {
             hairline(ui);
             ui.add_space(4.0);
 
-            // Model id
+            // Model id ─ with dropdown of models fetched from the provider's /v1/models.
             field_label(ui, "Model id");
-            ui.add(
-                TextEdit::singleline(&mut self.conv.settings.profiles[idx].model_id)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("e.g. gpt-4o-mini or claude-sonnet-4")
-                    .margin(Margin::symmetric(8.0, 5.0)),
-            );
+            let pid = self.conv.settings.profiles[idx].id.clone();
+            let have = self.conv.fetched_models.get(&pid).is_some_and(|f| !f.models.is_empty());
+            ui.horizontal(|ui| {
+                if have {
+                    let fetched = self
+                        .conv
+                        .fetched_models
+                        .get(&pid)
+                        .map(|f| f.models.clone())
+                        .unwrap_or_default();
+                    let current = self.conv.settings.profiles[idx].model_id.clone();
+                    let label = if current.is_empty() {
+                        "(custom)".to_string()
+                    } else {
+                        current.clone()
+                    };
+                    egui::ComboBox::from_id_salt(("model_combo", idx))
+                        .selected_text(label)
+                        .width(ui.available_width() - 30.0)
+                        .show_ui(ui, |ui| {
+                            if !current.is_empty()
+                                && fetched.iter().all(|x| x != &current)
+                            {
+                                let _ =
+                                    ui.selectable_label(false, format!("{current} (custom)"));
+                            }
+                            for m in &fetched {
+                                if ui
+                                    .selectable_label(*m == current, m.clone())
+                                    .clicked()
+                                {
+                                    self.conv.settings.profiles[idx].model_id = m.clone();
+                                }
+                            }
+                        });
+                } else {
+                    ui.add(
+                        TextEdit::singleline(&mut self.conv.settings.profiles[idx].model_id)
+                            .desired_width(ui.available_width() - 30.0)
+                            .hint_text("e.g. gpt-4o-mini or kimi-k2.7-code")
+                            .margin(Margin::symmetric(8.0, 5.0)),
+                    );
+                }
+                if ui
+                    .add(
+                        Button::new("↻")
+                            .fill(c_bg_elevated_2())
+                            .stroke(Stroke::new(1.0, c_border_subtle()))
+                            .rounding(7.0)
+                            .min_size(egui::vec2(26.0, 0.0)),
+                    )
+                    .on_hover_text("Load available models from provider")
+                    .clicked()
+                {
+                    self.spawn_model_fetch(ui.ctx(), idx);
+                }
+            });
+            // Status line for the model fetch.
+            if let Some(f) = self.conv.fetched_models.get(&pid) {
+                if let Some(e) = &f.error {
+                    ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
+                } else if f.loading {
+                    ui.label(RichText::new("Loading models…").size(FS_TINY).color(c_text_muted()));
+                } else if !f.models.is_empty() {
+                    ui.label(
+                        RichText::new(format!("{} models available", f.models.len()))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                }
+            }
+            // Context window (auto from catalog; editable override).
+            {
+                let cw = self.conv.settings.profiles[idx].context_window;
+                let resolved = self.conv.settings.profiles[idx]
+                    .effective_context_window(self.conv.settings.context_window_default);
+                field_label(ui, "Context window (tokens, 0 = auto)");
+                let mut value = cw.unwrap_or(0).to_string();
+                let resp = ui.add(
+                    TextEdit::singleline(&mut value)
+                        .desired_width(160.0)
+                        .hint_text(format!("auto ({resolved})"))
+                        .margin(Margin::symmetric(8.0, 5.0)),
+                );
+                if resp.changed() {
+                    let parsed = value.trim().parse::<usize>().ok();
+                    self.conv.settings.profiles[idx].context_window =
+                        parsed.and_then(|n| if n > 0 { Some(n) } else { None });
+                }
+                if ui
+                    .add(egui::Button::new("Auto").fill(c_bg_elevated_2()).stroke(Stroke::new(1.0, c_border_subtle())).rounding(7.0))
+                    .on_hover_text("Resolve context window from the model catalog")
+                    .clicked()
+                {
+                    self.conv.settings.profiles[idx].context_window = None;
+                }
+                ui.label(
+                    RichText::new(format!("effective: {resolved}"))
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                );
+            }
 
             // Base URL
             field_label(ui, "Base URL (optional)");
@@ -671,6 +793,113 @@ impl OxiApp {
                 ctx.request_repaint();
             },
         );
+    }
+
+    // ── Model list fetch ─────────────────────────────────────────────────────
+    /// Kick off a background `/v1/models` fetch for the profile at `idx`, if one isn't
+    /// already in flight. Results arrive on `conv.model_rx` and are drained each frame.
+    fn spawn_model_fetch(&mut self, ctx: &egui::Context, idx: usize) {
+        let profile = match self.conv.settings.profiles.get(idx) {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let entry = self
+            .conv
+            .fetched_models
+            .entry(profile.id.clone())
+            .or_default();
+        if entry.loading {
+            return;
+        }
+        entry.loading = true;
+        entry.error = None;
+
+        let (tx, rx) = std::sync::mpsc::channel::<ModelFetchMsg>();
+        // Keep only the most recent receiver live (single global channel).
+        self.conv.model_rx = Some(rx);
+        let ctx = ctx.clone();
+        let profile_id = profile.id.clone();
+        let err_tx = tx.clone();
+        let err_pid = profile_id.clone();
+        let err_ctx = ctx.clone();
+        spawn_async_task(
+            move |err| {
+                let _ = err_tx.send(ModelFetchMsg {
+                    profile_id: err_pid,
+                    result: Err(err),
+                });
+                err_ctx.request_repaint();
+            },
+            move |rt| {
+                let client = match reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(ModelFetchMsg {
+                            profile_id,
+                            result: Err(e.to_string()),
+                        });
+                        ctx.request_repaint();
+                        return;
+                    }
+                };
+                let base = profile.effective_base_url();
+                // OpenCode Go expects /v1/models but its default base lacks /v1.
+                let base = if profile.provider == LlmProviderKind::OpenCodeGo
+                    && !base.trim_end_matches('/').ends_with("/v1")
+                {
+                    format!("{}/v1", base.trim_end_matches('/'))
+                } else {
+                    base
+                };
+                let extra = if profile.provider == LlmProviderKind::OpenRouter {
+                    crate::agent::runner::openrouter_extra_headers(&profile)
+                } else {
+                    Vec::new()
+                };
+                let key = match resolve_fetch_key(&profile) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        let _ = tx.send(ModelFetchMsg {
+                            profile_id,
+                            result: Err(e),
+                        });
+                        ctx.request_repaint();
+                        return;
+                    }
+                };
+                let r = rt.block_on(crate::agent::fetch_models(
+                    &client,
+                    &base,
+                    &key,
+                    &extra,
+                ));
+                let r = r.map(|ms| ms.into_iter().map(|m| m.id).collect::<Vec<_>>());
+                let _ = tx.send(ModelFetchMsg {
+                    profile_id,
+                    result: r,
+                });
+                ctx.request_repaint();
+            },
+        );
+    }
+}
+
+/// Resolve the bearer key to use for a model-list fetch (mirrors the runner's auth fallbacks).
+fn resolve_fetch_key(profile: &ProviderProfile) -> Result<String, String> {
+    let key = profile.api_key.trim();
+    if !key.is_empty() {
+        return Ok(key.to_string());
+    }
+    match profile.provider {
+        LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => std::env::var("OPENAI_API_KEY")
+            .map_err(|_| "Set an API key to list models.".into()),
+        LlmProviderKind::OpenRouter => std::env::var("OPENROUTER_API_KEY")
+            .map_err(|_| "Set an API key to list models.".into()),
+        // OpenCode Go exposes the model list without auth.
+        LlmProviderKind::OpenCodeGo => Ok(String::new()),
     }
 }
 

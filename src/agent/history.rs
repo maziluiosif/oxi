@@ -6,30 +6,48 @@
 //!
 //! 1. The system prompt and the **last `MIN_KEEP_TURNS` user+assistant pairs** are always kept.
 //! 2. Older turns are counted character-by-character and dropped from the oldest end until the
-//!    total estimated character count is below [`CONTEXT_CHAR_BUDGET`].
+//!    total estimated character count is below the caller-supplied context budget.
 //!
-//! A conservative `~4 chars per token` ratio is used; the budget targets ~100k tokens which is
-//! safe for all current providers (GPT-4o context is 128k tokens).
+//! A conservative `~4 chars per token` ratio is used; the budget is computed per run from the
+//! active profile's effective context window (`~4 chars/token × context tokens`).
 
 use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::model::{AssistantBlock, ChatMessage, MsgRole, UserAttachment};
 
-/// Approximate character budget before trimming old turns (~100k tokens × 4 chars/token).
+/// Approximate character budget for the default 100k-token fallback (~100k tokens × 4 chars/token).
 const CONTEXT_CHAR_BUDGET: usize = 400_000;
 
 /// Always keep this many most-recent user+assistant turn pairs regardless of budget.
 const MIN_KEEP_TURNS: usize = 6;
 
-pub fn build_openai_messages(system: &str, chat: &[ChatMessage]) -> Vec<Value> {
+/// Conservative characters-per-token estimate used when converting a token context
+/// window into a character trim budget.
+const CHARS_PER_TOKEN: usize = 4;
+
+/// Compute the character trim budget from a context window measured in tokens.
+/// Uses ~4 chars/token and reserves 20% headroom for tool definitions, system prompt and the
+/// newest turn the model is about to generate. Never drops below ~8k chars so the protected tail
+/// always has room.
+pub fn context_char_budget_from_tokens(context_tokens: usize) -> usize {
+    if context_tokens == 0 {
+        return CONTEXT_CHAR_BUDGET;
+    }
+    let reserve_pct = 80usize; // use 80% of the window for history
+    let tokens = context_tokens.saturating_mul(reserve_pct) / 100;
+    let chars = tokens.saturating_mul(CHARS_PER_TOKEN);
+    chars.max(8_192)
+}
+
+pub fn build_openai_messages(system: &str, chat: &[ChatMessage], context_char_budget: usize) -> Vec<Value> {
     let system_msg = json!({ "role": "system", "content": system });
 
     // Build all candidate turn JSON values first.
     let mut turns: Vec<Value> = chat.iter().filter_map(message_to_openai).collect();
 
     // Apply context budget trimming.
-    trim_to_budget(&mut turns, system.len());
+    trim_to_budget(&mut turns, system.len(), context_char_budget);
 
     let mut out = Vec::with_capacity(1 + turns.len());
     out.push(system_msg);
@@ -143,12 +161,12 @@ fn value_char_len(v: &Value) -> usize {
 
 /// Drop oldest turns until the total character count (system + turns) fits the budget,
 /// while always keeping at least `MIN_KEEP_TURNS` pairs from the end.
-fn trim_to_budget(turns: &mut Vec<Value>, system_len: usize) {
+fn trim_to_budget(turns: &mut Vec<Value>, system_len: usize, budget: usize) {
     // Serialize each turn exactly once and cache its length; the previous version
     // re-serialized every value during the drop loop (up to 2× the work on large histories).
     let lens: Vec<usize> = turns.iter().map(value_char_len).collect();
     let total: usize = system_len + lens.iter().sum::<usize>();
-    if total <= CONTEXT_CHAR_BUDGET {
+    if total <= budget {
         return;
     }
 
@@ -163,7 +181,7 @@ fn trim_to_budget(turns: &mut Vec<Value>, system_len: usize) {
         if i >= keep_from {
             break;
         }
-        if running <= CONTEXT_CHAR_BUDGET {
+        if running <= budget {
             break;
         }
         running = running.saturating_sub(*len);
@@ -203,7 +221,7 @@ mod tests {
     #[test]
     fn short_conversation_untouched() {
         let chat = vec![user_msg("hello"), assistant_msg("hi")];
-        let msgs = build_openai_messages("system", &chat);
+        let msgs = build_openai_messages("system", &chat, CONTEXT_CHAR_BUDGET);
         // system + user + assistant
         assert_eq!(msgs.len(), 3);
     }
@@ -217,7 +235,7 @@ mod tests {
             chat.push(user_msg(&big));
             chat.push(assistant_msg(&big));
         }
-        let msgs = build_openai_messages("system", &chat);
+        let msgs = build_openai_messages("system", &chat, CONTEXT_CHAR_BUDGET);
         // Total serialized size must be within budget.
         let total: usize = msgs.iter().map(|v| v.to_string().len()).sum();
         assert!(
@@ -237,7 +255,7 @@ mod tests {
             user_msg(&huge),
             assistant_msg(&huge),
         ];
-        let msgs = build_openai_messages("system", &chat);
+        let msgs = build_openai_messages("system", &chat, CONTEXT_CHAR_BUDGET);
         // Even if we can't fit everything, the last MIN_KEEP_TURNS pairs stay.
         // With only 2 pairs and MIN_KEEP_TURNS=6, all turns are kept.
         assert!(msgs.len() >= 3); // at minimum: system + 1 user + 1 assistant

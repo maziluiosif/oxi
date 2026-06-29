@@ -100,6 +100,24 @@ pub struct RunState {
     pub pending_load_session_idx: Option<usize>,
 }
 
+/// Cached model list for one provider profile.
+#[derive(Debug, Clone, Default)]
+pub struct FetchedModels {
+    /// Model ids returned by the provider's `/v1/models` endpoint.
+    pub models: Vec<String>,
+    /// True while a fetch is in flight for this profile.
+    pub loading: bool,
+    /// Last error message, if any.
+    pub error: Option<String>,
+}
+
+/// Result message from a background model-list fetch.
+#[derive(Debug)]
+pub struct ModelFetchMsg {
+    pub profile_id: String,
+    pub result: Result<Vec<String>, String>,
+}
+
 pub struct ConversationState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -138,4 +156,8 @@ pub struct ConversationState {
     pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
     /// egui context used for the git worker so it can request repaints.
     pub git_ctx: eframe::egui::Context,
+    /// Background model-list fetch results keyed by profile id.
+    pub fetched_models: std::collections::HashMap<String, FetchedModels>,
+    /// Channel for model-list fetch results (drained each frame).
+    pub model_rx: Option<std::sync::mpsc::Receiver<ModelFetchMsg>>,
 }
