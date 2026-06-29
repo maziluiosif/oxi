@@ -320,6 +320,34 @@ fn render_expandable_monospace_panel(
     text: &str,
     color: Color32,
 ) {
+    render_expandable_monospace_panel_with(ui, panel_fill, max_preview_lines, persist_id, content_overflows, text, color, false)
+}
+
+/// Same as [`render_expandable_monospace_panel`] but, while collapsed, shows the *tail* of the
+/// text (newest content) instead of the head. Used for live streaming panels (e.g. the
+/// thinking bubble) so the newly produced reasoning stays visible as it grows.
+fn render_expandable_monospace_panel_tail(
+    ui: &mut Ui,
+    panel_fill: Color32,
+    max_preview_lines: usize,
+    persist_id: Id,
+    content_overflows: bool,
+    text: &str,
+    color: Color32,
+) {
+    render_expandable_monospace_panel_with(ui, panel_fill, max_preview_lines, persist_id, content_overflows, text, color, true)
+}
+
+fn render_expandable_monospace_panel_with(
+    ui: &mut Ui,
+    panel_fill: Color32,
+    max_preview_lines: usize,
+    persist_id: Id,
+    content_overflows: bool,
+    text: &str,
+    color: Color32,
+    tail: bool,
+) {
     let frame = Frame::none()
         .fill(panel_fill)
         .stroke(Stroke::new(1.0, c_border_subtle()))
@@ -330,6 +358,8 @@ fn render_expandable_monospace_panel(
             let inner = ui.available_width().max(40.0);
             let display = if !content_overflows || is_expanded(ui, persist_id) {
                 text.to_string()
+            } else if tail {
+                crate::ui::preview_expand::truncate_lines_tail_preview(text, max_preview_lines)
             } else {
                 truncate_lines_preview(text, max_preview_lines)
             };
@@ -1186,20 +1216,39 @@ fn render_thinking_group_block(
     let bubble_w = content_wrap_width(ui);
     ui.set_width(bubble_w);
     let overflow = combined.lines().count() > BLOCK_PREVIEW_LINES;
-    render_expandable_monospace_panel(
-        ui,
-        c_bg_elevated(),
-        BLOCK_PREVIEW_LINES,
-        expand_persist_id(Id::new((
-            msg_idx,
-            salt,
-            "thinking_body",
-            block_state_tag(live),
-        ))),
-        overflow,
-        combined.as_str(),
-        c_text_muted(),
-    );
+    // While the model is actively streaming reasoning, keep the view pinned to the newest
+    // text (tail) so you can follow along instead of seeing a frozen first page.
+    if overflow && live {
+        render_expandable_monospace_panel_tail(
+            ui,
+            c_bg_elevated(),
+            BLOCK_PREVIEW_LINES,
+            expand_persist_id(Id::new((
+                msg_idx,
+                salt,
+                "thinking_body",
+                block_state_tag(live),
+            ))),
+            overflow,
+            combined.as_str(),
+            c_text_muted(),
+        )
+    } else {
+        render_expandable_monospace_panel(
+            ui,
+            c_bg_elevated(),
+            BLOCK_PREVIEW_LINES,
+            expand_persist_id(Id::new((
+                msg_idx,
+                salt,
+                "thinking_body",
+                block_state_tag(live),
+            ))),
+            overflow,
+            combined.as_str(),
+            c_text_muted(),
+        )
+    };
     ui.add_space(8.0);
 }
 
