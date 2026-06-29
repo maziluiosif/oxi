@@ -71,13 +71,91 @@ impl OxiApp {
             return;
         };
         let mut latest: Option<GitState> = None;
+        // The diff collected for the commit-message generator can arrive on any drained
+        // state, so capture it across all of them rather than only the last one.
+        let mut collected_diff: Option<String> = None;
         while let Ok(state) = rx.try_recv() {
+            if let Some(diff) = &state.commit_diff {
+                collected_diff = Some(diff.clone());
+            }
             latest = Some(state);
         }
         if let Some(state) = latest {
             self.conv.git = state;
             ctx.request_repaint();
         }
+        if let Some(diff) = collected_diff {
+            if self.conv.commit_gen_pending {
+                self.start_commit_gen(&diff);
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// Kick off the LLM completion for the commit message once the diff is in hand.
+    fn start_commit_gen(&mut self, diff: &str) {
+        self.conv.commit_gen_pending = false;
+        let Some(profile) = self.conv.settings.commit_msg_profile().cloned() else {
+            self.conv.commit_gen_error =
+                Some("No provider profile configured for commit messages.".to_string());
+            return;
+        };
+        let system_prompt = self.conv.settings.commit_msg_system_prompt.clone();
+        let user_prompt = format!(
+            "Write a git commit message for the following diff.\n\n```diff\n{diff}\n```"
+        );
+        let (rx, _handle) = crate::agent::spawn_completion(crate::agent::CompleteRequest {
+            profile,
+            system_prompt,
+            user_prompt,
+            max_chars: Some(1500),
+        });
+        self.conv.git_commit_message.clear();
+        self.conv.commit_gen_error = None;
+        self.conv.commit_gen_rx = Some(rx);
+    }
+
+    /// Drain streamed commit-message deltas into the composer. Called each frame.
+    pub(crate) fn drain_commit_gen(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.conv.commit_gen_rx.as_ref() else {
+            return;
+        };
+        let mut done = false;
+        loop {
+            match rx.try_recv() {
+                Ok(crate::agent::CompleteEvent::Delta(d)) => {
+                    self.conv.git_commit_message.push_str(&d);
+                    ctx.request_repaint();
+                }
+                Ok(crate::agent::CompleteEvent::Done(result)) => {
+                    match result {
+                        Ok(text) => {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                self.conv.git_commit_message = trimmed.to_string();
+                            }
+                        }
+                        Err(e) => self.conv.commit_gen_error = Some(e),
+                    }
+                    done = true;
+                    ctx.request_repaint();
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    done = true;
+                    break;
+                }
+            }
+        }
+        if done {
+            self.conv.commit_gen_rx = None;
+        }
+    }
+
+    /// True while a commit message is being collected or generated.
+    fn commit_gen_active(&self) -> bool {
+        self.conv.commit_gen_pending || self.conv.commit_gen_rx.is_some()
     }
 
     /// Render the right-side git column (allocated after the chat area).
@@ -312,12 +390,30 @@ impl OxiApp {
         ui.add(resp);
         ui.add_space(4.0);
 
+        let gen_active = self.commit_gen_active();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if crate::ui::chrome::primary_button(ui, "✓ Commit").clicked() {
+            if crate::ui::chrome::primary_button(ui, "✔ Commit").clicked() {
                 let msg = self.conv.git_commit_message.clone();
                 self.request(GitOp::Commit(msg));
                 self.conv.git_commit_message.clear();
+            }
+            let gen_label = if gen_active { "Generating…" } else { "✨ Generate" };
+            let gen_resp = ui
+                .add_enabled_ui(!gen_active, |ui| {
+                    crate::ui::chrome::ghost_button(ui, gen_label, false)
+                })
+                .inner;
+            if gen_resp
+                .on_hover_text(
+                    "Generate a commit message from the staged diff with the configured model",
+                )
+                .clicked()
+            {
+                // Ask the worker for the diff; the response handler starts the LLM run.
+                self.conv.commit_gen_error = None;
+                self.conv.commit_gen_pending = true;
+                self.request(GitOp::CollectCommitDiff);
             }
             if crate::ui::chrome::ghost_button(ui, "Stage all", false).clicked() {
                 let paths: Vec<String> = self
@@ -344,6 +440,15 @@ impl OxiApp {
                 }
             }
         });
+
+        if let Some(err) = self.conv.commit_gen_error.clone() {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!("Generate failed: {err}"))
+                    .size(FS_TINY)
+                    .color(Color32::from_rgb(0xE0, 0x6C, 0x6C)),
+            );
+        }
 
         ui.add_space(8.0);
         crate::ui::chrome::hairline(ui);
@@ -532,9 +637,14 @@ impl OxiApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add(
-                        Button::new(RichText::new("✕").size(FS_TINY).color(c_text_muted()))
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT),
+                        Button::new(
+                            RichText::new(ICON_CLOSE)
+                                .size(FS_TINY)
+                                .font(FontId::new(FS_TINY, icon_font()))
+                                .color(c_text_muted()),
+                        )
+                        .frame(false)
+                        .fill(Color32::TRANSPARENT),
                     )
                     .on_hover_text("Close diff")
                     .clicked()

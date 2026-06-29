@@ -140,109 +140,129 @@ impl OxiApp {
             }
             ui.allocate_ui_with_layout(
                 egui::vec2(col_w, 38.0),
-                egui::Layout::left_to_right(Align::Center),
+                egui::Layout::right_to_left(Align::Center),
                 |ui| {
-                    if !self.conv.sidebar_open
-                        && ui
-                            .add_sized(
-                                [30.0, 28.0],
-                                Button::new(RichText::new("☰").size(14.0).color(c_text_muted()))
+                    ui.spacing_mut().item_spacing.x = 6.0;
+
+                    // Right cluster — sized to its content so it never overflows the title.
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 28.0),
+                        egui::Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if ui
+                                .add_sized(
+                                    [96.0, 28.0],
+                                    Button::new(
+                                        RichText::new("＋  New").size(FS_SMALL).color(c_text()),
+                                    )
                                     .fill(c_bg_elevated())
                                     .stroke(Stroke::new(1.0, c_border_subtle()))
                                     .rounding(8.0),
-                            )
-                            .on_hover_text("Show sidebar")
-                            .clicked()
-                    {
-                        self.conv.sidebar_open = true;
-                    }
-
-                    let workspace = workspace_sidebar_label(&self.active_workspace().root_path);
-                    ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 172.0).max(80.0));
-                        ui.add(
-                            Label::new(
-                                RichText::new("Chat")
-                                    .size(FS_SMALL)
-                                    .color(c_text())
-                                    .strong(),
-                            )
-                            .truncate(),
-                        );
-                        let profile = self
-                            .conv
-                            .settings
-                            .active_profile()
-                            .map(|p| p.subtitle())
-                            .unwrap_or_else(|| "No active profile".to_string());
-                        ui.add(
-                            Label::new(
-                                RichText::new(format!("{workspace} · {profile}"))
-                                    .size(FS_TINY)
-                                    .color(c_text_muted()),
-                            )
-                            .truncate(),
-                        );
-                    });
-
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add_sized(
-                                [96.0, 28.0],
-                                Button::new(
-                                    RichText::new("＋  New").size(FS_SMALL).color(c_text()),
                                 )
-                                .fill(c_bg_elevated())
-                                .stroke(Stroke::new(1.0, c_border_subtle()))
-                                .rounding(8.0),
-                            )
-                            .on_hover_text("Start a new chat in this workspace")
-                            .clicked()
-                        {
-                            self.new_chat();
-                        }
-                        ui.add_space(6.0);
-                        let term_on = self.conv.terminal_open;
-                        if ui
-                            .add_sized(
-                                [34.0, 28.0],
-                                Button::new(RichText::new(">_").size(FS_SMALL).color(if term_on {
-                                    c_accent()
-                                } else {
-                                    c_text()
-                                }))
-                                .fill(c_bg_elevated())
-                                .stroke(Stroke::new(1.0, c_border_subtle()))
-                                .rounding(8.0),
-                            )
-                            .on_hover_text("Toggle terminal panel")
-                            .clicked()
-                        {
-                            self.toggle_terminal();
-                        }
-                        ui.add_space(6.0);
-                        let git_on = self.conv.git_open;
-                        if ui
-                            .add_sized(
-                                [34.0, 28.0],
-                                Button::new(
-                                    RichText::new("⎇").size(FS_SMALL).color(if git_on {
-                                        c_accent()
-                                    } else {
-                                        c_text()
-                                    }),
+                                .on_hover_text("Start a new chat in this workspace")
+                                .clicked()
+                            {
+                                self.new_chat();
+                            }
+                            let term_on = self.conv.terminal_open;
+                            if ui
+                                .add_sized(
+                                    [34.0, 28.0],
+                                    Button::new(
+                                        RichText::new(">_").size(FS_SMALL).color(if term_on {
+                                            c_accent()
+                                        } else {
+                                            c_text()
+                                        }),
+                                    )
+                                    .fill(c_bg_elevated())
+                                    .stroke(Stroke::new(1.0, c_border_subtle()))
+                                    .rounding(8.0),
                                 )
-                                .fill(c_bg_elevated())
-                                .stroke(Stroke::new(1.0, c_border_subtle()))
-                                .rounding(8.0),
-                            )
-                            .on_hover_text("Toggle source-control (git) panel")
-                            .clicked()
-                        {
-                            self.toggle_git_panel();
-                        }
-                        self.render_header_status_chip(ui);
-                    });
+                                .on_hover_text("Toggle terminal panel")
+                                .clicked()
+                            {
+                                self.toggle_terminal();
+                            }
+                            let git_on = self.conv.git_open;
+                            if ui
+                                .add_sized(
+                                    [34.0, 28.0],
+                                    Button::new(
+                                        RichText::new("⎇").size(FS_SMALL).color(if git_on {
+                                            c_accent()
+                                        } else {
+                                            c_text()
+                                        }),
+                                    )
+                                    .fill(c_bg_elevated())
+                                    .stroke(Stroke::new(1.0, c_border_subtle()))
+                                    .rounding(8.0),
+                                )
+                                .on_hover_text("Toggle source-control (git) panel")
+                                .clicked()
+                            {
+                                self.toggle_git_panel();
+                            }
+                            self.render_header_status_chip(ui);
+                        },
+                    );
+
+                    // Left group gets whatever the right cluster didn’t take.
+                    let left_w = ui.available_width();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(left_w, 38.0),
+                        egui::Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if !self.conv.sidebar_open
+                                && ui
+                                    .add_sized(
+                                        [30.0, 28.0],
+                                        Button::new(
+                                            RichText::new("☰").size(14.0).color(c_text_muted()),
+                                        )
+                                        .fill(c_bg_elevated())
+                                        .stroke(Stroke::new(1.0, c_border_subtle()))
+                                        .rounding(8.0),
+                                    )
+                                    .on_hover_text("Show sidebar")
+                                    .clicked()
+                            {
+                                self.conv.sidebar_open = true;
+                            }
+
+                            let workspace =
+                                workspace_sidebar_label(&self.active_workspace().root_path);
+                            ui.vertical(|ui| {
+                                ui.set_width(ui.available_width());
+                                ui.add(
+                                    Label::new(
+                                        RichText::new("Chat")
+                                            .size(FS_SMALL)
+                                            .color(c_text())
+                                            .strong(),
+                                    )
+                                    .truncate(),
+                                );
+                                let profile = self
+                                    .conv
+                                    .settings
+                                    .active_profile()
+                                    .map(|p| p.subtitle())
+                                    .unwrap_or_else(|| "No active profile".to_string());
+                                ui.add(
+                                    Label::new(
+                                        RichText::new(format!("{workspace} · {profile}"))
+                                            .size(FS_TINY)
+                                            .color(c_text_muted()),
+                                    )
+                                    .truncate(),
+                                );
+                            });
+                        },
+                    );
                 },
             );
             if pad > 0.0 {

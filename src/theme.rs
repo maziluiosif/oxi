@@ -40,6 +40,28 @@ pub fn icon_font() -> FontFamily {
     FontFamily::Name("icons".into())
 }
 
+// ─── Icon glyphs (Nerd Font, rendered with [`icon_font`]) ───────────────────────
+//
+// These are PUA codepoints from `SymbolsNerdFontMono`, bundled with the app and
+// installed under the dedicated `icons` family. We use them for small inline UI
+// glyphs instead of bare Unicode symbols (✦ ✎ ◐ ✕ ✓ …), whose codepoints are
+// frequently absent from the bundled text/emoji/symbol fonts and render as empty
+// boxes at small sizes. Each constant below is verified present in the font.
+//
+// Always pair these with `​.font(FontId::new(<size>, icon_font()))` so they go
+// through the icon family rather than the proportional fallback chain.
+
+/// Models & providers (settings nav) — nf-md-cube.
+pub const ICON_PROVIDERS: &str = "\u{f0148}";
+/// Agent (settings nav) — nf-fa-robot.
+pub const ICON_AGENT: &str = "\u{f2bb}";
+/// Appearance (settings nav) — nf-fa-adjust (half-filled circle, matches ◐).
+pub const ICON_APPEARANCE: &str = "\u{f042}";
+/// Close / dismiss (e.g. diff viewer) — nf-fa-xmark.
+pub const ICON_CLOSE: &str = "\u{f00d}";
+/// Affirmative / done (commit button, tool enable check) — nf-fa-check.
+pub const ICON_CHECK: &str = "\u{f00c}";
+
 // ─── Palette ─────────────────────────────────────────────────────────────────
 //
 // Every surface / ink / accent color the UI draws with lives in [`Palette`], so the

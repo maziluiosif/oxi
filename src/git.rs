@@ -55,6 +55,10 @@ pub struct GitState {
     pub last_op: Option<String>,
     pub current_diff_path: Option<String>,
     pub current_diff_staged: Option<bool>,
+    /// Combined staged (+ unstaged fallback) diff text collected for the "generate commit
+    /// message" feature. Populated by [`GitOp::CollectCommitDiff`]; the UI copies it and
+    /// kicks off an LLM completion.
+    pub commit_diff: Option<String>,
 }
 
 /// Operations the UI can request. Parameterized where needed.
@@ -77,6 +81,9 @@ pub enum GitOp {
     Fetch,
     /// Change the working directory the worker shells out in.
     SetCwd(String),
+    /// Gather a combined diff of staged changes (falls back to unstaged when nothing is
+    /// staged) into [`GitState::commit_diff`] for the commit-message generator.
+    CollectCommitDiff,
 }
 
 /// A request/response pair owned by the app.
@@ -157,6 +164,7 @@ fn label_op(op: &GitOp) -> String {
         GitOp::Push => "push".to_string(),
         GitOp::Fetch => "fetch".to_string(),
         GitOp::SetCwd(_) => "switch".to_string(),
+        GitOp::CollectCommitDiff => "diff".to_string(),
     }
 }
 
@@ -434,6 +442,7 @@ fn snapshot_with(
         last_op: None,
         current_diff_path,
         current_diff_staged,
+        commit_diff: None,
     }
 }
 
@@ -551,6 +560,31 @@ fn handle_op(root: &str, op: GitOp) -> GitState {
         }
         GitOp::SetCwd(_) => {
             // Handled by the worker loop before dispatch; never reached here.
+        }
+        GitOp::CollectCommitDiff => {
+            // Prefer the staged diff; if nothing is staged, fall back to the working-tree
+            // diff so the generator still has something to summarize.
+            let (ok, staged_out) = git(root, &["diff", "--cached", "--no-color"]);
+            if !ok {
+                error = Some(staged_out.trim().to_string());
+            }
+            let combined = if staged_out.trim().is_empty() {
+                let (ok2, unstaged_out) = git(root, &["diff", "--no-color"]);
+                if !ok2 && error.is_none() {
+                    error = Some(unstaged_out.trim().to_string());
+                }
+                unstaged_out
+            } else {
+                staged_out
+            };
+            let mut state = snapshot(root, None, error);
+            let trimmed = truncate(&combined, MAX_DIFF_CHARS);
+            state.commit_diff = if trimmed.trim().is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            };
+            return state;
         }
     }
 
