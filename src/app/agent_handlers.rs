@@ -71,6 +71,45 @@ impl OxiApp {
         }
     }
 
+    pub(crate) fn drain_models(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.conv.model_rx.take() else {
+            return;
+        };
+        let mut repainted = false;
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    let entry = self
+                        .conv
+                        .fetched_models
+                        .entry(msg.profile_id.clone())
+                        .or_default();
+                    entry.loading = false;
+                    match msg.result {
+                        Ok(models) => {
+                            entry.models = models;
+                            entry.error = None;
+                        }
+                        Err(e) => {
+                            entry.error = Some(e);
+                        }
+                    }
+                    repainted = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.conv.model_rx = Some(rx);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    break;
+                }
+            }
+        }
+        if repainted {
+            ctx.request_repaint();
+        }
+    }
+
     pub(crate) fn drain_oauth(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.conn.oauth_rx.take() else {
             return;

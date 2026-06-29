@@ -370,6 +370,7 @@ pub async fn run_codex_responses_loop(
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
     gate: &mut ApprovalGate,
+    max_rounds: u32,
 ) -> Result<(), String> {
     let url = resolve_codex_post_url(base_url);
     let rtools = responses_tools(tools);
@@ -380,8 +381,8 @@ pub async fn run_codex_responses_loop(
             break;
         }
         round += 1;
-        if round > 64 {
-            return Err("Too many tool rounds".into());
+        if max_rounds != 0 && round > max_rounds {
+            return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
         let (instructions, rest) = split_system(messages);
         let input = chat_to_input(&rest)?;

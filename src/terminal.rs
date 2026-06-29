@@ -186,7 +186,13 @@ impl TerminalSession {
 
         self.handle_mouse(ui, rect, cell_w, cell_h, resp.hovered());
         // Apply scrollback view (no-op when an app has grabbed the mouse / offset is 0).
+        // vt100 0.15's `visible_rows` mixes `offset` scrollback rows with `rows - offset`
+        // live rows, so an offset larger than the row count underflows and panics. Clamp
+        // to the visible row count before handing it over; `set_scrollback` then clamps
+        // again to the buffer length.
         if let Ok(mut p) = self.parser.lock() {
+            let max_off = self.rows as usize;
+            self.scroll_offset = self.scroll_offset.min(max_off);
             p.set_scrollback(self.scroll_offset);
             self.scroll_offset = p.screen().scrollback();
         }

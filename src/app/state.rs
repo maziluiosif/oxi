@@ -100,6 +100,24 @@ pub struct RunState {
     pub pending_load_session_idx: Option<usize>,
 }
 
+/// Cached model list for one provider profile.
+#[derive(Debug, Clone, Default)]
+pub struct FetchedModels {
+    /// Model ids returned by the provider's `/v1/models` endpoint.
+    pub models: Vec<String>,
+    /// True while a fetch is in flight for this profile.
+    pub loading: bool,
+    /// Last error message, if any.
+    pub error: Option<String>,
+}
+
+/// Result message from a background model-list fetch.
+#[derive(Debug)]
+pub struct ModelFetchMsg {
+    pub profile_id: String,
+    pub result: Result<Vec<String>, String>,
+}
+
 pub struct ConversationState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -126,4 +144,28 @@ pub struct ConversationState {
     pub composer_measured_text_h: f32,
     /// Full height of the composer row (from the previous frame) for splitting transcript vs input.
     pub composer_measured_full_h: f32,
+    /// Source-control (git) panel visibility and width (persisted in settings).
+    pub git_open: bool,
+    pub git_width: f32,
+    pub git_tab: crate::app::git_panel::GitTab,
+    pub git: crate::git::GitState,
+    pub git_commit_message: String,
+    pub git_new_branch: String,
+    /// Set while a commit-message generation is in flight: we've asked the git worker for
+    /// the diff and are waiting for it to come back so we can kick off the LLM completion.
+    pub commit_gen_pending: bool,
+    /// Receiver for the in-flight commit-message completion (deltas + terminal Done).
+    /// `Some` while generating; cleared when the run finishes.
+    pub commit_gen_rx: Option<std::sync::mpsc::Receiver<crate::agent::CompleteEvent>>,
+    /// Last commit-generation error, shown inline under the composer until the next run.
+    pub commit_gen_error: Option<String>,
+    /// Git worker request channel. Responses arrive on `git_rx`; drained each frame.
+    pub git_tx: Option<std::sync::mpsc::Sender<crate::git::GitOp>>,
+    pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
+    /// egui context used for the git worker so it can request repaints.
+    pub git_ctx: eframe::egui::Context,
+    /// Background model-list fetch results keyed by profile id.
+    pub fetched_models: std::collections::HashMap<String, FetchedModels>,
+    /// Channel for model-list fetch results (drained each frame).
+    pub model_rx: Option<std::sync::mpsc::Receiver<ModelFetchMsg>>,
 }

@@ -173,11 +173,12 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
         egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
         |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.label(RichText::new(icon).size(FS_BODY).color(if selected {
-                    c_accent()
-                } else {
-                    c_text_faint()
-                }));
+                ui.label(
+                    RichText::new(icon)
+                        .size(FS_BODY)
+                        .font(FontId::new(FS_BODY, icon_font()))
+                        .color(if selected { c_accent() } else { c_text_faint() }),
+                );
                 ui.add_space(8.0);
                 ui.add(
                     Label::new(RichText::new(label).size(FS_SMALL).color(text_color))
