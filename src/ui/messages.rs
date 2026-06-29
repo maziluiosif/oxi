@@ -320,7 +320,16 @@ fn render_expandable_monospace_panel(
     text: &str,
     color: Color32,
 ) {
-    render_expandable_monospace_panel_with(ui, panel_fill, max_preview_lines, persist_id, content_overflows, text, color, false)
+    render_expandable_monospace_panel_with(
+        ui,
+        panel_fill,
+        max_preview_lines,
+        persist_id,
+        content_overflows,
+        text,
+        color,
+        false,
+    )
 }
 
 /// Same as [`render_expandable_monospace_panel`] but, while collapsed, shows the *tail* of the
@@ -335,7 +344,16 @@ fn render_expandable_monospace_panel_tail(
     text: &str,
     color: Color32,
 ) {
-    render_expandable_monospace_panel_with(ui, panel_fill, max_preview_lines, persist_id, content_overflows, text, color, true)
+    render_expandable_monospace_panel_with(
+        ui,
+        panel_fill,
+        max_preview_lines,
+        persist_id,
+        content_overflows,
+        text,
+        color,
+        true,
+    )
 }
 
 fn render_expandable_monospace_panel_with(
