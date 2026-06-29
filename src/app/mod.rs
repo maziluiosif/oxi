@@ -20,6 +20,7 @@ mod sidebar;
 mod state;
 mod streaming;
 mod task_runner;
+mod terminal_panel;
 
 pub use state::{
     ConnectionState, ConversationState, PendingApproval, RunState, SessionKey, SessionRunState,
@@ -30,6 +31,8 @@ pub struct OxiApp {
     pub conn: ConnectionState,
     pub flow: RunState,
     pub conv: ConversationState,
+    /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
+    pub terminal: Option<crate::terminal::TerminalSession>,
 }
 
 impl OxiApp {
@@ -68,6 +71,8 @@ impl OxiApp {
                 input_history_draft: String::new(),
                 sidebar_open: true,
                 sidebar_width: settings.sidebar_width,
+                terminal_open: settings.terminal_open,
+                terminal_height: settings.terminal_height,
                 settings,
                 settings_open: false,
                 settings_tab: state::SettingsTab::default(),
@@ -77,6 +82,7 @@ impl OxiApp {
                 composer_measured_text_h: 0.0,
                 composer_measured_full_h: 0.0,
             },
+            terminal: None,
         };
         app.ensure_active_session_loaded();
         app

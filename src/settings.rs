@@ -161,6 +161,12 @@ pub struct AppSettings {
     /// Persisted width of the main app/sidebar split.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
+    /// Persisted height of the bottom terminal panel.
+    #[serde(default = "default_terminal_height")]
+    pub terminal_height: f32,
+    /// Whether the bottom terminal panel is shown.
+    #[serde(default)]
+    pub terminal_open: bool,
     /// Active color theme id (see [`crate::theme`]: `dark`, `light`, `midnight`, or
     /// `custom:<name>`). Falls back to the default theme if unknown.
     #[serde(default = "default_theme_id")]
@@ -185,6 +191,14 @@ fn default_searxng_url() -> String {
 fn default_sidebar_width() -> f32 {
     168.0
 }
+
+fn default_terminal_height() -> f32 {
+    260.0
+}
+
+/// Clamp bounds for the bottom terminal panel height.
+pub const TERMINAL_H_MIN: f32 = 96.0;
+pub const TERMINAL_H_MAX: f32 = 900.0;
 
 fn default_theme_id() -> String {
     crate::theme::DEFAULT_THEME_ID.to_string()
@@ -227,6 +241,8 @@ impl Default for AppSettings {
             searxng_url: default_searxng_url(),
             require_approval: default_require_approval(),
             sidebar_width: default_sidebar_width(),
+            terminal_height: default_terminal_height(),
+            terminal_open: false,
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
         }
@@ -315,6 +331,10 @@ impl AppSettings {
             self.sidebar_width = default_sidebar_width();
         }
         self.sidebar_width = self.sidebar_width.clamp(120.0, 520.0);
+        if !self.terminal_height.is_finite() || self.terminal_height <= 0.0 {
+            self.terminal_height = default_terminal_height();
+        }
+        self.terminal_height = self.terminal_height.clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
         if self.profiles.is_empty() {
             *self = Self::default();
             return;
