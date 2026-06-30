@@ -17,8 +17,9 @@ use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
 use crate::agent::openai::run_chat_loop;
 use crate::agent::runner::{
-    configured_lmstudio_key, configured_openai_key, configured_opencode_go_key,
-    configured_openrouter_key, opencode_go_model_uses_anthropic, openrouter_extra_headers,
+    configured_lmstudio_key, configured_ollama_key, configured_openai_key,
+    configured_opencode_go_key, configured_openrouter_key, opencode_go_model_uses_anthropic,
+    openrouter_extra_headers,
 };
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{LlmProviderKind, ProviderProfile};
@@ -147,6 +148,29 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         }
         LlmProviderKind::LmStudio => {
             let key = configured_lmstudio_key(&profile);
+            let base = profile.effective_base_url();
+            run_chat_loop(
+                &client,
+                &base,
+                &key,
+                &model,
+                &[],
+                &mut messages,
+                &tools,
+                std::path::Path::new("."),
+                &crate::agent::tools::ToolEnv {
+                    enabled: Vec::new(),
+                    web_search_url: String::new(),
+                },
+                &agent_tx,
+                &cancel,
+                &mut gate,
+                max_rounds,
+            )
+            .await
+        }
+        LlmProviderKind::Ollama => {
+            let key = configured_ollama_key(&profile);
             let base = profile.effective_base_url();
             run_chat_loop(
                 &client,

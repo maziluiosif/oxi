@@ -1,5 +1,6 @@
 mod agent;
 mod app;
+mod compute;
 mod git;
 mod hydrate;
 mod markdown;

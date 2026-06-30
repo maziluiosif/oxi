@@ -118,6 +118,22 @@ pub struct ModelFetchMsg {
     pub result: Result<Vec<String>, String>,
 }
 
+/// Status of an in-flight or completed SSH tunnel "Test connection" check, keyed by
+/// provider profile id.
+#[derive(Debug, Clone, Default)]
+pub struct SshTestStatus {
+    pub loading: bool,
+    /// `Ok(local_port)` on success, `Err(message)` on failure. `None` before any test runs.
+    pub result: Option<Result<u16, String>>,
+}
+
+/// Result message from a background SSH "Test connection" check.
+#[derive(Debug)]
+pub struct SshTestMsg {
+    pub profile_id: String,
+    pub result: Result<u16, String>,
+}
+
 pub struct ConversationState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -174,4 +190,13 @@ pub struct ConversationState {
     pub fetched_models: std::collections::HashMap<String, FetchedModels>,
     /// Channel for model-list fetch results (drained each frame).
     pub model_rx: Option<std::sync::mpsc::Receiver<ModelFetchMsg>>,
+    /// Draft (in-memory only) SSH passwords for Remote SSH compute targets, keyed by
+    /// profile id. Loaded lazily from `ssh_credentials.json` on first edit, written
+    /// through to disk on change; never stored in `settings.json`.
+    pub ssh_password_drafts: std::collections::HashMap<String, String>,
+    /// Background "Test connection" results for Remote SSH compute targets, keyed by
+    /// profile id.
+    pub ssh_test: std::collections::HashMap<String, SshTestStatus>,
+    /// Channel for SSH "Test connection" results (drained each frame).
+    pub ssh_test_rx: Option<std::sync::mpsc::Receiver<SshTestMsg>>,
 }
