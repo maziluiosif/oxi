@@ -272,7 +272,15 @@ impl OxiApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let _join = spawn_agent_run(settings, cwd, chat, tx, approval_rx, cancel.clone());
+        let _join = spawn_agent_run(
+            settings,
+            self.tunnels.clone(),
+            cwd,
+            chat,
+            tx,
+            approval_rx,
+            cancel.clone(),
+        );
         let run = self.run_state_mut(key);
         run.agent_rx = Some(rx);
         run.approval_tx = Some(approval_tx);

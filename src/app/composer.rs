@@ -120,11 +120,15 @@ impl OxiApp {
         // ── Left: round attach button ──────────────────────────────────────
         let attach = ui
             .add(
-                Button::new(RichText::new("+").size(16.0).color(c_text_muted()))
-                    .min_size(egui::vec2(ATTACH_DIAM, ATTACH_DIAM))
-                    .fill(c_bg_input())
-                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .rounding(ATTACH_DIAM * 0.5),
+                Button::new(crate::ui::chrome::icon_glyph_rich(
+                    ICON_ATTACH,
+                    15.0,
+                    c_text_muted(),
+                ))
+                .min_size(egui::vec2(ATTACH_DIAM, ATTACH_DIAM))
+                .fill(c_bg_input())
+                .stroke(Stroke::new(1.0, c_border_subtle()))
+                .rounding(ATTACH_DIAM * 0.5),
             )
             .on_hover_text("Attach image");
         if attach.clicked() {
@@ -139,30 +143,30 @@ impl OxiApp {
             let active_session_streaming = self.active_waiting_response();
             let no_profile = self.conv.settings.active_profile().is_none();
             let (fill, fg, enabled, icon, hover) = if active_session_streaming {
-                (c_text(), c_bg_main(), true, "■", "Stop generation")
+                (c_text(), c_bg_main(), true, ICON_STOP, "Stop generation")
             } else if no_profile {
                 (
                     c_bg_elevated_2(),
                     c_text_muted(),
                     false,
-                    "↑",
+                    ICON_SEND,
                     "Configure an active provider profile in Settings",
                 )
             } else if can_send {
-                (c_text(), c_bg_main(), true, "↑", "Send message")
+                (c_text(), c_bg_main(), true, ICON_SEND, "Send message")
             } else {
                 (
                     c_bg_elevated_2(),
                     c_text_muted(),
                     false,
-                    "↑",
+                    ICON_SEND,
                     "Type a message or attach an image",
                 )
             };
             let clicked = ui
                 .add_enabled(
                     enabled,
-                    Button::new(RichText::new(icon).size(15.0).color(fg))
+                    Button::new(crate::ui::chrome::icon_glyph_rich(icon, 15.0, fg))
                         .min_size(egui::vec2(SEND_DIAM, SEND_DIAM))
                         .fill(fill)
                         .stroke(Stroke::NONE)
@@ -316,11 +320,15 @@ impl OxiApp {
                     .show(ui.ctx(), |ui| {
                         if ui
                             .add(
-                                Button::new(RichText::new("×").size(12.0).color(c_text()))
-                                    .min_size(egui::vec2(15.0, 15.0))
-                                    .fill(c_bg_main())
-                                    .stroke(Stroke::new(1.0, c_border()))
-                                    .rounding(7.5),
+                                Button::new(crate::ui::chrome::icon_glyph_rich(
+                                    ICON_CLOSE,
+                                    12.0,
+                                    c_text(),
+                                ))
+                                .min_size(egui::vec2(15.0, 15.0))
+                                .fill(c_bg_main())
+                                .stroke(Stroke::new(1.0, c_border()))
+                                .rounding(7.5),
                             )
                             .on_hover_text("Remove image")
                             .clicked()

@@ -13,6 +13,7 @@ impl eframe::App for OxiApp {
         self.consume_dropped_files(ctx);
         self.drain_agent(ctx);
         self.drain_models(ctx);
+        self.drain_ssh_test(ctx);
         self.drain_oauth(ctx);
         self.bind_git_ctx(ctx);
         self.drain_git(ctx);

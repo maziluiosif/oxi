@@ -57,10 +57,52 @@ pub const ICON_PROVIDERS: &str = "\u{f0148}";
 pub const ICON_AGENT: &str = "\u{f2bb}";
 /// Appearance (settings nav) — nf-fa-adjust (half-filled circle, matches ◐).
 pub const ICON_APPEARANCE: &str = "\u{f042}";
-/// Close / dismiss (e.g. diff viewer) — nf-fa-xmark.
+/// Close / dismiss (diff viewer, settings, image chip) — nf-fa-xmark.
 pub const ICON_CLOSE: &str = "\u{f00d}";
 /// Affirmative / done (commit button, tool enable check) — nf-fa-check.
 pub const ICON_CHECK: &str = "\u{f00c}";
+/// Gear / cog — settings entry points and the empty-state settings button (`nf-fa-gear`).
+pub const ICON_SETTINGS: &str = "\u{f013}";
+/// Plus — "new" / "add" actions (new chat, add profile) (`nf-fa-plus`).
+pub const ICON_PLUS: &str = "\u{f067}";
+/// Plus inside a filled square — primary "new chat" button (`nf-fa-plus-square`).
+pub const ICON_PLUS_SQUARE: &str = "\u{f0fe}";
+/// Chevron pointed left — "back" / hide panel (`nf-fa-chevron-left`).
+pub const ICON_CHEVRON_LEFT: &str = "\u{f060}";
+/// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
+pub const ICON_CHEVRON_RIGHT: &str = "\u{f054}";
+/// Hamburger menu — toggle sidebar (`nf-fa-bars`).
+pub const ICON_MENU: &str = "\u{f02a}";
+/// Terminal — toggle the embedded terminal panel (`nf-fa-terminal`).
+pub const ICON_TERMINAL: &str = "\u{f120}";
+/// Git — source-control panel and header (`nf-fa-git`).
+pub const ICON_GIT: &str = "\u{f1d3}";
+/// Rotate / refresh (`nf-fa-arrows-rotate`).
+pub const ICON_REFRESH: &str = "\u{f450}";
+/// Arrow pointing up — send message button (`nf-fa-arrow-up`).
+pub const ICON_SEND: &str = "\u{f062}";
+/// Filled stop square — stop streaming (`nf-fa-stop`).
+pub const ICON_STOP: &str = "\u{f04d}";
+/// Paperclip — attach image composer button (`nf-fa-paperclip`).
+pub const ICON_ATTACH: &str = "\u{f0c6}";
+/// Arrow rising out of a box — "external" suggestion / prompt chips (`nf-fa-external-link`).
+pub const ICON_EXTERNAL: &str = "\u{f08e}";
+/// Trash — delete / discard actions (`nf-fa-trash`).
+pub const ICON_TRASH: &str = "\u{f1f8}";
+/// Folder plus — "add workspace" (`nf-md-folder-plus`).
+pub const ICON_FOLDER_PLUS: &str = "\u{f0257}";
+/// Check inside a circle — affirmative pill ("Signed in", committed) (`nf-fa-check-circle`).
+pub const ICON_CHECK_CIRCLE: &str = "\u{f058}";
+/// Up angle chevron — "stage" direction / collapse hint (`nf-fa-angle-up`).
+pub const ICON_ANGLE_UP: &str = "\u{f077}";
+/// Down angle chevron — unfold/expand hint (`nf-fa-angle-down`).
+pub const ICON_ANGLE_DOWN: &str = "\u{f078}";
+/// Magic wand — "generate" (commit-message generator) (`nf-fa-magic`).
+pub const ICON_MAGIC: &str = "\u{f135}";
+/// Cloud download — pull/fetch from remote (`nf-fa-cloud-download`).
+pub const ICON_DOWNLOAD: &str = "\u{f019}";
+/// Cloud upload / arrow up — push to remote (`nf-fa-cloud-upload`).
+pub const ICON_UPLOAD: &str = "\u{f0aa}";
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
 //
@@ -303,6 +345,212 @@ palette_accessors! {
     c_md_code_block_border => md_code_block_border,
     c_md_quote_accent => md_quote_accent,
     c_md_code_fg => md_code_fg,
+}
+
+// ─── Derived semantic colors ─────────────────────────────────────────────────
+//
+// Signals (error/warning/info/tool-state) used in the transcript, git panel, composer, etc.
+// Historically dozens of `Color32::from_rgb(...)` literals were scattered through the UI and
+// shadowed the active palette — they read fine on the dark theme but stayed identical on light,
+// breaking consistency. These helpers build each tint from the *active* accent/danger/success so a
+// theme swap re-skins them automatically. All take a base hue (an accent/danger/success color).
+
+/// Blend a color toward the panel background by `alpha/255` (gives a translucent panel tint that
+/// works on both dark and light surfaces without a hard-coded RGB).
+fn tint_on_panels(base: Color32, alpha: u8) -> Color32 {
+    let bg = c_bg_main();
+    Color32::from_rgba_unmultiplied(
+        u8_blend(base.r(), bg.r(), alpha),
+        u8_blend(base.g(), bg.g(), alpha),
+        u8_blend(base.b(), bg.b(), alpha),
+        255,
+    )
+}
+
+/// Blend a surface channel toward a `tint` color by `alpha/255` — used to give elevated surfaces
+/// (pills, borders) a faint accent/danger hue without darkening toward bg_main.
+fn surface_tint(surface: Color32, tint: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgb(
+        u8_blend(surface.r(), tint.r(), alpha),
+        u8_blend(surface.g(), tint.g(), alpha),
+        u8_blend(surface.b(), tint.b(), alpha),
+    )
+}
+
+/// Linear blend of two u8 channels toward `b` by `t` (0..=255 → 0..=1).
+fn u8_blend(a: u8, b: u8, t: u8) -> u8 {
+    let f = t as f32 / 255.0;
+    let af = a as f32;
+    let bf = b as f32;
+    (af + (bf - af) * f).round().clamp(0.0, 255.0) as u8
+}
+
+/// Solid stem (text/foreground) color for an error — danger, but nudged so it stays readable on
+/// elevated backgrounds; on light themes `c_danger` is already dark enough.
+pub fn c_error_fg() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        // brightened danger, red-ish
+        Color32::from_rgb(0xff, 0xb0, 0xb0)
+    } else {
+        p.danger
+    }
+}
+
+/// Solid stem color for a warning (agent stream errors).
+pub fn c_warning_fg() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        Color32::from_rgb(0xff, 0xd0, 0xa0)
+    } else {
+        Color32::from_rgb(0x9a, 0x6a, 0x10)
+    }
+}
+
+/// Error banner background (danger tint on the panel).
+pub fn c_error_bg() -> Color32 {
+    tint_on_panels(c_danger(), 40)
+}
+/// Error banner stroke.
+pub fn c_error_stroke() -> Color32 {
+    tint_on_panels(c_danger(), 110)
+}
+/// Warning banner background.
+pub fn c_warning_bg() -> Color32 {
+    tint_on_panels(Color32::from_rgb(0xb9, 0x8a, 0x2a), 36)
+}
+/// Warning banner stroke.
+pub fn c_warning_stroke() -> Color32 {
+    tint_on_panels(Color32::from_rgb(0xb9, 0x8a, 0x2a), 110)
+}
+/// Info / approval card background — a faint accent tint.
+pub fn c_info_bg() -> Color32 {
+    tint_on_panels(c_accent(), 30)
+}
+
+// ── Tool pill palettes (single source of truth for the transcript tool pills + edit blocks) ──
+
+/// Background for a plain (done) tool pill. Matches the original near-black neutral surface on
+/// dark themes; a faint elevated tint on light.
+pub fn c_tool_pill_bg() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        Color32::from_rgb(0x15, 0x16, 0x19)
+    } else {
+        p.bg_elevated_2
+    }
+}
+/// Background for a running tool pill (accent-tinted dark surface on dark; light bluish on light).
+pub fn c_tool_running_bg() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        Color32::from_rgb(0x13, 0x18, 0x20)
+    } else {
+        surface_tint(p.bg_elevated_2, p.accent, 18)
+    }
+}
+/// Background for an errored tool pill (danger-tinted dark surface on dark; light reddish on light).
+pub fn c_tool_error_bg() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        Color32::from_rgb(0x22, 0x14, 0x15)
+    } else {
+        surface_tint(p.bg_elevated_2, p.danger, 18)
+    }
+}
+/// Border for a plain tool pill.
+pub fn c_tool_pill_border() -> Color32 {
+    c_border_subtle()
+}
+/// Border for a running tool pill.
+pub fn c_tool_running_border() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        Color32::from_rgb(0x24, 0x35, 0x48)
+    } else {
+        surface_tint(p.border, p.accent, 90)
+    }
+}
+/// Border for an errored tool pill.
+pub fn c_tool_error_border() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        Color32::from_rgb(0x47, 0x20, 0x22)
+    } else {
+        surface_tint(p.border, p.danger, 90)
+    }
+}
+/// Foreground for an errored tool label.
+pub fn c_tool_error_fg() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        Color32::from_rgb(0xf0, 0x9a, 0x9d)
+    } else {
+        p.danger
+    }
+}
+/// Background for the diff body of an edit tool.
+pub fn c_tool_diff_bg() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        Color32::from_rgb(0x0f, 0x10, 0x13)
+    } else {
+        p.bg_main
+    }
+}
+
+// ── Status-badge tints ("running" / "done" / "failed" chips under tool pills) ──
+
+/// Running badge (accent): (fg, bg, stroke). Original dark values restored for parity.
+pub fn badge_running_parts() -> (Color32, Color32, Color32) {
+    let p = active_palette();
+    if p.dark_base {
+        (
+            p.accent,
+            Color32::from_rgb(0x10, 0x1b, 0x29),
+            Color32::from_rgb(0x24, 0x35, 0x48),
+        )
+    } else {
+        (
+            p.accent,
+            surface_tint(p.bg_elevated_2, p.accent, 28),
+            surface_tint(p.border, p.accent, 90),
+        )
+    }
+}
+/// Done badge (success): (fg, bg, stroke).
+pub fn badge_done_parts() -> (Color32, Color32, Color32) {
+    let p = active_palette();
+    if p.dark_base {
+        (
+            p.diff_add_fg,
+            Color32::from_rgb(0x12, 0x20, 0x18),
+            Color32::from_rgb(0x22, 0x3a, 0x2b),
+        )
+    } else {
+        (
+            p.diff_add_fg,
+            surface_tint(p.bg_elevated_2, p.success, 26),
+            surface_tint(p.border, p.success, 90),
+        )
+    }
+}
+/// Failed badge (danger): (fg, bg, stroke).
+pub fn badge_failed_parts() -> (Color32, Color32, Color32) {
+    let p = active_palette();
+    if p.dark_base {
+        (
+            p.diff_del_fg,
+            Color32::from_rgb(0x2a, 0x15, 0x17),
+            Color32::from_rgb(0x47, 0x20, 0x22),
+        )
+    } else {
+        (
+            p.diff_del_fg,
+            surface_tint(p.bg_elevated_2, p.danger, 26),
+            surface_tint(p.border, p.danger, 90),
+        )
+    }
 }
 
 // ─── Theme registry ──────────────────────────────────────────────────────────
