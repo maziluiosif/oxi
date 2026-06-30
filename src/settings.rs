@@ -17,15 +17,21 @@ pub enum LlmProviderKind {
     OpenCodeGo,
     /// LM Studio local server (OpenAI-compatible API, e.g. a Mac mini on the LAN).
     LmStudio,
+    /// Ollama local server (OpenAI-compatible API at `/v1`, e.g. a Mac mini on the LAN).
+    Ollama,
 }
 
 impl LlmProviderKind {
-    pub const ALL: [LlmProviderKind; 5] = [
+    /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
+    /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
+    /// around; the hosted API providers follow.
+    pub const ALL: [LlmProviderKind; 6] = [
+        LlmProviderKind::Ollama,
+        LlmProviderKind::LmStudio,
         LlmProviderKind::OpenAi,
         LlmProviderKind::OpenRouter,
         LlmProviderKind::GptCodex,
         LlmProviderKind::OpenCodeGo,
-        LlmProviderKind::LmStudio,
     ];
 
     pub fn default_base_url(&self) -> &'static str {
@@ -36,6 +42,8 @@ impl LlmProviderKind {
             // LM Studio's built-in server speaks plain HTTP on port 1234; the Mac mini host
             // resolves on the LAN/Tailscale. (HTTPS would need a separate reverse proxy.)
             LlmProviderKind::LmStudio => "http://mac-mini:1234/v1",
+            // Ollama's OpenAI-compatible API lives under `/v1` on its default port 11434.
+            LlmProviderKind::Ollama => "http://localhost:11434/v1",
         }
     }
 
@@ -46,6 +54,7 @@ impl LlmProviderKind {
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
             LlmProviderKind::LmStudio => "LM Studio",
+            LlmProviderKind::Ollama => "Ollama",
         }
     }
 
@@ -55,18 +64,73 @@ impl LlmProviderKind {
             LlmProviderKind::OpenRouter => "openai/gpt-4o-mini",
             LlmProviderKind::GptCodex => "gpt-4o-mini",
             LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
-            // LM Studio model ids depend on what's loaded; fetch the real list from the dropdown.
+            // LM Studio / Ollama model ids depend on what's loaded/pulled; fetch the real
+            // list from the dropdown.
             LlmProviderKind::LmStudio => "local-model",
+            LlmProviderKind::Ollama => "qwen2.5-coder:7b",
+        }
+    }
+
+    /// Default port for a `RemoteSsh` compute target's runtime, i.e. the port the runtime
+    /// listens on locally on the remote host. Used to pre-fill [`SshConfig`] when a profile
+    /// is switched to Remote, so e.g. an LM Studio profile defaults to `1234` instead of
+    /// Ollama's `11434`.
+    pub fn default_remote_runtime_port(&self) -> u16 {
+        match self {
+            LlmProviderKind::LmStudio => 1234,
+            _ => 11434,
         }
     }
 
     /// Whether HTTP clients for this provider should accept self-signed / invalid TLS certs.
     ///
-    /// Enabled only for LM Studio, which typically runs on a LAN host (e.g. a Mac mini)
+    /// Enabled for LM Studio and Ollama, which typically run on a LAN host (e.g. a Mac mini)
     /// behind HTTPS with a self-signed cert — same trust model as the local SearXNG instance.
     /// Stays off for public providers so their certs are always validated.
     pub fn allows_self_signed_tls(&self) -> bool {
-        matches!(self, LlmProviderKind::LmStudio)
+        matches!(self, LlmProviderKind::LmStudio | LlmProviderKind::Ollama)
+    }
+}
+
+/// Where the model server for a profile actually runs.
+///
+/// `Local` covers the common case (the runtime listens on this machine, or on a LAN host
+/// reachable directly via `base_url`). `RemoteSsh` tunnels the connection through SSH port
+/// forwarding so a runtime bound to `127.0.0.1` on a remote host (e.g. a Mac mini reachable
+/// only over SSH) can still be reached as if it were local. See [`crate::compute`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ComputeLocation {
+    #[default]
+    Local,
+    RemoteSsh(SshConfig),
+}
+
+/// SSH connection details for a remote compute target. The password itself is **not**
+/// stored here — it lives in `ssh_credentials.json` (see [`crate::compute::store`]), keyed
+/// by [`ProviderProfile::id`], so it never ends up in `settings.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshConfig {
+    pub host: String,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    pub user: String,
+    /// Port the model runtime (Ollama/LM Studio) listens on on the remote host.
+    pub remote_runtime_port: u16,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            port: default_ssh_port(),
+            user: String::new(),
+            remote_runtime_port: 11434,
+        }
     }
 }
 
@@ -98,6 +162,10 @@ pub struct ProviderProfile {
     /// back to a conservative default. Set to a number to override the history trim budget.
     #[serde(default)]
     pub context_window: Option<usize>,
+    /// Where the model server for this profile runs. Defaults to [`ComputeLocation::Local`]
+    /// so existing/older settings files (no `location` field) behave exactly as before.
+    #[serde(default)]
+    pub location: ComputeLocation,
 }
 
 impl ProviderProfile {
@@ -112,6 +180,15 @@ impl ProviderProfile {
             openrouter_http_referer: String::new(),
             openrouter_title: String::new(),
             context_window: None,
+            location: ComputeLocation::Local,
+        }
+    }
+
+    /// `Some(&SshConfig)` when this profile's runtime is reached over an SSH tunnel.
+    pub fn ssh_config(&self) -> Option<&SshConfig> {
+        match &self.location {
+            ComputeLocation::Local => None,
+            ComputeLocation::RemoteSsh(cfg) => Some(cfg),
         }
     }
 
@@ -320,6 +397,7 @@ impl Default for AppSettings {
                 LlmProviderKind::LmStudio,
                 "LM Studio default",
             ),
+            ProviderProfile::new("ollama-default", LlmProviderKind::Ollama, "Ollama default"),
         ];
         Self {
             active_profile_id: "openai-default".to_string(),
@@ -387,11 +465,14 @@ impl AppSettings {
                 api_key: match provider {
                     LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
                     LlmProviderKind::OpenRouter => old.openrouter_api_key,
-                    LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio => String::new(),
+                    LlmProviderKind::OpenCodeGo
+                    | LlmProviderKind::LmStudio
+                    | LlmProviderKind::Ollama => String::new(),
                 },
                 openrouter_http_referer: old.openrouter_http_referer,
                 openrouter_title: old.openrouter_title,
                 context_window: None,
+                location: ComputeLocation::Local,
             },
             ProviderProfile::new("openai-default", LlmProviderKind::OpenAi, "OpenAI default"),
             ProviderProfile::new(
@@ -410,6 +491,7 @@ impl AppSettings {
                 LlmProviderKind::LmStudio,
                 "LM Studio default",
             ),
+            ProviderProfile::new("ollama-default", LlmProviderKind::Ollama, "Ollama default"),
         ];
         s.active_profile_id = "migrated-active".to_string();
         s
@@ -640,6 +722,48 @@ mod tests {
         s.remove_profile(&active);
         assert_ne!(s.active_profile_id, active);
         assert!(s.active_profile().is_some());
+    }
+
+    #[test]
+    fn new_profile_defaults_to_local_compute() {
+        let p = ProviderProfile::new("test", LlmProviderKind::Ollama, "test");
+        assert_eq!(p.location, ComputeLocation::Local);
+        assert!(p.ssh_config().is_none());
+    }
+
+    #[test]
+    fn ssh_config_returns_some_for_remote() {
+        let mut p = ProviderProfile::new("test", LlmProviderKind::Ollama, "test");
+        p.location = ComputeLocation::RemoteSsh(SshConfig {
+            host: "mac-mini".to_string(),
+            port: 22,
+            user: "ioan".to_string(),
+            remote_runtime_port: 11434,
+        });
+        let cfg = p.ssh_config().expect("remote ssh config");
+        assert_eq!(cfg.host, "mac-mini");
+        assert_eq!(cfg.remote_runtime_port, 11434);
+    }
+
+    #[test]
+    fn compute_location_missing_field_deserializes_to_local() {
+        // Older settings.json files have no `location` field at all.
+        let json = r#"{"id":"t","name":"t","provider":"ollama","model_id":"x","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}"#;
+        let p: ProviderProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(p.location, ComputeLocation::Local);
+    }
+
+    #[test]
+    fn ssh_config_serde_roundtrip() {
+        let loc = ComputeLocation::RemoteSsh(SshConfig {
+            host: "mac-mini.local".to_string(),
+            port: 2222,
+            user: "ioan".to_string(),
+            remote_runtime_port: 1234,
+        });
+        let json = serde_json::to_string(&loc).unwrap();
+        let back: ComputeLocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(loc, back);
     }
 
     #[test]
