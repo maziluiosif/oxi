@@ -82,7 +82,7 @@ fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
         ..Default::default()
     };
 
-    const CONTEXT_TEXT: Color32 = Color32::from_rgb(0x8d, 0x90, 0x9b);
+    let context_text = c_text_muted();
 
     for (i, line) in lines.iter().enumerate() {
         let start = job.text.len();
@@ -96,7 +96,7 @@ fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
         } else if line.starts_with('-') {
             (c_diff_del_fg(), c_diff_del_bg())
         } else {
-            (CONTEXT_TEXT, Color32::TRANSPARENT)
+            (context_text, Color32::TRANSPARENT)
         };
         job.sections.push(LayoutSection {
             leading_space: 0.0,
@@ -245,17 +245,6 @@ fn tool_summary_text(
     }
 
     parts.join(" · ")
-}
-
-fn tool_state_badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32, stroke: Color32) {
-    Frame::none()
-        .fill(bg)
-        .stroke(Stroke::new(1.0, stroke))
-        .rounding(Rounding::same(999.0))
-        .inner_margin(Margin::symmetric(7.0, 2.0))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).size(FS_TINY).color(fg));
-        });
 }
 
 fn user_image_texture(
@@ -531,18 +520,18 @@ fn render_tool_pill(
 
     let status_done = !running && !has_error;
     let pill_bg = if has_error {
-        Color32::from_rgb(0x22, 0x14, 0x15)
+        crate::theme::c_tool_error_bg()
     } else if running {
-        Color32::from_rgb(0x13, 0x18, 0x20)
+        crate::theme::c_tool_running_bg()
     } else {
-        Color32::from_rgb(0x15, 0x16, 0x19)
+        crate::theme::c_tool_pill_bg()
     };
     let pill_border = if has_error {
-        Color32::from_rgb(0x47, 0x20, 0x22)
+        crate::theme::c_tool_error_border()
     } else if running {
-        Color32::from_rgb(0x24, 0x35, 0x48)
+        crate::theme::c_tool_running_border()
     } else {
-        c_border_subtle()
+        crate::theme::c_tool_pill_border()
     };
     let icon_color = if has_error {
         c_diff_del_fg()
@@ -552,12 +541,12 @@ fn render_tool_pill(
         c_text_faint()
     };
     let name_color = if has_error {
-        Color32::from_rgb(0xf0, 0x9a, 0x9d)
+        crate::theme::c_tool_error_fg()
     } else {
         c_text()
     };
     let summary_color = if has_error {
-        Color32::from_rgb(0xf0, 0x9a, 0x9d)
+        crate::theme::c_tool_error_fg()
     } else {
         c_text_muted()
     };
@@ -609,29 +598,11 @@ fn render_tool_pill(
                                     .color(c_text_muted()),
                             );
                             ui.add_space(4.0);
-                            tool_state_badge(
-                                ui,
-                                "running",
-                                c_accent(),
-                                Color32::from_rgb(0x10, 0x1b, 0x29),
-                                Color32::from_rgb(0x24, 0x35, 0x48),
-                            );
+                            crate::ui::chrome::running_badge(ui);
                         } else if has_error {
-                            tool_state_badge(
-                                ui,
-                                "failed",
-                                c_diff_del_fg(),
-                                Color32::from_rgb(0x2a, 0x15, 0x17),
-                                Color32::from_rgb(0x47, 0x20, 0x22),
-                            );
+                            crate::ui::chrome::failed_badge(ui);
                         } else if status_done {
-                            tool_state_badge(
-                                ui,
-                                "done",
-                                c_diff_add_fg(),
-                                Color32::from_rgb(0x12, 0x20, 0x18),
-                                Color32::from_rgb(0x22, 0x3a, 0x2b),
-                            );
+                            crate::ui::chrome::done_badge(ui);
                         }
                     });
                 });
@@ -749,7 +720,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                     } else {
                         // Fallback badge when texture loading fails
                         Frame::none()
-                            .fill(Color32::from_rgb(0x25, 0x25, 0x28))
+                            .fill(c_bg_elevated_2())
                             .rounding(Rounding::same(6.0))
                             .inner_margin(Margin::symmetric(8.0, 4.0))
                             .show(ui, |ui| {
@@ -886,20 +857,20 @@ fn render_edit_tool_block(
         .unwrap_or((0, 0));
 
     let outer_border = if has_error {
-        Color32::from_rgb(0x4d, 0x21, 0x23)
+        crate::theme::c_tool_error_border()
     } else if running {
-        Color32::from_rgb(0x24, 0x35, 0x48)
+        crate::theme::c_tool_running_border()
     } else {
         c_border_subtle()
     };
     let header_bg = if has_error {
-        Color32::from_rgb(0x20, 0x14, 0x15)
+        crate::theme::c_tool_error_bg()
     } else if running {
-        Color32::from_rgb(0x13, 0x18, 0x20)
+        crate::theme::c_tool_running_bg()
     } else {
-        Color32::from_rgb(0x15, 0x16, 0x19)
+        crate::theme::c_tool_pill_bg()
     };
-    let diff_bg = Color32::from_rgb(0x0f, 0x10, 0x13);
+    let diff_bg = crate::theme::c_tool_diff_bg();
 
     let is_open = true;
 
@@ -952,7 +923,7 @@ fn render_edit_tool_block(
                             ))
                             .size(FS_SMALL)
                             .color(if has_error {
-                                Color32::from_rgb(0xf0, 0x9a, 0x9d)
+                                crate::theme::c_tool_error_fg()
                             } else {
                                 c_text()
                             })
@@ -968,13 +939,7 @@ fn render_edit_tool_block(
                                         .color(c_text_muted()),
                                 );
                                 ui.add_space(4.0);
-                                tool_state_badge(
-                                    ui,
-                                    "running",
-                                    c_accent(),
-                                    Color32::from_rgb(0x10, 0x1b, 0x29),
-                                    Color32::from_rgb(0x24, 0x35, 0x48),
-                                );
+                                crate::ui::chrome::running_badge(ui);
                             } else if has_diff {
                                 ui.label(
                                     RichText::new(format!("-{removed}"))
@@ -990,21 +955,9 @@ fn render_edit_tool_block(
                                         .monospace(),
                                 );
                                 ui.add_space(4.0);
-                                tool_state_badge(
-                                    ui,
-                                    "done",
-                                    c_diff_add_fg(),
-                                    Color32::from_rgb(0x12, 0x20, 0x18),
-                                    Color32::from_rgb(0x22, 0x3a, 0x2b),
-                                );
+                                crate::ui::chrome::done_badge(ui);
                             } else if has_error {
-                                tool_state_badge(
-                                    ui,
-                                    "failed",
-                                    c_diff_del_fg(),
-                                    Color32::from_rgb(0x2a, 0x15, 0x17),
-                                    Color32::from_rgb(0x47, 0x20, 0x22),
-                                );
+                                crate::ui::chrome::failed_badge(ui);
                             }
                         });
                     });

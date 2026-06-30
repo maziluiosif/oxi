@@ -53,6 +53,16 @@ pub(super) fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<St
     })
 }
 
+/// LM Studio's local server ignores the bearer token, so an API key is optional. Use the
+/// profile value (or `LMSTUDIO_API_KEY`) if present, otherwise fall back to an empty key.
+pub(super) fn configured_lmstudio_key(profile: &ProviderProfile) -> String {
+    let key = profile.api_key.trim();
+    if !key.is_empty() {
+        return key.to_string();
+    }
+    std::env::var("LMSTUDIO_API_KEY").unwrap_or_default()
+}
+
 pub(super) fn opencode_go_model_uses_anthropic(model: &str) -> bool {
     let m = model
         .trim()
@@ -123,6 +133,7 @@ pub fn spawn_agent_run(
             let model = profile.model_id.clone();
             let client = match reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
+                .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
                 .build()
             {
                 Ok(c) => c,
@@ -233,6 +244,26 @@ pub fn spawn_agent_run(
                         &key,
                         &model,
                         &openrouter_extra_headers(&profile),
+                        &mut messages,
+                        &tools,
+                        cwd_ref,
+                        &tool_env,
+                        &tx,
+                        &cancel,
+                        &mut gate,
+                        max_rounds,
+                    )
+                    .await
+                }
+                LlmProviderKind::LmStudio => {
+                    let key = configured_lmstudio_key(&profile);
+                    let base = profile.effective_base_url();
+                    run_chat_loop(
+                        &client,
+                        &base,
+                        &key,
+                        &model,
+                        &[],
                         &mut messages,
                         &tools,
                         cwd_ref,

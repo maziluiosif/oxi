@@ -4,7 +4,7 @@
 //! Uses [`Sense::hover`] for the hit target so wheel events still reach the parent transcript
 //! [`ScrollArea`] (a full [`Sense::click`] rect was stealing scroll).
 
-use eframe::egui::{Color32, CursorIcon, Id, Rect, Rounding, Sense, Stroke, Ui};
+use eframe::egui::{CursorIcon, Id, Rect, Rounding, Sense, Stroke, Ui};
 
 /// First `max_lines` lines; adds a final `…` line when the source continues.
 pub fn truncate_lines_preview(s: &str, max_lines: usize) -> String {
@@ -61,7 +61,7 @@ pub fn clickable_expand_overlay(ui: &mut Ui, rect: Rect, persist_id: Id) {
         ui.painter().rect_stroke(
             rect,
             Rounding::same(8.0),
-            Stroke::new(1.0, Color32::from_rgb(0x36, 0x39, 0x40)),
+            Stroke::new(1.0, crate::theme::c_border()),
         );
     }
     if response.hovered()

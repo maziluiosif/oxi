@@ -83,6 +83,113 @@ pub fn hairline(ui: &mut Ui) {
     );
 }
 
+/// Inline alert banner (`kind` chooses error / warning) — replaces the duplicated hard-coded
+/// red/orange `Frame`s in the transcript and git panel.
+pub fn alert_banner(ui: &mut Ui, text: &str, error: bool) {
+    let (bg, stroke, fg) = if error {
+        (
+            crate::theme::c_error_bg(),
+            Stroke::new(1.0, crate::theme::c_error_stroke()),
+            crate::theme::c_error_fg(),
+        )
+    } else {
+        (
+            crate::theme::c_warning_bg(),
+            Stroke::new(1.0, crate::theme::c_warning_stroke()),
+            crate::theme::c_warning_fg(),
+        )
+    };
+    Frame::none()
+        .fill(bg)
+        .stroke(stroke)
+        .rounding(Rounding::same(6.0))
+        .inner_margin(Margin::symmetric(8.0, 6.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(text).size(FS_TINY).color(fg).monospace());
+        });
+}
+
+/// Render `icon` (Nerd-Font glyph) as a leading span followed by `label` text, each laid out with
+/// its own font family (icon family + proportional), sharing `color`/`size`. Returned as a layout
+/// job so it can be passed straight to [`egui::Button::new`] / [`egui::Label`].
+pub fn icon_label_job(icon: &str, label: &str, size: f32, color: Color32) -> egui::WidgetText {
+    use egui::text::{LayoutJob, TextFormat};
+    use egui::WidgetText;
+    if icon.is_empty() {
+        return WidgetText::from(RichText::new(label).size(size).color(color));
+    }
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = f32::INFINITY;
+    let icon_fmt = TextFormat::simple(FontId::new(size, icon_font()), color);
+    let label_fmt = TextFormat::simple(FontId::proportional(size), color);
+    job.append(icon, 0.0, icon_fmt);
+    job.append(" ", 0.0, label_fmt.clone());
+    job.append(label, 0.0, label_fmt);
+    WidgetText::LayoutJob(job.into())
+}
+
+/// Render `icon` with the dedicated icon font family (no trailing label) at the given size/color.
+pub fn icon_glyph_rich(icon: &str, size: f32, color: Color32) -> RichText {
+    RichText::new(icon)
+        .size(size)
+        .color(color)
+        .font(FontId::new(size, icon_font()))
+}
+
+/// Compact square icon button for toolbars (refresh, hide, close, etc.) —uses the shared
+/// elevated fill, subtle border, and 8px rounding so every toolbar chip in the app matches.
+/// `active` swaps the icon to the accent color ("on" state for toggle buttons).
+pub fn icon_button(ui: &mut Ui, icon: &str, height: f32, active: bool) -> Response {
+    let color = if active { c_accent() } else { c_text_muted() };
+    ui.add(
+        egui::Button::new(icon_glyph_rich(icon, FS_SMALL, color))
+            .fill(c_bg_elevated())
+            .stroke(Stroke::new(1.0, c_border_subtle()))
+            .rounding(8.0)
+            .min_size(egui::vec2(height, height)),
+    )
+}
+
+/// Borderless, transparent square icon button for tight chrome strips (sidebar hide,
+/// top-row toggles). Hover uses `c_row_hover` only; no frame.
+pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> Response {
+    let color = if active { c_accent() } else { c_sidebar_section() };
+    ui.add(
+        egui::Button::new(icon_glyph_rich(icon, FS_SMALL, color))
+            .frame(false)
+            .fill(Color32::TRANSPARENT)
+            .min_size(egui::vec2(height, height)),
+    )
+}
+
+/// Small pill-style status badge: `running` / `done` / `failed`. Uses the shared semantic badge
+/// palette from [`crate::theme`] so every badge across the app shares one set of colors.
+pub fn status_badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32, stroke: Color32) {
+    Frame::none()
+        .fill(bg)
+        .stroke(Stroke::new(1.0, stroke))
+        .rounding(Rounding::same(999.0))
+        .inner_margin(Margin::symmetric(7.0, 2.0))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).size(FS_TINY).color(fg));
+        });
+}
+
+/// Pre-colored variants of [`status_badge`] for the three standard tool states.
+pub fn running_badge(ui: &mut Ui) {
+    let (fg, bg, stroke) = crate::theme::badge_running_parts();
+    status_badge(ui, "running", fg, bg, stroke)
+}
+pub fn done_badge(ui: &mut Ui) {
+    let (fg, bg, stroke) = crate::theme::badge_done_parts();
+    status_badge(ui, "done", fg, bg, stroke)
+}
+pub fn failed_badge(ui: &mut Ui) {
+    let (fg, bg, stroke) = crate::theme::badge_failed_parts();
+    status_badge(ui, "failed", fg, bg, stroke)
+}
+
 /// Pill-style tab used for provider selection or sub-tabs. Returns `true` when clicked.
 pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     let text_size = FS_SMALL;
@@ -122,29 +229,73 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
 }
 
 /// Primary filled button with accent color.
-pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
+pub fn primary_button_widget(label: &str) -> egui::Button<'_> {
     let rich = RichText::new(label).size(FS_SMALL).color(Color32::WHITE);
-    let btn = egui::Button::new(rich)
+    egui::Button::new(rich)
         .fill(c_accent())
         .stroke(Stroke::NONE)
         .rounding(7.0)
-        .min_size(egui::vec2(0.0, 26.0));
-    ui.add(btn)
+        .min_size(egui::vec2(0.0, 26.0))
+}
+pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
+    ui.add(primary_button_widget(label))
+}
+
+/// Primary filled button with a leading Nerd-Font icon glyph.
+pub fn primary_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Button<'a> {
+    let text = icon_label_job(icon, label, FS_SMALL, Color32::WHITE);
+    egui::Button::new(text)
+        .fill(c_accent())
+        .stroke(Stroke::NONE)
+        .rounding(7.0)
+        .min_size(egui::vec2(0.0, 26.0))
+}
+pub fn primary_button_icon(ui: &mut Ui, icon: &str, label: &str) -> Response {
+    ui.add(primary_button_icon_widget(icon, label))
 }
 
 /// Neutral secondary button — used for Sign out, Delete, etc. (with `danger` color swap).
-pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
+pub fn ghost_button_widget(label: &str, danger: bool) -> egui::Button<'_> {
     let color = if danger {
         crate::theme::c_danger()
     } else {
         c_text()
     };
-    let btn = egui::Button::new(RichText::new(label).size(FS_SMALL).color(color))
+    egui::Button::new(RichText::new(label).size(FS_SMALL).color(color))
+        .fill(c_bg_elevated_2())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
+        .rounding(7.0)
+        .min_size(egui::vec2(0.0, 26.0))
+}
+pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
+    ui.add(ghost_button_widget(label, danger))
+}
+
+/// Ghost (neutral) secondary button with a leading Nerd-Font icon glyph.
+pub fn ghost_button_icon_widget<'a>(icon: &'a str, label: &'a str, danger: bool) -> egui::Button<'a> {
+    let color = if danger { crate::theme::c_danger() } else { c_text() };
+    let text = icon_label_job(icon, label, FS_SMALL, color);
+    let btn = egui::Button::new(text)
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
         .rounding(7.0)
         .min_size(egui::vec2(0.0, 26.0));
-    ui.add(btn)
+    btn
+}
+pub fn ghost_button_icon(ui: &mut Ui, icon: &str, label: &str, danger: bool) -> Response {
+    ui.add(ghost_button_icon_widget(icon, label, danger))
+}
+
+/// Compact chip-style button for tight toolbar rows (git Pull/Push/Fetch, etc.) — shares the
+/// ghost-button fill/border/rounding palette but renders at `FS_TINY` on `c_bg_elevated` with
+/// 6px rounding, so the small action chips share one language across the app. Leading icon
+/// glyph variant.
+pub fn mini_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Button<'a> {
+    let text = icon_label_job(icon, label, FS_TINY, c_text_muted());
+    egui::Button::new(text)
+        .fill(c_bg_elevated())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
+        .rounding(6.0)
 }
 
 /// Settings-page sidebar nav row (icon + label, rounded pill row).

@@ -1,16 +1,16 @@
 //! Settings page: profiles panel, system prompt panel, OAuth sections.
 
 use eframe::egui::{
-    self, Align, Button, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense,
-    Stroke, TextEdit, Ui,
+    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
+    Sense, Stroke, TextEdit, Ui,
 };
 
 use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
 use crate::settings::{LlmProviderKind, ProviderProfile, ALL_TOOL_NAMES};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_label, ghost_button, hairline, nested_card_frame, pill_tab, primary_button,
-    settings_caption, settings_nav_row, settings_section_title,
+    card_frame, field_label, ghost_button, hairline, nested_card_frame, pill_tab,
+    primary_button_icon, settings_caption, settings_nav_row, settings_section_title,
 };
 
 use super::state::SettingsTab;
@@ -121,18 +121,7 @@ impl OxiApp {
                             .color(c_text_muted()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("×  Close")
-                                        .size(FS_SMALL)
-                                        .color(c_text_muted()),
-                                )
-                                .fill(c_bg_elevated())
-                                .stroke(Stroke::new(1.0, c_border_subtle()))
-                                .rounding(7.0)
-                                .min_size(egui::vec2(0.0, 26.0)),
-                            )
+                        if crate::ui::chrome::ghost_button_icon(ui, ICON_CLOSE, "Close", false)
                             .on_hover_text("Back to chat")
                             .clicked()
                         {
@@ -153,11 +142,12 @@ impl OxiApp {
 
         if ui
             .add(
-                Button::new(
-                    RichText::new("←  Back to chat")
-                        .size(FS_SMALL)
-                        .color(c_text_muted()),
-                )
+                Button::new(crate::ui::chrome::icon_label_job(
+                    ICON_CHEVRON_LEFT,
+                    "Back to chat",
+                    FS_SMALL,
+                    c_text_muted(),
+                ))
                 .frame(false)
                 .fill(Color32::TRANSPARENT),
             )
@@ -200,7 +190,11 @@ impl OxiApp {
                 .monospace(),
             );
             ui.horizontal(|ui| {
-                ui.label(RichText::new("●").size(FS_TINY).color(c_success()));
+                ui.label(
+                    RichText::new(ICON_CHECK_CIRCLE)
+                        .font(FontId::new(FS_TINY, icon_font()))
+                        .color(c_success()),
+                );
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("Auto-saved")
@@ -249,7 +243,7 @@ impl OxiApp {
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if primary_button(ui, "+ Add profile")
+                if primary_button_icon(ui, ICON_PLUS, "Add profile")
                     .on_hover_text("Create a new profile for this provider")
                     .clicked()
                 {
@@ -563,16 +557,7 @@ impl OxiApp {
                     if selected {
                         // "Active" indicator pill (non-interactive)
                         active_pill(ui, "Active");
-                    } else if ui
-                        .add(
-                            Button::new(
-                                RichText::new("Make active").size(FS_SMALL).color(c_text()),
-                            )
-                            .fill(c_bg_elevated_2())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(7.0)
-                            .min_size(egui::vec2(0.0, 26.0)),
-                        )
+                    } else if crate::ui::chrome::ghost_button(ui, "Make active", false)
                         .on_hover_text("Use this profile for new chats")
                         .clicked()
                     {
@@ -628,14 +613,7 @@ impl OxiApp {
                             .margin(Margin::symmetric(8.0, 5.0)),
                     );
                 }
-                if ui
-                    .add(
-                        Button::new("↻")
-                            .fill(c_bg_elevated_2())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(7.0)
-                            .min_size(egui::vec2(26.0, 0.0)),
-                    )
+                if crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
                     .on_hover_text("Load available models from provider")
                     .clicked()
                 {
@@ -678,13 +656,7 @@ impl OxiApp {
                     self.conv.settings.profiles[idx].context_window =
                         parsed.and_then(|n| if n > 0 { Some(n) } else { None });
                 }
-                if ui
-                    .add(
-                        egui::Button::new("Auto")
-                            .fill(c_bg_elevated_2())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(7.0),
-                    )
+                if crate::ui::chrome::ghost_button(ui, "Auto", false)
                     .on_hover_text("Resolve context window from the model catalog")
                     .clicked()
                 {
@@ -717,6 +689,7 @@ impl OxiApp {
                         LlmProviderKind::OpenRouter => "OpenRouter API key",
                         LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
                         LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
+                        LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
                     })
                     .margin(Margin::symmetric(8.0, 5.0)),
             );
@@ -788,28 +761,17 @@ impl OxiApp {
                 if ui
                     .add_enabled(
                         !self.conv.oauth_busy,
-                        Button::new(
-                            RichText::new("Sign in with ChatGPT")
-                                .size(FS_SMALL)
-                                .color(Color32::WHITE),
-                        )
-                        .fill(c_accent())
-                        .stroke(Stroke::NONE)
-                        .rounding(7.0)
-                        .min_size(egui::vec2(0.0, 28.0)),
+                        crate::ui::chrome::primary_button_widget("Sign in with ChatGPT"),
                     )
                     .clicked()
                 {
                     self.spawn_codex_oauth(ui.ctx());
                 }
                 if ui
-                    .add_enabled(signed_in, {
-                        Button::new(RichText::new("Sign out").size(FS_SMALL).color(c_text()))
-                            .fill(c_bg_elevated_2())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(7.0)
-                            .min_size(egui::vec2(0.0, 28.0))
-                    })
+                    .add_enabled(
+                        signed_in,
+                        crate::ui::chrome::ghost_button_widget("Sign out", false),
+                    )
                     .clicked()
                 {
                     let mut s = load_oauth_store();
@@ -892,6 +854,7 @@ impl OxiApp {
             move |rt| {
                 let client = match reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
+                    .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
                     .build()
                 {
                     Ok(c) => c,
@@ -954,8 +917,8 @@ fn resolve_fetch_key(profile: &ProviderProfile) -> Result<String, String> {
         LlmProviderKind::OpenRouter => {
             std::env::var("OPENROUTER_API_KEY").map_err(|_| "Set an API key to list models.".into())
         }
-        // OpenCode Go exposes the model list without auth.
-        LlmProviderKind::OpenCodeGo => Ok(String::new()),
+        // OpenCode Go and LM Studio expose the model list without auth.
+        LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio => Ok(String::new()),
     }
 }
 
