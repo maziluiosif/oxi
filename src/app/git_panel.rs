@@ -2,8 +2,8 @@
 
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{
-    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding,
-    ScrollArea, Sense, Ui,
+    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
+    Sense, Ui,
 };
 
 use crate::git::{GitEntry, GitOp, GitState};
@@ -286,21 +286,30 @@ impl OxiApp {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if ui
-                    .add(crate::ui::chrome::mini_button_icon_widget(ICON_DOWNLOAD, "Pull"))
+                    .add(crate::ui::chrome::mini_button_icon_widget(
+                        ICON_DOWNLOAD,
+                        "Pull",
+                    ))
                     .on_hover_text("Pull (fast-forward only)")
                     .clicked()
                 {
                     self.request(GitOp::Pull);
                 }
                 if ui
-                    .add(crate::ui::chrome::mini_button_icon_widget(ICON_UPLOAD, "Push"))
+                    .add(crate::ui::chrome::mini_button_icon_widget(
+                        ICON_UPLOAD,
+                        "Push",
+                    ))
                     .on_hover_text("Push")
                     .clicked()
                 {
                     self.request(GitOp::Push);
                 }
                 if ui
-                    .add(crate::ui::chrome::mini_button_icon_widget(ICON_DOWNLOAD, "Fetch"))
+                    .add(crate::ui::chrome::mini_button_icon_widget(
+                        ICON_DOWNLOAD,
+                        "Fetch",
+                    ))
                     .on_hover_text("Fetch")
                     .clicked()
                 {
