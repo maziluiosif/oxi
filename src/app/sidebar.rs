@@ -425,44 +425,65 @@ impl OxiApp {
 
                             const HEADER_H: f32 = 38.0;
                             const HEADER_GAP: f32 = 6.0;
+                            let show_diff =
+                                self.conv.diff_view_open && self.conv.git.diff.is_some();
                             self.render_chat_header(ui, column_center_w);
                             ui.add_space(HEADER_GAP);
 
-                            // Floating composer: the transcript uses the full remaining height,
-                            // while the input is painted as an overlay pinned to the bottom of the
-                            // chat column. The transcript adds matching tail padding internally so
-                            // bottom content can still be scrolled into view.
-                            const COMPOSER_GAP: f32 = 8.0;
-                            let composer_overlay_h =
-                                (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
-                            let conversation_h =
-                                (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                            let chat_rect = ui.max_rect();
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), conversation_h),
-                                egui::Layout::top_down(egui::Align::Min),
-                                |ui| {
-                                    self.render_conversation(
-                                        ui,
-                                        column_center_w,
-                                        conversation_h,
-                                        composer_overlay_h,
-                                    );
-                                },
-                            );
+                            if show_diff {
+                                // Diff viewer replaces the chat transcript + composer.
+                                let diff_h =
+                                    (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                                let chat_rect = ui.max_rect();
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), diff_h),
+                                    egui::Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        if let Some((title, diff_text)) = self.conv.git.diff.clone()
+                                        {
+                                            self.render_diff_view(
+                                                ui, &title, &diff_text, chat_rect,
+                                            );
+                                        }
+                                    },
+                                );
+                            } else {
+                                // Floating composer: the transcript uses the full remaining height,
+                                // while the input is painted as an overlay pinned to the bottom of the
+                                // chat column. The transcript adds matching tail padding internally so
+                                // bottom content can still be scrolled into view.
+                                const COMPOSER_GAP: f32 = 8.0;
+                                let composer_overlay_h =
+                                    (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
+                                let conversation_h =
+                                    (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                                let chat_rect = ui.max_rect();
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), conversation_h),
+                                    egui::Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        self.render_conversation(
+                                            ui,
+                                            column_center_w,
+                                            conversation_h,
+                                            composer_overlay_h,
+                                        );
+                                    },
+                                );
 
-                            let composer_h = self.conv.composer_measured_full_h.max(80.0);
-                            let composer_top = chat_rect.bottom() - composer_h;
-                            let composer_rect = egui::Rect::from_min_size(
-                                egui::pos2(chat_rect.left(), composer_top),
-                                egui::vec2(chat_rect.width(), composer_h),
-                            );
-                            ui.allocate_new_ui(
-                                egui::UiBuilder::new().max_rect(composer_rect),
-                                |ui| {
-                                    self.render_composer(ui, column_center_w);
-                                },
-                            );
+                                let composer_h = self.conv.composer_measured_full_h.max(80.0);
+                                let composer_top = chat_rect.bottom() - composer_h;
+                                let composer_rect = egui::Rect::from_min_size(
+                                    egui::pos2(chat_rect.left(), composer_top),
+                                    egui::vec2(chat_rect.width(), composer_h),
+                                );
+                                ui.allocate_new_ui(
+                                    egui::UiBuilder::new().max_rect(composer_rect),
+                                    |ui| {
+                                        self.render_composer(ui, column_center_w);
+                                    },
+                                );
+                            }
                         });
                     ui.expand_to_include_rect(ui.max_rect());
                 },
