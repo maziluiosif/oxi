@@ -126,7 +126,7 @@ pub fn icon_label_job(icon: &str, label: &str, size: f32, color: Color32) -> egu
     job.append(icon, 0.0, icon_fmt);
     job.append(" ", 0.0, label_fmt.clone());
     job.append(label, 0.0, label_fmt);
-    WidgetText::LayoutJob(job.into())
+    WidgetText::LayoutJob(job)
 }
 
 /// Render `icon` with the dedicated icon font family (no trailing label) at the given size/color.
@@ -154,7 +154,11 @@ pub fn icon_button(ui: &mut Ui, icon: &str, height: f32, active: bool) -> Respon
 /// Borderless, transparent square icon button for tight chrome strips (sidebar hide,
 /// top-row toggles). Hover uses `c_row_hover` only; no frame.
 pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> Response {
-    let color = if active { c_accent() } else { c_sidebar_section() };
+    let color = if active {
+        c_accent()
+    } else {
+        c_sidebar_section()
+    };
     ui.add(
         egui::Button::new(icon_glyph_rich(icon, FS_SMALL, color))
             .frame(false)
@@ -272,8 +276,16 @@ pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
 }
 
 /// Ghost (neutral) secondary button with a leading Nerd-Font icon glyph.
-pub fn ghost_button_icon_widget<'a>(icon: &'a str, label: &'a str, danger: bool) -> egui::Button<'a> {
-    let color = if danger { crate::theme::c_danger() } else { c_text() };
+pub fn ghost_button_icon_widget<'a>(
+    icon: &'a str,
+    label: &'a str,
+    danger: bool,
+) -> egui::Button<'a> {
+    let color = if danger {
+        crate::theme::c_danger()
+    } else {
+        c_text()
+    };
     let text = icon_label_job(icon, label, FS_SMALL, color);
     let btn = egui::Button::new(text)
         .fill(c_bg_elevated_2())

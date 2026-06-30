@@ -2,8 +2,7 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, FontId, Frame, Label, Margin, RichText, Rounding, ScrollArea, Stroke,
-    Ui,
+    self, Align, Button, FontId, Frame, Label, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
 };
 
 use crate::agent::ApprovalDecision;
@@ -67,7 +66,10 @@ impl OxiApp {
                         self.respond_to_approval(ApprovalDecision::Approve);
                     }
                     if ui
-                        .add(crate::ui::chrome::ghost_button_widget("Approve rest", false))
+                        .add(crate::ui::chrome::ghost_button_widget(
+                            "Approve rest",
+                            false,
+                        ))
                         .on_hover_text("Run this and auto-approve the rest of this turn")
                         .clicked()
                     {

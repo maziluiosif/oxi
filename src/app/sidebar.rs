@@ -144,7 +144,11 @@ impl OxiApp {
             let folded = self.conv.workspaces[wi].sidebar_folded;
             ui.add_space(1.0);
 
-            let chev = if folded { ICON_ANGLE_DOWN } else { ICON_ANGLE_UP };
+            let chev = if folded {
+                ICON_ANGLE_DOWN
+            } else {
+                ICON_ANGLE_UP
+            };
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 const ROW_H: f32 = 22.0;
@@ -180,9 +184,9 @@ impl OxiApp {
                                 FS_TINY,
                                 c_text_muted(),
                             ))
-                                .frame(false)
-                                .fill(Color32::TRANSPARENT)
-                                .min_size(egui::vec2(PLUS_W, ROW_H)),
+                            .frame(false)
+                            .fill(Color32::TRANSPARENT)
+                            .min_size(egui::vec2(PLUS_W, ROW_H)),
                         )
                         .on_hover_text("New chat in this workspace")
                         .clicked()
