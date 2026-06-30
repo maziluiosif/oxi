@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Ollama provider profile (OpenAI-compatible `/v1` API, no-auth by default, defaults to
+  `http://localhost:11434/v1`)
+- Remote SSH compute target for LM Studio / Ollama profiles: point a profile at a host
+  reached over SSH (e.g. a Mac mini) and oxi tunnels the connection so the runtime only
+  needs to listen on `127.0.0.1` there. Password auth, "Test connection" button in
+  Settings → Providers. SSH passwords are stored separately in `ssh_credentials.json`,
+  never in `settings.json`.
+
 ## [0.5.0] - 2026-06-27
 
 ### Added

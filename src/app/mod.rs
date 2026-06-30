@@ -25,7 +25,7 @@ mod terminal_panel;
 
 pub use state::{
     ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState, SessionKey,
-    SessionRunState, Workspace,
+    SessionRunState, SshTestMsg, Workspace,
 };
 
 pub struct OxiApp {
@@ -34,6 +34,10 @@ pub struct OxiApp {
     pub conv: ConversationState,
     /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
     pub terminal: Option<crate::terminal::TerminalSession>,
+    /// SSH tunnels for `RemoteSsh` provider profiles (e.g. Ollama/LM Studio on a Mac mini).
+    /// Cheap to clone; the actual tunnels live on a dedicated background thread/runtime
+    /// started once here and kept alive for the life of the app.
+    pub tunnels: crate::compute::TunnelManager,
 }
 
 impl OxiApp {
@@ -100,8 +104,12 @@ impl OxiApp {
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),
                 model_rx: None,
+                ssh_password_drafts: std::collections::HashMap::new(),
+                ssh_test: std::collections::HashMap::new(),
+                ssh_test_rx: None,
             },
             terminal: None,
+            tunnels: crate::compute::TunnelManager::spawn(),
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.

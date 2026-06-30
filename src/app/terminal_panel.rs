@@ -1,6 +1,6 @@
 //! Bottom terminal panel: a resizable, hideable frame hosting a live PTY shell.
 
-use eframe::egui::{self, Align, Button, Color32, Frame, Layout, RichText, Sense, Stroke};
+use eframe::egui::{self, Align, FontId, Frame, Layout, RichText, Sense, Stroke};
 
 use crate::settings::{TERMINAL_H_MAX, TERMINAL_H_MIN};
 use crate::theme::*;
@@ -74,8 +74,8 @@ impl OxiApp {
             |ui| {
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("Terminal")
-                        .size(FS_TINY)
+                    RichText::new(ICON_TERMINAL)
+                        .font(FontId::new(FS_TINY, icon_font()))
                         .color(c_sidebar_section())
                         .strong(),
                 );
@@ -90,27 +90,13 @@ impl OxiApp {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.add_space(6.0);
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("⤓").size(FS_SMALL).color(c_sidebar_section()),
-                            )
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT),
-                        )
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_ANGLE_DOWN, 22.0, false)
                         .on_hover_text("Hide terminal")
                         .clicked()
                     {
                         self.toggle_terminal();
                     }
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new("⟳").size(FS_SMALL).color(c_sidebar_section()),
-                            )
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT),
-                        )
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false)
                         .on_hover_text("Restart shell")
                         .clicked()
                     {

@@ -1,21 +1,23 @@
 //! Settings page: profiles panel, system prompt panel, OAuth sections.
 
 use eframe::egui::{
-    self, Align, Button, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense,
-    Stroke, TextEdit, Ui,
+    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
+    Sense, Stroke, TextEdit, Ui,
 };
 
 use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
-use crate::settings::{LlmProviderKind, ProviderProfile, ALL_TOOL_NAMES};
+use crate::settings::{
+    ComputeLocation, LlmProviderKind, ProviderProfile, SshConfig, ALL_TOOL_NAMES,
+};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_label, ghost_button, hairline, nested_card_frame, pill_tab, primary_button,
-    settings_caption, settings_nav_row, settings_section_title,
+    card_frame, field_label, ghost_button, hairline, nested_card_frame, pill_tab,
+    primary_button_icon, settings_caption, settings_nav_row, settings_section_title,
 };
 
 use super::state::SettingsTab;
 use super::task_runner::spawn_async_task;
-use super::{ModelFetchMsg, OxiApp};
+use super::{ModelFetchMsg, OxiApp, SshTestMsg};
 
 const SETTINGS_CONTENT_MAX: f32 = 820.0;
 
@@ -121,18 +123,7 @@ impl OxiApp {
                             .color(c_text_muted()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add(
-                                Button::new(
-                                    RichText::new("×  Close")
-                                        .size(FS_SMALL)
-                                        .color(c_text_muted()),
-                                )
-                                .fill(c_bg_elevated())
-                                .stroke(Stroke::new(1.0, c_border_subtle()))
-                                .rounding(7.0)
-                                .min_size(egui::vec2(0.0, 26.0)),
-                            )
+                        if crate::ui::chrome::ghost_button_icon(ui, ICON_CLOSE, "Close", false)
                             .on_hover_text("Back to chat")
                             .clicked()
                         {
@@ -153,11 +144,12 @@ impl OxiApp {
 
         if ui
             .add(
-                Button::new(
-                    RichText::new("←  Back to chat")
-                        .size(FS_SMALL)
-                        .color(c_text_muted()),
-                )
+                Button::new(crate::ui::chrome::icon_label_job(
+                    ICON_CHEVRON_LEFT,
+                    "Back to chat",
+                    FS_SMALL,
+                    c_text_muted(),
+                ))
                 .frame(false)
                 .fill(Color32::TRANSPARENT),
             )
@@ -200,7 +192,11 @@ impl OxiApp {
                 .monospace(),
             );
             ui.horizontal(|ui| {
-                ui.label(RichText::new("●").size(FS_TINY).color(c_success()));
+                ui.label(
+                    RichText::new(ICON_CHECK_CIRCLE)
+                        .font(FontId::new(FS_TINY, icon_font()))
+                        .color(c_success()),
+                );
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("Auto-saved")
@@ -249,7 +245,7 @@ impl OxiApp {
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if primary_button(ui, "+ Add profile")
+                if primary_button_icon(ui, ICON_PLUS, "Add profile")
                     .on_hover_text("Create a new profile for this provider")
                     .clicked()
                 {
@@ -563,16 +559,7 @@ impl OxiApp {
                     if selected {
                         // "Active" indicator pill (non-interactive)
                         active_pill(ui, "Active");
-                    } else if ui
-                        .add(
-                            Button::new(
-                                RichText::new("Make active").size(FS_SMALL).color(c_text()),
-                            )
-                            .fill(c_bg_elevated_2())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(7.0)
-                            .min_size(egui::vec2(0.0, 26.0)),
-                        )
+                    } else if crate::ui::chrome::ghost_button(ui, "Make active", false)
                         .on_hover_text("Use this profile for new chats")
                         .clicked()
                     {
@@ -628,14 +615,7 @@ impl OxiApp {
                             .margin(Margin::symmetric(8.0, 5.0)),
                     );
                 }
-                if ui
-                    .add(
-                        Button::new("↻")
-                            .fill(c_bg_elevated_2())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(7.0)
-                            .min_size(egui::vec2(26.0, 0.0)),
-                    )
+                if crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
                     .on_hover_text("Load available models from provider")
                     .clicked()
                 {
@@ -678,13 +658,7 @@ impl OxiApp {
                     self.conv.settings.profiles[idx].context_window =
                         parsed.and_then(|n| if n > 0 { Some(n) } else { None });
                 }
-                if ui
-                    .add(
-                        egui::Button::new("Auto")
-                            .fill(c_bg_elevated_2())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(7.0),
-                    )
+                if crate::ui::chrome::ghost_button(ui, "Auto", false)
                     .on_hover_text("Resolve context window from the model catalog")
                     .clicked()
                 {
@@ -717,6 +691,8 @@ impl OxiApp {
                         LlmProviderKind::OpenRouter => "OpenRouter API key",
                         LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
                         LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
+                        LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
+                        LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
                     })
                     .margin(Margin::symmetric(8.0, 5.0)),
             );
@@ -744,6 +720,10 @@ impl OxiApp {
                     );
                 });
             }
+
+            if prov == LlmProviderKind::LmStudio || prov == LlmProviderKind::Ollama {
+                self.render_compute_target_section(ui, idx);
+            }
         });
 
         if make_active_clicked {
@@ -753,6 +733,274 @@ impl OxiApp {
         if delete_clicked {
             let id = self.conv.settings.profiles[idx].id.clone();
             self.conv.settings.remove_profile(&id);
+            self.conv.ssh_password_drafts.remove(&id);
+            self.conv.ssh_test.remove(&id);
+            let mut creds = crate::compute::load_ssh_credentials();
+            creds.clear(&id);
+            let _ = crate::compute::save_ssh_credentials(&creds);
+        }
+    }
+
+    /// "Local" vs "Remote (SSH)" compute target for a profile, shown only for self-hosted
+    /// runtimes (LM Studio / Ollama) where running on another host over SSH is meaningful.
+    fn render_compute_target_section(&mut self, ui: &mut Ui, idx: usize) {
+        ui.add_space(8.0);
+        nested_card_frame().show(ui, |ui| {
+            settings_caption(ui, "Compute target");
+            let is_remote = matches!(
+                self.conv.settings.profiles[idx].location,
+                ComputeLocation::RemoteSsh(_)
+            );
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                if pill_tab(ui, "Local", !is_remote) && is_remote {
+                    self.conv.settings.profiles[idx].location = ComputeLocation::Local;
+                }
+                if pill_tab(ui, "Remote (SSH)", is_remote) && !is_remote {
+                    let remote_runtime_port = self.conv.settings.profiles[idx]
+                        .provider
+                        .default_remote_runtime_port();
+                    self.conv.settings.profiles[idx].location =
+                        ComputeLocation::RemoteSsh(SshConfig {
+                            remote_runtime_port,
+                            ..SshConfig::default()
+                        });
+                }
+            });
+
+            if let ComputeLocation::RemoteSsh(cfg) = &mut self.conv.settings.profiles[idx].location
+            {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "Runs the model on another host (e.g. a Mac mini) reached over SSH. \
+                         The runtime must be listening on 127.0.0.1 on that host; oxi \
+                         forwards a local port to it.",
+                    )
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
+                );
+                ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        field_label(ui, "SSH host");
+                        ui.add(
+                            TextEdit::singleline(&mut cfg.host)
+                                .desired_width(200.0)
+                                .hint_text("mac-mini.local")
+                                .margin(Margin::symmetric(8.0, 5.0)),
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        field_label(ui, "SSH port");
+                        let mut port_str = cfg.port.to_string();
+                        if ui
+                            .add(
+                                TextEdit::singleline(&mut port_str)
+                                    .desired_width(70.0)
+                                    .margin(Margin::symmetric(8.0, 5.0)),
+                            )
+                            .changed()
+                        {
+                            if let Ok(p) = port_str.trim().parse::<u16>() {
+                                cfg.port = p;
+                            }
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        field_label(ui, "SSH user");
+                        ui.add(
+                            TextEdit::singleline(&mut cfg.user)
+                                .desired_width(200.0)
+                                .hint_text("e.g. ioan")
+                                .margin(Margin::symmetric(8.0, 5.0)),
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        field_label(ui, "Remote runtime port");
+                        let mut rport_str = cfg.remote_runtime_port.to_string();
+                        if ui
+                            .add(
+                                TextEdit::singleline(&mut rport_str)
+                                    .desired_width(70.0)
+                                    .margin(Margin::symmetric(8.0, 5.0)),
+                            )
+                            .changed()
+                        {
+                            if let Ok(p) = rport_str.trim().parse::<u16>() {
+                                cfg.remote_runtime_port = p;
+                            }
+                        }
+                    });
+                });
+            }
+        });
+
+        if !matches!(
+            self.conv.settings.profiles[idx].location,
+            ComputeLocation::RemoteSsh(_)
+        ) {
+            return;
+        }
+        let pid = self.conv.settings.profiles[idx].id.clone();
+
+        // Lazily load the saved password (if any) into the in-memory draft on first touch.
+        if !self.conv.ssh_password_drafts.contains_key(&pid) {
+            let creds = crate::compute::load_ssh_credentials();
+            let pw = creds.get(&pid).unwrap_or_default().to_string();
+            self.conv.ssh_password_drafts.insert(pid.clone(), pw);
+        }
+
+        ui.add_space(8.0);
+        nested_card_frame().show(ui, |ui| {
+            field_label(ui, "SSH password");
+            let changed = {
+                let pw = self.conv.ssh_password_drafts.get_mut(&pid).unwrap();
+                ui.add(
+                    TextEdit::singleline(pw)
+                        .password(true)
+                        .desired_width(240.0)
+                        .hint_text("SSH password")
+                        .margin(Margin::symmetric(8.0, 5.0)),
+                )
+                .changed()
+            };
+            ui.label(
+                RichText::new(
+                    "Stored in ssh_credentials.json (plaintext, like oauth.json), \
+                     never in settings.json.",
+                )
+                .size(FS_TINY)
+                .color(c_text_faint()),
+            );
+            if changed {
+                let pw = self
+                    .conv
+                    .ssh_password_drafts
+                    .get(&pid)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut creds = crate::compute::load_ssh_credentials();
+                creds.set(pid.clone(), pw);
+                if let Err(e) = crate::compute::save_ssh_credentials(&creds) {
+                    self.run_state_mut(self.active_session_key()).stream_error =
+                        Some(format!("Save SSH password: {e}"));
+                }
+            }
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ghost_button(ui, "Test connection", false).clicked() {
+                    self.spawn_ssh_test(ui.ctx(), idx);
+                }
+                ui.add_space(8.0);
+                if let Some(status) = self.conv.ssh_test.get(&pid) {
+                    if status.loading {
+                        ui.label(
+                            RichText::new("Connecting…")
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
+                        );
+                    } else if let Some(result) = &status.result {
+                        match result {
+                            Ok(port) => {
+                                ui.label(
+                                    RichText::new(format!("Connected (local tunnel port {port})"))
+                                        .size(FS_TINY)
+                                        .color(c_accent()),
+                                );
+                            }
+                            Err(e) => {
+                                ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    /// Kick off a background SSH "Test connection" check for the profile at `idx`'s
+    /// `RemoteSsh` config, if one isn't already in flight. Results arrive on
+    /// `conv.ssh_test_rx` and are drained each frame.
+    fn spawn_ssh_test(&mut self, ctx: &egui::Context, idx: usize) {
+        let Some(profile) = self.conv.settings.profiles.get(idx) else {
+            return;
+        };
+        let Some(cfg) = profile.ssh_config().cloned() else {
+            return;
+        };
+        let pid = profile.id.clone();
+        let password = self
+            .conv
+            .ssh_password_drafts
+            .get(&pid)
+            .cloned()
+            .unwrap_or_default();
+
+        let entry = self.conv.ssh_test.entry(pid.clone()).or_default();
+        if entry.loading {
+            return;
+        }
+        entry.loading = true;
+        entry.result = None;
+
+        let (tx, rx) = std::sync::mpsc::channel::<SshTestMsg>();
+        self.conv.ssh_test_rx = Some(rx);
+        let ctx = ctx.clone();
+        let tunnels = self.tunnels.clone();
+        let err_tx = tx.clone();
+        let err_pid = pid.clone();
+        let err_ctx = ctx.clone();
+        spawn_async_task(
+            move |err| {
+                let _ = err_tx.send(SshTestMsg {
+                    profile_id: err_pid,
+                    result: Err(err),
+                });
+                err_ctx.request_repaint();
+            },
+            move |rt| {
+                let r = rt.block_on(tunnels.ensure_tunnel(&pid, &cfg, &password));
+                let _ = tx.send(SshTestMsg {
+                    profile_id: pid,
+                    result: r,
+                });
+                ctx.request_repaint();
+            },
+        );
+    }
+
+    /// Drain background SSH "Test connection" results into `conv.ssh_test`. Mirrors
+    /// [`Self::drain_models`].
+    pub(crate) fn drain_ssh_test(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.conv.ssh_test_rx.take() else {
+            return;
+        };
+        let mut repainted = false;
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    let entry = self.conv.ssh_test.entry(msg.profile_id).or_default();
+                    entry.loading = false;
+                    entry.result = Some(msg.result);
+                    repainted = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.conv.ssh_test_rx = Some(rx);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        if repainted {
+            ctx.request_repaint();
         }
     }
 
@@ -788,28 +1036,17 @@ impl OxiApp {
                 if ui
                     .add_enabled(
                         !self.conv.oauth_busy,
-                        Button::new(
-                            RichText::new("Sign in with ChatGPT")
-                                .size(FS_SMALL)
-                                .color(Color32::WHITE),
-                        )
-                        .fill(c_accent())
-                        .stroke(Stroke::NONE)
-                        .rounding(7.0)
-                        .min_size(egui::vec2(0.0, 28.0)),
+                        crate::ui::chrome::primary_button_widget("Sign in with ChatGPT"),
                     )
                     .clicked()
                 {
                     self.spawn_codex_oauth(ui.ctx());
                 }
                 if ui
-                    .add_enabled(signed_in, {
-                        Button::new(RichText::new("Sign out").size(FS_SMALL).color(c_text()))
-                            .fill(c_bg_elevated_2())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(7.0)
-                            .min_size(egui::vec2(0.0, 28.0))
-                    })
+                    .add_enabled(
+                        signed_in,
+                        crate::ui::chrome::ghost_button_widget("Sign out", false),
+                    )
                     .clicked()
                 {
                     let mut s = load_oauth_store();
@@ -881,6 +1118,7 @@ impl OxiApp {
         let err_tx = tx.clone();
         let err_pid = profile_id.clone();
         let err_ctx = ctx.clone();
+        let tunnels = self.tunnels.clone();
         spawn_async_task(
             move |err| {
                 let _ = err_tx.send(ModelFetchMsg {
@@ -892,6 +1130,7 @@ impl OxiApp {
             move |rt| {
                 let client = match reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
+                    .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
                     .build()
                 {
                     Ok(c) => c,
@@ -904,7 +1143,17 @@ impl OxiApp {
                         return;
                     }
                 };
-                let base = profile.effective_base_url();
+                let base = match rt.block_on(crate::compute::resolve_base_url(&profile, &tunnels)) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let _ = tx.send(ModelFetchMsg {
+                            profile_id,
+                            result: Err(e),
+                        });
+                        ctx.request_repaint();
+                        return;
+                    }
+                };
                 // OpenCode Go expects /v1/models but its default base lacks /v1.
                 let base = if profile.provider == LlmProviderKind::OpenCodeGo
                     && !base.trim_end_matches('/').ends_with("/v1")
@@ -954,8 +1203,10 @@ fn resolve_fetch_key(profile: &ProviderProfile) -> Result<String, String> {
         LlmProviderKind::OpenRouter => {
             std::env::var("OPENROUTER_API_KEY").map_err(|_| "Set an API key to list models.".into())
         }
-        // OpenCode Go exposes the model list without auth.
-        LlmProviderKind::OpenCodeGo => Ok(String::new()),
+        // OpenCode Go, LM Studio, and Ollama expose the model list without auth.
+        LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
+            Ok(String::new())
+        }
     }
 }
 
