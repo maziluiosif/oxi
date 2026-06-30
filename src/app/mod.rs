@@ -84,6 +84,8 @@ impl OxiApp {
                 oauth_last_message: None,
                 composer_measured_text_h: 0.0,
                 composer_measured_full_h: 0.0,
+                diff_view_open: false,
+                diff_job_cache: None,
                 git_open,
                 git_width,
                 git_tab: crate::app::git_panel::GitTab::default(),

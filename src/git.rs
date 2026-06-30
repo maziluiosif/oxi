@@ -330,7 +330,7 @@ fn parse_log(root: &str) -> Vec<GitCommit> {
     );
     let mut entries = Vec::new();
     for rec in out.split('\u{1}') {
-        let rec = rec.trim_start_matches('\u{2}');
+        let rec = rec.trim().trim_start_matches('\u{2}');
         if rec.is_empty() {
             continue;
         }

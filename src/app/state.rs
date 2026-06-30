@@ -144,6 +144,12 @@ pub struct ConversationState {
     pub composer_measured_text_h: f32,
     /// Full height of the composer row (from the previous frame) for splitting transcript vs input.
     pub composer_measured_full_h: f32,
+    /// Diff view replaces the chat window while a file/commit diff is open.
+    pub diff_view_open: bool,
+    /// Cached colorized diff job, keyed on (title+text hash, wrap width). Avoids
+    /// rebuilding the (potentially huge) `LayoutJob` on every frame while the same
+    /// diff stays open.
+    pub diff_job_cache: Option<(u64, u32, egui::text::LayoutJob)>,
     /// Source-control (git) panel visibility and width (persisted in settings).
     pub git_open: bool,
     pub git_width: f32,

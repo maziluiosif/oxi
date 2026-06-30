@@ -458,13 +458,8 @@ impl OxiApp {
         crate::ui::chrome::hairline(ui);
         ui.add_space(6.0);
 
-        // Diff viewer (if a file is selected)
-        if let Some((title, diff_text)) = self.conv.git.diff.clone() {
-            self.render_git_diff(ui, &title, &diff_text);
-            ui.add_space(6.0);
-            crate::ui::chrome::hairline(ui);
-            ui.add_space(6.0);
-        }
+        // The diff is now shown as an overlay over the chat window instead of
+        // inline in the sidebar; nothing to render here.
 
         let available_h = ui.available_height();
         let (staged, unstaged) = (self.conv.git.staged.clone(), self.conv.git.unstaged.clone());
@@ -614,45 +609,90 @@ impl OxiApp {
                 path: entry.path.clone(),
                 staged,
             });
+            self.conv.diff_view_open = true;
         }
         if hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
     }
 
-    fn render_git_diff(&mut self, ui: &mut Ui, title: &str, diff_text: &str) {
+    /// Full-area diff viewer that replaces the chat window while a diff is open.
+    /// Rendered inside the chat column allocation, so it spans the same area as
+    /// the transcript + composer would. Easy to close via the ✕ button or Esc.
+    pub(crate) fn render_diff_view(
+        &mut self,
+        ui: &mut Ui,
+        title: &str,
+        diff_text: &str,
+        chat_rect: egui::Rect,
+    ) {
+        let _ = chat_rect;
+        ui.set_min_width(ui.available_width());
+
+        // Close the viewer on Esc.
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.request(GitOp::ClearDiff);
+            self.conv.diff_view_open = false;
+        }
+
+        // Header bar: title + metadata on the left, close button on the right.
         ui.horizontal(|ui| {
-            ui.label(RichText::new(title).size(FS_TINY).color(c_text()).strong());
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(RichText::new("Diff").size(FS_H3).color(c_text()).strong());
+            ui.label(
+                RichText::new(title)
+                    .size(FS_SMALL)
+                    .color(c_text_muted())
+                    .monospace(),
+            );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add(
                         Button::new(
                             RichText::new(ICON_CLOSE)
-                                .size(FS_TINY)
-                                .font(FontId::new(FS_TINY, icon_font()))
+                                .size(FS_SMALL)
+                                .font(FontId::new(FS_SMALL, icon_font()))
                                 .color(c_text_muted()),
                         )
                         .frame(false)
                         .fill(Color32::TRANSPARENT),
                     )
-                    .on_hover_text("Close diff")
+                    .on_hover_text("Close diff (Esc)")
                     .clicked()
                 {
                     self.request(GitOp::ClearDiff);
+                    self.conv.diff_view_open = false;
                 }
             });
         });
-        ui.add_space(2.0);
+        ui.add_space(4.0);
+        crate::ui::chrome::hairline(ui);
+        ui.add_space(6.0);
 
-        let max_h = 220.0;
+        let avail_h = ui.available_height();
         ScrollArea::vertical()
-            .id_salt("git_diff_scroll")
-            .max_height(max_h)
+            .id_salt("diff_view_scroll")
+            .max_height(avail_h)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let job = colorize_diff(diff_text, ui.available_width().max(200.0));
-                ui.label(job);
+                let wrap_width = ui.available_width().max(200.0);
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(title, &mut hasher);
+                std::hash::Hash::hash(diff_text, &mut hasher);
+                let key = (std::hash::Hasher::finish(&hasher), wrap_width.to_bits());
+                let cached = self
+                    .conv
+                    .diff_job_cache
+                    .as_ref()
+                    .is_some_and(|(h, w, _)| (*h, *w) == key);
+                if !cached {
+                    let job = colorize_diff(diff_text, wrap_width);
+                    self.conv.diff_job_cache = Some((key.0, key.1, job));
+                }
+                if let Some((_, _, job)) = &self.conv.diff_job_cache {
+                    ui.label(job.clone());
+                }
             });
     }
 
@@ -805,6 +845,7 @@ impl OxiApp {
         );
         if response.clicked() {
             self.request(GitOp::ShowCommit(commit.hash.clone()));
+            self.conv.diff_view_open = true;
         } else if response.secondary_clicked() {
             let hash = commit.hash.clone();
             ui.ctx().copy_text(hash.clone());
@@ -850,10 +891,13 @@ fn colorize_diff(text: &str, wrap_width: f32) -> LayoutJob {
 
     const CONTEXT: Color32 = Color32::from_rgb(0x8d, 0x90, 0x9b);
 
-    for (i, line) in text.lines().enumerate() {
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
         let start = job.text.len();
         job.text.push_str(line);
-        if i + 1 < text.lines().count() {
+        // Keep the newline inside this section's byte range — egui only lays out
+        // bytes covered by a section, so a newline left in a gap gets dropped.
+        if lines.peek().is_some() {
             job.text.push('\n');
         }
         let end = job.text.len();
