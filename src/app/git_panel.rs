@@ -2,8 +2,8 @@
 
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{
-    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
-    Sense, Stroke, Ui,
+    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding,
+    ScrollArea, Sense, Ui,
 };
 
 use crate::git::{GitEntry, GitOp, GitState};
@@ -204,20 +204,7 @@ impl OxiApp {
                 }
 
                 if let Some(err) = self.conv.git.error.clone() {
-                    Frame::none()
-                        .fill(Color32::from_rgb(0x32, 0x18, 0x18))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(0x70, 0x38, 0x38)))
-                        .rounding(Rounding::same(6.0))
-                        .inner_margin(Margin::symmetric(8.0, 6.0))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.label(
-                                RichText::new(err)
-                                    .size(FS_TINY)
-                                    .color(Color32::from_rgb(0xff, 0xb0, 0xb0))
-                                    .monospace(),
-                            );
-                        });
+                    crate::ui::chrome::alert_banner(ui, &err, true);
                     ui.add_space(6.0);
                 }
 
@@ -251,7 +238,12 @@ impl OxiApp {
     fn render_git_header(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(RichText::new("⎇").size(FS_H3).color(c_accent()).strong());
+            ui.label(
+                RichText::new(ICON_GIT)
+                    .font(FontId::new(FS_H3, icon_font()))
+                    .color(c_accent())
+                    .strong(),
+            );
             ui.label(
                 RichText::new("Source Control")
                     .size(FS_H3)
@@ -259,24 +251,14 @@ impl OxiApp {
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add(
-                        Button::new(RichText::new("⟳").size(FS_SMALL).color(c_sidebar_section()))
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT),
-                    )
+                if crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false)
                     .on_hover_text("Refresh")
                     .clicked()
                 {
                     self.ensure_git_channels();
                     let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
                 }
-                if ui
-                    .add(
-                        Button::new(RichText::new("⇥").size(FS_SMALL).color(c_sidebar_section()))
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT),
-                    )
+                if crate::ui::chrome::icon_button_plain(ui, ICON_CHEVRON_RIGHT, 22.0, false)
                     .on_hover_text("Hide git panel")
                     .clicked()
                 {
@@ -304,36 +286,21 @@ impl OxiApp {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if ui
-                    .add(
-                        Button::new(RichText::new("↓ Pull").size(FS_TINY).color(c_text_muted()))
-                            .fill(c_bg_elevated())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(6.0),
-                    )
+                    .add(crate::ui::chrome::mini_button_icon_widget(ICON_DOWNLOAD, "Pull"))
                     .on_hover_text("Pull (fast-forward only)")
                     .clicked()
                 {
                     self.request(GitOp::Pull);
                 }
                 if ui
-                    .add(
-                        Button::new(RichText::new("↑ Push").size(FS_TINY).color(c_text_muted()))
-                            .fill(c_bg_elevated())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(6.0),
-                    )
+                    .add(crate::ui::chrome::mini_button_icon_widget(ICON_UPLOAD, "Push"))
                     .on_hover_text("Push")
                     .clicked()
                 {
                     self.request(GitOp::Push);
                 }
                 if ui
-                    .add(
-                        Button::new(RichText::new("⤓ Fetch").size(FS_TINY).color(c_text_muted()))
-                            .fill(c_bg_elevated())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(6.0),
-                    )
+                    .add(crate::ui::chrome::mini_button_icon_widget(ICON_DOWNLOAD, "Fetch"))
                     .on_hover_text("Fetch")
                     .clicked()
                 {
@@ -393,19 +360,18 @@ impl OxiApp {
         let gen_active = self.commit_gen_active();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if crate::ui::chrome::primary_button(ui, "✔ Commit").clicked() {
+            if crate::ui::chrome::primary_button_icon(ui, ICON_CHECK, "Commit").clicked() {
                 let msg = self.conv.git_commit_message.clone();
                 self.request(GitOp::Commit(msg));
                 self.conv.git_commit_message.clear();
             }
-            let gen_label = if gen_active {
-                "Generating…"
-            } else {
-                "✨ Generate"
-            };
             let gen_resp = ui
                 .add_enabled_ui(!gen_active, |ui| {
-                    crate::ui::chrome::ghost_button(ui, gen_label, false)
+                    if gen_active {
+                        crate::ui::chrome::ghost_button(ui, "Generating…", false)
+                    } else {
+                        crate::ui::chrome::ghost_button_icon(ui, ICON_MAGIC, "Generate", false)
+                    }
                 })
                 .inner;
             if gen_resp
@@ -450,7 +416,7 @@ impl OxiApp {
             ui.label(
                 RichText::new(format!("Generate failed: {err}"))
                     .size(FS_TINY)
-                    .color(Color32::from_rgb(0xE0, 0x6C, 0x6C)),
+                    .color(crate::theme::c_error_fg()),
             );
         }
 
@@ -541,9 +507,11 @@ impl OxiApp {
                     if staged {
                         if ui
                             .add(
-                                Button::new(
-                                    RichText::new("−").size(FS_SMALL).color(c_text_muted()),
-                                )
+                                Button::new(crate::ui::chrome::icon_glyph_rich(
+                                    ICON_CLOSE,
+                                    FS_SMALL,
+                                    c_text_muted(),
+                                ))
                                 .frame(false)
                                 .fill(Color32::TRANSPARENT),
                             )
@@ -555,9 +523,11 @@ impl OxiApp {
                     } else {
                         if ui
                             .add(
-                                Button::new(
-                                    RichText::new("+").size(FS_SMALL).color(c_text_muted()),
-                                )
+                                Button::new(crate::ui::chrome::icon_glyph_rich(
+                                    ICON_PLUS,
+                                    FS_SMALL,
+                                    c_text_muted(),
+                                ))
                                 .frame(false)
                                 .fill(Color32::TRANSPARENT),
                             )
@@ -587,9 +557,11 @@ impl OxiApp {
                         if !staged
                             && ui
                                 .add(
-                                    Button::new(
-                                        RichText::new("⟲").size(FS_TINY).color(c_text_faint()),
-                                    )
+                                    Button::new(crate::ui::chrome::icon_glyph_rich(
+                                        ICON_TRASH,
+                                        FS_TINY,
+                                        c_text_faint(),
+                                    ))
                                     .frame(false)
                                     .fill(Color32::TRANSPARENT),
                                 )
@@ -618,7 +590,7 @@ impl OxiApp {
 
     /// Full-area diff viewer that replaces the chat window while a diff is open.
     /// Rendered inside the chat column allocation, so it spans the same area as
-    /// the transcript + composer would. Easy to close via the ✕ button or Esc.
+    /// the transcript + composer would. Easy to close via the close button or Esc.
     pub(crate) fn render_diff_view(
         &mut self,
         ui: &mut Ui,
@@ -646,17 +618,7 @@ impl OxiApp {
                     .monospace(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add(
-                        Button::new(
-                            RichText::new(ICON_CLOSE)
-                                .size(FS_SMALL)
-                                .font(FontId::new(FS_SMALL, icon_font()))
-                                .color(c_text_muted()),
-                        )
-                        .frame(false)
-                        .fill(Color32::TRANSPARENT),
-                    )
+                if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
                     .on_hover_text("Close diff (Esc)")
                     .clicked()
                 {
@@ -889,7 +851,7 @@ fn colorize_diff(text: &str, wrap_width: f32) -> LayoutJob {
         ..Default::default()
     };
 
-    const CONTEXT: Color32 = Color32::from_rgb(0x8d, 0x90, 0x9b);
+    let context_color = c_text_muted();
 
     let mut lines = text.lines().peekable();
     while let Some(line) = lines.next() {
@@ -910,7 +872,7 @@ fn colorize_diff(text: &str, wrap_width: f32) -> LayoutJob {
         } else if line.starts_with("@@") {
             (c_accent(), Color32::TRANSPARENT)
         } else {
-            (CONTEXT, Color32::TRANSPARENT)
+            (context_color, Color32::TRANSPARENT)
         };
         job.sections.push(egui::text::LayoutSection {
             leading_space: 0.0,

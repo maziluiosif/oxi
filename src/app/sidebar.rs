@@ -2,8 +2,8 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense,
-    Stroke, Ui,
+    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
+    Sense, Stroke, Ui,
 };
 
 use crate::theme::*;
@@ -26,12 +26,7 @@ impl OxiApp {
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add(
-                        Button::new(RichText::new("⇤").size(FS_SMALL).color(c_sidebar_section()))
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT),
-                    )
+                if crate::ui::chrome::icon_button_plain(ui, ICON_CHEVRON_LEFT, 22.0, false)
                     .on_hover_text("Hide sidebar")
                     .clicked()
                 {
@@ -63,10 +58,15 @@ impl OxiApp {
         if ui
             .add_sized(
                 [ui.available_width(), 30.0],
-                Button::new(RichText::new("⚙   Settings").size(FS_SMALL).color(c_text()))
-                    .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .rounding(8.0),
+                Button::new(crate::ui::chrome::icon_label_job(
+                    ICON_SETTINGS,
+                    "Settings",
+                    FS_SMALL,
+                    c_text(),
+                ))
+                .fill(c_bg_elevated())
+                .stroke(Stroke::new(1.0, c_border_subtle()))
+                .rounding(8.0),
             )
             .on_hover_text("Open settings")
             .clicked()
@@ -105,11 +105,11 @@ impl OxiApp {
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
             |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("＋").size(FS_SMALL).color(if hovered {
-                        c_accent()
-                    } else {
-                        c_text_muted()
-                    }));
+                    ui.label(
+                        RichText::new(ICON_FOLDER_PLUS)
+                            .font(FontId::new(FS_SMALL, icon_font()))
+                            .color(if hovered { c_accent() } else { c_text_muted() }),
+                    );
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new("Add workspace")
@@ -144,7 +144,7 @@ impl OxiApp {
             let folded = self.conv.workspaces[wi].sidebar_folded;
             ui.add_space(1.0);
 
-            let chev = if folded { "▸" } else { "▾" };
+            let chev = if folded { ICON_ANGLE_DOWN } else { ICON_ANGLE_UP };
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 const ROW_H: f32 = 22.0;
@@ -157,11 +157,12 @@ impl OxiApp {
                 let row_w = (ui.available_width() - plus_reserved).max(40.0);
                 if ui
                     .add(
-                        Button::new(
-                            RichText::new(format!("{chev}  {root_label}"))
-                                .size(FS_TINY)
-                                .color(c_sidebar_section()),
-                        )
+                        Button::new(crate::ui::chrome::icon_label_job(
+                            chev,
+                            &root_label,
+                            FS_TINY,
+                            c_sidebar_section(),
+                        ))
                         .frame(false)
                         .fill(Color32::TRANSPARENT)
                         .min_size(egui::vec2(row_w, ROW_H)),
@@ -174,7 +175,11 @@ impl OxiApp {
                 if wi == self.conv.active_workspace
                     && ui
                         .add(
-                            Button::new(RichText::new("＋").size(FS_TINY).color(c_text_muted()))
+                            Button::new(crate::ui::chrome::icon_glyph_rich(
+                                ICON_PLUS_SQUARE,
+                                FS_TINY,
+                                c_text_muted(),
+                            ))
                                 .frame(false)
                                 .fill(Color32::TRANSPARENT)
                                 .min_size(egui::vec2(PLUS_W, ROW_H)),

@@ -15,14 +15,17 @@ pub enum LlmProviderKind {
     GptCodex,
     /// OpenCode Go subscription models (OpenAI/Anthropic-compatible endpoints).
     OpenCodeGo,
+    /// LM Studio local server (OpenAI-compatible API, e.g. a Mac mini on the LAN).
+    LmStudio,
 }
 
 impl LlmProviderKind {
-    pub const ALL: [LlmProviderKind; 4] = [
+    pub const ALL: [LlmProviderKind; 5] = [
         LlmProviderKind::OpenAi,
         LlmProviderKind::OpenRouter,
         LlmProviderKind::GptCodex,
         LlmProviderKind::OpenCodeGo,
+        LlmProviderKind::LmStudio,
     ];
 
     pub fn default_base_url(&self) -> &'static str {
@@ -30,6 +33,9 @@ impl LlmProviderKind {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => "https://api.openai.com/v1",
             LlmProviderKind::OpenRouter => "https://openrouter.ai/api/v1",
             LlmProviderKind::OpenCodeGo => "https://opencode.ai/zen/go",
+            // LM Studio's built-in server speaks plain HTTP on port 1234; the Mac mini host
+            // resolves on the LAN/Tailscale. (HTTPS would need a separate reverse proxy.)
+            LlmProviderKind::LmStudio => "http://mac-mini:1234/v1",
         }
     }
 
@@ -39,6 +45,7 @@ impl LlmProviderKind {
             LlmProviderKind::OpenRouter => "OpenRouter",
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
+            LlmProviderKind::LmStudio => "LM Studio",
         }
     }
 
@@ -48,7 +55,18 @@ impl LlmProviderKind {
             LlmProviderKind::OpenRouter => "openai/gpt-4o-mini",
             LlmProviderKind::GptCodex => "gpt-4o-mini",
             LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
+            // LM Studio model ids depend on what's loaded; fetch the real list from the dropdown.
+            LlmProviderKind::LmStudio => "local-model",
         }
+    }
+
+    /// Whether HTTP clients for this provider should accept self-signed / invalid TLS certs.
+    ///
+    /// Enabled only for LM Studio, which typically runs on a LAN host (e.g. a Mac mini)
+    /// behind HTTPS with a self-signed cert — same trust model as the local SearXNG instance.
+    /// Stays off for public providers so their certs are always validated.
+    pub fn allows_self_signed_tls(&self) -> bool {
+        matches!(self, LlmProviderKind::LmStudio)
     }
 }
 
@@ -297,6 +315,11 @@ impl Default for AppSettings {
                 LlmProviderKind::OpenCodeGo,
                 "OpenCode Go default",
             ),
+            ProviderProfile::new(
+                "lmstudio-default",
+                LlmProviderKind::LmStudio,
+                "LM Studio default",
+            ),
         ];
         Self {
             active_profile_id: "openai-default".to_string(),
@@ -364,7 +387,7 @@ impl AppSettings {
                 api_key: match provider {
                     LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
                     LlmProviderKind::OpenRouter => old.openrouter_api_key,
-                    LlmProviderKind::OpenCodeGo => String::new(),
+                    LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio => String::new(),
                 },
                 openrouter_http_referer: old.openrouter_http_referer,
                 openrouter_title: old.openrouter_title,
@@ -381,6 +404,11 @@ impl AppSettings {
                 "opencode-go-default",
                 LlmProviderKind::OpenCodeGo,
                 "OpenCode Go default",
+            ),
+            ProviderProfile::new(
+                "lmstudio-default",
+                LlmProviderKind::LmStudio,
+                "LM Studio default",
             ),
         ];
         s.active_profile_id = "migrated-active".to_string();
