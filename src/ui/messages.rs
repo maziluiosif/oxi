@@ -535,8 +535,6 @@ fn render_tool_pill(
     };
     let icon_color = if has_error {
         c_diff_del_fg()
-    } else if running {
-        c_accent()
     } else {
         c_text_faint()
     };
@@ -905,8 +903,6 @@ fn render_edit_tool_block(
                                 .font(FontId::new(FS_SMALL + 0.5, icon_font()))
                                 .color(if has_error {
                                     c_diff_del_fg()
-                                } else if running {
-                                    c_accent()
                                 } else {
                                     c_text_faint()
                                 }),
