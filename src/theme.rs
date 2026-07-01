@@ -464,14 +464,11 @@ pub fn c_tool_pill_bg() -> Color32 {
         p.bg_elevated_2
     }
 }
-/// Background for a running tool pill (a faint accent tint over the base surface).
+/// Background for a running tool pill. Deliberately identical to the plain pill — the
+/// running state is carried by the spinner and the "running" badge, so the pill surface
+/// itself stays quiet instead of tinting the whole block with the accent.
 pub fn c_tool_running_bg() -> Color32 {
-    let p = active_palette();
-    if p.dark_base {
-        tint_on_panels(p.accent, 22)
-    } else {
-        surface_tint(p.bg_elevated_2, p.accent, 18)
-    }
+    c_tool_pill_bg()
 }
 /// Background for an errored tool pill (danger-tinted dark surface on dark; light reddish on light).
 pub fn c_tool_error_bg() -> Color32 {
@@ -486,14 +483,9 @@ pub fn c_tool_error_bg() -> Color32 {
 pub fn c_tool_pill_border() -> Color32 {
     c_border_subtle()
 }
-/// Border for a running tool pill.
+/// Border for a running tool pill — quiet like [`c_tool_pill_border`], see [`c_tool_running_bg`].
 pub fn c_tool_running_border() -> Color32 {
-    let p = active_palette();
-    if p.dark_base {
-        tint_on_panels(p.accent, 95)
-    } else {
-        surface_tint(p.border, p.accent, 90)
-    }
+    c_tool_pill_border()
 }
 /// Border for an errored tool pill.
 pub fn c_tool_error_border() -> Color32 {
