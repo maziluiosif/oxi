@@ -1,6 +1,9 @@
 # oxi
 
 [![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+![oxi chat UI](assets/screenshots/chat.png)
 
 `oxi` is a local desktop coding-agent chat app built in Rust with **egui/eframe**.
 It runs as a **single native binary** and combines:
@@ -256,6 +259,8 @@ Authentication:
 - Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
 
 ## Compute targets (Local / Remote SSH)
+
+![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png)
 
 LM Studio and Ollama profiles support a **compute target**, configurable per profile in
 Settings → Providers:
