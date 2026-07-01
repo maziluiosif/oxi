@@ -143,7 +143,13 @@ impl OxiApp {
             let active_session_streaming = self.active_waiting_response();
             let no_profile = self.conv.settings.active_profile().is_none();
             let (fill, fg, enabled, icon, hover) = if active_session_streaming {
-                (c_text(), c_bg_main(), true, ICON_STOP, "Stop generation")
+                (
+                    c_accent(),
+                    crate::theme::c_on_accent(),
+                    true,
+                    ICON_STOP,
+                    "Stop generation",
+                )
             } else if no_profile {
                 (
                     c_bg_elevated_2(),
@@ -153,7 +159,13 @@ impl OxiApp {
                     "Configure an active provider profile in Settings",
                 )
             } else if can_send {
-                (c_text(), c_bg_main(), true, ICON_SEND, "Send message")
+                (
+                    c_accent(),
+                    crate::theme::c_on_accent(),
+                    true,
+                    ICON_SEND,
+                    "Send message",
+                )
             } else {
                 (
                     c_bg_elevated_2(),
