@@ -646,29 +646,31 @@ impl OxiApp {
                 let resolved = self.conv.settings.profiles[idx]
                     .effective_context_window(self.conv.settings.context_window_default);
                 field_label(ui, "Context window (tokens, 0 = auto)");
-                let mut value = cw.unwrap_or(0).to_string();
-                let resp = ui.add(
-                    TextEdit::singleline(&mut value)
-                        .desired_width(160.0)
-                        .hint_text(format!("auto ({resolved})"))
-                        .margin(Margin::symmetric(8.0, 5.0)),
-                );
-                if resp.changed() {
-                    let parsed = value.trim().parse::<usize>().ok();
-                    self.conv.settings.profiles[idx].context_window =
-                        parsed.and_then(|n| if n > 0 { Some(n) } else { None });
-                }
-                if crate::ui::chrome::ghost_button(ui, "Auto", false)
-                    .on_hover_text("Resolve context window from the model catalog")
-                    .clicked()
-                {
-                    self.conv.settings.profiles[idx].context_window = None;
-                }
-                ui.label(
-                    RichText::new(format!("effective: {resolved}"))
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
-                );
+                ui.horizontal(|ui| {
+                    let mut value = cw.unwrap_or(0).to_string();
+                    let resp = ui.add(
+                        TextEdit::singleline(&mut value)
+                            .desired_width(160.0)
+                            .hint_text(format!("auto ({resolved})"))
+                            .margin(Margin::symmetric(8.0, 5.0)),
+                    );
+                    if resp.changed() {
+                        let parsed = value.trim().parse::<usize>().ok();
+                        self.conv.settings.profiles[idx].context_window =
+                            parsed.and_then(|n| if n > 0 { Some(n) } else { None });
+                    }
+                    if crate::ui::chrome::ghost_button(ui, "Auto", false)
+                        .on_hover_text("Resolve context window from the model catalog")
+                        .clicked()
+                    {
+                        self.conv.settings.profiles[idx].context_window = None;
+                    }
+                    ui.label(
+                        RichText::new(format!("effective: {resolved}"))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                });
             }
 
             // Base URL

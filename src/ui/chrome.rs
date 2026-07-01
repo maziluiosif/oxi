@@ -67,9 +67,9 @@ pub fn nested_card_frame() -> Frame {
 
 /// Single-line label → value field row used on settings panels.
 pub fn field_label(ui: &mut Ui, text: &str) {
-    ui.add_space(6.0);
+    ui.add_space(10.0);
     ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
-    ui.add_space(2.0);
+    ui.add_space(3.0);
 }
 
 /// Horizontal rule that matches the subtle border color.
@@ -208,7 +208,11 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let (fill, stroke, text_color) = if selected {
-        (c_row_active(), Stroke::new(1.0, c_border()), c_text())
+        (
+            c_pill_selected_bg(),
+            Stroke::new(1.0, c_pill_selected_border()),
+            c_text_strong(),
+        )
     } else if hovered {
         (c_row_hover(), Stroke::new(1.0, c_border_subtle()), c_text())
     } else {
@@ -234,7 +238,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
 
 /// Primary filled button with accent color.
 pub fn primary_button_widget(label: &str) -> egui::Button<'_> {
-    let rich = RichText::new(label).size(FS_SMALL).color(Color32::WHITE);
+    let rich = RichText::new(label).size(FS_SMALL).color(c_on_accent());
     egui::Button::new(rich)
         .fill(c_accent())
         .stroke(Stroke::NONE)
@@ -247,7 +251,7 @@ pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
 
 /// Primary filled button with a leading Nerd-Font icon glyph.
 pub fn primary_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Button<'a> {
-    let text = icon_label_job(icon, label, FS_SMALL, Color32::WHITE);
+    let text = icon_label_job(icon, label, FS_SMALL, c_on_accent());
     egui::Button::new(text)
         .fill(c_accent())
         .stroke(Stroke::NONE)

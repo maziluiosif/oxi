@@ -162,8 +162,8 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// Codex-style dark theme: neutral near-black surfaces, off-white ink, a single
-    /// restrained blue accent (the original hardcoded palette, `codex-theme-v1`).
+    /// Default dark theme: neutral near-black surfaces, off-white ink, and a single warm
+    /// rust/copper accent (oxi ⇒ oxide — the brand color).
     pub const DARK: Palette = Palette {
         dark_base: true,
         bg_main: rgb(0x0f, 0x10, 0x12),
@@ -174,7 +174,7 @@ impl Palette {
         faint_bg: rgb(0x16, 0x17, 0x1a),
         border: rgb(0x26, 0x28, 0x2c),
         border_subtle: rgb(0x1b, 0x1c, 0x1f),
-        accent: rgb(0x6c, 0xa2, 0xe0),
+        accent: rgb(0xe2, 0x8f, 0x5b),
         text: rgb(0xd8, 0xde, 0xe9),
         text_strong: rgb(0xee, 0xee, 0xf4),
         text_muted: rgb(0x8b, 0x8f, 0x99),
@@ -194,13 +194,13 @@ impl Palette {
         widget_active_bg: rgb(0x30, 0x33, 0x39),
         widget_open_bg: rgb(0x24, 0x26, 0x2b),
         widget_active_border: rgb(0x33, 0x36, 0x3c),
-        selection_bg: rgb(0x21, 0x35, 0x4c),
-        selection_stroke: rgb(0x3c, 0x66, 0x96),
+        selection_bg: rgb(0x44, 0x2d, 0x1d),
+        selection_stroke: rgb(0x96, 0x5f, 0x35),
         md_code_bg: rgb(0x24, 0x26, 0x2d),
         md_code_block_bg: rgb(0x13, 0x14, 0x18),
         md_code_block_header_bg: rgb(0x19, 0x1b, 0x21),
         md_code_block_border: rgb(0x2a, 0x2d, 0x34),
-        md_quote_accent: rgb(0x4f, 0x83, 0xc4),
+        md_quote_accent: rgb(0xc4, 0x82, 0x4f),
         md_code_fg: rgb(0xe1, 0xe4, 0xea),
     };
 
@@ -216,7 +216,7 @@ impl Palette {
         faint_bg: rgb(0xf0, 0xf0, 0xee),
         border: rgb(0xd6, 0xd6, 0xd0),
         border_subtle: rgb(0xe6, 0xe6, 0xe1),
-        accent: rgb(0x25, 0x63, 0xa8),
+        accent: rgb(0xb4, 0x52, 0x19),
         text: rgb(0x1c, 0x1d, 0x20),
         text_strong: rgb(0x05, 0x06, 0x09),
         text_muted: rgb(0x5f, 0x63, 0x6b),
@@ -236,13 +236,13 @@ impl Palette {
         widget_active_bg: rgb(0xd7, 0xd7, 0xd2),
         widget_open_bg: rgb(0xe8, 0xe8, 0xe4),
         widget_active_border: rgb(0xc4, 0xc4, 0xbe),
-        selection_bg: rgb(0xcf, 0xe0, 0xf5),
-        selection_stroke: rgb(0x7a, 0xa8, 0xde),
+        selection_bg: rgb(0xf5, 0xe0, 0xcf),
+        selection_stroke: rgb(0xd8, 0x9a, 0x62),
         md_code_bg: rgb(0xec, 0xec, 0xea),
         md_code_block_bg: rgb(0xf4, 0xf4, 0xf2),
         md_code_block_header_bg: rgb(0xeb, 0xeb, 0xe8),
         md_code_block_border: rgb(0xde, 0xde, 0xda),
-        md_quote_accent: rgb(0x25, 0x63, 0xa8),
+        md_quote_accent: rgb(0xb4, 0x52, 0x19),
         md_code_fg: rgb(0x1f, 0x21, 0x26),
     };
 
@@ -257,7 +257,7 @@ impl Palette {
         faint_bg: rgb(0x0a, 0x0a, 0x0c),
         border: rgb(0x1f, 0x20, 0x24),
         border_subtle: rgb(0x14, 0x15, 0x19),
-        accent: rgb(0x6c, 0xa2, 0xe0),
+        accent: rgb(0xe2, 0x8f, 0x5b),
         text: rgb(0xd8, 0xde, 0xe9),
         text_strong: rgb(0xee, 0xee, 0xf4),
         text_muted: rgb(0x8b, 0x8f, 0x99),
@@ -277,13 +277,13 @@ impl Palette {
         widget_active_bg: rgb(0x26, 0x26, 0x2c),
         widget_open_bg: rgb(0x1a, 0x1a, 0x1f),
         widget_active_border: rgb(0x2a, 0x2a, 0x30),
-        selection_bg: rgb(0x1a, 0x2c, 0x40),
-        selection_stroke: rgb(0x3c, 0x66, 0x96),
+        selection_bg: rgb(0x38, 0x25, 0x18),
+        selection_stroke: rgb(0x96, 0x5f, 0x35),
         md_code_bg: rgb(0x1a, 0x1c, 0x22),
         md_code_block_bg: rgb(0x0a, 0x0b, 0x0e),
         md_code_block_header_bg: rgb(0x10, 0x12, 0x18),
         md_code_block_border: rgb(0x20, 0x23, 0x29),
-        md_quote_accent: rgb(0x4f, 0x83, 0xc4),
+        md_quote_accent: rgb(0xc4, 0x82, 0x4f),
         md_code_fg: rgb(0xe1, 0xe4, 0xea),
     };
 }
@@ -428,6 +428,30 @@ pub fn c_info_bg() -> Color32 {
     tint_on_panels(c_accent(), 30)
 }
 
+/// Foreground for text/icons drawn on an accent-filled surface (primary buttons, send).
+/// The dark themes use a light copper accent, so ink on it must be near-black; on light
+/// themes the accent is dark enough for white.
+pub fn c_on_accent() -> Color32 {
+    if active_palette().dark_base {
+        Color32::from_rgb(0x17, 0x0e, 0x07)
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// Background for a selected pill tab (provider row, compute target, sub-tabs) — a faint
+/// accent tint over the elevated surface so the active choice reads as "on", not just lighter.
+pub fn c_pill_selected_bg() -> Color32 {
+    let p = active_palette();
+    surface_tint(p.bg_elevated_2, p.accent, 46)
+}
+
+/// Border for a selected pill tab.
+pub fn c_pill_selected_border() -> Color32 {
+    let p = active_palette();
+    surface_tint(p.border, p.accent, 120)
+}
+
 // ── Tool pill palettes (single source of truth for the transcript tool pills + edit blocks) ──
 
 /// Background for a plain (done) tool pill. Matches the original near-black neutral surface on
@@ -440,11 +464,11 @@ pub fn c_tool_pill_bg() -> Color32 {
         p.bg_elevated_2
     }
 }
-/// Background for a running tool pill (accent-tinted dark surface on dark; light bluish on light).
+/// Background for a running tool pill (a faint accent tint over the base surface).
 pub fn c_tool_running_bg() -> Color32 {
     let p = active_palette();
     if p.dark_base {
-        Color32::from_rgb(0x13, 0x18, 0x20)
+        tint_on_panels(p.accent, 22)
     } else {
         surface_tint(p.bg_elevated_2, p.accent, 18)
     }
@@ -466,7 +490,7 @@ pub fn c_tool_pill_border() -> Color32 {
 pub fn c_tool_running_border() -> Color32 {
     let p = active_palette();
     if p.dark_base {
-        Color32::from_rgb(0x24, 0x35, 0x48)
+        tint_on_panels(p.accent, 95)
     } else {
         surface_tint(p.border, p.accent, 90)
     }
@@ -501,14 +525,14 @@ pub fn c_tool_diff_bg() -> Color32 {
 
 // ── Status-badge tints ("running" / "done" / "failed" chips under tool pills) ──
 
-/// Running badge (accent): (fg, bg, stroke). Original dark values restored for parity.
+/// Running badge (accent): (fg, bg, stroke).
 pub fn badge_running_parts() -> (Color32, Color32, Color32) {
     let p = active_palette();
     if p.dark_base {
         (
             p.accent,
-            Color32::from_rgb(0x10, 0x1b, 0x29),
-            Color32::from_rgb(0x24, 0x35, 0x48),
+            tint_on_panels(p.accent, 34),
+            tint_on_panels(p.accent, 105),
         )
     } else {
         (
@@ -832,7 +856,7 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// Codex-style dark theme: neutral near-black surfaces, subtle borders, a single blue accent.
+/// Build egui visuals from the active palette: neutral surfaces, subtle borders, one accent.
 pub fn setup_style(ctx: &egui::Context) {
     install_fonts(ctx);
     let p = active_palette();
