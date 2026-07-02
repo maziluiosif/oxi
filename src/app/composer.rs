@@ -46,10 +46,56 @@ fn composer_thumb_texture(ui: &Ui, data: &[u8]) -> Option<TextureHandle> {
     Some(tex)
 }
 
+/// Quiet pill styling shared by the composer combos (profile + model): transparent at
+/// rest, soft fill + hairline on hover, fully rounded.
+fn quiet_combo_style(ui: &mut Ui) {
+    let widgets = &mut ui.visuals_mut().widgets;
+    widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    widgets.inactive.bg_fill = Color32::TRANSPARENT;
+    widgets.inactive.bg_stroke = Stroke::NONE;
+    widgets.inactive.rounding = Rounding::same(999.0);
+    widgets.hovered.weak_bg_fill = c_row_hover();
+    widgets.hovered.bg_stroke = Stroke::new(1.0, c_border_subtle());
+    widgets.hovered.rounding = Rounding::same(999.0);
+    widgets.active.weak_bg_fill = c_row_hover();
+    widgets.active.bg_stroke = Stroke::NONE;
+    widgets.active.rounding = Rounding::same(999.0);
+    widgets.open.weak_bg_fill = c_row_hover();
+    widgets.open.bg_stroke = Stroke::NONE;
+    widgets.open.rounding = Rounding::same(999.0);
+}
+
+/// Nerd Font chevron for the quiet combos — the default painted triangle is nearly
+/// invisible on these dark surfaces.
+fn quiet_combo_icon(
+    ui: &Ui,
+    rect: egui::Rect,
+    visuals: &egui::style::WidgetVisuals,
+    _is_open: bool,
+    _above_or_below: egui::AboveOrBelow,
+) {
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        ICON_ANGLE_DOWN,
+        egui::FontId::new(10.0, icon_font()),
+        visuals.fg_stroke.color,
+    );
+}
+
 impl OxiApp {
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
         let pad = ((column_center_w - CHAT_COLUMN_MAX.min(column_center_w)) * 0.5).max(0.0);
         let can_send = !self.conv.input.trim().is_empty() || !self.conv.pending_images.is_empty();
+
+        // Focus state persists in egui memory across frames, so reading it here (before
+        // the TextEdit runs) is exact, not one frame late.
+        let input_id = Id::new("composer_input");
+        let composer_focused = ui.ctx().memory(|m| m.has_focus(input_id));
+        let focus_t =
+            ui.ctx()
+                .animate_bool_with_time(Id::new("composer_focus_anim"), composer_focused, 0.12);
+        let card_border = blend_color(c_border(), c_composer_focus_border(), focus_t);
 
         // Top-align the row so a parent `bottom_up` layout cannot vertically stretch/center the
         // block and shift the field off-screen.
@@ -62,7 +108,7 @@ impl OxiApp {
                 ui.set_width(composer_w);
                 Frame::none()
                     .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border()))
+                    .stroke(Stroke::new(1.0, card_border))
                     .rounding(14.0)
                     .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN))
                     .show(ui, |ui| {
@@ -76,6 +122,12 @@ impl OxiApp {
                         // desired_rows(1) keeps it compact; it grows naturally
                         // as the user types (both newlines and soft-wrap).
                         let te_output = TextEdit::multiline(&mut self.conv.input)
+                            .id(input_id)
+                            .hint_text(
+                                RichText::new("Message oxi…")
+                                    .size(FS_BODY)
+                                    .color(c_text_faint()),
+                            )
                             .desired_width(f32::INFINITY)
                             .desired_rows(1)
                             .frame(false)
@@ -102,7 +154,7 @@ impl OxiApp {
 
                         // === Controls row ===
                         ui.horizontal(|ui| {
-                            self.render_controls_row(ui, can_send);
+                            self.render_controls_row(ui, can_send, composer_focused);
                         });
                     });
             });
@@ -114,7 +166,7 @@ impl OxiApp {
     }
 
     /// `[+]  [model ▾]                                  [↑]`
-    fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool) {
+    fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool, composer_focused: bool) {
         ui.spacing_mut().item_spacing.x = 6.0;
 
         // ── Left: round attach button ──────────────────────────────────────
@@ -193,6 +245,21 @@ impl OxiApp {
                     self.send_message();
                 }
             }
+
+            // Quiet keyboard hint, faded in only while the input has focus.
+            let hint_t = ui.ctx().animate_bool_with_time(
+                Id::new("composer_hint_anim"),
+                composer_focused,
+                0.15,
+            );
+            if hint_t > 0.0 {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Shift+Enter for newline")
+                        .size(FS_TINY)
+                        .color(c_text_faint().gamma_multiply(hint_t)),
+                );
+            }
         });
     }
 
@@ -206,19 +273,11 @@ impl OxiApp {
             .unwrap_or_else(|| "No profile".to_string());
 
         ui.scope(|ui| {
-            let widgets = &mut ui.visuals_mut().widgets;
-            widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-            widgets.inactive.bg_fill = Color32::TRANSPARENT;
-            widgets.inactive.bg_stroke = Stroke::NONE;
-            widgets.hovered.weak_bg_fill = c_row_hover();
-            widgets.hovered.bg_stroke = Stroke::NONE;
-            widgets.active.weak_bg_fill = c_row_hover();
-            widgets.active.bg_stroke = Stroke::NONE;
-            widgets.open.weak_bg_fill = c_row_hover();
-            widgets.open.bg_stroke = Stroke::NONE;
+            quiet_combo_style(ui);
 
-            ComboBox::from_id_salt("profile_combo")
+            let resp = ComboBox::from_id_salt("profile_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
+                .icon(quiet_combo_icon)
                 .width(190.0)
                 .show_ui(ui, |ui| {
                     let current_id = self.conv.settings.active_profile_id.clone();
@@ -235,6 +294,8 @@ impl OxiApp {
                         }
                     }
                 });
+            resp.response
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
         });
 
         // Second row: model picker for the active profile, populated from the fetched model list.
@@ -249,24 +310,16 @@ impl OxiApp {
             let current = p.model_id.clone();
             if !fetched.is_empty() {
                 ui.scope(|ui| {
-                    let widgets = &mut ui.visuals_mut().widgets;
-                    widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                    widgets.inactive.bg_fill = Color32::TRANSPARENT;
-                    widgets.inactive.bg_stroke = Stroke::NONE;
-                    widgets.hovered.weak_bg_fill = c_row_hover();
-                    widgets.hovered.bg_stroke = Stroke::NONE;
-                    widgets.active.weak_bg_fill = c_row_hover();
-                    widgets.active.bg_stroke = Stroke::NONE;
-                    widgets.open.weak_bg_fill = c_row_hover();
-                    widgets.open.bg_stroke = Stroke::NONE;
+                    quiet_combo_style(ui);
 
                     let label = if current.is_empty() {
                         "(custom)".to_string()
                     } else {
                         current.clone()
                     };
-                    ComboBox::from_id_salt("active_model_combo")
+                    let resp = ComboBox::from_id_salt("active_model_combo")
                         .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
+                        .icon(quiet_combo_icon)
                         .width(190.0)
                         .show_ui(ui, |ui| {
                             for m in &fetched {
@@ -283,6 +336,8 @@ impl OxiApp {
                                 }
                             }
                         });
+                    resp.response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
                 });
             }
         }
