@@ -75,8 +75,12 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
     } = req;
 
     let model = profile.model_id.clone();
+    // Bound connect + idle-between-chunks time rather than the whole request, so a
+    // slow but progressing stream is not cut off.
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(60))
+        .tcp_keepalive(std::time::Duration::from_secs(60))
         .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
         .build()
     {
@@ -336,6 +340,9 @@ async fn collect_deltas(
                 }
             }
             AgentEvent::StreamError(e) => return Err(e),
+            // The round is being re-sent after a dropped stream: discard the partial
+            // text so the retried generation does not get appended to it.
+            AgentEvent::StreamRetry { .. } => out.clear(),
             _ => {}
         }
     }
