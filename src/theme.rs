@@ -77,8 +77,8 @@ pub const ICON_MENU: &str = "\u{f02a}";
 pub const ICON_TERMINAL: &str = "\u{f120}";
 /// Git — source-control panel and header (`nf-fa-git`).
 pub const ICON_GIT: &str = "\u{f1d3}";
-/// Rotate / refresh (`nf-fa-arrows-rotate`).
-pub const ICON_REFRESH: &str = "\u{f450}";
+/// Rotate / refresh (`nf-fa-refresh`).
+pub const ICON_REFRESH: &str = "\u{f021}";
 /// Arrow pointing up — send message button (`nf-fa-arrow-up`).
 pub const ICON_SEND: &str = "\u{f062}";
 /// Filled stop square — stop streaming (`nf-fa-stop`).
@@ -103,6 +103,12 @@ pub const ICON_MAGIC: &str = "\u{f135}";
 pub const ICON_DOWNLOAD: &str = "\u{f019}";
 /// Cloud upload / arrow up — push to remote (`nf-fa-cloud-upload`).
 pub const ICON_UPLOAD: &str = "\u{f0aa}";
+/// Magnifier over a globe — web search tool pill (`nf-md-search_web`).
+pub const ICON_WEB_SEARCH: &str = "\u{f070f}";
+/// Globe — web fetch / URL tool pill (`nf-fa-globe`).
+pub const ICON_GLOBE: &str = "\u{f0ac}";
+/// Git branch — current-branch line in the source-control panel (`nf-oct-git_branch`).
+pub const ICON_BRANCH: &str = "\u{f418}";
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
 //
@@ -428,6 +434,12 @@ pub fn c_info_bg() -> Color32 {
     tint_on_panels(c_accent(), 30)
 }
 
+/// Left rail on thinking blocks — accent sunk toward the panel so it reads as a
+/// quiet hairline, not a highlight.
+pub fn c_thinking_rail() -> Color32 {
+    tint_on_panels(c_accent(), 90)
+}
+
 /// Foreground for text/icons drawn on an accent-filled surface (primary buttons, send).
 /// The dark themes use a light copper accent, so ink on it must be near-black; on light
 /// themes the accent is dark enough for white.
@@ -450,6 +462,13 @@ pub fn c_pill_selected_bg() -> Color32 {
 pub fn c_pill_selected_border() -> Color32 {
     let p = active_palette();
     surface_tint(p.border, p.accent, 120)
+}
+
+/// Composer card border while the input has keyboard focus — border nudged toward
+/// the accent so the field reads as "live" without shouting.
+pub fn c_composer_focus_border() -> Color32 {
+    let p = active_palette();
+    surface_tint(p.border, p.accent, 115)
 }
 
 // ── Tool pill palettes (single source of truth for the transcript tool pills + edit blocks) ──
@@ -1017,7 +1036,7 @@ pub fn sidebar_session_title_display(title: &str) -> String {
 }
 
 pub fn tool_status_label(name: &str) -> String {
-    let trimmed = name.trim();
+    let trimmed = name.trim().replace('_', " ");
     if trimmed.is_empty() {
         "Running".to_string()
     } else {
@@ -1072,6 +1091,13 @@ mod tests {
         // Restore default so other tests are not affected by global state.
         set_active_palette(Palette::DARK);
         assert_eq!(c_bg_main(), Palette::DARK.bg_main);
+    }
+
+    #[test]
+    fn tool_status_label_humanizes_names() {
+        assert_eq!(tool_status_label("web_search"), "Web search");
+        assert_eq!(tool_status_label("bash"), "Bash");
+        assert_eq!(tool_status_label("  "), "Running");
     }
 
     #[test]

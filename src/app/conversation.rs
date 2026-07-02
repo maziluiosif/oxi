@@ -192,11 +192,13 @@ impl OxiApp {
 
                             let workspace =
                                 workspace_sidebar_label(&self.active_workspace().root_path);
+                            let session_title =
+                                sidebar_session_title_display(&self.active_session().title);
                             ui.vertical(|ui| {
                                 ui.set_width(ui.available_width());
                                 ui.add(
                                     Label::new(
-                                        RichText::new("Chat")
+                                        RichText::new(session_title)
                                             .size(FS_SMALL)
                                             .color(c_text())
                                             .strong(),

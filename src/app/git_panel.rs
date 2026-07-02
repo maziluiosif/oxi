@@ -164,6 +164,14 @@ impl OxiApp {
     /// Render the right-side git column (allocated after the chat area).
     pub(crate) fn render_git_panel(&mut self, ui: &mut Ui, full_h: f32) {
         let _ = full_h;
+
+        // The panel can come up open straight from settings (git_open persisted), in
+        // which case no one went through `toggle_git_panel` — make sure the worker
+        // exists so we don't sit on a stale "Not a git repository" default state.
+        if self.conv.git_rx.is_none() {
+            self.ensure_git_channels();
+            let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+        }
         ui.set_min_width(ui.max_rect().width());
         ui.set_min_height(ui.max_rect().height());
 
@@ -272,16 +280,38 @@ impl OxiApp {
             ui.add_space(2.0);
             let branch = self.conv.git.branch.clone();
             let (ahead, behind) = (self.conv.git.ahead, self.conv.git.behind);
-            let mut chips = String::new();
-            if ahead > 0 || behind > 0 {
-                chips = format!("  ↑{ahead} ↓{behind}");
-            }
-            ui.label(
-                RichText::new(format!("{branch}{chips}"))
-                    .size(FS_TINY)
-                    .color(c_text_muted())
-                    .monospace(),
-            );
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.label(
+                    RichText::new(ICON_BRANCH)
+                        .font(FontId::new(FS_TINY, icon_font()))
+                        .color(c_text_muted()),
+                );
+                ui.label(
+                    RichText::new(branch)
+                        .size(FS_TINY)
+                        .color(c_text_muted())
+                        .monospace(),
+                );
+                if ahead > 0 {
+                    ui.label(
+                        RichText::new(format!("↑{ahead}"))
+                            .size(FS_TINY)
+                            .color(c_success())
+                            .monospace(),
+                    )
+                    .on_hover_text("Commits ahead of upstream");
+                }
+                if behind > 0 {
+                    ui.label(
+                        RichText::new(format!("↓{behind}"))
+                            .size(FS_TINY)
+                            .color(c_warning_fg())
+                            .monospace(),
+                    )
+                    .on_hover_text("Commits behind upstream");
+                }
+            });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -307,7 +337,7 @@ impl OxiApp {
                 }
                 if ui
                     .add(crate::ui::chrome::mini_button_icon_widget(
-                        ICON_DOWNLOAD,
+                        ICON_REFRESH,
                         "Fetch",
                     ))
                     .on_hover_text("Fetch")
@@ -360,6 +390,11 @@ impl OxiApp {
         ui.add_space(2.0);
         let resp = egui::TextEdit::multiline(&mut self.conv.git_commit_message)
             .frame(true)
+            .hint_text(
+                RichText::new("Commit message…")
+                    .size(FS_SMALL)
+                    .color(c_text_faint()),
+            )
             .desired_rows(3)
             .desired_width(ui.available_width())
             .font(FontId::proportional(FS_SMALL));
@@ -367,9 +402,22 @@ impl OxiApp {
         ui.add_space(4.0);
 
         let gen_active = self.commit_gen_active();
+        let staged_empty = self.conv.git.staged.is_empty();
+        let msg_empty = self.conv.git_commit_message.trim().is_empty();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if crate::ui::chrome::primary_button_icon(ui, ICON_CHECK, "Commit").clicked() {
+            let commit_resp = ui
+                .add_enabled_ui(!staged_empty && !msg_empty, |ui| {
+                    crate::ui::chrome::primary_button_icon(ui, ICON_CHECK, "Commit")
+                })
+                .inner
+                .on_hover_text("Commit staged changes")
+                .on_disabled_hover_text(if staged_empty {
+                    "Stage some changes first"
+                } else {
+                    "Write or generate a commit message"
+                });
+            if commit_resp.clicked() {
                 let msg = self.conv.git_commit_message.clone();
                 self.request(GitOp::Commit(msg));
                 self.conv.git_commit_message.clear();
@@ -394,7 +442,14 @@ impl OxiApp {
                 self.conv.commit_gen_pending = true;
                 self.request(GitOp::CollectCommitDiff);
             }
-            if crate::ui::chrome::ghost_button(ui, "Stage all", false).clicked() {
+            let has_unstaged = !self.conv.git.unstaged.is_empty();
+            if ui
+                .add_enabled_ui(has_unstaged, |ui| {
+                    crate::ui::chrome::ghost_button(ui, "Stage all", false)
+                })
+                .inner
+                .clicked()
+            {
                 let paths: Vec<String> = self
                     .conv
                     .git
@@ -402,11 +457,15 @@ impl OxiApp {
                     .iter()
                     .map(|e| e.path.clone())
                     .collect();
-                if !paths.is_empty() {
-                    self.request(GitOp::Stage(paths));
-                }
+                self.request(GitOp::Stage(paths));
             }
-            if crate::ui::chrome::ghost_button(ui, "Unstage all", false).clicked() {
+            if ui
+                .add_enabled_ui(!staged_empty, |ui| {
+                    crate::ui::chrome::ghost_button(ui, "Unstage all", false)
+                })
+                .inner
+                .clicked()
+            {
                 let paths: Vec<String> = self
                     .conv
                     .git
@@ -414,9 +473,7 @@ impl OxiApp {
                     .iter()
                     .map(|e| e.path.clone())
                     .collect();
-                if !paths.is_empty() {
-                    self.request(GitOp::Unstage(paths));
-                }
+                self.request(GitOp::Unstage(paths));
             }
         });
 
@@ -452,11 +509,19 @@ impl OxiApp {
                 }
                 if staged.is_empty() && unstaged.is_empty() {
                     ui.add_space(10.0);
-                    ui.label(
-                        RichText::new("No changes")
-                            .size(FS_SMALL)
-                            .color(c_text_muted()),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.label(
+                            RichText::new(ICON_CHECK_CIRCLE)
+                                .font(FontId::new(FS_SMALL, icon_font()))
+                                .color(c_success()),
+                        );
+                        ui.label(
+                            RichText::new("Working tree clean")
+                                .size(FS_SMALL)
+                                .color(c_text_muted()),
+                        );
+                    });
                 }
             });
     }
@@ -488,6 +553,12 @@ impl OxiApp {
         let full_w = ui.available_width();
         let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 22.0), Sense::click());
         let hovered = response.hovered();
+        // Pure geometric hover test — `Ui::rect_contains_pointer` also checks layer
+        // and clip, which the nested child layouts below fail even with the pointer
+        // visually on the row.
+        let row_hot = ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|p| rect.contains(p));
 
         // Selection highlight if this is the currently-viewed diff.
         let selected = self
@@ -554,16 +625,30 @@ impl OxiApp {
                             .strong(),
                     );
                     ui.add_space(6.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(entry.path.clone())
-                                .size(FS_SMALL)
-                                .color(c_text()),
-                        )
-                        .truncate(),
+                    // Filename first, parent dir faint after — the name is what you scan for.
+                    let (dir, file) = match entry.path.rsplit_once('/') {
+                        Some((d, f)) => (Some(d), f),
+                        None => (None, entry.path.as_str()),
+                    };
+                    let mut job = LayoutJob::default();
+                    job.append(
+                        file,
+                        0.0,
+                        TextFormat::simple(FontId::proportional(FS_SMALL), c_text()),
                     );
+                    if let Some(d) = dir {
+                        job.append(
+                            d,
+                            8.0,
+                            TextFormat::simple(FontId::proportional(FS_TINY), c_text_faint()),
+                        );
+                    }
+                    ui.add(egui::Label::new(job).truncate());
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        // Discard is destructive — keep it hover-only so it doesn't
+                        // read as part of every row.
                         if !staged
+                            && row_hot
                             && ui
                                 .add(
                                     Button::new(crate::ui::chrome::icon_glyph_rich(

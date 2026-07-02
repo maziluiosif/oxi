@@ -22,7 +22,7 @@ impl OxiApp {
             ui.label(
                 RichText::new("oxi")
                     .size(FS_H3)
-                    .color(crate::theme::c_text())
+                    .color(crate::theme::c_accent())
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -138,9 +138,12 @@ impl OxiApp {
             if sidebar_changed {
                 return;
             }
-            let root_label = workspace_sidebar_label(&self.conv.workspaces[wi].root_path);
             let active_si = self.conv.workspaces[wi].active;
             let n_sessions = self.conv.workspaces[wi].sessions.len();
+            let mut root_label = workspace_sidebar_label(&self.conv.workspaces[wi].root_path);
+            if n_sessions > 0 {
+                root_label = format!("{root_label} · {n_sessions}");
+            }
             let folded = self.conv.workspaces[wi].sidebar_folded;
             ui.add_space(1.0);
 
@@ -229,6 +232,9 @@ impl OxiApp {
                                 Sense::click(),
                             );
                             let hovered = response.hovered();
+                            if hovered {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
                             let fill = if selected {
                                 c_row_active()
                             } else if hovered {
@@ -253,6 +259,55 @@ impl OxiApp {
                             self.render_session_row_inner(
                                 ui, rect, wi, si, running, selected, title,
                             );
+
+                            // Hover-only delete button, mirroring the context-menu action.
+                            let can_delete = wi == self.conv.active_workspace
+                                && n_sessions > 1
+                                && !running;
+                            if can_delete && ui.rect_contains_pointer(rect) {
+                                let trash_rect = egui::Rect::from_min_max(
+                                    egui::pos2(rect.right() - 24.0, rect.top()),
+                                    egui::pos2(rect.right() - 2.0, rect.bottom()),
+                                );
+                                // Backing fill keeps the icon legible over long titles.
+                                ui.painter().rect_filled(
+                                    trash_rect,
+                                    Rounding::same(6.0),
+                                    if selected { c_row_active() } else { c_row_hover() },
+                                );
+                                let clicked = ui
+                                    .allocate_new_ui(
+                                        egui::UiBuilder::new().max_rect(trash_rect),
+                                        |ui| {
+                                            ui.with_layout(
+                                                Layout::centered_and_justified(
+                                                    egui::Direction::LeftToRight,
+                                                ),
+                                                |ui| {
+                                                    ui.add(
+                                                        Button::new(
+                                                            crate::ui::chrome::icon_glyph_rich(
+                                                                ICON_TRASH,
+                                                                FS_TINY,
+                                                                c_text_faint(),
+                                                            ),
+                                                        )
+                                                        .frame(false)
+                                                        .fill(Color32::TRANSPARENT),
+                                                    )
+                                                    .on_hover_text("Delete chat")
+                                                    .clicked()
+                                                },
+                                            )
+                                            .inner
+                                        },
+                                    )
+                                    .inner;
+                                if clicked {
+                                    self.delete_session(si);
+                                    sidebar_changed = true;
+                                }
+                            }
                         });
                     });
                 });
@@ -321,7 +376,10 @@ impl OxiApp {
                         egui::vec2(lead_w, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
-                            ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                            // Dot only on the active chat — a bullet on every row is noise.
+                            if selected {
+                                ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                            }
                         },
                     );
                     ui.add_space(BULLET_GAP);
@@ -586,10 +644,12 @@ impl OxiApp {
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        ui.painter().vline(
-            boundary_x,
-            sep_rect.y_range(),
-            Stroke::new(1.0, crate::theme::c_border_subtle()),
-        );
+        let col = if sep.hovered() || sep.dragged() {
+            c_accent()
+        } else {
+            crate::theme::c_border_subtle()
+        };
+        ui.painter()
+            .vline(boundary_x, sep_rect.y_range(), Stroke::new(1.0, col));
     }
 }
