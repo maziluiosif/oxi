@@ -2,7 +2,7 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, Color32, Frame, Label, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
+    self, Align, Button, FontId, Frame, Label, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
 };
 
 use crate::agent::ApprovalDecision;
@@ -22,35 +22,11 @@ impl OxiApp {
         }
         ui.spacing_mut().item_spacing.y = 4.0;
         if let Some(ref e) = self.conn.connect_error {
-            Frame::none()
-                .fill(Color32::from_rgb(0x32, 0x18, 0x18))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(0x70, 0x38, 0x38)))
-                .rounding(Rounding::same(6.0))
-                .inner_margin(Margin::symmetric(8.0, 6.0))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(
-                        RichText::new(format!("Connection: {e}"))
-                            .size(FS_SMALL)
-                            .color(Color32::from_rgb(0xff, 0xb0, 0xb0)),
-                    );
-                });
+            crate::ui::chrome::alert_banner(ui, &format!("Connection: {e}"), true);
             ui.add_space(4.0);
         }
         if let Some(e) = active_stream_error {
-            Frame::none()
-                .fill(Color32::from_rgb(0x38, 0x28, 0x14))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(0x78, 0x58, 0x28)))
-                .rounding(Rounding::same(6.0))
-                .inner_margin(Margin::symmetric(8.0, 6.0))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(
-                        RichText::new(format!("Agent: {e}"))
-                            .size(FS_SMALL)
-                            .color(Color32::from_rgb(0xff, 0xd0, 0xa0)),
-                    );
-                });
+            crate::ui::chrome::alert_banner(ui, &format!("Agent: {e}"), false);
             ui.add_space(4.0);
         }
     }
@@ -60,7 +36,7 @@ impl OxiApp {
     /// view while the run is paused — `stick_to_bottom` keeps the tail visible during a run.
     fn render_approval_card(&mut self, ui: &mut Ui, pa: PendingApproval) {
         Frame::none()
-            .fill(Color32::from_rgb(0x16, 0x20, 0x2e))
+            .fill(crate::theme::c_info_bg())
             .stroke(Stroke::new(1.0, c_accent()))
             .rounding(Rounding::same(6.0))
             .inner_margin(Margin::symmetric(10.0, 8.0))
@@ -84,43 +60,23 @@ impl OxiApp {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui
-                        .add(
-                            Button::new(RichText::new("Approve").size(FS_SMALL).color(c_text()))
-                                .fill(c_accent())
-                                .rounding(6.0)
-                                .min_size(egui::vec2(0.0, 26.0)),
-                        )
+                        .add(crate::ui::chrome::primary_button_widget("Approve"))
                         .clicked()
                     {
                         self.respond_to_approval(ApprovalDecision::Approve);
                     }
                     if ui
-                        .add(
-                            Button::new(
-                                RichText::new("Approve rest").size(FS_SMALL).color(c_text()),
-                            )
-                            .fill(c_bg_elevated())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(6.0)
-                            .min_size(egui::vec2(0.0, 26.0)),
-                        )
+                        .add(crate::ui::chrome::ghost_button_widget(
+                            "Approve rest",
+                            false,
+                        ))
                         .on_hover_text("Run this and auto-approve the rest of this turn")
                         .clicked()
                     {
                         self.respond_to_approval(ApprovalDecision::ApproveRest);
                     }
                     if ui
-                        .add(
-                            Button::new(
-                                RichText::new("Deny")
-                                    .size(FS_SMALL)
-                                    .color(Color32::from_rgb(0xff, 0xb0, 0xb0)),
-                            )
-                            .fill(c_bg_elevated())
-                            .stroke(Stroke::new(1.0, c_border_subtle()))
-                            .rounding(6.0)
-                            .min_size(egui::vec2(0.0, 26.0)),
-                        )
+                        .add(crate::ui::chrome::ghost_button_widget("Deny", true))
                         .clicked()
                     {
                         self.respond_to_approval(ApprovalDecision::Deny);
@@ -140,69 +96,130 @@ impl OxiApp {
             }
             ui.allocate_ui_with_layout(
                 egui::vec2(col_w, 38.0),
-                egui::Layout::left_to_right(Align::Center),
+                egui::Layout::right_to_left(Align::Center),
                 |ui| {
-                    if !self.conv.sidebar_open
-                        && ui
-                            .add_sized(
-                                [30.0, 28.0],
-                                Button::new(RichText::new("☰").size(14.0).color(c_text_muted()))
+                    ui.spacing_mut().item_spacing.x = 6.0;
+
+                    // Right cluster — sized to its content so it never overflows the title.
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 28.0),
+                        egui::Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if ui
+                                .add_sized(
+                                    [120.0, 28.0],
+                                    Button::new(crate::ui::chrome::icon_label_job(
+                                        ICON_PLUS,
+                                        "New",
+                                        FS_SMALL,
+                                        crate::theme::c_on_accent(),
+                                    ))
+                                    .fill(c_accent())
+                                    .stroke(Stroke::NONE)
+                                    .rounding(8.0),
+                                )
+                                .on_hover_text("Start a new chat in this workspace")
+                                .clicked()
+                            {
+                                self.new_chat();
+                            }
+                            let term_on = self.conv.terminal_open;
+                            if ui
+                                .add_sized(
+                                    [34.0, 28.0],
+                                    Button::new(crate::ui::chrome::icon_glyph_rich(
+                                        ICON_TERMINAL,
+                                        FS_SMALL,
+                                        if term_on { c_accent() } else { c_text() },
+                                    ))
                                     .fill(c_bg_elevated())
                                     .stroke(Stroke::new(1.0, c_border_subtle()))
                                     .rounding(8.0),
-                            )
-                            .on_hover_text("Show sidebar")
-                            .clicked()
-                    {
-                        self.conv.sidebar_open = true;
-                    }
-
-                    let workspace = workspace_sidebar_label(&self.active_workspace().root_path);
-                    ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 126.0).max(80.0));
-                        ui.add(
-                            Label::new(
-                                RichText::new("Chat")
-                                    .size(FS_SMALL)
-                                    .color(c_text())
-                                    .strong(),
-                            )
-                            .truncate(),
-                        );
-                        let profile = self
-                            .conv
-                            .settings
-                            .active_profile()
-                            .map(|p| p.subtitle())
-                            .unwrap_or_else(|| "No active profile".to_string());
-                        ui.add(
-                            Label::new(
-                                RichText::new(format!("{workspace} · {profile}"))
-                                    .size(FS_TINY)
-                                    .color(c_text_muted()),
-                            )
-                            .truncate(),
-                        );
-                    });
-
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add_sized(
-                                [96.0, 28.0],
-                                Button::new(
-                                    RichText::new("＋  New").size(FS_SMALL).color(c_text()),
                                 )
-                                .fill(c_bg_elevated())
-                                .stroke(Stroke::new(1.0, c_border_subtle()))
-                                .rounding(8.0),
-                            )
-                            .on_hover_text("Start a new chat in this workspace")
-                            .clicked()
-                        {
-                            self.new_chat();
-                        }
-                        self.render_header_status_chip(ui);
-                    });
+                                .on_hover_text("Toggle terminal panel")
+                                .clicked()
+                            {
+                                self.toggle_terminal();
+                            }
+                            let git_on = self.conv.git_open;
+                            if ui
+                                .add_sized(
+                                    [34.0, 28.0],
+                                    Button::new(crate::ui::chrome::icon_glyph_rich(
+                                        ICON_GIT,
+                                        FS_SMALL,
+                                        if git_on { c_accent() } else { c_text() },
+                                    ))
+                                    .fill(c_bg_elevated())
+                                    .stroke(Stroke::new(1.0, c_border_subtle()))
+                                    .rounding(8.0),
+                                )
+                                .on_hover_text("Toggle source-control (git) panel")
+                                .clicked()
+                            {
+                                self.toggle_git_panel();
+                            }
+                            self.render_header_status_chip(ui);
+                        },
+                    );
+
+                    // Left group gets whatever the right cluster didn’t take.
+                    let left_w = ui.available_width();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(left_w, 38.0),
+                        egui::Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if !self.conv.sidebar_open
+                                && ui
+                                    .add_sized(
+                                        [30.0, 28.0],
+                                        Button::new(crate::ui::chrome::icon_glyph_rich(
+                                            ICON_MENU,
+                                            14.0,
+                                            c_text_muted(),
+                                        ))
+                                        .fill(c_bg_elevated())
+                                        .stroke(Stroke::new(1.0, c_border_subtle()))
+                                        .rounding(8.0),
+                                    )
+                                    .on_hover_text("Show sidebar")
+                                    .clicked()
+                            {
+                                self.conv.sidebar_open = true;
+                            }
+
+                            let workspace =
+                                workspace_sidebar_label(&self.active_workspace().root_path);
+                            ui.vertical(|ui| {
+                                ui.set_width(ui.available_width());
+                                ui.add(
+                                    Label::new(
+                                        RichText::new("Chat")
+                                            .size(FS_SMALL)
+                                            .color(c_text())
+                                            .strong(),
+                                    )
+                                    .truncate(),
+                                );
+                                let profile = self
+                                    .conv
+                                    .settings
+                                    .active_profile()
+                                    .map(|p| p.subtitle())
+                                    .unwrap_or_else(|| "No active profile".to_string());
+                                ui.add(
+                                    Label::new(
+                                        RichText::new(format!("{workspace} · {profile}"))
+                                            .size(FS_TINY)
+                                            .color(c_text_muted()),
+                                    )
+                                    .truncate(),
+                                );
+                            });
+                        },
+                    );
                 },
             );
             if pad > 0.0 {
@@ -275,31 +292,21 @@ impl OxiApp {
 
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add(
-                        Button::new(
-                            RichText::new("＋ Add workspace")
-                                .size(FS_SMALL)
-                                .color(c_text()),
-                        )
-                        .fill(c_bg_elevated())
-                        .stroke(Stroke::new(1.0, c_border_subtle()))
-                        .rounding(8.0),
-                    )
+                    .add(crate::ui::chrome::ghost_button_icon_widget(
+                        ICON_FOLDER_PLUS,
+                        "Add workspace",
+                        false,
+                    ))
                     .clicked()
                 {
                     self.open_workspace_folder();
                 }
                 if ui
-                    .add(
-                        Button::new(
-                            RichText::new("⚙ Open settings")
-                                .size(FS_SMALL)
-                                .color(c_text()),
-                        )
-                        .fill(c_bg_elevated())
-                        .stroke(Stroke::new(1.0, c_border_subtle()))
-                        .rounding(8.0),
-                    )
+                    .add(crate::ui::chrome::ghost_button_icon_widget(
+                        ICON_SETTINGS,
+                        "Open settings",
+                        false,
+                    ))
                     .clicked()
                 {
                     self.conv.settings_open = true;
@@ -329,7 +336,12 @@ impl OxiApp {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("↗").size(FS_SMALL).color(c_accent()));
+                            ui.add_space(1.0);
+                            ui.label(
+                                RichText::new(ICON_EXTERNAL)
+                                    .font(FontId::new(FS_SMALL, icon_font()))
+                                    .color(c_accent()),
+                            );
                             ui.add_space(5.0);
                             ui.label(RichText::new(prompt).size(FS_SMALL).color(c_text()));
                         });
@@ -341,7 +353,7 @@ impl OxiApp {
                     ui.painter().rect_stroke(
                         response.rect,
                         Rounding::same(9.0),
-                        Stroke::new(1.0, c_row_hover()),
+                        Stroke::new(1.0, crate::theme::c_pill_selected_border()),
                     );
                 }
                 if response.clicked() {

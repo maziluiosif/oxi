@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use super::approval::ApprovalGate;
 use super::events::AgentEvent;
+use super::net::{backoff_delay, send_with_retry, sleep_cancellable, MAX_STREAM_RETRIES};
 use super::tools::{run_tool, ToolEnv, ToolResult};
 
 #[derive(Default, Clone)]
@@ -35,17 +36,19 @@ pub async fn run_chat_loop(
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
     gate: &mut ApprovalGate,
+    max_rounds: u32,
 ) -> Result<(), String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut round = 0u32;
+    let mut stream_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
             let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
             break;
         }
         round += 1;
-        if round > 64 {
-            return Err("Too many tool rounds".into());
+        if max_rounds != 0 && round > max_rounds {
+            return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
         let _ = tx.send(AgentEvent::AgentStart);
         let body = json!({
@@ -67,29 +70,25 @@ pub async fn run_chat_loop(
             let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
             headers.insert(name, val);
         }
-        let res = client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            let status = res.status();
-            let t = res.text().await.unwrap_or_default();
-            return Err(format!("HTTP {}: {}", status, t));
-        }
+        let res = send_with_retry(client.post(&url).headers(headers).json(&body), cancel).await?;
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
         let mut assistant_text = String::new();
         let mut tool_map: HashMap<u64, ToolCallAccum> = HashMap::new();
         let mut finish_reason: Option<String> = None;
+        let mut stream_error: Option<String> = None;
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
                 break;
             }
-            let chunk = chunk.map_err(|e| e.to_string())?;
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    stream_error = Some(e.to_string());
+                    break;
+                }
+            };
             let s = String::from_utf8_lossy(&chunk);
             buffer.push_str(&s);
             while let Some(pos) = buffer.find('\n') {
@@ -100,21 +99,46 @@ pub async fn run_chat_loop(
                     &mut assistant_text,
                     &mut tool_map,
                     &mut finish_reason,
+                    &mut stream_error,
                     tx,
-                )?;
+                );
             }
         }
-        if !buffer.trim().is_empty() {
+        if stream_error.is_none() && !buffer.trim().is_empty() {
             for line in buffer.lines() {
                 process_sse_line(
                     line.trim(),
                     &mut assistant_text,
                     &mut tool_map,
                     &mut finish_reason,
+                    &mut stream_error,
                     tx,
-                )?;
+                );
             }
         }
+        // The stream died (dropped connection or in-band error event) before the round
+        // completed. No tool has been executed yet, so re-sending the round is safe.
+        if let Some(err) = stream_error {
+            if cancel.load(Ordering::SeqCst) {
+                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
+                break;
+            }
+            stream_retries += 1;
+            if stream_retries > MAX_STREAM_RETRIES {
+                return Err(err);
+            }
+            let _ = tx.send(AgentEvent::StreamRetry {
+                attempt: stream_retries,
+                reason: err,
+            });
+            if !sleep_cancellable(backoff_delay(stream_retries), cancel).await {
+                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
+                break;
+            }
+            round -= 1;
+            continue;
+        }
+        stream_retries = 0;
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut pairs: Vec<(u64, ToolCallAccum)> = tool_map.into_iter().collect();
         pairs.sort_by_key(|(i, _)| *i);
@@ -280,30 +304,38 @@ fn process_sse_line(
     assistant_text: &mut String,
     tool_map: &mut HashMap<u64, ToolCallAccum>,
     finish_reason: &mut Option<String>,
+    stream_error: &mut Option<String>,
     tx: &Sender<AgentEvent>,
-) -> Result<(), String> {
+) {
     let line = line.trim();
     if line.is_empty() || line == "data: [DONE]" {
-        return Ok(());
+        return;
     }
     if line.starts_with(':') {
-        return Ok(());
+        return;
     }
     let Some(data) = line.strip_prefix("data:") else {
-        return Ok(());
+        return;
     };
     let data = data.trim();
     if data == "[DONE]" || data.is_empty() {
-        return Ok(());
+        return;
     }
-    let v: Value = serde_json::from_str(data).map_err(|e| format!("SSE JSON: {e}: {data}"))?;
+    // A malformed line from a flaky provider should not kill the whole run.
+    let v: Value = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[oxi] skipping malformed SSE line ({e}): {data}");
+            return;
+        }
+    };
     if let Some(err) = v.get("error") {
         let msg = err
             .get("message")
             .and_then(|x| x.as_str())
             .unwrap_or("API error");
-        let _ = tx.send(AgentEvent::StreamError(msg.to_string()));
-        return Ok(());
+        *stream_error = Some(msg.to_string());
+        return;
     }
     if let Some(fr) = v
         .get("choices")
@@ -356,5 +388,4 @@ fn process_sse_line(
             }
         }
     }
-    Ok(())
 }

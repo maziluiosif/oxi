@@ -23,7 +23,7 @@ fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
     let _ = tx.send(AgentEvent::AgentEnd);
 }
 
-fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -32,7 +32,7 @@ fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
         .map_err(|_| "Set OpenAI API key in profile or OPENAI_API_KEY, or sign in with ChatGPT (Codex) OAuth.".into())
 }
 
-fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -42,7 +42,7 @@ fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String
     })
 }
 
-fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
+pub(super) fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
     let key = profile.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
@@ -53,7 +53,27 @@ fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, Strin
     })
 }
 
-fn opencode_go_model_uses_anthropic(model: &str) -> bool {
+/// LM Studio's local server ignores the bearer token, so an API key is optional. Use the
+/// profile value (or `LMSTUDIO_API_KEY`) if present, otherwise fall back to an empty key.
+pub(super) fn configured_lmstudio_key(profile: &ProviderProfile) -> String {
+    let key = profile.api_key.trim();
+    if !key.is_empty() {
+        return key.to_string();
+    }
+    std::env::var("LMSTUDIO_API_KEY").unwrap_or_default()
+}
+
+/// Ollama's local server has no auth by default, so an API key is optional. Use the
+/// profile value (or `OLLAMA_API_KEY`) if present, otherwise fall back to an empty key.
+pub(super) fn configured_ollama_key(profile: &ProviderProfile) -> String {
+    let key = profile.api_key.trim();
+    if !key.is_empty() {
+        return key.to_string();
+    }
+    std::env::var("OLLAMA_API_KEY").unwrap_or_default()
+}
+
+pub(super) fn opencode_go_model_uses_anthropic(model: &str) -> bool {
     let m = model
         .trim()
         .strip_prefix("opencode-go/")
@@ -62,7 +82,7 @@ fn opencode_go_model_uses_anthropic(model: &str) -> bool {
     m.starts_with("minimax-") || m.starts_with("qwen")
 }
 
-fn openrouter_extra_headers(profile: &ProviderProfile) -> Vec<(String, String)> {
+pub fn openrouter_extra_headers(profile: &ProviderProfile) -> Vec<(String, String)> {
     let mut h = Vec::new();
     let referer = if profile.openrouter_http_referer.trim().is_empty() {
         std::env::var("OPENROUTER_HTTP_REFERER").ok()
@@ -84,8 +104,10 @@ fn openrouter_extra_headers(profile: &ProviderProfile) -> Vec<(String, String)> 
 }
 
 /// `chat_for_history`: messages including the latest user turn; excludes the trailing empty assistant placeholder.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_agent_run(
     settings: AppSettings,
+    tunnels: crate::compute::TunnelManager,
     cwd: PathBuf,
     chat_for_history: Vec<ChatMessage>,
     tx: Sender<AgentEvent>,
@@ -110,15 +132,25 @@ pub fn spawn_agent_run(
                 }
             };
             let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
-            let mut messages = build_openai_messages(&system, &chat_for_history);
+            let context_tokens = profile.effective_context_window(settings.context_window_default);
+            let context_budget =
+                crate::agent::history::context_char_budget_from_tokens(context_tokens);
+            let max_rounds = settings.max_tool_rounds;
+            let mut messages = build_openai_messages(&system, &chat_for_history, context_budget);
             let tools = tool_definitions_json(&settings.tools_enabled);
             let tool_env = ToolEnv {
                 enabled: settings.tools_enabled.clone(),
                 web_search_url: settings.searxng_url.clone(),
             };
             let model = profile.model_id.clone();
+            // No total request timeout: it would also cover the streamed body and kill
+            // long turns mid-stream. Instead bound connect time and idle time between
+            // chunks, and keep the TCP connection alive through NATs/proxies.
             let client = match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .read_timeout(std::time::Duration::from_secs(180))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
                 .build()
             {
                 Ok(c) => c,
@@ -158,6 +190,7 @@ pub fn spawn_agent_run(
                             &tx,
                             &cancel,
                             &mut gate,
+                            max_rounds,
                         )
                         .await
                     } else {
@@ -182,6 +215,7 @@ pub fn spawn_agent_run(
                             &tx,
                             &cancel,
                             &mut gate,
+                            max_rounds,
                         )
                         .await
                     }
@@ -208,6 +242,7 @@ pub fn spawn_agent_run(
                         &tx,
                         &cancel,
                         &mut gate,
+                        max_rounds,
                     )
                     .await
                 }
@@ -233,6 +268,59 @@ pub fn spawn_agent_run(
                         &tx,
                         &cancel,
                         &mut gate,
+                        max_rounds,
+                    )
+                    .await
+                }
+                LlmProviderKind::LmStudio => {
+                    let key = configured_lmstudio_key(&profile);
+                    let base = match crate::compute::resolve_base_url(&profile, &tunnels).await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            finish_with_error(&tx, e);
+                            return;
+                        }
+                    };
+                    run_chat_loop(
+                        &client,
+                        &base,
+                        &key,
+                        &model,
+                        &[],
+                        &mut messages,
+                        &tools,
+                        cwd_ref,
+                        &tool_env,
+                        &tx,
+                        &cancel,
+                        &mut gate,
+                        max_rounds,
+                    )
+                    .await
+                }
+                LlmProviderKind::Ollama => {
+                    let key = configured_ollama_key(&profile);
+                    let base = match crate::compute::resolve_base_url(&profile, &tunnels).await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            finish_with_error(&tx, e);
+                            return;
+                        }
+                    };
+                    run_chat_loop(
+                        &client,
+                        &base,
+                        &key,
+                        &model,
+                        &[],
+                        &mut messages,
+                        &tools,
+                        cwd_ref,
+                        &tool_env,
+                        &tx,
+                        &cancel,
+                        &mut gate,
+                        max_rounds,
                     )
                     .await
                 }
@@ -267,6 +355,7 @@ pub fn spawn_agent_run(
                             &tx,
                             &cancel,
                             &mut gate,
+                            max_rounds,
                         )
                         .await
                     } else {
@@ -291,6 +380,7 @@ pub fn spawn_agent_run(
                             &tx,
                             &cancel,
                             &mut gate,
+                            max_rounds,
                         )
                         .await
                     }
@@ -343,6 +433,22 @@ mod tests {
         let mut p = ProviderProfile::new("t", LlmProviderKind::OpenAi, "t");
         p.api_key = key.to_string();
         p
+    }
+
+    #[test]
+    fn ollama_key_prefers_profile_value() {
+        let mut p = ProviderProfile::new("t", LlmProviderKind::Ollama, "t");
+        p.api_key = "ollama-profile".to_string();
+        assert_eq!(configured_ollama_key(&p), "ollama-profile");
+    }
+
+    #[test]
+    fn ollama_key_defaults_empty_without_profile_or_env() {
+        let p = ProviderProfile::new("t", LlmProviderKind::Ollama, "t");
+        // No profile key set and (in test environments) no OLLAMA_API_KEY: falls back to "".
+        if std::env::var("OLLAMA_API_KEY").is_err() {
+            assert_eq!(configured_ollama_key(&p), "");
+        }
     }
 
     #[test]

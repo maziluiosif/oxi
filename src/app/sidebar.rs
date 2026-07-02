@@ -2,8 +2,8 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense,
-    Stroke, Ui,
+    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
+    Sense, Stroke, Ui,
 };
 
 use crate::theme::*;
@@ -26,12 +26,7 @@ impl OxiApp {
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add(
-                        Button::new(RichText::new("⇤").size(FS_SMALL).color(c_sidebar_section()))
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT),
-                    )
+                if crate::ui::chrome::icon_button_plain(ui, ICON_CHEVRON_LEFT, 22.0, false)
                     .on_hover_text("Hide sidebar")
                     .clicked()
                 {
@@ -63,10 +58,15 @@ impl OxiApp {
         if ui
             .add_sized(
                 [ui.available_width(), 30.0],
-                Button::new(RichText::new("⚙   Settings").size(FS_SMALL).color(c_text()))
-                    .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .rounding(8.0),
+                Button::new(crate::ui::chrome::icon_label_job(
+                    ICON_SETTINGS,
+                    "Settings",
+                    FS_SMALL,
+                    c_text(),
+                ))
+                .fill(c_bg_elevated())
+                .stroke(Stroke::new(1.0, c_border_subtle()))
+                .rounding(8.0),
             )
             .on_hover_text("Open settings")
             .clicked()
@@ -105,11 +105,11 @@ impl OxiApp {
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
             |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(RichText::new("＋").size(FS_SMALL).color(if hovered {
-                        c_accent()
-                    } else {
-                        c_text_muted()
-                    }));
+                    ui.label(
+                        RichText::new(ICON_FOLDER_PLUS)
+                            .font(FontId::new(FS_SMALL, icon_font()))
+                            .color(if hovered { c_accent() } else { c_text_muted() }),
+                    );
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new("Add workspace")
@@ -144,25 +144,32 @@ impl OxiApp {
             let folded = self.conv.workspaces[wi].sidebar_folded;
             ui.add_space(1.0);
 
-            let chev = if folded { "▸" } else { "▾" };
+            let chev = if folded {
+                ICON_ANGLE_DOWN
+            } else {
+                ICON_ANGLE_UP
+            };
             ui.horizontal(|ui| {
-                let plus_w = if wi == self.conv.active_workspace {
-                    26.0
+                ui.spacing_mut().item_spacing.x = 2.0;
+                const ROW_H: f32 = 22.0;
+                const PLUS_W: f32 = 22.0;
+                let plus_reserved = if wi == self.conv.active_workspace {
+                    PLUS_W + 2.0
                 } else {
                     0.0
                 };
-                let row_w = (ui.available_width() - plus_w).max(40.0);
+                let row_w = (ui.available_width() - plus_reserved).max(40.0);
                 if ui
-                    .add_sized(
-                        [row_w, 0.0],
-                        Button::new(
-                            RichText::new(format!("{chev}  {root_label}"))
-                                .size(FS_TINY)
-                                .color(c_sidebar_section()),
-                        )
+                    .add(
+                        Button::new(crate::ui::chrome::icon_label_job(
+                            chev,
+                            &root_label,
+                            FS_TINY,
+                            c_sidebar_section(),
+                        ))
                         .frame(false)
                         .fill(Color32::TRANSPARENT)
-                        .min_size(egui::vec2(row_w, 22.0)),
+                        .min_size(egui::vec2(row_w, ROW_H)),
                     )
                     .on_hover_text("Fold or unfold chats")
                     .clicked()
@@ -171,11 +178,15 @@ impl OxiApp {
                 }
                 if wi == self.conv.active_workspace
                     && ui
-                        .add_sized(
-                            [22.0, 22.0],
-                            Button::new(RichText::new("＋").size(FS_TINY).color(c_text_muted()))
-                                .frame(false)
-                                .fill(Color32::TRANSPARENT),
+                        .add(
+                            Button::new(crate::ui::chrome::icon_glyph_rich(
+                                ICON_PLUS_SQUARE,
+                                FS_TINY,
+                                c_text_muted(),
+                            ))
+                            .frame(false)
+                            .fill(Color32::TRANSPARENT)
+                            .min_size(egui::vec2(PLUS_W, ROW_H)),
                         )
                         .on_hover_text("New chat in this workspace")
                         .clicked()
@@ -392,8 +403,18 @@ impl OxiApp {
                 self.render_sidebar_resize_sep(ui, full_h, SIDEBAR_W_MIN, SIDEBAR_W_MAX);
             }
 
+            let git_open = self.conv.git_open;
+            let git_w = if git_open {
+                self.conv.git_width.clamp(
+                    crate::app::git_panel::GIT_W_MIN,
+                    crate::app::git_panel::GIT_W_MAX,
+                )
+            } else {
+                0.0
+            };
+            let chat_w = (ui.available_width() - git_w).max(60.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), full_h),
+                egui::vec2(chat_w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     Frame::none()
@@ -413,49 +434,132 @@ impl OxiApp {
 
                             const HEADER_H: f32 = 38.0;
                             const HEADER_GAP: f32 = 6.0;
+                            let show_diff =
+                                self.conv.diff_view_open && self.conv.git.diff.is_some();
                             self.render_chat_header(ui, column_center_w);
                             ui.add_space(HEADER_GAP);
 
-                            // Floating composer: the transcript uses the full remaining height,
-                            // while the input is painted as an overlay pinned to the bottom of the
-                            // chat column. The transcript adds matching tail padding internally so
-                            // bottom content can still be scrolled into view.
-                            const COMPOSER_GAP: f32 = 8.0;
-                            let composer_overlay_h =
-                                (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
-                            let conversation_h =
-                                (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                            let chat_rect = ui.max_rect();
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), conversation_h),
-                                egui::Layout::top_down(egui::Align::Min),
-                                |ui| {
-                                    self.render_conversation(
-                                        ui,
-                                        column_center_w,
-                                        conversation_h,
-                                        composer_overlay_h,
-                                    );
-                                },
-                            );
+                            if show_diff {
+                                // Diff viewer replaces the chat transcript + composer.
+                                let diff_h =
+                                    (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                                let chat_rect = ui.max_rect();
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), diff_h),
+                                    egui::Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        if let Some((title, diff_text)) = self.conv.git.diff.clone()
+                                        {
+                                            self.render_diff_view(
+                                                ui, &title, &diff_text, chat_rect,
+                                            );
+                                        }
+                                    },
+                                );
+                            } else {
+                                // Floating composer: the transcript uses the full remaining height,
+                                // while the input is painted as an overlay pinned to the bottom of the
+                                // chat column. The transcript adds matching tail padding internally so
+                                // bottom content can still be scrolled into view.
+                                const COMPOSER_GAP: f32 = 8.0;
+                                let composer_overlay_h =
+                                    (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
+                                let conversation_h =
+                                    (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                                let chat_rect = ui.max_rect();
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), conversation_h),
+                                    egui::Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        self.render_conversation(
+                                            ui,
+                                            column_center_w,
+                                            conversation_h,
+                                            composer_overlay_h,
+                                        );
+                                    },
+                                );
 
-                            let composer_h = self.conv.composer_measured_full_h.max(80.0);
-                            let composer_top = chat_rect.bottom() - composer_h;
-                            let composer_rect = egui::Rect::from_min_size(
-                                egui::pos2(chat_rect.left(), composer_top),
-                                egui::vec2(chat_rect.width(), composer_h),
-                            );
-                            ui.allocate_new_ui(
-                                egui::UiBuilder::new().max_rect(composer_rect),
-                                |ui| {
-                                    self.render_composer(ui, column_center_w);
-                                },
-                            );
+                                let composer_h = self.conv.composer_measured_full_h.max(80.0);
+                                let composer_top = chat_rect.bottom() - composer_h;
+                                let composer_rect = egui::Rect::from_min_size(
+                                    egui::pos2(chat_rect.left(), composer_top),
+                                    egui::vec2(chat_rect.width(), composer_h),
+                                );
+                                ui.allocate_new_ui(
+                                    egui::UiBuilder::new().max_rect(composer_rect),
+                                    |ui| {
+                                        self.render_composer(ui, column_center_w);
+                                    },
+                                );
+                            }
                         });
                     ui.expand_to_include_rect(ui.max_rect());
                 },
             );
+
+            // Right git panel
+            if git_open {
+                self.render_git_resize_sep(ui, full_h);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(git_w, full_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_min_height(full_h);
+                        Frame::none()
+                            .fill(c_bg_sidebar())
+                            .inner_margin(Margin {
+                                left: 0.0,
+                                right: 0.0,
+                                top: 0.0,
+                                bottom: 0.0,
+                            })
+                            .show(ui, |ui| {
+                                self.render_git_panel(ui, full_h);
+                            });
+                        ui.expand_to_include_rect(ui.max_rect());
+                    },
+                );
+            }
         });
+    }
+
+    fn render_git_resize_sep(&mut self, ui: &mut Ui, full_h: f32) {
+        const SEP_W: f32 = 6.0;
+        let boundary_x = ui.cursor().min.x;
+        let sep_rect = egui::Rect::from_min_max(
+            egui::pos2(boundary_x - SEP_W * 0.5, ui.min_rect().top()),
+            egui::pos2(boundary_x + SEP_W * 0.5, ui.min_rect().top() + full_h),
+        );
+        let sep = ui.interact(sep_rect, ui.id().with("git_sep"), Sense::drag());
+        if sep.hovered() || sep.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if sep.dragged() {
+            // Dragging the left edge left (negative dx) grows the panel.
+            let dx = ui.input(|i| i.pointer.delta().x);
+            self.conv.git_width = (self.conv.git_width - dx).clamp(
+                crate::app::git_panel::GIT_W_MIN,
+                crate::app::git_panel::GIT_W_MAX,
+            );
+            self.conv.settings.git_width = self.conv.git_width;
+        }
+        if sep.drag_stopped() {
+            if let Err(e) = self.conv.settings.save() {
+                self.run_state_mut(self.active_session_key()).stream_error =
+                    Some(format!("Save settings: {e}"));
+            }
+        }
+        let col = if sep.hovered() || sep.dragged() {
+            c_accent()
+        } else {
+            c_border_subtle()
+        };
+        ui.painter().vline(
+            sep_rect.center().x,
+            sep_rect.y_range(),
+            Stroke::new(1.0, col),
+        );
     }
 
     fn render_sidebar_resize_sep(&mut self, ui: &mut Ui, full_h: f32, min_w: f32, max_w: f32) {

@@ -1,11 +1,14 @@
 mod agent;
 mod app;
+mod compute;
+mod git;
 mod hydrate;
 mod markdown;
 mod model;
 mod oauth;
 mod session_store;
 mod settings;
+mod terminal;
 mod theme;
 mod ui;
 
