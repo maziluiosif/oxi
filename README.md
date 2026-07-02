@@ -1,6 +1,9 @@
 # oxi
 
 [![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+![oxi chat UI](assets/screenshots/chat.png)
 
 `oxi` is a local desktop coding-agent chat app built in Rust with **egui/eframe**.
 It runs as a **single native binary** and combines:
@@ -137,6 +140,7 @@ High-level layout:
 - `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior
 - `src/agent/` — local agent runner, prompt building, message history conversion, tool execution, provider loops
 - `src/oauth/` — OAuth flows and token persistence
+- `src/compute/` — SSH tunnels for Remote compute targets and their credential storage
 - `src/session_store/` — session loading/saving and storage path handling
 - `src/ui/` — transcript and chrome rendering helpers
 - `src/settings.rs` — persistent settings and provider profile model
@@ -159,6 +163,8 @@ The current code supports these provider kinds:
 - **OpenRouter**
 - **GPT Codex**
 - **OpenCode Go**
+- **LM Studio**
+- **Ollama**
 
 ### OpenAI
 
@@ -224,6 +230,61 @@ Backend selection is model-dependent:
 - `minimax-*` / `qwen*` → Anthropic Messages API path
 - everything else → chat-completions-style path
 
+### LM Studio
+
+Defaults:
+
+- base URL: `http://mac-mini:1234/v1` (point this at whichever host runs LM Studio)
+- default model: `local-model` (use the profile's "Load available models" button to pick
+  whatever is actually loaded)
+
+Authentication:
+
+- LM Studio's local server ignores the bearer token, so an API key is optional. Use the
+  profile value or `LMSTUDIO_API_KEY` if set; otherwise an empty key is sent.
+- Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
+
+### Ollama
+
+Defaults:
+
+- base URL: `http://localhost:11434/v1` (Ollama's OpenAI-compatible API)
+- default model: `qwen2.5-coder:7b` (use the profile's "Load available models" button to
+  pick whatever is actually pulled)
+
+Authentication:
+
+- Ollama has no auth by default, so an API key is optional. Use the profile value or
+  `OLLAMA_API_KEY` if set; otherwise an empty key is sent.
+- Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
+
+## Compute targets (Local / Remote SSH)
+
+![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png)
+
+LM Studio and Ollama profiles support a **compute target**, configurable per profile in
+Settings → Providers:
+
+- **Local** (default) — connect directly to `effective_base_url()` as before.
+- **Remote (SSH)** — run the model on another host (e.g. a Mac mini) reached over SSH,
+  with the runtime bound to `127.0.0.1` on that host. oxi opens an SSH tunnel and forwards
+  a local port to the remote runtime port, so the rest of the app talks to it exactly like
+  a local server.
+
+Behavior visible in code (`src/compute/`):
+
+- the SSH client is implemented with `russh` (password authentication; no external `ssh`
+  binary required)
+- one tunnel is kept alive per profile, reused across agent runs and model-list fetches;
+  it (re)connects lazily on first use
+- host key verification is intentionally permissive (trust-on-every-connect) — this is a
+  convenience tunnel to a host you typed in yourself, not a general-purpose SSH client
+- the Settings UI exposes host / SSH port / user / remote runtime port fields plus a
+  password field and a **Test connection** button
+- SSH passwords are stored in `~/.config/oxi/ssh_credentials.json`, keyed by profile id —
+  **not** in `settings.json` — so they aren't dragged along whenever settings are read,
+  logged, or exported (same plaintext-JSON trust model as `oauth.json`)
+
 ## OAuth flows
 
 ### ChatGPT / Codex OAuth
@@ -274,6 +335,10 @@ Settings are stored at:
 OAuth tokens are stored separately at:
 
 - `~/.config/oxi/oauth.json`
+
+SSH passwords for Remote compute targets are stored separately at:
+
+- `~/.config/oxi/ssh_credentials.json`
 
 The settings model currently contains:
 
@@ -334,6 +399,8 @@ target/release/oxi
 | OpenRouter title | `OPENROUTER_TITLE` |
 | Codex fallback auth | `OPENAI_API_KEY` |
 | OpenCode Go auth | `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY` |
+| LM Studio auth (optional) | `LMSTUDIO_API_KEY` |
+| Ollama auth (optional) | `OLLAMA_API_KEY` |
 
 ## System prompt behavior
 
@@ -362,6 +429,10 @@ Based on the current source code:
 - `bash` safety checks are basic and not a real sandbox
 - tool execution can modify files inside the selected workspace
 - OAuth tokens are stored as JSON on disk
+- SSH passwords for Remote compute targets are stored as plaintext JSON on disk
+  (`ssh_credentials.json`), not in an OS keychain
+- Remote SSH tunnels trust the remote host key on every connection (no pinning/known_hosts
+  verification) — only point this at hosts you control
 - workspace path protections apply to file-based tools, but you should still use the app on trusted repositories
 - long conversations are trimmed heuristically by character budget, not exact tokenizer counts
 - image support in provider requests depends on backend/model compatibility
@@ -379,6 +450,8 @@ Based on the current source code:
 - `src/app/settings_ui.rs` — settings UI
 - `src/app/sessions.rs` — workspaces, attachments, and session deletion behavior
 - `src/session_store.rs` — session persistence entry points
+- `src/compute/tunnel.rs` — SSH tunnel manager (`russh`) for Remote compute targets
+- `src/compute/store.rs` — SSH credential storage (`ssh_credentials.json`)
 
 ## License
 

@@ -162,6 +162,24 @@ impl OxiApp {
         m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
     }
 
+    /// Drop the partial text/thinking of the round being retried after a mid-stream
+    /// failure, so the regenerated round is not shown twice. Tool blocks from
+    /// completed rounds are kept.
+    pub(crate) fn reset_streaming_tail(&mut self, key: SessionKey) {
+        let Some(m) = self.last_assistant_mut(key) else {
+            return;
+        };
+        if !m.streaming {
+            return;
+        }
+        while matches!(
+            m.blocks.last(),
+            Some(AssistantBlock::Answer(_) | AssistantBlock::Thinking(_))
+        ) {
+            m.blocks.pop();
+        }
+    }
+
     pub(crate) fn append_assistant_answer(&mut self, key: SessionKey, s: &str) {
         let Some(m) = self.last_assistant_mut(key) else {
             return;
@@ -272,7 +290,15 @@ impl OxiApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let _join = spawn_agent_run(settings, cwd, chat, tx, approval_rx, cancel.clone());
+        let _join = spawn_agent_run(
+            settings,
+            self.tunnels.clone(),
+            cwd,
+            chat,
+            tx,
+            approval_rx,
+            cancel.clone(),
+        );
         let run = self.run_state_mut(key);
         run.agent_rx = Some(rx);
         run.approval_tx = Some(approval_tx);

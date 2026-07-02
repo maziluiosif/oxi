@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use super::approval::ApprovalGate;
 use super::events::AgentEvent;
+use super::net::{backoff_delay, send_with_retry, sleep_cancellable, MAX_STREAM_RETRIES};
 use super::tools::{run_tool, ToolEnv, ToolResult};
 
 #[derive(Default, Clone)]
@@ -209,6 +210,7 @@ pub async fn run_anthropic_loop(
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
     gate: &mut ApprovalGate,
+    max_rounds: u32,
 ) -> Result<(), String> {
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let anthropic_tools = to_anthropic_tools(tools_openai);
@@ -216,14 +218,15 @@ pub async fn run_anthropic_loop(
     // Enable extended thinking for models that support it.
     let supports_thinking = supports_extended_thinking(model);
     let mut round = 0u32;
+    let mut stream_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
             let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
             break;
         }
         round += 1;
-        if round > 64 {
-            return Err("Too many tool rounds".into());
+        if max_rounds != 0 && round > max_rounds {
+            return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
         let (system, anth_msgs) = to_anthropic_messages(openai_messages, cache_control.clone());
         let _ = tx.send(AgentEvent::AgentStart);
@@ -260,29 +263,25 @@ pub async fn run_anthropic_loop(
             let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
             headers.insert(name, val);
         }
-        let res = client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            let status = res.status();
-            let t = res.text().await.unwrap_or_default();
-            return Err(format!("HTTP {}: {}", status, t));
-        }
+        let res = send_with_retry(client.post(&url).headers(headers).json(&body), cancel).await?;
         let mut stream = res.bytes_stream();
         let mut buf = String::new();
         let mut text_out = String::new();
         let mut tool_uses: HashMap<u64, ToolUseAccum> = HashMap::new();
         let mut stop_reason: Option<String> = None;
+        let mut stream_error: Option<String> = None;
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
                 break;
             }
-            let chunk = chunk.map_err(|e| e.to_string())?;
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    stream_error = Some(e.to_string());
+                    break;
+                }
+            };
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(pos) = buf.find("\n\n") {
                 let event_block = buf[..pos].to_string();
@@ -292,15 +291,48 @@ pub async fn run_anthropic_loop(
                     &mut text_out,
                     &mut tool_uses,
                     &mut stop_reason,
+                    &mut stream_error,
                     tx,
-                )?;
+                );
             }
         }
-        for block in buf.split("\n\n") {
-            if !block.trim().is_empty() {
-                parse_anthropic_event(block, &mut text_out, &mut tool_uses, &mut stop_reason, tx)?;
+        if stream_error.is_none() {
+            for block in buf.split("\n\n") {
+                if !block.trim().is_empty() {
+                    parse_anthropic_event(
+                        block,
+                        &mut text_out,
+                        &mut tool_uses,
+                        &mut stop_reason,
+                        &mut stream_error,
+                        tx,
+                    );
+                }
             }
         }
+        // The stream died (dropped connection or in-band error event) before the round
+        // completed. No tool has been executed yet, so re-sending the round is safe.
+        if let Some(err) = stream_error {
+            if cancel.load(Ordering::SeqCst) {
+                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
+                break;
+            }
+            stream_retries += 1;
+            if stream_retries > MAX_STREAM_RETRIES {
+                return Err(err);
+            }
+            let _ = tx.send(AgentEvent::StreamRetry {
+                attempt: stream_retries,
+                reason: err,
+            });
+            if !sleep_cancellable(backoff_delay(stream_retries), cancel).await {
+                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
+                break;
+            }
+            round -= 1;
+            continue;
+        }
+        stream_retries = 0;
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut tus: Vec<(u64, ToolUseAccum)> = tool_uses.into_iter().collect();
         tus.sort_by_key(|(i, _)| *i);
@@ -459,8 +491,9 @@ fn parse_anthropic_event(
     text_out: &mut String,
     tool_uses: &mut HashMap<u64, ToolUseAccum>,
     stop_reason: &mut Option<String>,
+    stream_error: &mut Option<String>,
     tx: &Sender<AgentEvent>,
-) -> Result<(), String> {
+) {
     let mut event_type = "";
     let mut data_lines: Vec<&str> = Vec::new();
     for line in block.lines() {
@@ -471,14 +504,20 @@ fn parse_anthropic_event(
         }
     }
     if data_lines.is_empty() {
-        return Ok(());
+        return;
     }
     let data_line = data_lines.join("\n");
     if data_line == "[DONE]" {
-        return Ok(());
+        return;
     }
-    let v: Value = serde_json::from_str(&data_line)
-        .map_err(|e| format!("Anthropic SSE JSON: {e}: {data_line}"))?;
+    // A malformed event from a flaky provider should not kill the whole run.
+    let v: Value = match serde_json::from_str(&data_line) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[oxi] skipping malformed Anthropic SSE event ({e}): {data_line}");
+            return;
+        }
+    };
     match event_type {
         "content_block_delta" => {
             if let Some(delta) = v.get("delta") {
@@ -522,9 +561,16 @@ fn parse_anthropic_event(
                 }
             }
         }
+        // In-band errors (e.g. `overloaded_error`): surface for the round-retry logic.
+        "error" => {
+            let msg = v
+                .pointer("/error/message")
+                .and_then(|x| x.as_str())
+                .unwrap_or("Anthropic stream error");
+            *stream_error = Some(msg.to_string());
+        }
         _ => {}
     }
-    Ok(())
 }
 
 #[cfg(test)]

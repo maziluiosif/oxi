@@ -120,11 +120,15 @@ impl OxiApp {
         // ── Left: round attach button ──────────────────────────────────────
         let attach = ui
             .add(
-                Button::new(RichText::new("+").size(16.0).color(c_text_muted()))
-                    .min_size(egui::vec2(ATTACH_DIAM, ATTACH_DIAM))
-                    .fill(c_bg_input())
-                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .rounding(ATTACH_DIAM * 0.5),
+                Button::new(crate::ui::chrome::icon_glyph_rich(
+                    ICON_ATTACH,
+                    15.0,
+                    c_text_muted(),
+                ))
+                .min_size(egui::vec2(ATTACH_DIAM, ATTACH_DIAM))
+                .fill(c_bg_input())
+                .stroke(Stroke::new(1.0, c_border_subtle()))
+                .rounding(ATTACH_DIAM * 0.5),
             )
             .on_hover_text("Attach image");
         if attach.clicked() {
@@ -139,30 +143,42 @@ impl OxiApp {
             let active_session_streaming = self.active_waiting_response();
             let no_profile = self.conv.settings.active_profile().is_none();
             let (fill, fg, enabled, icon, hover) = if active_session_streaming {
-                (c_text(), c_bg_main(), true, "■", "Stop generation")
+                (
+                    c_accent(),
+                    crate::theme::c_on_accent(),
+                    true,
+                    ICON_STOP,
+                    "Stop generation",
+                )
             } else if no_profile {
                 (
                     c_bg_elevated_2(),
                     c_text_muted(),
                     false,
-                    "↑",
+                    ICON_SEND,
                     "Configure an active provider profile in Settings",
                 )
             } else if can_send {
-                (c_text(), c_bg_main(), true, "↑", "Send message")
+                (
+                    c_accent(),
+                    crate::theme::c_on_accent(),
+                    true,
+                    ICON_SEND,
+                    "Send message",
+                )
             } else {
                 (
                     c_bg_elevated_2(),
                     c_text_muted(),
                     false,
-                    "↑",
+                    ICON_SEND,
                     "Type a message or attach an image",
                 )
             };
             let clicked = ui
                 .add_enabled(
                     enabled,
-                    Button::new(RichText::new(icon).size(15.0).color(fg))
+                    Button::new(crate::ui::chrome::icon_glyph_rich(icon, 15.0, fg))
                         .min_size(egui::vec2(SEND_DIAM, SEND_DIAM))
                         .fill(fill)
                         .stroke(Stroke::NONE)
@@ -220,6 +236,56 @@ impl OxiApp {
                     }
                 });
         });
+
+        // Second row: model picker for the active profile, populated from the fetched model list.
+        if let Some(p) = self.conv.settings.active_profile() {
+            let pid = p.id.clone();
+            let fetched = self
+                .conv
+                .fetched_models
+                .get(&pid)
+                .map(|f| f.models.clone())
+                .unwrap_or_default();
+            let current = p.model_id.clone();
+            if !fetched.is_empty() {
+                ui.scope(|ui| {
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    widgets.inactive.bg_fill = Color32::TRANSPARENT;
+                    widgets.inactive.bg_stroke = Stroke::NONE;
+                    widgets.hovered.weak_bg_fill = c_row_hover();
+                    widgets.hovered.bg_stroke = Stroke::NONE;
+                    widgets.active.weak_bg_fill = c_row_hover();
+                    widgets.active.bg_stroke = Stroke::NONE;
+                    widgets.open.weak_bg_fill = c_row_hover();
+                    widgets.open.bg_stroke = Stroke::NONE;
+
+                    let label = if current.is_empty() {
+                        "(custom)".to_string()
+                    } else {
+                        current.clone()
+                    };
+                    ComboBox::from_id_salt("active_model_combo")
+                        .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
+                        .width(190.0)
+                        .show_ui(ui, |ui| {
+                            for m in &fetched {
+                                if ui.selectable_label(m == &current, m.clone()).clicked() {
+                                    if let Some(p) = self
+                                        .conv
+                                        .settings
+                                        .profiles
+                                        .iter_mut()
+                                        .find(|pp| pp.id == pid)
+                                    {
+                                        p.model_id = m.clone();
+                                    }
+                                }
+                            }
+                        });
+                });
+            }
+        }
     }
 
     /// Image attachment thumbnails shown at the top of the composer, each with a
@@ -266,11 +332,15 @@ impl OxiApp {
                     .show(ui.ctx(), |ui| {
                         if ui
                             .add(
-                                Button::new(RichText::new("×").size(12.0).color(c_text()))
-                                    .min_size(egui::vec2(15.0, 15.0))
-                                    .fill(c_bg_main())
-                                    .stroke(Stroke::new(1.0, c_border()))
-                                    .rounding(7.5),
+                                Button::new(crate::ui::chrome::icon_glyph_rich(
+                                    ICON_CLOSE,
+                                    12.0,
+                                    c_text(),
+                                ))
+                                .min_size(egui::vec2(15.0, 15.0))
+                                .fill(c_bg_main())
+                                .stroke(Stroke::new(1.0, c_border()))
+                                .rounding(7.5),
                             )
                             .on_hover_text("Remove image")
                             .clicked()

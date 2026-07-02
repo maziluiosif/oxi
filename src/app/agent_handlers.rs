@@ -28,6 +28,7 @@ impl OxiApp {
     pub(crate) fn drain_agent(&mut self, ctx: &egui::Context) {
         let keys: Vec<SessionKey> = self.flow.sessions.keys().copied().collect();
         let mut repainted = false;
+        let mut disconnected: Vec<SessionKey> = Vec::new();
 
         for key in keys {
             let Some(rx) = self
@@ -55,6 +56,7 @@ impl OxiApp {
                         if let Some(state) = self.flow.sessions.get_mut(&key) {
                             state.cancel_agent = None;
                         }
+                        disconnected.push(key);
                         repainted = true;
                         break;
                     }
@@ -62,10 +64,62 @@ impl OxiApp {
             }
         }
 
+        // A disconnect while still waiting means the worker died without a terminal
+        // event (e.g. a panic): close out the stream so the session doesn't hang.
+        // After a normal AgentEnd, waiting is already off and this is a no-op.
+        for key in disconnected {
+            if self
+                .run_state(key)
+                .is_some_and(|state| state.waiting_response)
+            {
+                self.append_assistant_answer(key, "\n[Error] Agent stopped unexpectedly.\n");
+                self.finish_assistant_stream(key);
+            }
+        }
+
         self.flow.sessions.retain(|_, state| {
             state.agent_rx.is_some() || state.waiting_response || state.stream_error.is_some()
         });
 
+        if repainted {
+            ctx.request_repaint();
+        }
+    }
+
+    pub(crate) fn drain_models(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.conv.model_rx.take() else {
+            return;
+        };
+        let mut repainted = false;
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    let entry = self
+                        .conv
+                        .fetched_models
+                        .entry(msg.profile_id.clone())
+                        .or_default();
+                    entry.loading = false;
+                    match msg.result {
+                        Ok(models) => {
+                            entry.models = models;
+                            entry.error = None;
+                        }
+                        Err(e) => {
+                            entry.error = Some(e);
+                        }
+                    }
+                    repainted = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.conv.model_rx = Some(rx);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    break;
+                }
+            }
+        }
         if repainted {
             ctx.request_repaint();
         }
@@ -162,6 +216,10 @@ impl OxiApp {
             AgentEvent::StreamError(reason) => {
                 self.append_assistant_answer(key, &format!("\n[Error] {reason}\n"));
                 self.finish_assistant_stream(key);
+            }
+            AgentEvent::StreamRetry { attempt, reason } => {
+                eprintln!("[oxi] stream retry (attempt {attempt}): {reason}");
+                self.reset_streaming_tail(key);
             }
             AgentEvent::AssistantMessageDone => {}
             AgentEvent::AgentEnd => {

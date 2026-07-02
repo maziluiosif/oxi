@@ -15,10 +15,19 @@ pub enum LlmProviderKind {
     GptCodex,
     /// OpenCode Go subscription models (OpenAI/Anthropic-compatible endpoints).
     OpenCodeGo,
+    /// LM Studio local server (OpenAI-compatible API, e.g. a Mac mini on the LAN).
+    LmStudio,
+    /// Ollama local server (OpenAI-compatible API at `/v1`, e.g. a Mac mini on the LAN).
+    Ollama,
 }
 
 impl LlmProviderKind {
-    pub const ALL: [LlmProviderKind; 4] = [
+    /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
+    /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
+    /// around; the hosted API providers follow.
+    pub const ALL: [LlmProviderKind; 6] = [
+        LlmProviderKind::Ollama,
+        LlmProviderKind::LmStudio,
         LlmProviderKind::OpenAi,
         LlmProviderKind::OpenRouter,
         LlmProviderKind::GptCodex,
@@ -30,6 +39,11 @@ impl LlmProviderKind {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => "https://api.openai.com/v1",
             LlmProviderKind::OpenRouter => "https://openrouter.ai/api/v1",
             LlmProviderKind::OpenCodeGo => "https://opencode.ai/zen/go",
+            // LM Studio's built-in server speaks plain HTTP on port 1234; the Mac mini host
+            // resolves on the LAN/Tailscale. (HTTPS would need a separate reverse proxy.)
+            LlmProviderKind::LmStudio => "http://mac-mini:1234/v1",
+            // Ollama's OpenAI-compatible API lives under `/v1` on its default port 11434.
+            LlmProviderKind::Ollama => "http://localhost:11434/v1",
         }
     }
 
@@ -39,6 +53,8 @@ impl LlmProviderKind {
             LlmProviderKind::OpenRouter => "OpenRouter",
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
+            LlmProviderKind::LmStudio => "LM Studio",
+            LlmProviderKind::Ollama => "Ollama",
         }
     }
 
@@ -48,6 +64,72 @@ impl LlmProviderKind {
             LlmProviderKind::OpenRouter => "openai/gpt-4o-mini",
             LlmProviderKind::GptCodex => "gpt-4o-mini",
             LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
+            // LM Studio / Ollama model ids depend on what's loaded/pulled; fetch the real
+            // list from the dropdown.
+            LlmProviderKind::LmStudio => "local-model",
+            LlmProviderKind::Ollama => "qwen2.5-coder:7b",
+        }
+    }
+
+    /// Default port for a `RemoteSsh` compute target's runtime, i.e. the port the runtime
+    /// listens on locally on the remote host. Used to pre-fill [`SshConfig`] when a profile
+    /// is switched to Remote, so e.g. an LM Studio profile defaults to `1234` instead of
+    /// Ollama's `11434`.
+    pub fn default_remote_runtime_port(&self) -> u16 {
+        match self {
+            LlmProviderKind::LmStudio => 1234,
+            _ => 11434,
+        }
+    }
+
+    /// Whether HTTP clients for this provider should accept self-signed / invalid TLS certs.
+    ///
+    /// Enabled for LM Studio and Ollama, which typically run on a LAN host (e.g. a Mac mini)
+    /// behind HTTPS with a self-signed cert — same trust model as the local SearXNG instance.
+    /// Stays off for public providers so their certs are always validated.
+    pub fn allows_self_signed_tls(&self) -> bool {
+        matches!(self, LlmProviderKind::LmStudio | LlmProviderKind::Ollama)
+    }
+}
+
+/// Where the model server for a profile actually runs.
+///
+/// `Local` covers the common case (the runtime listens on this machine, or on a LAN host
+/// reachable directly via `base_url`). `RemoteSsh` tunnels the connection through SSH port
+/// forwarding so a runtime bound to `127.0.0.1` on a remote host (e.g. a Mac mini reachable
+/// only over SSH) can still be reached as if it were local. See [`crate::compute`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ComputeLocation {
+    #[default]
+    Local,
+    RemoteSsh(SshConfig),
+}
+
+/// SSH connection details for a remote compute target. The password itself is **not**
+/// stored here — it lives in `ssh_credentials.json` (see [`crate::compute::store`]), keyed
+/// by [`ProviderProfile::id`], so it never ends up in `settings.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshConfig {
+    pub host: String,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    pub user: String,
+    /// Port the model runtime (Ollama/LM Studio) listens on on the remote host.
+    pub remote_runtime_port: u16,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            port: default_ssh_port(),
+            user: String::new(),
+            remote_runtime_port: 11434,
         }
     }
 }
@@ -75,6 +157,15 @@ pub struct ProviderProfile {
     pub api_key: String,
     pub openrouter_http_referer: String,
     pub openrouter_title: String,
+    /// Optional explicit context window in tokens for this model/profile.
+    /// `None` (or `0`) = auto: look it up from the built-in model catalog, then fall
+    /// back to a conservative default. Set to a number to override the history trim budget.
+    #[serde(default)]
+    pub context_window: Option<usize>,
+    /// Where the model server for this profile runs. Defaults to [`ComputeLocation::Local`]
+    /// so existing/older settings files (no `location` field) behave exactly as before.
+    #[serde(default)]
+    pub location: ComputeLocation,
 }
 
 impl ProviderProfile {
@@ -88,6 +179,16 @@ impl ProviderProfile {
             api_key: String::new(),
             openrouter_http_referer: String::new(),
             openrouter_title: String::new(),
+            context_window: None,
+            location: ComputeLocation::Local,
+        }
+    }
+
+    /// `Some(&SshConfig)` when this profile's runtime is reached over an SSH tunnel.
+    pub fn ssh_config(&self) -> Option<&SshConfig> {
+        match &self.location {
+            ComputeLocation::Local => None,
+            ComputeLocation::RemoteSsh(cfg) => Some(cfg),
         }
     }
 
@@ -102,6 +203,18 @@ impl ProviderProfile {
 
     pub fn subtitle(&self) -> String {
         format!("{} · {}", self.provider.label(), self.model_id)
+    }
+
+    /// Resolve the effective context window in tokens for this profile.
+    ///
+    /// Order: explicit profile override > built-in catalog > provider/model default.
+    pub fn effective_context_window(&self, fallback_default: usize) -> usize {
+        if let Some(cw) = self.context_window {
+            if cw > 0 {
+                return cw;
+            }
+        }
+        crate::agent::models::context_window_for_model(&self.model_id).unwrap_or(fallback_default)
     }
 }
 
@@ -161,6 +274,18 @@ pub struct AppSettings {
     /// Persisted width of the main app/sidebar split.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
+    /// Persisted height of the bottom terminal panel.
+    #[serde(default = "default_terminal_height")]
+    pub terminal_height: f32,
+    /// Whether the bottom terminal panel is shown.
+    #[serde(default)]
+    pub terminal_open: bool,
+    /// Whether the right source-control (git) panel is shown.
+    #[serde(default)]
+    pub git_open: bool,
+    /// Persisted width of the right git panel.
+    #[serde(default = "default_git_width")]
+    pub git_width: f32,
     /// Active color theme id (see [`crate::theme`]: `dark`, `light`, `midnight`, or
     /// `custom:<name>`). Falls back to the default theme if unknown.
     #[serde(default = "default_theme_id")]
@@ -168,11 +293,48 @@ pub struct AppSettings {
     /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
     #[serde(default)]
     pub ui_density: UiDensity,
+    /// Maximum number of agent tool rounds per run. `0` means unlimited. Default unlimited.
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: u32,
+    /// Fallback context window in tokens used when no per-profile override and no catalog
+    /// match is found. Defaults to 128k (safe across all current providers).
+    #[serde(default = "default_context_window")]
+    pub context_window_default: usize,
+    /// Profile id used by the "generate commit message" feature. Empty = use the active
+    /// profile. Must reference an existing [`ProviderProfile`] id; unknown ids fall back
+    /// to the active profile at use time.
+    #[serde(default)]
+    pub commit_msg_profile_id: String,
+    /// System prompt for the "generate commit message" feature.
+    #[serde(default = "default_commit_msg_system_prompt")]
+    pub commit_msg_system_prompt: String,
 }
 
 fn default_require_approval() -> bool {
     true
 }
+
+fn default_max_tool_rounds() -> u32 {
+    0
+}
+
+fn default_context_window() -> usize {
+    128_000
+}
+
+fn default_commit_msg_system_prompt() -> String {
+    DEFAULT_COMMIT_MSG_SYSTEM_PROMPT.to_string()
+}
+
+/// Default system prompt for the "generate commit message" feature.
+pub const DEFAULT_COMMIT_MSG_SYSTEM_PROMPT: &str =
+    "You generate concise, well-formed git commit messages from a staged/unstaged diff. \
+     Rules:\n\
+     - Output ONLY the commit message, no preamble, no code fences, no explanations.\n\
+     - Start with a single imperative subject line up to ~50 characters, lowercase where natural.\n\
+     - If the change is non-trivial, add a blank line then a short body (bullet points OK) wrapping at ~72 chars.\n\
+     - Do not mention the diff itself, file counts, or that this was AI-generated.\n\
+     - Follow Conventional Commits (e.g. feat:, fix:, refactor:, docs:, chore:) when it fits.";
 
 fn default_tools_enabled() -> Vec<bool> {
     vec![true; ALL_TOOL_NAMES.len()]
@@ -185,6 +347,18 @@ fn default_searxng_url() -> String {
 fn default_sidebar_width() -> f32 {
     168.0
 }
+
+fn default_terminal_height() -> f32 {
+    260.0
+}
+
+fn default_git_width() -> f32 {
+    360.0
+}
+
+/// Clamp bounds for the bottom terminal panel height.
+pub const TERMINAL_H_MIN: f32 = 96.0;
+pub const TERMINAL_H_MAX: f32 = 900.0;
 
 fn default_theme_id() -> String {
     crate::theme::DEFAULT_THEME_ID.to_string()
@@ -218,6 +392,12 @@ impl Default for AppSettings {
                 LlmProviderKind::OpenCodeGo,
                 "OpenCode Go default",
             ),
+            ProviderProfile::new(
+                "lmstudio-default",
+                LlmProviderKind::LmStudio,
+                "LM Studio default",
+            ),
+            ProviderProfile::new("ollama-default", LlmProviderKind::Ollama, "Ollama default"),
         ];
         Self {
             active_profile_id: "openai-default".to_string(),
@@ -227,8 +407,16 @@ impl Default for AppSettings {
             searxng_url: default_searxng_url(),
             require_approval: default_require_approval(),
             sidebar_width: default_sidebar_width(),
+            terminal_height: default_terminal_height(),
+            terminal_open: false,
+            git_open: false,
+            git_width: default_git_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
+            max_tool_rounds: default_max_tool_rounds(),
+            context_window_default: default_context_window(),
+            commit_msg_profile_id: String::new(),
+            commit_msg_system_prompt: default_commit_msg_system_prompt(),
         }
     }
 }
@@ -277,10 +465,14 @@ impl AppSettings {
                 api_key: match provider {
                     LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
                     LlmProviderKind::OpenRouter => old.openrouter_api_key,
-                    LlmProviderKind::OpenCodeGo => String::new(),
+                    LlmProviderKind::OpenCodeGo
+                    | LlmProviderKind::LmStudio
+                    | LlmProviderKind::Ollama => String::new(),
                 },
                 openrouter_http_referer: old.openrouter_http_referer,
                 openrouter_title: old.openrouter_title,
+                context_window: None,
+                location: ComputeLocation::Local,
             },
             ProviderProfile::new("openai-default", LlmProviderKind::OpenAi, "OpenAI default"),
             ProviderProfile::new(
@@ -294,6 +486,12 @@ impl AppSettings {
                 LlmProviderKind::OpenCodeGo,
                 "OpenCode Go default",
             ),
+            ProviderProfile::new(
+                "lmstudio-default",
+                LlmProviderKind::LmStudio,
+                "LM Studio default",
+            ),
+            ProviderProfile::new("ollama-default", LlmProviderKind::Ollama, "Ollama default"),
         ];
         s.active_profile_id = "migrated-active".to_string();
         s
@@ -311,10 +509,17 @@ impl AppSettings {
         if self.system_prompt.trim().is_empty() {
             self.system_prompt = crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string();
         }
+        if self.commit_msg_system_prompt.trim().is_empty() {
+            self.commit_msg_system_prompt = default_commit_msg_system_prompt();
+        }
         if !self.sidebar_width.is_finite() || self.sidebar_width <= 0.0 {
             self.sidebar_width = default_sidebar_width();
         }
         self.sidebar_width = self.sidebar_width.clamp(120.0, 520.0);
+        if !self.terminal_height.is_finite() || self.terminal_height <= 0.0 {
+            self.terminal_height = default_terminal_height();
+        }
+        self.terminal_height = self.terminal_height.clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
         if self.profiles.is_empty() {
             *self = Self::default();
             return;
@@ -333,6 +538,17 @@ impl AppSettings {
             if profile.model_id.trim().is_empty() {
                 profile.model_id = profile.provider.default_model_id().to_string();
             }
+            if let Some(cw) = profile.context_window {
+                if cw > 0 {
+                    profile.context_window = Some(cw);
+                } else {
+                    // 0/null means "auto".
+                    profile.context_window = None;
+                }
+            }
+        }
+        if self.context_window_default == 0 {
+            self.context_window_default = default_context_window();
         }
         if self.active_profile().is_none() {
             self.active_profile_id = self.profiles[0].id.clone();
@@ -352,6 +568,21 @@ impl AppSettings {
         self.profiles
             .iter()
             .find(|p| p.id == self.active_profile_id)
+    }
+
+    /// Profile used by the "generate commit message" feature. Falls back to the active
+    /// profile when no explicit id is configured or the stored id no longer exists.
+    pub fn commit_msg_profile(&self) -> Option<&ProviderProfile> {
+        if !self.commit_msg_profile_id.trim().is_empty() {
+            if let Some(p) = self
+                .profiles
+                .iter()
+                .find(|p| p.id == self.commit_msg_profile_id)
+            {
+                return Some(p);
+            }
+        }
+        self.active_profile()
     }
 
     pub fn set_active_profile(&mut self, id: impl AsRef<str>) {
@@ -491,6 +722,48 @@ mod tests {
         s.remove_profile(&active);
         assert_ne!(s.active_profile_id, active);
         assert!(s.active_profile().is_some());
+    }
+
+    #[test]
+    fn new_profile_defaults_to_local_compute() {
+        let p = ProviderProfile::new("test", LlmProviderKind::Ollama, "test");
+        assert_eq!(p.location, ComputeLocation::Local);
+        assert!(p.ssh_config().is_none());
+    }
+
+    #[test]
+    fn ssh_config_returns_some_for_remote() {
+        let mut p = ProviderProfile::new("test", LlmProviderKind::Ollama, "test");
+        p.location = ComputeLocation::RemoteSsh(SshConfig {
+            host: "mac-mini".to_string(),
+            port: 22,
+            user: "ioan".to_string(),
+            remote_runtime_port: 11434,
+        });
+        let cfg = p.ssh_config().expect("remote ssh config");
+        assert_eq!(cfg.host, "mac-mini");
+        assert_eq!(cfg.remote_runtime_port, 11434);
+    }
+
+    #[test]
+    fn compute_location_missing_field_deserializes_to_local() {
+        // Older settings.json files have no `location` field at all.
+        let json = r#"{"id":"t","name":"t","provider":"ollama","model_id":"x","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}"#;
+        let p: ProviderProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(p.location, ComputeLocation::Local);
+    }
+
+    #[test]
+    fn ssh_config_serde_roundtrip() {
+        let loc = ComputeLocation::RemoteSsh(SshConfig {
+            host: "mac-mini.local".to_string(),
+            port: 2222,
+            user: "ioan".to_string(),
+            remote_runtime_port: 1234,
+        });
+        let json = serde_json::to_string(&loc).unwrap();
+        let back: ComputeLocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(loc, back);
     }
 
     #[test]

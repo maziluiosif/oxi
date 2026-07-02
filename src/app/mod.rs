@@ -13,6 +13,7 @@ mod composer;
 mod connection;
 mod conversation;
 mod eframe_app;
+mod git_panel;
 mod input_history;
 mod sessions;
 mod settings_ui;
@@ -20,16 +21,23 @@ mod sidebar;
 mod state;
 mod streaming;
 mod task_runner;
+mod terminal_panel;
 
 pub use state::{
-    ConnectionState, ConversationState, PendingApproval, RunState, SessionKey, SessionRunState,
-    Workspace,
+    ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState, SessionKey,
+    SessionRunState, SshTestMsg, Workspace,
 };
 
 pub struct OxiApp {
     pub conn: ConnectionState,
     pub flow: RunState,
     pub conv: ConversationState,
+    /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
+    pub terminal: Option<crate::terminal::TerminalSession>,
+    /// SSH tunnels for `RemoteSsh` provider profiles (e.g. Ollama/LM Studio on a Mac mini).
+    /// Cheap to clone; the actual tunnels live on a dedicated background thread/runtime
+    /// started once here and kept alive for the life of the app.
+    pub tunnels: crate::compute::TunnelManager,
 }
 
 impl OxiApp {
@@ -37,6 +45,8 @@ impl OxiApp {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let root_path = cwd.to_string_lossy().to_string();
         let settings = AppSettings::load();
+        let git_open = settings.git_open;
+        let git_width = settings.git_width;
         let sessions = Self::initial_workspace_sessions(&root_path, false);
         let mut app = Self {
             conn: ConnectionState {
@@ -68,6 +78,8 @@ impl OxiApp {
                 input_history_draft: String::new(),
                 sidebar_open: true,
                 sidebar_width: settings.sidebar_width,
+                terminal_open: settings.terminal_open,
+                terminal_height: settings.terminal_height,
                 settings,
                 settings_open: false,
                 settings_tab: state::SettingsTab::default(),
@@ -76,8 +88,31 @@ impl OxiApp {
                 oauth_last_message: None,
                 composer_measured_text_h: 0.0,
                 composer_measured_full_h: 0.0,
+                diff_view_open: false,
+                diff_job_cache: None,
+                git_open,
+                git_width,
+                git_tab: crate::app::git_panel::GitTab::default(),
+                git: crate::git::GitState::default(),
+                git_commit_message: String::new(),
+                git_new_branch: String::new(),
+                commit_gen_pending: false,
+                commit_gen_rx: None,
+                commit_gen_error: None,
+                git_tx: None,
+                git_rx: None,
+                git_ctx: eframe::egui::Context::default(),
+                fetched_models: std::collections::HashMap::new(),
+                model_rx: None,
+                ssh_password_drafts: std::collections::HashMap::new(),
+                ssh_test: std::collections::HashMap::new(),
+                ssh_test_rx: None,
             },
+            terminal: None,
+            tunnels: crate::compute::TunnelManager::spawn(),
         };
+        // The constructor doesn't have an egui::Context yet; it's bound on the first
+        // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
         app.ensure_active_session_loaded();
         app
     }
@@ -221,6 +256,7 @@ impl OxiApp {
         self.conv.active_workspace = workspace_idx;
         self.conv.scroll_to_bottom_once = true;
         self.ensure_active_session_loaded();
+        self.refresh_git_cwd();
     }
 
     pub(crate) fn select_session_in_workspace(&mut self, workspace_idx: usize, session_idx: usize) {

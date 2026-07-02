@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 
 use super::approval::ApprovalGate;
 use super::events::AgentEvent;
+use super::net::{backoff_delay, send_with_retry, sleep_cancellable, MAX_STREAM_RETRIES};
 use super::tools::{run_tool, ToolEnv, ToolResult};
 
 #[derive(Default, Clone)]
@@ -41,8 +42,9 @@ fn drain_codex_sse_blocks(
     assistant_text: &mut String,
     pending_tools: &mut Vec<ToolCallAccum>,
     sse_state: &mut CodexStreamState,
+    stream_error: &mut Option<String>,
     tx: &Sender<AgentEvent>,
-) -> Result<(), String> {
+) {
     while let Some((idx, sep_len)) = sse_record_end(buffer) {
         let chunk = buffer[..idx].to_string();
         buffer.drain(..idx + sep_len);
@@ -60,9 +62,15 @@ fn drain_codex_sse_blocks(
             Ok(v) => v,
             Err(_) => continue,
         };
-        process_responses_event(&v, assistant_text, pending_tools, sse_state, tx)?;
+        process_responses_event(
+            &v,
+            assistant_text,
+            pending_tools,
+            sse_state,
+            stream_error,
+            tx,
+        );
     }
-    Ok(())
 }
 
 fn format_codex_http_error(status: reqwest::StatusCode, body: &str) -> String {
@@ -81,6 +89,27 @@ fn format_codex_http_error(status: reqwest::StatusCode, body: &str) -> String {
         }
     }
     format!("HTTP {}: {}", status.as_u16(), body)
+}
+
+/// Re-parse a `"HTTP {status}: {body}"` string from `send_with_retry` so the
+/// Codex-specific hints in [`format_codex_http_error`] still apply.
+fn reformat_codex_error(err: String) -> String {
+    let Some(rest) = err.strip_prefix("HTTP ") else {
+        return err;
+    };
+    let Some((status, body)) = rest.split_once(": ") else {
+        return err;
+    };
+    // `StatusCode` displays as e.g. "429 Too Many Requests": take the leading number.
+    let code = status
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<u16>().ok())
+        .and_then(|c| reqwest::StatusCode::from_u16(c).ok());
+    match code {
+        Some(code) => format_codex_http_error(code, body),
+        None => err,
+    }
 }
 
 fn resolve_codex_post_url(base_url: &str) -> String {
@@ -268,8 +297,9 @@ fn process_responses_event(
     assistant_text: &mut String,
     pending_tools: &mut Vec<ToolCallAccum>,
     state: &mut CodexStreamState,
+    stream_error: &mut Option<String>,
     tx: &Sender<AgentEvent>,
-) -> Result<(), String> {
+) {
     let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
 
     match typ {
@@ -336,24 +366,24 @@ fn process_responses_event(
                 }
             }
         }
+        // In-band failures: surface for the round-retry logic instead of aborting.
         "error" => {
             let msg = v
                 .get("message")
                 .and_then(|x| x.as_str())
                 .or_else(|| v.get("code").and_then(|x| x.as_str()))
                 .unwrap_or("Codex API error");
-            let _ = tx.send(AgentEvent::StreamError(msg.to_string()));
+            *stream_error = Some(msg.to_string());
         }
         "response.failed" => {
             let msg = v
                 .pointer("/response/error/message")
                 .and_then(|x| x.as_str())
                 .unwrap_or("response.failed");
-            let _ = tx.send(AgentEvent::StreamError(msg.to_string()));
+            *stream_error = Some(msg.to_string());
         }
         _ => {}
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -370,18 +400,20 @@ pub async fn run_codex_responses_loop(
     tx: &Sender<AgentEvent>,
     cancel: &Arc<AtomicBool>,
     gate: &mut ApprovalGate,
+    max_rounds: u32,
 ) -> Result<(), String> {
     let url = resolve_codex_post_url(base_url);
     let rtools = responses_tools(tools);
     let mut round = 0u32;
+    let mut stream_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
             let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
             break;
         }
         round += 1;
-        if round > 64 {
-            return Err("Too many tool rounds".into());
+        if max_rounds != 0 && round > max_rounds {
+            return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
         let (instructions, rest) = split_system(messages);
         let input = chat_to_input(&rest)?;
@@ -419,39 +451,41 @@ pub async fn run_codex_responses_loop(
         headers.insert("accept", HeaderValue::from_static("text/event-stream"));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-        let res = client
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        if !res.status().is_success() {
-            let status = res.status();
-            let t = res.text().await.unwrap_or_default();
-            return Err(format_codex_http_error(status, &t));
-        }
+        let res =
+            match send_with_retry(client.post(&url).headers(headers).json(&body), cancel).await {
+                Ok(r) => r,
+                // Re-shape "HTTP {status}: {body}" errors with the Codex-specific hints.
+                Err(e) => return Err(reformat_codex_error(e)),
+            };
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
         let mut assistant_text = String::new();
         let mut pending_tools: Vec<ToolCallAccum> = Vec::new();
         let mut sse_state = CodexStreamState::default();
+        let mut stream_error: Option<String> = None;
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
                 break;
             }
-            let chunk = chunk.map_err(|e| e.to_string())?;
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    stream_error = Some(e.to_string());
+                    break;
+                }
+            };
             buffer.push_str(&String::from_utf8_lossy(&chunk));
             drain_codex_sse_blocks(
                 &mut buffer,
                 &mut assistant_text,
                 &mut pending_tools,
                 &mut sse_state,
+                &mut stream_error,
                 tx,
-            )?;
+            );
         }
-        if !buffer.trim().is_empty() {
+        if stream_error.is_none() && !buffer.trim().is_empty() {
             buffer.push('\n');
             buffer.push('\n');
             drain_codex_sse_blocks(
@@ -459,9 +493,33 @@ pub async fn run_codex_responses_loop(
                 &mut assistant_text,
                 &mut pending_tools,
                 &mut sse_state,
+                &mut stream_error,
                 tx,
-            )?;
+            );
         }
+        // The stream died (dropped connection or in-band error event) before the round
+        // completed. No tool has been executed yet, so re-sending the round is safe.
+        if let Some(err) = stream_error {
+            if cancel.load(Ordering::SeqCst) {
+                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
+                break;
+            }
+            stream_retries += 1;
+            if stream_retries > MAX_STREAM_RETRIES {
+                return Err(err);
+            }
+            let _ = tx.send(AgentEvent::StreamRetry {
+                attempt: stream_retries,
+                reason: err,
+            });
+            if !sleep_cancellable(backoff_delay(stream_retries), cancel).await {
+                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
+                break;
+            }
+            round -= 1;
+            continue;
+        }
+        stream_retries = 0;
         let _ = tx.send(AgentEvent::AssistantMessageDone);
 
         let tool_calls = pending_tools;
