@@ -7,6 +7,7 @@ pub mod complete;
 pub mod events;
 mod history;
 pub mod models;
+mod net;
 mod openai;
 pub mod prompt;
 pub mod runner;

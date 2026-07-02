@@ -143,8 +143,13 @@ pub fn spawn_agent_run(
                 web_search_url: settings.searxng_url.clone(),
             };
             let model = profile.model_id.clone();
+            // No total request timeout: it would also cover the streamed body and kill
+            // long turns mid-stream. Instead bound connect time and idle time between
+            // chunks, and keep the TCP connection alive through NATs/proxies.
             let client = match reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .read_timeout(std::time::Duration::from_secs(180))
+                .tcp_keepalive(std::time::Duration::from_secs(60))
                 .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
                 .build()
             {
