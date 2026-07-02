@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-02
+
+### Added
+- Ollama provider with OpenAI-compatible /v1 API support
+- SSH remote compute targets for LM Studio and Ollama with password authentication and connection testing
+- LM Studio provider with local LAN model support and self-signed TLS
+- LLM-powered commit message generator with streaming completion
+- Resizable bottom terminal panel with embedded PTY shell, 256/RGB colors, mouse support, and scrollback persistence
+- Stream-level retry logic with exponential backoff for transient HTTP failures (408/429/5xx)
+- In-band SSE error recovery without losing progress from completed rounds
+- Nerd Font icon constants and icon-driven UI widgets throughout the app
+- Git diff as full-area overlay with caching and keyboard dismissal (Esc/✕)
+- Automatic upstream detection and `--set-upstream` fallback for new branch pushes
+- Rust/copper brand accent across all built-in palettes with derived semantic colors
+- Settings reorganization into Providers/Agent/Appearance tabs with improved layout
+
+### Changed
+- Tightened client timeouts (connect=30s, read=60-180s, tcp_keepalive=60s) to prevent long turns from being killed
+- Replaced per-provider inline error handling with shared `send_with_retry` wrapper in new `agent/net.rs` module
+- Running tool pills now use neutral surface with spinner and badge only carrying state, reducing visual noise
+- Provider tabs reordered to lead with Ollama and LM Studio (local runtimes)
+- Git panel UI refactored to use icon-driven widgets and inline error display
+- Terminal scrollback offset clamped to prevent vt300 underflow panic
+- Live thinking bubble tail-preview truncated to keep newest reasoning lines visible while streaming
+
+### Fixed
+- Worker disconnect handling while waiting for response to avoid hanging sessions on panics
+- `AgentEvent::StreamRetry` prevents duplicate text/thinking when generation is re-sent
+- Conversation header layout no longer overflows with right button cluster
+- Cargo fmt and clippy warnings unblocked CI
+
+
 ### Added
 - Ollama provider profile (OpenAI-compatible `/v1` API, no-auth by default, defaults to
   `http://localhost:11434/v1`)
@@ -92,7 +124,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/maziluiosif/oxi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/maziluiosif/oxi/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/maziluiosif/oxi/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/maziluiosif/oxi/compare/v0.3.0...v0.4.0
