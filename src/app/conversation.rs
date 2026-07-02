@@ -113,10 +113,10 @@ impl OxiApp {
                                         ICON_PLUS,
                                         "New",
                                         FS_SMALL,
-                                        c_text(),
+                                        crate::theme::c_on_accent(),
                                     ))
-                                    .fill(c_bg_elevated())
-                                    .stroke(Stroke::new(1.0, c_border_subtle()))
+                                    .fill(c_accent())
+                                    .stroke(Stroke::NONE)
                                     .rounding(8.0),
                                 )
                                 .on_hover_text("Start a new chat in this workspace")
@@ -353,7 +353,7 @@ impl OxiApp {
                     ui.painter().rect_stroke(
                         response.rect,
                         Rounding::same(9.0),
-                        Stroke::new(1.0, c_row_hover()),
+                        Stroke::new(1.0, crate::theme::c_pill_selected_border()),
                     );
                 }
                 if response.clicked() {

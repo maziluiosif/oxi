@@ -31,6 +31,12 @@ pub enum AgentEvent {
         diff: Option<String>,
     },
     StreamError(String),
+    /// The stream died mid-round and the round is being re-sent; the UI should
+    /// discard the partial text/thinking of the current round to avoid duplicates.
+    StreamRetry {
+        attempt: u32,
+        reason: String,
+    },
     /// LLM finished one assistant message (may still have tool rounds).
     AssistantMessageDone,
     /// Entire turn finished (no more tool calls).
