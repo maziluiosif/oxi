@@ -162,6 +162,24 @@ impl OxiApp {
         m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
     }
 
+    /// Drop the partial text/thinking of the round being retried after a mid-stream
+    /// failure, so the regenerated round is not shown twice. Tool blocks from
+    /// completed rounds are kept.
+    pub(crate) fn reset_streaming_tail(&mut self, key: SessionKey) {
+        let Some(m) = self.last_assistant_mut(key) else {
+            return;
+        };
+        if !m.streaming {
+            return;
+        }
+        while matches!(
+            m.blocks.last(),
+            Some(AssistantBlock::Answer(_) | AssistantBlock::Thinking(_))
+        ) {
+            m.blocks.pop();
+        }
+    }
+
     pub(crate) fn append_assistant_answer(&mut self, key: SessionKey, s: &str) {
         let Some(m) = self.last_assistant_mut(key) else {
             return;
