@@ -35,8 +35,17 @@ fn is_reasonably_small_text_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Deny-list patterns checked against the lowercased command string.
-/// Each entry is a substring match — if the command contains it, the command is refused.
+/// Deny-list patterns checked against the lowercased, quote/backslash-stripped command
+/// string. Each entry is a substring match — if the command contains it, the command is
+/// refused.
+///
+/// This is a best-effort deterrent against obviously destructive one-liners, not a
+/// sandbox: it does not understand shell quoting, variable expansion, command
+/// substitution, or encoding (e.g. `$(echo c3Vkbw== | base64 -d)` sails through
+/// untouched). The real backstop is [`crate::agent::approval::ApprovalGate`], which
+/// shows the user the raw command and requires explicit approval before any `bash` call
+/// runs — treat this list as reducing accidental/obvious damage, not as a security
+/// boundary on its own.
 const DENIED_BASH_PATTERNS: &[&str] = &[
     // Destructive filesystem operations
     "rm -rf /",
@@ -96,8 +105,15 @@ const DENIED_BASH_PATTERNS: &[&str] = &[
 /// if the command matches a denied pattern.
 pub(crate) fn validate_bash_command(cmd: &str) -> Result<(), String> {
     let lowered = cmd.to_ascii_lowercase();
+    // Strip quote/backslash characters commonly used to split a denied pattern across a
+    // shell-syntax boundary (e.g. `s\udo`, `s"u"do`, `'sudo' cmd`) before matching, so
+    // these trivial obfuscations still get caught.
+    let unquoted: String = lowered
+        .chars()
+        .filter(|c| !matches!(c, '\\' | '\'' | '"'))
+        .collect();
     // Collapse multiple spaces so tricks like `sudo  cmd` still match.
-    let normalized: String = lowered.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized: String = unquoted.split_whitespace().collect::<Vec<_>>().join(" ");
     for denied in DENIED_BASH_PATTERNS {
         if normalized.contains(denied) {
             return Err(format!("Refusing risky bash command containing: {denied}"));
