@@ -627,7 +627,15 @@ impl AppSettings {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(&path, json).map_err(|e| e.to_string())
+        fs::write(&path, json).map_err(|e| e.to_string())?;
+        // Provider API keys are stored in this file in plaintext; restrict it to the
+        // owner so other local accounts on shared machines can't read it off disk.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
     }
 
     pub fn active_profile(&self) -> Option<&ProviderProfile> {
