@@ -416,7 +416,11 @@ impl OxiApp {
                 (ICON_MAGIC, "Generate")
             };
             if crate::ui::chrome::ghost_button_icon_enabled(
-                ui, gen_icon, gen_label, false, !gen_active,
+                ui,
+                gen_icon,
+                gen_label,
+                false,
+                !gen_active,
             )
             .on_hover_text(
                 "Generate a commit message from the staged diff with the configured model",

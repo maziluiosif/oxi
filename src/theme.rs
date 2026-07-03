@@ -1104,7 +1104,10 @@ mod tests {
         let now = SystemTime::now();
         assert_eq!(format_relative_time(now), "now");
         assert_eq!(format_relative_time(now - Duration::from_secs(59)), "now");
-        assert_eq!(format_relative_time(now - Duration::from_secs(5 * 60)), "5m");
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(5 * 60)),
+            "5m"
+        );
         assert_eq!(
             format_relative_time(now - Duration::from_secs(6 * 3600)),
             "6h"

@@ -61,11 +61,7 @@ impl ChatMessage {
     pub fn finish_streaming(&mut self) {
         self.streaming = false;
         if self.worked_duration.is_none() {
-            self.worked_duration = Some(
-                self.started_at
-                    .map(|t| t.elapsed())
-                    .unwrap_or_default(),
-            );
+            self.worked_duration = Some(self.started_at.map(|t| t.elapsed()).unwrap_or_default());
         }
     }
 }

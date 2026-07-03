@@ -674,8 +674,7 @@ fn render_tool_pill(
         let bubble_w = ui.available_width().max(40.0);
         let detail_id = persist_id.with("detail");
         if let Some(diff_text) = diff.as_deref().filter(|t| !t.trim().is_empty()) {
-            let overflow =
-                diff_text.lines().count() > EDIT_PREVIEW_LINES || diff_text.len() > 2000;
+            let overflow = diff_text.lines().count() > EDIT_PREVIEW_LINES || diff_text.len() > 2000;
             let preview = truncate_lines_preview(diff_text, EDIT_PREVIEW_LINES);
             render_static_preview_job_panel(
                 ui,
@@ -1653,9 +1652,13 @@ fn render_activity_summary(
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
             ui.label(
-                RichText::new(if expanded { ICON_ANGLE_UP } else { ICON_ANGLE_DOWN })
-                    .font(FontId::new(FS_TINY, icon_font()))
-                    .color(chevron_col),
+                RichText::new(if expanded {
+                    ICON_ANGLE_UP
+                } else {
+                    ICON_ANGLE_DOWN
+                })
+                .font(FontId::new(FS_TINY, icon_font()))
+                .color(chevron_col),
             );
             ui.label(RichText::new(label).size(FS_SMALL).color(c_text_muted()));
         });

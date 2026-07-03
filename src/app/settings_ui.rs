@@ -1,8 +1,8 @@
 //! Settings page: profiles panel, system prompt panel, OAuth sections.
 
 use eframe::egui::{
-    self, Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
-    Sense, Stroke, TextEdit, Ui,
+    self, Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense,
+    Stroke, TextEdit, Ui,
 };
 
 use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};

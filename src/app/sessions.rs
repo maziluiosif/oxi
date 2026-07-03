@@ -328,7 +328,9 @@ impl OxiApp {
         let deleting_active = wi == self.conv.active_workspace;
         if deleting_active {
             let active = self.active_workspace().active;
-            let session_file = self.active_workspace().sessions[active].session_file.clone();
+            let session_file = self.active_workspace().sessions[active]
+                .session_file
+                .clone();
             if session_file.as_deref() == self.flow.current_backend_session_file.as_deref() {
                 self.flow.current_backend_session_file = None;
             }

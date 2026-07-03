@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::settings::{ALL_TOOL_NAMES, WebSearchBackend};
+use crate::settings::{WebSearchBackend, ALL_TOOL_NAMES};
 
 /// Result returned by [`run_tool`] — carries both the text output and an optional unified diff
 /// generated locally for `edit` and `write` so the UI can render a diff block.
