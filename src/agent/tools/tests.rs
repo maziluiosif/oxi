@@ -159,6 +159,30 @@ fn bash_normalizes_whitespace_for_deny() {
     assert!(validate_bash_command("rm  -rf  /").is_err());
 }
 
+#[test]
+fn bash_strips_quotes_and_backslashes_for_deny() {
+    // The deny-list check strips quote/backslash characters before matching, so
+    // splitting a denied word across a shell-syntax boundary doesn't bypass it.
+    assert!(validate_bash_command("s\\udo apt install").is_err());
+    assert!(validate_bash_command("s\"u\"do apt install").is_err());
+    assert!(validate_bash_command("'sudo' apt install").is_err());
+    assert!(validate_bash_command("s'u'do apt install").is_err());
+}
+
+#[test]
+fn bash_deny_list_is_bypassable_by_variable_expansion_and_encoding() {
+    // Known, deliberate gaps: `validate_bash_command` is a substring deny-list, not a
+    // shell parser, so it does not understand variable expansion or command
+    // substitution/encoding. These commands run `sudo`-equivalent actions but are
+    // *not* caught — the real safety boundary for `bash` is the approval prompt in
+    // `crate::agent::approval::ApprovalGate`, which shows the user the raw command
+    // before it runs. If the deny-list is ever hardened to catch one of these, flip
+    // the assertion here to `is_err()` as a regression signal that it now works.
+    assert!(validate_bash_command("S=sudo; $S apt install").is_ok());
+    assert!(validate_bash_command("$(echo c3VkbyBhcHQgaW5zdGFsbA== | base64 -d)").is_ok());
+    assert!(validate_bash_command("$(printf '\\163\\165\\144\\157') apt install").is_ok());
+}
+
 // ─── tool_read ──────────────────────────────────────────────────────
 
 #[test]

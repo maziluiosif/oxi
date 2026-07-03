@@ -1,21 +1,25 @@
 //! Markdown → egui. Inline text uses [`egui::text::LayoutJob`] with an explicit wrap
 //! width so long paths do not layout as one character per row (horizontal_wrapped bug).
+//!
+//! Split by rendering responsibility: [`inline`] (text runs, links, inline images),
+//! [`blocks`] (headings, paragraphs, quotes, code fences, raw HTML), and [`table`] (GFM
+//! tables). This file keeps the shared layout helpers/constants every submodule depends
+//! on, plus [`render_markdown`] (the only symbol used outside this module) and
+//! [`render_list`], which recurses through both `inline` and `blocks`.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+mod blocks;
+mod inline;
+mod table;
 
-use base64::Engine as _;
-use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{
-    vec2, Align, FontFamily, FontId, Frame, Hyperlink, Id, Image, Layout, Margin, RichText,
-    Rounding, Stroke, Ui,
-};
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use eframe::egui::text::LayoutJob;
+use eframe::egui::{vec2, Align, FontFamily, Layout, RichText, Ui};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::theme::*;
-use crate::ui::preview_expand::{
-    clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
-};
+
+use blocks::{render_blockquote, render_fenced_block, render_heading, render_html_block};
+use inline::{append_inline_fallback, fmt_body, fmt_code, selectable_job, InlineDensity};
+use table::render_table;
 
 /// Prose wrap at word boundaries (do not set [`TextWrapping::break_anywhere`] — it splits mid-word).
 #[inline]
@@ -38,6 +42,7 @@ const SZ_BODY: f32 = FS_BODY;
 /// Floor for raw-HTML / math fallbacks shown in monospace; real inline `code` matches prose.
 const SZ_CODE_INLINE: f32 = FS_CODE;
 const SZ_CODE: f32 = FS_CODE;
+const SZ_TINY: f32 = FS_TINY;
 
 /// Lists are inset from body text so bullets do not sit flush on the column edge (Cursor-like).
 const LIST_BLOCK_MARGIN: f32 = 12.0;
@@ -71,129 +76,6 @@ fn line_height_for_body_size(size: f32) -> f32 {
     (size * 1.35).max(16.0)
 }
 
-#[derive(Clone, Copy)]
-enum InlineEnd {
-    Paragraph,
-    Item,
-}
-
-/// Tighter line metrics for list rows vs normal paragraphs.
-#[derive(Clone, Copy)]
-enum InlineDensity {
-    Normal,
-    ListItem,
-}
-
-impl InlineDensity {
-    fn line_height(self, size: f32) -> f32 {
-        // One line-height for all flowing prose (paragraphs and list items) so a wrapped list
-        // line matches a wrapped paragraph line. List compactness comes from the inter-item gap
-        // (`LIST_GAP_AFTER_ITEM`) and the zero tail below, not from a tighter line-height.
-        match self {
-            InlineDensity::Normal | InlineDensity::ListItem => (size * 1.35).max(16.0),
-        }
-    }
-}
-
-fn inline_text_format(size: f32, strong: u32, density: InlineDensity) -> TextFormat {
-    let color = if strong > 0 {
-        c_text_strong()
-    } else {
-        c_text()
-    };
-    let lh = density.line_height(size);
-    let mut f = TextFormat::simple(FontId::proportional(size), color);
-    f.line_height = Some(lh);
-    f.valign = Align::Center;
-    f
-}
-
-fn inline_code_format(density: InlineDensity) -> TextFormat {
-    // Use the same proportional font and size as the surrounding prose so inline code shares
-    // its exact baseline — the monospace font's much shorter ascent (Ubuntu Mono ~0.83 vs
-    // Noto Sans ~1.07) made code glyphs ride above the text line. The code styling now comes
-    // from the background tint and color, not a different typeface.
-    let lh = density.line_height(SZ_BODY);
-    let mut f = TextFormat::simple(FontId::proportional(SZ_BODY), c_md_code_fg());
-    f.background = c_md_code_bg();
-    f.line_height = Some(lh);
-    f.valign = Align::Center;
-    f
-}
-
-const SZ_TINY: f32 = FS_TINY;
-
-#[inline]
-fn inline_image_uri_id(uri: &str) -> u64 {
-    let mut h = DefaultHasher::new();
-    uri.hash(&mut h);
-    h.finish()
-}
-
-/// `data:image/...;base64,...` only (common for embedded thumbnails).
-fn try_decode_data_url_image(uri: &str) -> Option<Vec<u8>> {
-    let rest = uri.strip_prefix("data:")?;
-    let comma = rest.find(',')?;
-    let header = &rest[..comma];
-    let data = rest[comma + 1..].trim();
-    if !header.contains("base64") {
-        return None;
-    }
-    base64::engine::general_purpose::STANDARD
-        .decode(data.as_bytes())
-        .ok()
-}
-
-fn render_markdown_inline_image(
-    ui: &mut Ui,
-    wrap_w: f32,
-    dest_url: &str,
-    alt: &str,
-    compact: bool,
-) {
-    let max_w = if compact {
-        (wrap_w * 0.98).clamp(24.0, 220.0)
-    } else {
-        wrap_w.clamp(32.0, 560.0)
-    };
-    let img: Image<'_> = if let Some(bytes) = try_decode_data_url_image(dest_url) {
-        let id = format!("bytes://md-inline-{}", inline_image_uri_id(dest_url));
-        Image::from_bytes(id, bytes)
-    } else if dest_url.starts_with("https://")
-        || dest_url.starts_with("http://")
-        || dest_url.starts_with("file://")
-    {
-        Image::from_uri(dest_url.to_owned())
-    } else {
-        ui.label(
-            RichText::new(format!("![{alt}]({dest_url})"))
-                .monospace()
-                .size(SZ_CODE_INLINE)
-                .color(c_text_muted()),
-        );
-        ui.add_space(4.0);
-        return;
-    };
-    let mut img = img
-        .max_width(max_w)
-        .rounding(Rounding::same(6.0))
-        .show_loading_spinner(true);
-    if compact {
-        img = img.max_height(120.0);
-    }
-    let resp = ui.add(img);
-    if !alt.is_empty() {
-        if dest_url.starts_with("http://") || dest_url.starts_with("https://") {
-            resp.on_hover_text(format!("{alt}\n\n{dest_url}"));
-        } else {
-            resp.on_hover_text(alt);
-        }
-    } else if dest_url.starts_with("http://") || dest_url.starts_with("https://") {
-        resp.on_hover_text(dest_url);
-    }
-    ui.add_space(if compact { 2.0 } else { 4.0 });
-}
-
 fn consume_until_end(it: &mut ParserPeek<'_>, end: TagEnd) {
     while let Some(ev) = it.next() {
         match ev {
@@ -202,59 +84,6 @@ fn consume_until_end(it: &mut ParserPeek<'_>, end: TagEnd) {
             _ => {}
         }
     }
-}
-
-/// Raw HTML / unknown blocks: show monospace so nothing is silently dropped.
-fn render_raw_block(ui: &mut Ui, wrap_w: f32, label: &str, body: &str) {
-    allocate_full_width_block(ui, wrap_w, |ui| {
-        Frame::none()
-            .fill(c_md_code_block_bg())
-            .stroke(Stroke::new(1.0, c_border()))
-            .rounding(Rounding::same(8.0))
-            .inner_margin(Margin::symmetric(10.0, 8.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let inner = ui.available_width().max(40.0);
-                ui.label(
-                    RichText::new(label)
-                        .size(SZ_TINY)
-                        .color(c_text_muted())
-                        .family(FontFamily::Proportional),
-                );
-                ui.add_space(4.0);
-                let job = LayoutJob::simple(
-                    body.to_string(),
-                    FontId::monospace(SZ_CODE),
-                    c_text_muted(),
-                    inner,
-                );
-                selectable_job(ui, job);
-            });
-    });
-    ui.add_space(6.0);
-}
-
-fn render_html_block(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
-    let mut buf = String::new();
-    loop {
-        match it.next() {
-            Some(Event::End(TagEnd::HtmlBlock)) => break,
-            Some(Event::Text(t)) => buf.push_str(t.as_ref()),
-            Some(Event::Html(t)) => buf.push_str(t.as_ref()),
-            Some(Event::Start(t)) => consume_until_end(it, t.to_end()),
-            Some(_) => {}
-            None => break,
-        }
-    }
-    render_raw_block(ui, wrap_w, "HTML", &buf);
-}
-
-fn append_inline_fallback(job: &mut LayoutJob, wrap_w: f32, s: &str, line_height: f32) {
-    let mut f = TextFormat::simple(FontId::monospace(SZ_CODE_INLINE), c_md_code_fg());
-    f.line_height = Some(line_height);
-    f.valign = Align::Center;
-    job.append(s, 0.0, f);
-    set_job_wrap(job, wrap_w);
 }
 
 pub fn render_markdown(ui: &mut Ui, src: &str) {
@@ -266,13 +95,13 @@ pub fn render_markdown(ui: &mut Ui, src: &str) {
     let mut fence_idx = 0u32;
     while let Some(ev) = it.next() {
         match ev {
-            Event::Start(Tag::Paragraph) => render_paragraph(ui, wrap_w, &mut it),
+            Event::Start(Tag::Paragraph) => blocks::render_paragraph(ui, wrap_w, &mut it),
             Event::Start(Tag::Heading { level, .. }) => {
                 render_heading(ui, wrap_w, level, &mut it);
             }
             Event::Start(Tag::List(kind)) => render_list(ui, wrap_w, kind, 0, &mut it),
             Event::Start(Tag::CodeBlock(kind)) => {
-                let lang = code_block_language(&kind);
+                let lang = blocks::code_block_language(&kind);
                 let base = ui.id().with("md_fence").with(fence_idx).with(&lang);
                 fence_idx += 1;
                 render_fenced_block(ui, wrap_w, kind, &mut it, base);
@@ -340,203 +169,6 @@ pub fn render_markdown(ui: &mut Ui, src: &str) {
             _ => {}
         }
     }
-}
-
-struct TableCellData {
-    text: String,
-    is_header: bool,
-}
-
-fn collect_table_data(it: &mut ParserPeek<'_>) -> Vec<Vec<TableCellData>> {
-    let mut rows: Vec<Vec<TableCellData>> = Vec::new();
-    loop {
-        match it.peek() {
-            Some(Event::End(TagEnd::Table)) => {
-                it.next();
-                break;
-            }
-            Some(Event::Start(Tag::TableHead)) => {
-                it.next();
-                loop {
-                    match it.peek() {
-                        Some(Event::End(TagEnd::TableHead)) => {
-                            it.next();
-                            break;
-                        }
-                        Some(Event::Start(Tag::TableRow)) => {
-                            it.next();
-                            rows.push(collect_row_cells(it, true));
-                        }
-                        Some(_) => {
-                            it.next();
-                        }
-                        None => break,
-                    }
-                }
-            }
-            Some(Event::Start(Tag::TableRow)) => {
-                it.next();
-                rows.push(collect_row_cells(it, false));
-            }
-            Some(_) => {
-                it.next();
-            }
-            None => break,
-        }
-    }
-    rows
-}
-
-fn collect_row_cells(it: &mut ParserPeek<'_>, is_header: bool) -> Vec<TableCellData> {
-    let mut cells = Vec::new();
-    loop {
-        match it.peek() {
-            Some(Event::End(TagEnd::TableRow)) => {
-                it.next();
-                break;
-            }
-            Some(Event::Start(Tag::TableCell)) => {
-                it.next();
-                cells.push(TableCellData {
-                    text: collect_cell_text(it),
-                    is_header,
-                });
-            }
-            Some(_) => {
-                it.next();
-            }
-            None => break,
-        }
-    }
-    cells
-}
-
-fn collect_cell_text(it: &mut ParserPeek<'_>) -> String {
-    let mut text = String::new();
-    loop {
-        let ev = it.next();
-        match ev {
-            Some(Event::End(TagEnd::TableCell)) | None => break,
-            Some(Event::Text(t)) => text.push_str(t.as_ref()),
-            Some(Event::Code(c)) => text.push_str(c.as_ref()),
-            Some(Event::SoftBreak) => text.push(' '),
-            Some(Event::HardBreak) => text.push('\n'),
-            Some(Event::InlineHtml(t)) | Some(Event::Html(t)) => text.push_str(t.as_ref()),
-            Some(Event::Start(Tag::Link { dest_url, .. })) => {
-                let mut label = String::new();
-                loop {
-                    match it.next() {
-                        Some(Event::End(TagEnd::Link)) | None => break,
-                        Some(Event::Text(t)) => label.push_str(t.as_ref()),
-                        Some(Event::Code(c)) => label.push_str(c.as_ref()),
-                        Some(Event::SoftBreak) => label.push(' '),
-                        _ => {}
-                    }
-                }
-                text.push_str(if label.is_empty() {
-                    dest_url.as_ref()
-                } else {
-                    &label
-                });
-            }
-            Some(Event::Start(Tag::Image { dest_url, .. })) => {
-                let mut alt = String::new();
-                loop {
-                    match it.next() {
-                        Some(Event::End(TagEnd::Image)) | None => break,
-                        Some(Event::Text(t)) => alt.push_str(t.as_ref()),
-                        _ => {}
-                    }
-                }
-                text.push_str(if alt.is_empty() {
-                    dest_url.as_ref()
-                } else {
-                    &alt
-                });
-            }
-            Some(Event::Start(_)) | Some(Event::End(_)) => {}
-            _ => {}
-        }
-    }
-    text
-}
-
-fn render_table(ui: &mut Ui, wrap_w: f32, column_count: usize, it: &mut ParserPeek<'_>) {
-    let rows = collect_table_data(it);
-    if rows.is_empty() {
-        return;
-    }
-    let cols = column_count.max(1);
-    let grid = c_md_code_block_border();
-    let outer = c_border();
-    let header_bg = c_md_code_block_header_bg();
-    let body_bg = c_md_code_block_bg();
-    const CELL_PAD_X: f32 = 10.0;
-    const CELL_PAD_Y: f32 = 8.0;
-
-    allocate_full_width_block(ui, wrap_w, |ui| {
-        let table_w = ui.available_width().max(48.0);
-        let cell_w = table_w / cols as f32;
-
-        Frame::none()
-            .fill(c_md_code_block_bg())
-            .stroke(Stroke::new(1.0, outer))
-            .rounding(Rounding::same(8.0))
-            .inner_margin(Margin::same(0.0))
-            .show(ui, |ui| {
-                ui.set_width(table_w);
-                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-
-                for row in rows.iter() {
-                    let cell_jobs: Vec<(bool, LayoutJob)> = (0..cols)
-                        .map(|col_idx| {
-                            let cell = row.get(col_idx);
-                            let is_header = cell.map(|c| c.is_header).unwrap_or(false);
-                            let text = cell.map(|c| c.text.as_str()).unwrap_or("");
-                            let mut job = LayoutJob::default();
-                            set_job_wrap(&mut job, (cell_w - CELL_PAD_X * 2.0).max(24.0));
-                            let fmt = if is_header {
-                                inline_text_format(SZ_BODY, 1, InlineDensity::Normal)
-                            } else {
-                                inline_text_format(SZ_BODY, 0, InlineDensity::Normal)
-                            };
-                            job.append(text, 0.0, fmt);
-                            (is_header, job)
-                        })
-                        .collect();
-
-                    let row_h = cell_jobs
-                        .iter()
-                        .map(|(_, job)| ui.fonts(|fonts| fonts.layout_job(job.clone())).size().y)
-                        .fold(0.0_f32, f32::max)
-                        .max(22.0)
-                        + CELL_PAD_Y * 2.0;
-
-                    ui.horizontal(|ui| {
-                        ui.set_width(table_w);
-                        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-
-                        for (is_header, job) in cell_jobs {
-                            let (rect, _) =
-                                ui.allocate_exact_size(vec2(cell_w, row_h), egui::Sense::hover());
-                            let fill = if is_header { header_bg } else { body_bg };
-
-                            ui.painter().rect_filled(rect, 0.0, fill);
-                            ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, grid));
-
-                            let inner_rect = rect.shrink2(vec2(CELL_PAD_X, CELL_PAD_Y));
-                            let mut child = ui.new_child(
-                                egui::UiBuilder::new()
-                                    .max_rect(inner_rect)
-                                    .layout(Layout::top_down(Align::Min)),
-                            );
-                            selectable_job(&mut child, job);
-                        }
-                    });
-                }
-            });
-    });
-    ui.add_space(6.0);
 }
 
 /// `list_row_w`: width for this list’s rows — full column at depth 0, parent item **content** width
@@ -613,11 +245,11 @@ fn render_list(
                                 }
                                 Some(Event::Start(Tag::Paragraph)) => {
                                     it.next();
-                                    render_inline_until(
+                                    inline::render_inline_until(
                                         ui,
                                         text_w,
                                         it,
-                                        InlineEnd::Paragraph,
+                                        inline::InlineEnd::Paragraph,
                                         InlineDensity::ListItem,
                                     );
                                 }
@@ -638,11 +270,11 @@ fn render_list(
                                 }
                                 None => break,
                                 _ => {
-                                    render_inline_until(
+                                    inline::render_inline_until(
                                         ui,
                                         text_w,
                                         it,
-                                        InlineEnd::Item,
+                                        inline::InlineEnd::Item,
                                         InlineDensity::ListItem,
                                     );
                                     break;
@@ -666,407 +298,4 @@ fn render_list(
             }
         }
     }
-}
-
-fn fmt_body(size: f32, strong: u32) -> TextFormat {
-    let color = if strong > 0 {
-        c_text_strong()
-    } else {
-        c_text()
-    };
-    let lh = (size * 1.35).max(16.0);
-    let mut f = TextFormat::simple(FontId::proportional(size), color);
-    f.line_height = Some(lh);
-    f.valign = Align::Center;
-    f
-}
-
-fn fmt_code(line_height: f32) -> TextFormat {
-    let mut f = TextFormat::simple(FontId::monospace(SZ_CODE_INLINE), c_md_code_fg());
-    f.background = c_md_code_bg();
-    f.line_height = Some(line_height);
-    f.valign = Align::Center;
-    f
-}
-
-/// Inline until paragraph or list item end, using a single [`LayoutJob`] with wrap width.
-fn render_inline_until(
-    ui: &mut Ui,
-    wrap_w: f32,
-    it: &mut ParserPeek<'_>,
-    end: InlineEnd,
-    density: InlineDensity,
-) {
-    let mut job = LayoutJob::default();
-    set_job_wrap(&mut job, wrap_w);
-
-    let mut bold = 0u32;
-    let mut strike = 0u32;
-    while let Some(ev) = it.next() {
-        match (&ev, end) {
-            (Event::End(TagEnd::Paragraph), InlineEnd::Paragraph) => break,
-            (Event::End(TagEnd::Item), InlineEnd::Item) => break,
-            _ => {}
-        }
-        match ev {
-            Event::Start(Tag::Strong) | Event::Start(Tag::Emphasis) => bold += 1,
-            Event::End(TagEnd::Strong) | Event::End(TagEnd::Emphasis) => {
-                bold = bold.saturating_sub(1);
-            }
-            Event::Start(Tag::Strikethrough) => strike += 1,
-            Event::End(TagEnd::Strikethrough) => strike = strike.saturating_sub(1),
-            Event::Text(t) => {
-                let mut tf = inline_text_format(SZ_BODY, bold, density);
-                if strike > 0 {
-                    tf.strikethrough = Stroke::new(1.0, c_text());
-                }
-                job.append(t.as_ref(), 0.0, tf);
-            }
-            Event::Code(c) => {
-                job.append(c.as_ref(), 0.0, inline_code_format(density));
-            }
-            Event::SoftBreak => {
-                job.append(" ", 0.0, inline_text_format(SZ_BODY, bold, density));
-            }
-            Event::HardBreak => {
-                job.append("\n", 0.0, inline_text_format(SZ_BODY, bold, density));
-            }
-            Event::Start(Tag::Link {
-                link_type: _,
-                dest_url,
-                title: _,
-                id: _,
-            }) => {
-                if !job.text.is_empty() {
-                    selectable_job(ui, std::mem::take(&mut job));
-                    set_job_wrap(&mut job, wrap_w);
-                }
-                let dest = dest_url.to_string();
-                let mut label = String::new();
-                while let Some(inner) = it.next() {
-                    match inner {
-                        Event::End(TagEnd::Link) => break,
-                        Event::Text(t) => label.push_str(t.as_ref()),
-                        Event::Code(c) => label.push_str(c.as_ref()),
-                        Event::SoftBreak => label.push(' '),
-                        Event::HardBreak => label.push('\n'),
-                        Event::Html(t) | Event::InlineHtml(t) => label.push_str(t.as_ref()),
-                        Event::FootnoteReference(t) => {
-                            label.push_str(&format!("[^{}]", t));
-                        }
-                        Event::TaskListMarker(done) => {
-                            label.push_str(if done { "[x] " } else { "[ ] " });
-                        }
-                        Event::Start(nested) => consume_until_end(it, nested.to_end()),
-                        _ => {}
-                    }
-                }
-                ui.add(Hyperlink::from_label_and_url(
-                    RichText::new(label).color(c_accent()).size(SZ_BODY),
-                    dest,
-                ));
-                ui.add_space(2.0);
-            }
-            Event::Start(Tag::Image {
-                dest_url, title: _, ..
-            }) => {
-                if !job.text.is_empty() {
-                    selectable_job(ui, std::mem::take(&mut job));
-                    set_job_wrap(&mut job, wrap_w);
-                }
-                let mut alt = String::new();
-                while let Some(inner) = it.next() {
-                    match inner {
-                        Event::End(TagEnd::Image) => break,
-                        Event::Text(t) => alt.push_str(t.as_ref()),
-                        Event::Code(c) => alt.push_str(c.as_ref()),
-                        Event::SoftBreak => alt.push(' '),
-                        Event::HardBreak => alt.push('\n'),
-                        Event::Start(nested) => consume_until_end(it, nested.to_end()),
-                        _ => {}
-                    }
-                }
-                render_markdown_inline_image(ui, wrap_w, dest_url.as_ref(), alt.trim(), false);
-            }
-            Event::Html(t) | Event::InlineHtml(t) => {
-                append_inline_fallback(
-                    &mut job,
-                    wrap_w,
-                    t.as_ref(),
-                    density.line_height(SZ_CODE_INLINE),
-                );
-            }
-            Event::FootnoteReference(t) => {
-                let s = format!("[^{}]", t);
-                job.append(&s, 0.0, inline_text_format(SZ_BODY, bold, density));
-            }
-            Event::TaskListMarker(done) => {
-                let mark = if done { "☑ " } else { "☐ " };
-                job.append(mark, 0.0, inline_text_format(SZ_BODY, bold, density));
-            }
-            Event::InlineMath(t) | Event::DisplayMath(t) => {
-                job.append(t.as_ref(), 0.0, inline_code_format(density));
-            }
-            _ => {}
-        }
-    }
-    selectable_job(ui, job);
-    let tail = match (end, density) {
-        (InlineEnd::Paragraph | InlineEnd::Item, InlineDensity::Normal) => 1.5,
-        (InlineEnd::Paragraph | InlineEnd::Item, InlineDensity::ListItem) => 0.0,
-    };
-    ui.add_space(tail);
-}
-
-fn selectable_job(ui: &mut Ui, job: LayoutJob) {
-    if job.text.is_empty() {
-        return;
-    }
-
-    let galley = ui.fonts(|fonts| fonts.layout_job(job));
-    let (rect, response) =
-        ui.allocate_exact_size(galley.size(), eframe::egui::Sense::click_and_drag());
-    let galley_pos = rect.left_top();
-    eframe::egui::text_selection::LabelSelectionState::label_text_selection(
-        ui,
-        &response,
-        galley_pos,
-        galley,
-        ui.style().visuals.text_color(),
-        Stroke::NONE,
-    );
-}
-
-fn render_heading(ui: &mut Ui, wrap_w: f32, level: HeadingLevel, it: &mut ParserPeek<'_>) {
-    match level {
-        HeadingLevel::H1 => ui.add_space(8.0),
-        HeadingLevel::H2 => ui.add_space(6.0),
-        HeadingLevel::H3 => ui.add_space(4.0),
-        _ => ui.add_space(2.0),
-    }
-
-    let size = match level {
-        HeadingLevel::H1 => FS_H1,
-        HeadingLevel::H2 => FS_H2,
-        HeadingLevel::H3 => FS_H3,
-        HeadingLevel::H4 => FS_BODY,
-        HeadingLevel::H5 | HeadingLevel::H6 => FS_CODE,
-    };
-    let mut job = LayoutJob::default();
-    set_job_wrap(&mut job, wrap_w);
-
-    let mut bold = 0u32;
-    while let Some(ev) = it.next() {
-        match ev {
-            Event::End(TagEnd::Heading(_)) => break,
-            Event::Start(Tag::Strong) | Event::Start(Tag::Emphasis) => bold += 1,
-            Event::End(TagEnd::Strong) | Event::End(TagEnd::Emphasis) => {
-                bold = bold.saturating_sub(1);
-            }
-            Event::Text(t) => {
-                let strong = if bold > 0 { bold } else { 1 };
-                job.append(t.as_ref(), 0.0, fmt_body(size, strong));
-            }
-            Event::Code(c) => {
-                // Match the heading's proportional font and size so inline code shares its
-                // baseline; the monospace font's shorter ascent otherwise makes code ride high.
-                let mut f = fmt_code(line_height_for_body_size(size));
-                f.font_id = FontId::proportional(size);
-                job.append(c.as_ref(), 0.0, f);
-            }
-            Event::SoftBreak => {
-                let strong = if bold > 0 { bold } else { 1 };
-                job.append(" ", 0.0, fmt_body(size, strong));
-            }
-            Event::HardBreak => {
-                let strong = if bold > 0 { bold } else { 1 };
-                job.append("\n", 0.0, fmt_body(size, strong));
-            }
-            Event::Html(t) | Event::InlineHtml(t) => {
-                let strong = if bold > 0 { bold } else { 1 };
-                job.append(t.as_ref(), 0.0, fmt_body(size, strong));
-            }
-            Event::Start(tag) => {
-                consume_until_end(it, tag.to_end());
-            }
-            _ => {}
-        }
-    }
-    selectable_job(ui, job);
-    if matches!(level, HeadingLevel::H1 | HeadingLevel::H2) {
-        allocate_full_width_block(ui, wrap_w, |ui| {
-            ui.add_space(2.0);
-            let (rect, _) =
-                ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(rect, 0.0, c_md_code_block_border());
-        });
-        ui.add_space(7.0);
-    } else {
-        ui.add_space(5.0);
-    }
-}
-
-fn render_paragraph(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
-    render_inline_until(ui, wrap_w, it, InlineEnd::Paragraph, InlineDensity::Normal);
-    ui.add_space(4.0);
-}
-
-fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
-    allocate_full_width_block(ui, wrap_w, |ui| {
-        Frame::none()
-            .fill(c_md_code_block_bg())
-            .rounding(Rounding::same(8.0))
-            .stroke(Stroke::new(1.0, c_md_code_block_border()))
-            .inner_margin(Margin::same(0.0))
-            .show(ui, |ui| {
-                let full_w = ui.available_width().max(48.0);
-                ui.set_width(full_w);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let (bar_rect, _) =
-                        ui.allocate_exact_size(vec2(3.0, 1.0), egui::Sense::hover());
-                    ui.painter()
-                        .rect_filled(bar_rect, Rounding::same(2.0), c_md_quote_accent());
-                    ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        ui.add_space(8.0);
-                        let inner_w = (full_w - 24.0).max(32.0);
-                        ui.set_width(inner_w);
-                        while let Some(ev) = it.next() {
-                            match ev {
-                                Event::End(TagEnd::BlockQuote(_)) => break,
-                                Event::Start(Tag::Paragraph) => render_paragraph(ui, inner_w, it),
-                                Event::Start(Tag::List(kind)) => {
-                                    render_list(ui, inner_w, kind, 0, it)
-                                }
-                                Event::Start(Tag::Heading { level, .. }) => {
-                                    render_heading(ui, inner_w, level, it);
-                                }
-                                Event::Start(Tag::CodeBlock(kind)) => {
-                                    render_fenced_block(
-                                        ui,
-                                        inner_w,
-                                        kind,
-                                        it,
-                                        ui.id().with("quote_fence"),
-                                    );
-                                }
-                                _ => {}
-                            }
-                        }
-                        ui.add_space(4.0);
-                    });
-                });
-            });
-    });
-    ui.add_space(7.0);
-}
-
-fn code_block_language(kind: &CodeBlockKind<'_>) -> String {
-    match kind {
-        CodeBlockKind::Fenced(info) => info
-            .split_whitespace()
-            .next()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("code")
-            .to_string(),
-        CodeBlockKind::Indented => "code".to_string(),
-    }
-}
-
-fn render_fenced_block(
-    ui: &mut Ui,
-    wrap_w: f32,
-    kind: CodeBlockKind<'_>,
-    it: &mut ParserPeek<'_>,
-    block_base_id: Id,
-) {
-    let mut buf = String::new();
-    for ev in it.by_ref() {
-        match ev {
-            Event::Text(t) => buf.push_str(t.as_ref()),
-            Event::End(TagEnd::CodeBlock) => break,
-            _ => {}
-        }
-    }
-    while buf.ends_with('\n') {
-        buf.pop();
-    }
-    const PREVIEW_LINES: usize = 14;
-    let overflows = buf.lines().count() > PREVIEW_LINES || buf.len() > 2600;
-    let persist_id = expand_persist_id(block_base_id);
-    let lang = code_block_language(&kind);
-    allocate_full_width_block(ui, wrap_w, |ui| {
-        let frame = Frame::none()
-            .fill(c_md_code_block_bg())
-            .stroke(Stroke::new(1.0, c_md_code_block_border()))
-            .rounding(Rounding::same(9.0))
-            .inner_margin(Margin::same(0.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-
-                Frame::none()
-                    .fill(c_md_code_block_header_bg())
-                    .rounding(egui::Rounding {
-                        nw: 9.0,
-                        ne: 9.0,
-                        sw: 0.0,
-                        se: 0.0,
-                    })
-                    .inner_margin(Margin::symmetric(10.0, 5.0))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(RichText::new("●").size(7.0).color(c_text_muted()));
-                            ui.label(
-                                RichText::new(lang.as_str())
-                                    .size(SZ_TINY)
-                                    .color(c_text_muted())
-                                    .family(FontFamily::Monospace),
-                            );
-                            if overflows && !is_expanded(ui, persist_id) {
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    ui.label(
-                                        RichText::new("click to expand")
-                                            .size(SZ_TINY)
-                                            .color(c_text_faint()),
-                                    );
-                                });
-                            }
-                        });
-                    });
-
-                Frame::none()
-                    .fill(c_md_code_block_bg())
-                    .rounding(egui::Rounding {
-                        nw: 0.0,
-                        ne: 0.0,
-                        sw: 9.0,
-                        se: 9.0,
-                    })
-                    .inner_margin(Margin::symmetric(11.0, 9.0))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        let inner = ui.available_width().max(40.0);
-                        let text = if overflows && !is_expanded(ui, persist_id) {
-                            truncate_lines_preview(&buf, PREVIEW_LINES)
-                        } else {
-                            buf.clone()
-                        };
-                        let job = LayoutJob::simple(
-                            text,
-                            FontId::monospace(SZ_CODE),
-                            c_md_code_fg(),
-                            inner,
-                        );
-                        selectable_job(ui, job);
-                    });
-            });
-        if overflows {
-            clickable_expand_overlay(ui, frame.response.rect, persist_id);
-        }
-    });
-    ui.add_space(8.0);
 }

@@ -1,0 +1,726 @@
+//! Per-profile editing: model/base-URL/API-key fields, the Local/Remote(SSH) compute
+//! target (with SSH password storage and "Test connection"), Codex OAuth sign-in, and
+//! background model-list fetching.
+
+use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
+
+use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
+use crate::settings::{ComputeLocation, LlmProviderKind, ProviderProfile, SshConfig};
+use crate::theme::*;
+use crate::ui::chrome::{
+    card_frame, field_label, ghost_button, hairline, nested_card_frame, pill_tab, settings_caption,
+};
+
+use super::super::task_runner::spawn_async_task;
+use super::super::{ModelFetchMsg, OxiApp, SshTestMsg};
+use super::layout::{active_pill, inactive_pill};
+
+impl OxiApp {
+    pub(super) fn render_profile_card(&mut self, ui: &mut Ui, idx: usize) {
+        let mut delete_clicked = false;
+        let mut make_active_clicked = false;
+        let active_id = self.conv.settings.active_profile_id.clone();
+        let prov = self.conv.settings.profiles[idx].provider;
+        let selected = active_id == self.conv.settings.profiles[idx].id;
+
+        card_frame().show(ui, |ui| {
+            // Header: status dot, name editor, "Active" pill, delete
+            ui.horizontal(|ui| {
+                let dot_col = if selected { c_accent() } else { c_text_faint() };
+                ui.label(RichText::new("●").size(FS_BODY).color(dot_col));
+                ui.add_space(4.0);
+
+                ui.add(
+                    TextEdit::singleline(&mut self.conv.settings.profiles[idx].name)
+                        .desired_width(220.0)
+                        .hint_text("Profile name")
+                        .margin(Margin::symmetric(8.0, 4.0)),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(prov.label())
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                );
+
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ghost_button(ui, "Delete", true)
+                        .on_hover_text("Remove this profile")
+                        .clicked()
+                    {
+                        delete_clicked = true;
+                    }
+                    ui.add_space(6.0);
+                    if selected {
+                        // "Active" indicator pill (non-interactive)
+                        active_pill(ui, "Active");
+                    } else if crate::ui::chrome::ghost_button(ui, "Make active", false)
+                        .on_hover_text("Use this profile for new chats")
+                        .clicked()
+                    {
+                        make_active_clicked = true;
+                    }
+                });
+            });
+
+            ui.add_space(4.0);
+            hairline(ui);
+            ui.add_space(4.0);
+
+            // Model id ─ with dropdown of models fetched from the provider's /v1/models.
+            field_label(ui, "Model id");
+            let pid = self.conv.settings.profiles[idx].id.clone();
+            let have = self
+                .conv
+                .fetched_models
+                .get(&pid)
+                .is_some_and(|f| !f.models.is_empty());
+            ui.horizontal(|ui| {
+                if have {
+                    let fetched = self
+                        .conv
+                        .fetched_models
+                        .get(&pid)
+                        .map(|f| f.models.clone())
+                        .unwrap_or_default();
+                    let current = self.conv.settings.profiles[idx].model_id.clone();
+                    let label = if current.is_empty() {
+                        "(custom)".to_string()
+                    } else {
+                        current.clone()
+                    };
+                    egui::ComboBox::from_id_salt(("model_combo", idx))
+                        .selected_text(label)
+                        .width(ui.available_width() - 30.0)
+                        .show_ui(ui, |ui| {
+                            if !current.is_empty() && fetched.iter().all(|x| x != &current) {
+                                let _ = ui.selectable_label(false, format!("{current} (custom)"));
+                            }
+                            for m in &fetched {
+                                if ui.selectable_label(*m == current, m.clone()).clicked() {
+                                    self.conv.settings.profiles[idx].model_id = m.clone();
+                                }
+                            }
+                        });
+                } else {
+                    ui.add(
+                        TextEdit::singleline(&mut self.conv.settings.profiles[idx].model_id)
+                            .desired_width(ui.available_width() - 30.0)
+                            .hint_text("e.g. gpt-4o-mini or kimi-k2.7-code")
+                            .margin(Margin::symmetric(8.0, 5.0)),
+                    );
+                }
+                if crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
+                    .on_hover_text("Load available models from provider")
+                    .clicked()
+                {
+                    self.spawn_model_fetch(ui.ctx(), idx);
+                }
+            });
+            // Status line for the model fetch.
+            if let Some(f) = self.conv.fetched_models.get(&pid) {
+                if let Some(e) = &f.error {
+                    ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
+                } else if f.loading {
+                    ui.label(
+                        RichText::new("Loading models…")
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                } else if !f.models.is_empty() {
+                    ui.label(
+                        RichText::new(format!("{} models available", f.models.len()))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                }
+            }
+            // Context window (auto from catalog; editable override).
+            {
+                let cw = self.conv.settings.profiles[idx].context_window;
+                let resolved = self.conv.settings.profiles[idx]
+                    .effective_context_window(self.conv.settings.context_window_default);
+                field_label(ui, "Context window (tokens, 0 = auto)");
+                ui.horizontal(|ui| {
+                    let mut value = cw.unwrap_or(0).to_string();
+                    let resp = ui.add(
+                        TextEdit::singleline(&mut value)
+                            .desired_width(160.0)
+                            .hint_text(format!("auto ({resolved})"))
+                            .margin(Margin::symmetric(8.0, 5.0)),
+                    );
+                    if resp.changed() {
+                        let parsed = value.trim().parse::<usize>().ok();
+                        self.conv.settings.profiles[idx].context_window =
+                            parsed.and_then(|n| if n > 0 { Some(n) } else { None });
+                    }
+                    if crate::ui::chrome::ghost_button(ui, "Auto", false)
+                        .on_hover_text("Resolve context window from the model catalog")
+                        .clicked()
+                    {
+                        self.conv.settings.profiles[idx].context_window = None;
+                    }
+                    ui.label(
+                        RichText::new(format!("effective: {resolved}"))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                });
+            }
+
+            // Base URL
+            field_label(ui, "Base URL (optional)");
+            ui.add(
+                TextEdit::singleline(&mut self.conv.settings.profiles[idx].base_url)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(prov.default_base_url())
+                    .margin(Margin::symmetric(8.0, 5.0)),
+            );
+
+            // API key
+            field_label(ui, "API key / token");
+            ui.add(
+                TextEdit::singleline(&mut self.conv.settings.profiles[idx].api_key)
+                    .password(true)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(match prov {
+                        LlmProviderKind::OpenAi => "OpenAI API key",
+                        LlmProviderKind::OpenRouter => "OpenRouter API key",
+                        LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
+                        LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
+                        LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
+                        LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
+                    })
+                    .margin(Margin::symmetric(8.0, 5.0)),
+            );
+
+            if prov == LlmProviderKind::OpenRouter {
+                ui.add_space(8.0);
+                nested_card_frame().show(ui, |ui| {
+                    settings_caption(ui, "Optional OpenRouter headers");
+                    ui.add(
+                        TextEdit::singleline(
+                            &mut self.conv.settings.profiles[idx].openrouter_http_referer,
+                        )
+                        .desired_width(f32::INFINITY)
+                        .hint_text("HTTP-Referer")
+                        .margin(Margin::symmetric(8.0, 5.0)),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        TextEdit::singleline(
+                            &mut self.conv.settings.profiles[idx].openrouter_title,
+                        )
+                        .desired_width(f32::INFINITY)
+                        .hint_text("X-Title")
+                        .margin(Margin::symmetric(8.0, 5.0)),
+                    );
+                });
+            }
+
+            if prov == LlmProviderKind::LmStudio || prov == LlmProviderKind::Ollama {
+                self.render_compute_target_section(ui, idx);
+            }
+        });
+
+        if make_active_clicked {
+            let id = self.conv.settings.profiles[idx].id.clone();
+            self.conv.settings.set_active_profile(&id);
+        }
+        if delete_clicked {
+            let id = self.conv.settings.profiles[idx].id.clone();
+            self.conv.settings.remove_profile(&id);
+            self.conv.ssh_password_drafts.remove(&id);
+            self.conv.ssh_test.remove(&id);
+            let mut creds = crate::compute::load_ssh_credentials();
+            creds.clear(&id);
+            let _ = crate::compute::save_ssh_credentials(&creds);
+        }
+    }
+
+    /// "Local" vs "Remote (SSH)" compute target for a profile, shown only for self-hosted
+    /// runtimes (LM Studio / Ollama) where running on another host over SSH is meaningful.
+    fn render_compute_target_section(&mut self, ui: &mut Ui, idx: usize) {
+        ui.add_space(8.0);
+        nested_card_frame().show(ui, |ui| {
+            settings_caption(ui, "Compute target");
+            let is_remote = matches!(
+                self.conv.settings.profiles[idx].location,
+                ComputeLocation::RemoteSsh(_)
+            );
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                if pill_tab(ui, "Local", !is_remote) && is_remote {
+                    self.conv.settings.profiles[idx].location = ComputeLocation::Local;
+                }
+                if pill_tab(ui, "Remote (SSH)", is_remote) && !is_remote {
+                    let remote_runtime_port = self.conv.settings.profiles[idx]
+                        .provider
+                        .default_remote_runtime_port();
+                    self.conv.settings.profiles[idx].location =
+                        ComputeLocation::RemoteSsh(SshConfig {
+                            remote_runtime_port,
+                            ..SshConfig::default()
+                        });
+                }
+            });
+
+            if let ComputeLocation::RemoteSsh(cfg) = &mut self.conv.settings.profiles[idx].location
+            {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "Runs the model on another host (e.g. a machine on your LAN) reached over SSH. \
+                         The runtime must be listening on 127.0.0.1 on that host; oxi \
+                         forwards a local port to it.",
+                    )
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
+                );
+                ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        field_label(ui, "SSH host");
+                        ui.add(
+                            TextEdit::singleline(&mut cfg.host)
+                                .desired_width(200.0)
+                                .hint_text("192.168.1.10 or myhost.local")
+                                .margin(Margin::symmetric(8.0, 5.0)),
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        field_label(ui, "SSH port");
+                        let mut port_str = cfg.port.to_string();
+                        if ui
+                            .add(
+                                TextEdit::singleline(&mut port_str)
+                                    .desired_width(70.0)
+                                    .margin(Margin::symmetric(8.0, 5.0)),
+                            )
+                            .changed()
+                        {
+                            if let Ok(p) = port_str.trim().parse::<u16>() {
+                                cfg.port = p;
+                            }
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        field_label(ui, "SSH user");
+                        ui.add(
+                            TextEdit::singleline(&mut cfg.user)
+                                .desired_width(200.0)
+                                .hint_text("e.g. ioan")
+                                .margin(Margin::symmetric(8.0, 5.0)),
+                        );
+                    });
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        field_label(ui, "Remote runtime port");
+                        let mut rport_str = cfg.remote_runtime_port.to_string();
+                        if ui
+                            .add(
+                                TextEdit::singleline(&mut rport_str)
+                                    .desired_width(70.0)
+                                    .margin(Margin::symmetric(8.0, 5.0)),
+                            )
+                            .changed()
+                        {
+                            if let Ok(p) = rport_str.trim().parse::<u16>() {
+                                cfg.remote_runtime_port = p;
+                            }
+                        }
+                    });
+                });
+            }
+        });
+
+        if !matches!(
+            self.conv.settings.profiles[idx].location,
+            ComputeLocation::RemoteSsh(_)
+        ) {
+            return;
+        }
+        let pid = self.conv.settings.profiles[idx].id.clone();
+
+        // Lazily load the saved password (if any) into the in-memory draft on first touch.
+        if !self.conv.ssh_password_drafts.contains_key(&pid) {
+            let creds = crate::compute::load_ssh_credentials();
+            let pw = creds.get(&pid).unwrap_or_default().to_string();
+            self.conv.ssh_password_drafts.insert(pid.clone(), pw);
+        }
+
+        ui.add_space(8.0);
+        nested_card_frame().show(ui, |ui| {
+            field_label(ui, "SSH password");
+            let changed = {
+                let pw = self.conv.ssh_password_drafts.get_mut(&pid).unwrap();
+                ui.add(
+                    TextEdit::singleline(pw)
+                        .password(true)
+                        .desired_width(240.0)
+                        .hint_text("SSH password")
+                        .margin(Margin::symmetric(8.0, 5.0)),
+                )
+                .changed()
+            };
+            ui.label(
+                RichText::new("Stored in the OS keychain, never in settings.json.")
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
+            );
+            if changed {
+                let pw = self
+                    .conv
+                    .ssh_password_drafts
+                    .get(&pid)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut creds = crate::compute::load_ssh_credentials();
+                creds.set(pid.clone(), pw);
+                if let Err(e) = crate::compute::save_ssh_credentials(&creds) {
+                    self.run_state_mut(self.active_session_key()).stream_error =
+                        Some(format!("Save SSH password: {e}"));
+                }
+            }
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ghost_button(ui, "Test connection", false).clicked() {
+                    self.spawn_ssh_test(ui.ctx(), idx);
+                }
+                ui.add_space(8.0);
+                if let Some(status) = self.conv.ssh_test.get(&pid) {
+                    if status.loading {
+                        ui.label(
+                            RichText::new("Connecting…")
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
+                        );
+                    } else if let Some(result) = &status.result {
+                        match result {
+                            Ok(port) => {
+                                ui.label(
+                                    RichText::new(format!("Connected (local tunnel port {port})"))
+                                        .size(FS_TINY)
+                                        .color(c_accent()),
+                                );
+                            }
+                            Err(e) => {
+                                ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    /// Kick off a background SSH "Test connection" check for the profile at `idx`'s
+    /// `RemoteSsh` config, if one isn't already in flight. Results arrive on
+    /// `conv.ssh_test_rx` and are drained each frame.
+    fn spawn_ssh_test(&mut self, ctx: &egui::Context, idx: usize) {
+        let Some(profile) = self.conv.settings.profiles.get(idx) else {
+            return;
+        };
+        let Some(cfg) = profile.ssh_config().cloned() else {
+            return;
+        };
+        let pid = profile.id.clone();
+        let password = self
+            .conv
+            .ssh_password_drafts
+            .get(&pid)
+            .cloned()
+            .unwrap_or_default();
+
+        let entry = self.conv.ssh_test.entry(pid.clone()).or_default();
+        if entry.loading {
+            return;
+        }
+        entry.loading = true;
+        entry.result = None;
+
+        let (tx, rx) = std::sync::mpsc::channel::<SshTestMsg>();
+        self.conv.ssh_test_rx = Some(rx);
+        let ctx = ctx.clone();
+        let tunnels = self.tunnels.clone();
+        let err_tx = tx.clone();
+        let err_pid = pid.clone();
+        let err_ctx = ctx.clone();
+        spawn_async_task(
+            move |err| {
+                let _ = err_tx.send(SshTestMsg {
+                    profile_id: err_pid,
+                    result: Err(err),
+                });
+                err_ctx.request_repaint();
+            },
+            move |rt| {
+                let r = rt.block_on(tunnels.ensure_tunnel(&pid, &cfg, &password));
+                let _ = tx.send(SshTestMsg {
+                    profile_id: pid,
+                    result: r,
+                });
+                ctx.request_repaint();
+            },
+        );
+    }
+
+    /// Drain background SSH "Test connection" results into `conv.ssh_test`. Mirrors
+    /// [`Self::drain_models`].
+    pub(crate) fn drain_ssh_test(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.conv.ssh_test_rx.take() else {
+            return;
+        };
+        let mut repainted = false;
+        loop {
+            match rx.try_recv() {
+                Ok(msg) => {
+                    let entry = self.conv.ssh_test.entry(msg.profile_id).or_default();
+                    entry.loading = false;
+                    entry.result = Some(msg.result);
+                    repainted = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.conv.ssh_test_rx = Some(rx);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        if repainted {
+            ctx.request_repaint();
+        }
+    }
+
+    // ── OAuth sections ────────────────────────────────────────────────────────
+
+    pub(super) fn render_codex_oauth_section(&mut self, ui: &mut Ui) {
+        let oauth = load_oauth_store();
+        let signed_in = oauth.openai_codex.is_some();
+        card_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("ChatGPT / Codex OAuth")
+                        .size(FS_BODY)
+                        .color(c_text())
+                        .strong(),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if signed_in {
+                        active_pill(ui, "Signed in");
+                    } else {
+                        inactive_pill(ui, "Signed out");
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("Browser + localhost:1455 callback")
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        !self.conv.oauth_busy,
+                        crate::ui::chrome::primary_button_widget("Sign in with ChatGPT"),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    self.spawn_codex_oauth(ui.ctx());
+                }
+                if ui
+                    .add_enabled(
+                        signed_in,
+                        crate::ui::chrome::ghost_button_widget("Sign out", false),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    let mut s = load_oauth_store();
+                    clear_codex(&mut s);
+                    let _ = save_oauth_store(&s);
+                    self.conv.oauth_last_message = Some("Signed out Codex OAuth.".into());
+                }
+            });
+            if let Some(ref msg) = self.conv.oauth_last_message {
+                ui.add_space(6.0);
+                ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
+            }
+        });
+    }
+
+    // ── OAuth spawn helpers ───────────────────────────────────────────────────
+
+    fn spawn_codex_oauth(&mut self, ctx: &egui::Context) {
+        if self.conv.oauth_busy {
+            return;
+        }
+        self.conv.oauth_busy = true;
+        self.conv.oauth_last_message = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.conn.oauth_rx = Some(rx);
+        let ctx = ctx.clone();
+        spawn_async_task(
+            {
+                let tx = tx.clone();
+                let ctx = ctx.clone();
+                move |err| {
+                    let _ = tx.send(OAuthUiMsg::CodexDone(Err(err)));
+                    ctx.request_repaint();
+                }
+            },
+            move |rt| {
+                let tx2 = tx.clone();
+                let r = rt.block_on(crate::oauth::login_openai_codex(tx2));
+                let _ = tx.send(OAuthUiMsg::CodexDone(r));
+                ctx.request_repaint();
+            },
+        );
+    }
+
+    // ── Model list fetch ─────────────────────────────────────────────────────
+    /// Ensure the active profile's model catalog has been fetched at least once
+    /// (e.g. on startup) so the composer model dropdown offers the full list
+    /// instead of falling back to just the current model id.
+    pub(crate) fn ensure_active_models_fetched(&mut self, ctx: &egui::Context) {
+        let Some(active) = self.conv.settings.active_profile() else {
+            return;
+        };
+        let pid = active.id.clone();
+        // Already fetched (or in flight)? Then nothing to do.
+        if let Some(f) = self.conv.fetched_models.get(&pid) {
+            if f.loading || !f.models.is_empty() {
+                return;
+            }
+        }
+        if let Some(idx) = self.conv.settings.profiles.iter().position(|p| p.id == pid) {
+            self.spawn_model_fetch(ctx, idx);
+        }
+    }
+
+    /// Kick off a background `/v1/models` fetch for the profile at `idx`, if one isn't
+    /// already in flight. Results arrive on `conv.model_rx` and are drained each frame.
+    pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, idx: usize) {
+        let profile = match self.conv.settings.profiles.get(idx) {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let entry = self
+            .conv
+            .fetched_models
+            .entry(profile.id.clone())
+            .or_default();
+        if entry.loading {
+            return;
+        }
+        entry.loading = true;
+        entry.error = None;
+
+        let (tx, rx) = std::sync::mpsc::channel::<ModelFetchMsg>();
+        // Keep only the most recent receiver live (single global channel).
+        self.conv.model_rx = Some(rx);
+        let ctx = ctx.clone();
+        let profile_id = profile.id.clone();
+        let err_tx = tx.clone();
+        let err_pid = profile_id.clone();
+        let err_ctx = ctx.clone();
+        let tunnels = self.tunnels.clone();
+        spawn_async_task(
+            move |err| {
+                let _ = err_tx.send(ModelFetchMsg {
+                    profile_id: err_pid,
+                    result: Err(err),
+                });
+                err_ctx.request_repaint();
+            },
+            move |rt| {
+                let client = match reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
+                    .build()
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx.send(ModelFetchMsg {
+                            profile_id,
+                            result: Err(e.to_string()),
+                        });
+                        ctx.request_repaint();
+                        return;
+                    }
+                };
+                let base = match rt.block_on(crate::compute::resolve_base_url(&profile, &tunnels)) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        let _ = tx.send(ModelFetchMsg {
+                            profile_id,
+                            result: Err(e),
+                        });
+                        ctx.request_repaint();
+                        return;
+                    }
+                };
+                // OpenCode Go expects /v1/models but its default base lacks /v1.
+                let base = if profile.provider == LlmProviderKind::OpenCodeGo
+                    && !base.trim_end_matches('/').ends_with("/v1")
+                {
+                    format!("{}/v1", base.trim_end_matches('/'))
+                } else {
+                    base
+                };
+                let extra = if profile.provider == LlmProviderKind::OpenRouter {
+                    crate::agent::runner::openrouter_extra_headers(&profile)
+                } else {
+                    Vec::new()
+                };
+                let key = match resolve_fetch_key(&profile) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        let _ = tx.send(ModelFetchMsg {
+                            profile_id,
+                            result: Err(e),
+                        });
+                        ctx.request_repaint();
+                        return;
+                    }
+                };
+                let r = rt.block_on(crate::agent::fetch_models(&client, &base, &key, &extra));
+                let r = r.map(|ms| ms.into_iter().map(|m| m.id).collect::<Vec<_>>());
+                let _ = tx.send(ModelFetchMsg {
+                    profile_id,
+                    result: r,
+                });
+                ctx.request_repaint();
+            },
+        );
+    }
+}
+
+/// Resolve the bearer key to use for a model-list fetch (mirrors the runner's auth fallbacks).
+fn resolve_fetch_key(profile: &ProviderProfile) -> Result<String, String> {
+    let key = profile.api_key.trim();
+    if !key.is_empty() {
+        return Ok(key.to_string());
+    }
+    match profile.provider {
+        LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => {
+            std::env::var("OPENAI_API_KEY").map_err(|_| "Set an API key to list models.".into())
+        }
+        LlmProviderKind::OpenRouter => {
+            std::env::var("OPENROUTER_API_KEY").map_err(|_| "Set an API key to list models.".into())
+        }
+        // OpenCode Go, LM Studio, and Ollama expose the model list without auth.
+        LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
+            Ok(String::new())
+        }
+    }
+}
