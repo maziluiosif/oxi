@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-03
+
+### Changed
+- Centralize theme tokens with shared corner-radius constants (`RADIUS_ROW`, `RADIUS_BUTTON`, `RADIUS_CHIP`, `RADIUS_PANEL`) replacing hardcoded pixel values throughout UI
+- Rewrite git panel with improved layout: constrain diff viewer width to stay centered in chat column, make scrollbars always visible, reserve fixed space for action buttons on narrow panels
+- Align message-status pill to fixed 28px height for visual consistency with header buttons
+- Fix local-default URLs and hostnames in settings and documentation (`mac-mini` → `localhost`)
+
+### Removed
+- Delete autonomous Claude Code agent loop system (`.claude/loops/` directory)
+
+
 ## [0.6.0] - 2026-07-02
 
 ### Added
@@ -124,7 +136,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/maziluiosif/oxi/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/maziluiosif/oxi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/maziluiosif/oxi/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/maziluiosif/oxi/compare/v0.4.0...v0.4.1
