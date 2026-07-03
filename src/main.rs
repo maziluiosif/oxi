@@ -15,6 +15,35 @@ mod ui;
 use app::OxiApp;
 use eframe::egui::IconData;
 
+/// Record panics to `<config_dir>/oxi/crash.log` before the default hook prints to stderr,
+/// so a crash in a background thread (agent/network) leaves a trace the user can find and
+/// report even if they never saw the terminal.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let log_path = dirs::config_dir().map(|d| d.join("oxi").join("crash.log"));
+        if let Some(path) = log_path {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let entry = format!("[{timestamp}] {info}\n");
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                use std::io::Write;
+                let _ = f.write_all(entry.as_bytes());
+            }
+        }
+        default_hook(info);
+    }));
+}
+
 fn app_icon() -> IconData {
     let image = image::load_from_memory(include_bytes!("../assets/app-icon.png"))
         .expect("embedded app icon should be a valid PNG")
@@ -28,6 +57,7 @@ fn app_icon() -> IconData {
 }
 
 fn main() -> eframe::Result<()> {
+    install_panic_hook();
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1240.0, 820.0])

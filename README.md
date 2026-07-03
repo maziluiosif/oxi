@@ -428,9 +428,11 @@ Based on the current source code:
 
 - `bash` safety checks are basic and not a real sandbox
 - tool execution can modify files inside the selected workspace
-- OAuth tokens are stored as JSON on disk
-- SSH passwords for Remote compute targets are stored as plaintext JSON on disk
-  (`ssh_credentials.json`), not in an OS keychain
+- provider API keys (`settings.json`), OAuth tokens (`oauth.json`), and SSH passwords for
+  Remote compute targets (`ssh_credentials.json`) are all stored as plaintext JSON on disk,
+  not in an OS keychain. On Unix these files are written with `0600` permissions (owner-only)
+  as a baseline protection against other local accounts; there is no protection against
+  another process running as the same user, and no such restriction is applied on Windows
 - Remote SSH tunnels trust the remote host key on every connection (no pinning/known_hosts
   verification) — only point this at hosts you control
 - workspace path protections apply to file-based tools, but you should still use the app on trusted repositories
