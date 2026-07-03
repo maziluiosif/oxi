@@ -65,8 +65,6 @@ pub const ICON_CHECK: &str = "\u{f00c}";
 pub const ICON_SETTINGS: &str = "\u{f013}";
 /// Plus — "new" / "add" actions (new chat, add profile) (`nf-fa-plus`).
 pub const ICON_PLUS: &str = "\u{f067}";
-/// Plus inside a filled square — primary "new chat" button (`nf-fa-plus-square`).
-pub const ICON_PLUS_SQUARE: &str = "\u{f0fe}";
 /// Chevron pointed left — "back" / hide panel (`nf-fa-chevron-left`).
 pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
 /// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
@@ -91,6 +89,10 @@ pub const ICON_EXTERNAL: &str = "\u{f08e}";
 pub const ICON_TRASH: &str = "\u{f1f8}";
 /// Folder plus — "add workspace" (`nf-md-folder-plus`).
 pub const ICON_FOLDER_PLUS: &str = "\u{f0257}";
+/// Closed folder — folded workspace row in the sidebar (`nf-md-folder`).
+pub const ICON_FOLDER: &str = "\u{f024b}";
+/// Open folder — unfolded workspace row in the sidebar (`nf-md-folder_open`).
+pub const ICON_FOLDER_OPEN: &str = "\u{f0770}";
 /// Check inside a circle — affirmative pill ("Signed in", committed) (`nf-fa-check-circle`).
 pub const ICON_CHECK_CIRCLE: &str = "\u{f058}";
 /// Up angle chevron — "stage" direction / collapse hint (`nf-fa-angle-up`).
@@ -337,8 +339,6 @@ palette_accessors! {
     c_text_faint => text_faint,
     c_sidebar_section => sidebar_section,
     c_user_bubble => user_bubble,
-    c_row_active => row_active,
-    c_row_hover => row_hover,
     c_success => success,
     c_danger => danger,
     c_diff_add_fg => diff_add_fg,
@@ -361,14 +361,16 @@ palette_accessors! {
 // breaking consistency. These helpers build each tint from the *active* accent/danger/success so a
 // theme swap re-skins them automatically. All take a base hue (an accent/danger/success color).
 
-/// Blend a color toward the panel background by `alpha/255` (gives a translucent panel tint that
-/// works on both dark and light surfaces without a hard-coded RGB).
+/// Composite `base` over the panel background at `alpha/255` opacity (gives a translucent panel
+/// tint that works on both dark and light surfaces without a hard-coded RGB). Note the blend
+/// starts from the panel background: alpha 30 means a faint wash of `base`, not 88% of it —
+/// the earlier inverted blend is what made accent/danger "tints" render as near-solid color.
 fn tint_on_panels(base: Color32, alpha: u8) -> Color32 {
     let bg = c_bg_main();
     Color32::from_rgba_unmultiplied(
-        u8_blend(base.r(), bg.r(), alpha),
-        u8_blend(base.g(), bg.g(), alpha),
-        u8_blend(base.b(), bg.b(), alpha),
+        u8_blend(bg.r(), base.r(), alpha),
+        u8_blend(bg.g(), base.g(), alpha),
+        u8_blend(bg.b(), base.b(), alpha),
         255,
     )
 }
@@ -438,6 +440,18 @@ pub fn c_info_bg() -> Color32 {
 /// quiet hairline, not a highlight.
 pub fn c_thinking_rail() -> Color32 {
     tint_on_panels(c_accent(), 90)
+}
+
+/// Selected-row background, app-wide (sidebar rows, settings nav, git panel, …) —
+/// an accent tint rather than a neutral grey, so the active item reads as "accent"
+/// consistently everywhere a row/button has a selected or pressed state.
+pub fn c_row_active() -> Color32 {
+    tint_on_panels(c_accent(), 40)
+}
+/// Hover background, app-wide — the same accent tint dialed down, so hover reads
+/// as a preview of the active-row treatment rather than a mismatched grey.
+pub fn c_row_hover() -> Color32 {
+    tint_on_panels(c_accent(), 16)
 }
 
 /// Foreground for text/icons drawn on an accent-filled surface (primary buttons, send).
@@ -542,8 +556,8 @@ pub fn badge_running_parts() -> (Color32, Color32, Color32) {
     if p.dark_base {
         (
             p.accent,
-            tint_on_panels(p.accent, 34),
-            tint_on_panels(p.accent, 105),
+            Color32::from_rgb(0x2a, 0x1c, 0x10),
+            Color32::from_rgb(0x4d, 0x33, 0x1d),
         )
     } else {
         (
@@ -1021,6 +1035,26 @@ pub fn format_stream_elapsed(d: Duration) -> String {
     format!("{m}m{rs:02}")
 }
 
+/// Coarse "time ago" label for sidebar rows: "now", "5m", "6h", "18h", "3d".
+pub fn format_relative_time(t: std::time::SystemTime) -> String {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(t)
+        .unwrap_or_default();
+    let s = elapsed.as_secs();
+    if s < 60 {
+        return "now".to_string();
+    }
+    let m = s / 60;
+    if m < 60 {
+        return format!("{m}m");
+    }
+    let h = m / 60;
+    if h < 24 {
+        return format!("{h}h");
+    }
+    format!("{}d", h / 24)
+}
+
 /// Short label for a workspace root path (last two path segments, e.g. `owner/repo`).
 pub fn workspace_sidebar_label(root_path: &str) -> String {
     let path = std::path::Path::new(root_path);
@@ -1063,6 +1097,32 @@ pub fn tool_status_label(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_relative_time_coarse_units() {
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::now();
+        assert_eq!(format_relative_time(now), "now");
+        assert_eq!(format_relative_time(now - Duration::from_secs(59)), "now");
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(5 * 60)),
+            "5m"
+        );
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(6 * 3600)),
+            "6h"
+        );
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(18 * 3600)),
+            "18h"
+        );
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(3 * 86_400)),
+            "3d"
+        );
+        // Future timestamps (clock skew) clamp to "now" rather than underflowing.
+        assert_eq!(format_relative_time(now + Duration::from_secs(3600)), "now");
+    }
 
     #[test]
     fn builtin_themes_present_and_unique() {

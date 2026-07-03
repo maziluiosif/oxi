@@ -314,31 +314,19 @@ impl OxiApp {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                if ui
-                    .add(crate::ui::chrome::mini_button_icon_widget(
-                        ICON_DOWNLOAD,
-                        "Pull",
-                    ))
+                if crate::ui::chrome::mini_button_icon(ui, ICON_DOWNLOAD, "Pull")
                     .on_hover_text("Pull (fast-forward only)")
                     .clicked()
                 {
                     self.request(GitOp::Pull);
                 }
-                if ui
-                    .add(crate::ui::chrome::mini_button_icon_widget(
-                        ICON_UPLOAD,
-                        "Push",
-                    ))
+                if crate::ui::chrome::mini_button_icon(ui, ICON_UPLOAD, "Push")
                     .on_hover_text("Push")
                     .clicked()
                 {
                     self.request(GitOp::Push);
                 }
-                if ui
-                    .add(crate::ui::chrome::mini_button_icon_widget(
-                        ICON_REFRESH,
-                        "Fetch",
-                    ))
+                if crate::ui::chrome::mini_button_icon(ui, ICON_REFRESH, "Fetch")
                     .on_hover_text("Fetch")
                     .clicked()
                 {
@@ -410,6 +398,7 @@ impl OxiApp {
                     !staged_empty && !msg_empty,
                     crate::ui::chrome::primary_button_icon_widget(ICON_CHECK, "Commit"),
                 )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text("Commit staged changes")
                 .on_disabled_hover_text(if staged_empty {
                     "Stage some changes first"
@@ -421,17 +410,22 @@ impl OxiApp {
                 self.request(GitOp::Commit(msg));
                 self.conv.git_commit_message.clear();
             }
-            let gen_widget = if gen_active {
-                crate::ui::chrome::ghost_button_widget("Generating…", false)
+            let (gen_icon, gen_label) = if gen_active {
+                ("", "Generating…")
             } else {
-                crate::ui::chrome::ghost_button_icon_widget(ICON_MAGIC, "Generate", false)
+                (ICON_MAGIC, "Generate")
             };
-            if ui
-                .add_enabled(!gen_active, gen_widget)
-                .on_hover_text(
-                    "Generate a commit message from the staged diff with the configured model",
-                )
-                .clicked()
+            if crate::ui::chrome::ghost_button_icon_enabled(
+                ui,
+                gen_icon,
+                gen_label,
+                false,
+                !gen_active,
+            )
+            .on_hover_text(
+                "Generate a commit message from the staged diff with the configured model",
+            )
+            .clicked()
             {
                 // Ask the worker for the diff; the response handler starts the LLM run.
                 self.conv.commit_gen_error = None;
@@ -444,6 +438,7 @@ impl OxiApp {
                     has_unstaged,
                     crate::ui::chrome::ghost_button_widget("Stage all", false),
                 )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
                 let paths: Vec<String> = self
@@ -460,6 +455,7 @@ impl OxiApp {
                     !staged_empty,
                     crate::ui::chrome::ghost_button_widget("Unstage all", false),
                 )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
                 let paths: Vec<String> = self

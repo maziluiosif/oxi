@@ -2,8 +2,8 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
-    Sense, Stroke, Ui,
+    self, Align, Color32, FontFamily, FontId, Frame, Layout, Margin, RichText, Rounding,
+    ScrollArea, Sense, Stroke, Ui,
 };
 
 use crate::theme::*;
@@ -32,6 +32,15 @@ impl OxiApp {
                 {
                     self.conv.sidebar_open = false;
                 }
+                if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, 22.0, false)
+                    .on_hover_text(
+                        "Add a project folder. Each workspace has its own chats; \
+                         tools run with that folder as cwd.",
+                    )
+                    .clicked()
+                {
+                    self.open_workspace_folder();
+                }
             });
         });
 
@@ -39,8 +48,6 @@ impl OxiApp {
 
         sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
 
-        ui.add_space(4.0);
-        self.render_sidebar_add_workspace(ui);
         ui.add_space(8.0);
 
         let scroll_h = (ui.available_height() - 38.0).max(48.0);
@@ -55,82 +62,24 @@ impl OxiApp {
 
         ui.add_space(8.0);
         // Settings footer row: same rounded pill styling
-        if ui
-            .add_sized(
-                [ui.available_width(), 30.0],
-                Button::new(crate::ui::chrome::icon_label_job(
-                    ICON_SETTINGS,
-                    "Settings",
-                    FS_SMALL,
-                    c_text(),
-                ))
-                .fill(c_bg_elevated())
-                .stroke(Stroke::new(1.0, c_border_subtle()))
-                .rounding(8.0),
-            )
-            .on_hover_text("Open settings")
-            .clicked()
+        if crate::ui::chrome::row_button_icon(
+            ui,
+            ICON_SETTINGS,
+            "Settings",
+            egui::vec2(ui.available_width(), 30.0),
+        )
+        .on_hover_text("Open settings")
+        .clicked()
         {
             self.conv.settings_open = true;
         }
         ui.expand_to_include_rect(ui.max_rect());
     }
 
-    fn render_sidebar_add_workspace(&mut self, ui: &mut Ui) {
-        const H: f32 = 30.0;
-        const R: f32 = 8.0;
-        let full_w = ui.available_width();
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, H), Sense::click());
-        let hovered = response.hovered();
-        let fill = if hovered {
-            c_row_hover()
-        } else {
-            c_bg_elevated()
-        };
-        let rounding = Rounding::same(R);
-        ui.painter().rect_filled(rect, rounding, fill);
-        ui.painter().rect_stroke(
-            rect,
-            rounding,
-            Stroke::new(
-                1.0,
-                if hovered {
-                    c_border()
-                } else {
-                    c_border_subtle()
-                },
-            ),
-        );
-        ui.allocate_new_ui(
-            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
-            |ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(ICON_FOLDER_PLUS)
-                            .font(FontId::new(FS_SMALL, icon_font()))
-                            .color(if hovered { c_accent() } else { c_text_muted() }),
-                    );
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("Add workspace")
-                            .size(FS_SMALL)
-                            .color(c_text()),
-                    );
-                });
-            },
-        );
-        if hovered {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if response.clicked() {
-            self.open_workspace_folder();
-        }
-        response.on_hover_text(
-            "Add a project folder. Each workspace has its own chats; tools run with that folder as cwd.",
-        );
-    }
-
     fn render_sidebar_session_list(&mut self, ui: &mut Ui) {
+        // Workspace headers sit a step above the chat rows' default size, matching
+        // the app-wide type scale (theme.rs) so it still tracks the UI density zoom.
+        const FS_WORKSPACE: f32 = FS_SMALL + 1.5;
         let q = self.conv.sidebar_search.trim().to_lowercase();
         let mut sidebar_changed = false;
 
@@ -140,66 +89,106 @@ impl OxiApp {
             }
             let active_si = self.conv.workspaces[wi].active;
             let n_sessions = self.conv.workspaces[wi].sessions.len();
-            let mut root_label = workspace_sidebar_label(&self.conv.workspaces[wi].root_path);
-            if n_sessions > 0 {
-                root_label = format!("{root_label} · {n_sessions}");
-            }
+            let root_label = workspace_sidebar_label(&self.conv.workspaces[wi].root_path);
             let folded = self.conv.workspaces[wi].sidebar_folded;
             ui.add_space(1.0);
 
-            let chev = if folded {
-                ICON_ANGLE_DOWN
-            } else {
-                ICON_ANGLE_UP
+            const ROW_H: f32 = 22.0;
+            const PLUS_W: f32 = 22.0;
+            const GLYPH_W: f32 = 18.0;
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
+            // `rect_contains_pointer` instead of `response.hovered()`: the in-place "+"
+            // below steals hover from the row response, which would flicker the fill.
+            let row_hovered = ui.rect_contains_pointer(rect);
+            if row_hovered {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                ui.painter()
+                    .rect_filled(rect, Rounding::same(6.0), c_row_hover());
+            }
+            // Leading glyph: folder open/closed at rest, fold chevron on hover.
+            let glyph = match (row_hovered, folded) {
+                (true, true) => ICON_CHEVRON_RIGHT,
+                (true, false) => ICON_ANGLE_DOWN,
+                (false, true) => ICON_FOLDER,
+                (false, false) => ICON_FOLDER_OPEN,
             };
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                const ROW_H: f32 = 22.0;
-                const PLUS_W: f32 = 22.0;
-                let plus_reserved = if wi == self.conv.active_workspace {
-                    PLUS_W + 2.0
-                } else {
-                    0.0
-                };
-                let row_w = (ui.available_width() - plus_reserved).max(40.0);
-                if ui
-                    .add(
-                        Button::new(crate::ui::chrome::icon_label_job(
-                            chev,
-                            &root_label,
-                            FS_TINY,
-                            c_sidebar_section(),
-                        ))
-                        .frame(false)
-                        .fill(Color32::TRANSPARENT)
-                        .min_size(egui::vec2(row_w, ROW_H)),
-                    )
-                    .on_hover_text("Fold or unfold chats")
-                    .clicked()
-                {
-                    self.conv.workspaces[wi].sidebar_folded = !folded;
-                }
-                if wi == self.conv.active_workspace
-                    && ui
-                        .add(
-                            Button::new(crate::ui::chrome::icon_glyph_rich(
-                                ICON_PLUS_SQUARE,
-                                FS_TINY,
-                                c_text_muted(),
-                            ))
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(egui::vec2(PLUS_W, ROW_H)),
+            ui.painter().text(
+                egui::pos2(rect.left() + 4.0 + GLYPH_W * 0.5, rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                glyph,
+                FontId::new(FS_TINY, icon_font()),
+                c_sidebar_section(),
+            );
+            let label_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 4.0 + GLYPH_W + 4.0, rect.top()),
+                egui::pos2(rect.right() - PLUS_W - 2.0, rect.bottom()),
+            );
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(label_rect), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&root_label)
+                                .size(FS_WORKSPACE)
+                                .color(c_sidebar_section()),
                         )
-                        .on_hover_text("New chat in this workspace")
-                        .clicked()
-                {
-                    self.new_chat();
-                    sidebar_changed = true;
-                }
+                        .truncate()
+                        .halign(Align::LEFT)
+                        .selectable(false),
+                    );
+                });
             });
+            // Hover-only "+" at the right edge, painted + interacted in place (never
+            // allocated) so its appearance can't shift the layout.
+            let mut plus_hovered = false;
+            let mut plus_clicked = false;
+            if row_hovered {
+                let plus_rect = egui::Rect::from_min_max(
+                    egui::pos2(rect.right() - PLUS_W - 2.0, rect.top()),
+                    egui::pos2(rect.right() - 2.0, rect.bottom()),
+                );
+                let plus_resp = ui
+                    .interact(plus_rect, ui.id().with(("ws_plus", wi)), Sense::click())
+                    .on_hover_text("New chat in this workspace");
+                plus_hovered = plus_resp.hovered();
+                plus_clicked = plus_resp.clicked();
+                ui.painter().text(
+                    plus_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    ICON_PLUS,
+                    FontId::new(FS_TINY, icon_font()),
+                    if plus_hovered {
+                        c_accent()
+                    } else {
+                        c_text_faint()
+                    },
+                );
+            }
+            if plus_clicked {
+                if wi != self.conv.active_workspace {
+                    self.select_workspace(wi);
+                }
+                self.new_chat();
+                sidebar_changed = true;
+            } else if response.clicked() && !plus_hovered {
+                self.conv.workspaces[wi].sidebar_folded = !folded;
+                self.sync_workspaces_to_settings();
+            }
+            // The cwd workspace (index 0) is always present, so it gets no delete option.
+            if wi != 0 {
+                response.context_menu(|ui| {
+                    if ui.button("Delete workspace").clicked() {
+                        self.delete_workspace(wi);
+                        sidebar_changed = true;
+                        ui.close_menu();
+                    }
+                });
+            }
             ui.add_space(1.0);
-            if folded {
+            if sidebar_changed {
+                return;
+            }
+            if self.conv.workspaces[wi].sidebar_folded {
                 continue;
             }
 
@@ -224,8 +213,8 @@ impl OxiApp {
                             let selected = wi == self.conv.active_workspace && si == active_si;
                             let running = self.session_row_is_running(wi, si);
                             let title = row_title.clone();
-                            const ROW_INNER_H: f32 = 20.0;
-                            const ROW_VMARGIN: f32 = 2.0;
+                            const ROW_INNER_H: f32 = 22.0;
+                            const ROW_VMARGIN: f32 = 4.0;
                             let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(row_w, row_outer_h),
@@ -242,7 +231,7 @@ impl OxiApp {
                             } else {
                                 Color32::TRANSPARENT
                             };
-                            ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
+                            ui.painter().rect_filled(rect, Rounding::same(7.0), fill);
                             if response.clicked() {
                                 self.select_session_in_workspace(wi, si);
                             }
@@ -256,22 +245,30 @@ impl OxiApp {
                                     ui.close_menu();
                                 }
                             });
-                            self.render_session_row_inner(
-                                ui, rect, wi, si, running, selected, title,
-                            );
-
                             // Hover-only delete button, mirroring the context-menu action.
+                            // `rect_contains_pointer`, not `response.hovered()`: the
+                            // trash button interacted below overlaps this rect and
+                            // would otherwise steal hover from the row response,
+                            // flickering show/hide every other frame.
                             let can_delete =
                                 wi == self.conv.active_workspace && n_sessions > 1 && !running;
-                            if can_delete && ui.rect_contains_pointer(rect) {
+                            let show_trash = can_delete && ui.rect_contains_pointer(rect);
+                            self.render_session_row_inner(
+                                ui, rect, wi, si, running, selected, title, show_trash,
+                            );
+
+                            if show_trash {
+                                // Flush against the same right edge the time label
+                                // sits at, so it swaps in instead of crowding it.
+                                const TIME_W: f32 = 34.0;
                                 let trash_rect = egui::Rect::from_min_max(
-                                    egui::pos2(rect.right() - 24.0, rect.top()),
-                                    egui::pos2(rect.right() - 2.0, rect.bottom()),
+                                    egui::pos2(rect.right() - 3.0 - TIME_W, rect.top() + 2.0),
+                                    egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
                                 );
                                 // Backing fill keeps the icon legible over long titles.
                                 ui.painter().rect_filled(
                                     trash_rect,
-                                    Rounding::same(6.0),
+                                    Rounding::same(7.0),
                                     if selected {
                                         c_row_active()
                                     } else {
@@ -290,11 +287,14 @@ impl OxiApp {
                                     ICON_TRASH,
                                     FontId::new(FS_TINY, icon_font()),
                                     if trash_resp.hovered() {
-                                        c_text()
+                                        c_accent()
                                     } else {
                                         c_text_faint()
                                     },
                                 );
+                                if trash_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
                                 if trash_resp.clicked() {
                                     self.delete_session(si);
                                     sidebar_changed = true;
@@ -303,7 +303,6 @@ impl OxiApp {
                         });
                     });
                 });
-                ui.add_space(1.0);
                 if sidebar_changed {
                     return;
                 }
@@ -333,9 +332,10 @@ impl OxiApp {
         running: bool,
         selected: bool,
         title: String,
+        hide_time: bool,
     ) {
-        const ROW_INNER_H: f32 = 20.0;
-        const ROW_VMARGIN: f32 = 2.0;
+        const ROW_INNER_H: f32 = 22.0;
+        const ROW_VMARGIN: f32 = 4.0;
         const BULLET_GAP: f32 = 4.0;
         const SPINNER_GAP: f32 = 4.0;
 
@@ -343,21 +343,28 @@ impl OxiApp {
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_min_width(inner.width());
             let lead_w = if running { 0.0 } else { 14.0 };
-            let time_w = if running { 40.0 } else { 0.0 };
+            let time_w = if running { 40.0 } else { 34.0 };
             let spin_reserve = if running { 14.0 } else { 0.0 };
             let sx = ui.spacing().item_spacing.x;
-            let time_label = if running {
+            // Space is always reserved for the time label so the title never
+            // reflows; when hidden the delete button is painted over that
+            // same slot instead.
+            let time_label = if hide_time {
+                None
+            } else if running {
                 self.stream_started_at_for(wi, si)
                     .map(|t| format_stream_elapsed(t.elapsed()))
             } else {
-                None
+                Some(format_relative_time(
+                    self.conv.workspaces[wi].sessions[si].modified,
+                ))
             };
             let fixed = lead_w
                 + if running { 0.0 } else { BULLET_GAP }
                 + if running { SPINNER_GAP } else { 0.0 }
                 + time_w
                 + spin_reserve
-                + sx * if running { 4.0 } else { 2.0 };
+                + sx * if running { 4.0 } else { 3.0 };
             let title_w = (ui.available_width() - fixed).max(24.0);
             let bullet_col = if selected { c_accent() } else { c_text_muted() };
 
@@ -391,30 +398,39 @@ impl OxiApp {
                     egui::Layout::left_to_right(Align::Center),
                     |ui| {
                         use eframe::egui::Label;
+                        let title_color = if selected { c_text() } else { c_text_muted() };
                         ui.add(
                             Label::new(
-                                RichText::new(title.as_str()).size(FS_SMALL).color(c_text()),
+                                RichText::new(title.as_str())
+                                    .size(FS_SMALL)
+                                    .color(title_color),
                             )
                             .truncate()
                             .halign(Align::LEFT),
                         );
                     },
                 );
-                if let Some(ref s) = time_label {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(time_w, ROW_INNER_H),
-                        egui::Layout::right_to_left(Align::Center),
-                        |ui| {
-                            ui.label(
-                                RichText::new(s)
-                                    .size(FS_TINY)
-                                    .color(c_text_muted())
-                                    .monospace(),
-                            );
-                        },
-                    );
-                }
             });
+            // Painted at an absolute rect (flush against `inner`'s right edge)
+            // rather than placed in the sequential layout, so it lines up
+            // pixel-for-pixel with the hover-only trash button that swaps
+            // into this same spot.
+            if let Some(ref s) = time_label {
+                let time_rect = egui::Rect::from_min_max(
+                    egui::pos2(inner.right() - time_w, inner.top()),
+                    egui::pos2(inner.right(), inner.bottom()),
+                );
+                // Nudged left off the flush-right edge (~2 monospace chars)
+                // so it doesn't sit exactly under the trash icon's center.
+                const TEXT_NUDGE: f32 = 7.0;
+                ui.painter().text(
+                    time_rect.right_center() - egui::vec2(TEXT_NUDGE, 0.0),
+                    egui::Align2::RIGHT_CENTER,
+                    s,
+                    FontId::new(FS_TINY, FontFamily::Monospace),
+                    c_text_muted(),
+                );
+            }
         });
     }
 
@@ -437,10 +453,10 @@ impl OxiApp {
                         Frame::none()
                             .fill(c_bg_sidebar())
                             .inner_margin(Margin {
-                                left: 8.0,
-                                right: 6.0,
-                                top: 6.0,
-                                bottom: 8.0,
+                                left: 12.0,
+                                right: 10.0,
+                                top: 12.0,
+                                bottom: 12.0,
                             })
                             .show(ui, |ui| {
                                 ui.set_min_width(ui.max_rect().width());

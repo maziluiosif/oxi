@@ -22,7 +22,7 @@ impl OxiApp {
             .rev()
             .find(|m| m.role == MsgRole::Assistant)
         {
-            last.streaming = false;
+            last.finish_streaming();
         }
 
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
