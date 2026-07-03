@@ -265,7 +265,8 @@ pub struct AppSettings {
     /// current tool count, enabling any newly-added tools by default.
     #[serde(default = "default_tools_enabled")]
     pub tools_enabled: Vec<bool>,
-    /// Base URL of the SearXNG instance used by the `web_search` tool.
+    /// Base URL of the SearXNG instance used by the `web_search` tool. Empty (the default)
+    /// means the built-in zero-config DuckDuckGo backend is used instead.
     #[serde(default = "default_searxng_url")]
     pub searxng_url: String,
     /// Require explicit user approval before each mutating tool (`bash` / `write` / `edit`).
@@ -342,7 +343,8 @@ fn default_tools_enabled() -> Vec<bool> {
 
 fn default_searxng_url() -> String {
     // No universal public SearXNG instance exists (public ones rate-limit and rarely
-    // expose the JSON API), so web_search ships unconfigured until the user sets one.
+    // expose the JSON API), so this ships empty and web_search falls back to the
+    // built-in DuckDuckGo backend until the user configures an instance.
     String::new()
 }
 
