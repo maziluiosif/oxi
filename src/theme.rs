@@ -361,14 +361,16 @@ palette_accessors! {
 // breaking consistency. These helpers build each tint from the *active* accent/danger/success so a
 // theme swap re-skins them automatically. All take a base hue (an accent/danger/success color).
 
-/// Blend a color toward the panel background by `alpha/255` (gives a translucent panel tint that
-/// works on both dark and light surfaces without a hard-coded RGB).
+/// Composite `base` over the panel background at `alpha/255` opacity (gives a translucent panel
+/// tint that works on both dark and light surfaces without a hard-coded RGB). Note the blend
+/// starts from the panel background: alpha 30 means a faint wash of `base`, not 88% of it —
+/// the earlier inverted blend is what made accent/danger "tints" render as near-solid color.
 fn tint_on_panels(base: Color32, alpha: u8) -> Color32 {
     let bg = c_bg_main();
     Color32::from_rgba_unmultiplied(
-        u8_blend(base.r(), bg.r(), alpha),
-        u8_blend(base.g(), bg.g(), alpha),
-        u8_blend(base.b(), bg.b(), alpha),
+        u8_blend(bg.r(), base.r(), alpha),
+        u8_blend(bg.g(), base.g(), alpha),
+        u8_blend(bg.b(), base.b(), alpha),
         255,
     )
 }
@@ -542,8 +544,8 @@ pub fn badge_running_parts() -> (Color32, Color32, Color32) {
     if p.dark_base {
         (
             p.accent,
-            tint_on_panels(p.accent, 34),
-            tint_on_panels(p.accent, 105),
+            Color32::from_rgb(0x2a, 0x1c, 0x10),
+            Color32::from_rgb(0x4d, 0x33, 0x1d),
         )
     } else {
         (
