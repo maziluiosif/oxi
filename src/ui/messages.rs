@@ -18,7 +18,8 @@ use crate::model::{
 };
 use crate::theme::*;
 use crate::ui::preview_expand::{
-    clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
+    clickable_expand_overlay, clickable_expand_overlay_quiet, expand_persist_id, is_expanded,
+    toggle_expanded, truncate_lines_preview,
 };
 
 const BLOCK_PREVIEW_LINES: usize = 10;
@@ -38,12 +39,19 @@ struct ExploredClusterCtx<'a> {
     streaming: bool,
 }
 
-fn monospace_wrapped_job(text: String, wrap_width: f32, color: Color32) -> LayoutJob {
+/// Thinking-block body text: proportional, small, airy — deliberately lighter than the
+/// monospace tool-output panels so reasoning reads as a side note, not a code dump.
+fn thinking_wrapped_job(text: String, wrap_width: f32) -> LayoutJob {
     LayoutJob {
         sections: vec![LayoutSection {
             leading_space: 0.0,
             byte_range: 0..text.len(),
-            format: TextFormat::simple(FontId::monospace(FS_SMALL), color),
+            format: TextFormat {
+                font_id: FontId::proportional(FS_SMALL),
+                color: c_text_muted(),
+                line_height: Some(FS_SMALL * 1.45),
+                ..Default::default()
+            },
         }],
         text,
         wrap: TextWrapping {
@@ -142,6 +150,20 @@ fn short_path(path: &str, max_segments: usize) -> String {
     }
 }
 
+/// "https://www.example.com/a/b?x=1" → "example.com/a/b?x=1…" (scheme + www stripped, truncated).
+fn short_url(url: &str, max_chars: usize) -> String {
+    let s = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let s = s.strip_prefix("www.").unwrap_or(s);
+    let s = s.trim_end_matches('/');
+    let mut out: String = s.chars().take(max_chars).collect();
+    if s.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
 fn command_preview(command: &str, max_chars: usize) -> String {
     let first_line = command.lines().next().unwrap_or(command).trim();
     let mut out: String = first_line.chars().take(max_chars).collect();
@@ -168,6 +190,8 @@ fn tool_action_label(name: &str) -> &'static str {
         "grep" => "Searched",
         "find" => "Found files",
         "ls" => "Listed",
+        "web_search" => "Searched",
+        "web_fetch" => "Fetched",
         _ => "Used",
     }
 }
@@ -225,6 +249,27 @@ fn tool_summary_text(
         "read" | "write" | "edit" | "find" | "ls" => {
             if let Some(path) = tool_path_from_args(args_summary) {
                 parts.push(short_path(&path, 2));
+            }
+        }
+        "web_search" => {
+            if let Some(raw) = args_summary {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+                    if let Some(q) = v.get("query").and_then(|x| x.as_str()) {
+                        let p = command_preview(q, 40);
+                        if !p.is_empty() {
+                            parts.push(p);
+                        }
+                    }
+                }
+            }
+        }
+        "web_fetch" => {
+            if let Some(raw) = args_summary {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+                    if let Some(u) = v.get("url").and_then(|x| x.as_str()) {
+                        parts.push(short_url(u, 44));
+                    }
+                }
             }
         }
         _ => {
@@ -300,89 +345,6 @@ fn selectable_layout_job(ui: &mut Ui, job: LayoutJob, allow_select: bool) {
     );
 }
 
-fn render_expandable_monospace_panel(
-    ui: &mut Ui,
-    panel_fill: Color32,
-    max_preview_lines: usize,
-    persist_id: Id,
-    content_overflows: bool,
-    text: &str,
-    color: Color32,
-) {
-    render_expandable_monospace_panel_with(
-        ui,
-        panel_fill,
-        max_preview_lines,
-        persist_id,
-        content_overflows,
-        text,
-        color,
-        false,
-    )
-}
-
-/// Same as [`render_expandable_monospace_panel`] but, while collapsed, shows the *tail* of the
-/// text (newest content) instead of the head. Used for live streaming panels (e.g. the
-/// thinking bubble) so the newly produced reasoning stays visible as it grows.
-fn render_expandable_monospace_panel_tail(
-    ui: &mut Ui,
-    panel_fill: Color32,
-    max_preview_lines: usize,
-    persist_id: Id,
-    content_overflows: bool,
-    text: &str,
-    color: Color32,
-) {
-    render_expandable_monospace_panel_with(
-        ui,
-        panel_fill,
-        max_preview_lines,
-        persist_id,
-        content_overflows,
-        text,
-        color,
-        true,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_expandable_monospace_panel_with(
-    ui: &mut Ui,
-    panel_fill: Color32,
-    max_preview_lines: usize,
-    persist_id: Id,
-    content_overflows: bool,
-    text: &str,
-    color: Color32,
-    tail: bool,
-) {
-    let frame = Frame::none()
-        .fill(panel_fill)
-        .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(Rounding::same(8.0))
-        .inner_margin(Margin::symmetric(10.0, 7.0))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            let inner = ui.available_width().max(40.0);
-            let display = if !content_overflows || is_expanded(ui, persist_id) {
-                text.to_string()
-            } else if tail {
-                crate::ui::preview_expand::truncate_lines_tail_preview(text, max_preview_lines)
-            } else {
-                truncate_lines_preview(text, max_preview_lines)
-            };
-            let allow_select = !content_overflows || is_expanded(ui, persist_id);
-            selectable_layout_job(
-                ui,
-                monospace_wrapped_job(display, inner, color),
-                allow_select,
-            );
-        });
-    if content_overflows {
-        clickable_expand_overlay(ui, frame.response.rect, persist_id);
-    }
-}
-
 fn render_static_preview_job_panel(
     ui: &mut Ui,
     panel_fill: Color32,
@@ -421,7 +383,9 @@ fn tool_icon(name: &str) -> &'static str {
         "grep" => "\u{f021e}",  // nf-md-file_find
         "find" => "\u{f0349}",  // nf-md-magnify
         "ls" => "\u{f0645}",    // nf-md-folder_open
-        _ => "\u{f0214}",       // nf-md-file
+        "web_search" => crate::theme::ICON_WEB_SEARCH,
+        "web_fetch" => crate::theme::ICON_GLOBE,
+        _ => "\u{f0214}", // nf-md-file
     }
 }
 
@@ -470,6 +434,12 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
             } else {
                 format!("`{pat}`  in {dir}")
             });
+        }
+    }
+    // URL scurtat pentru web_fetch
+    if name == "web_fetch" {
+        if let Some(u) = v.get("url").and_then(|x| x.as_str()) {
+            return Some(short_url(u, 44));
         }
     }
     // fallback: prima string din obiect
@@ -722,11 +692,17 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                             .rounding(Rounding::same(6.0))
                             .inner_margin(Margin::symmetric(8.0, 4.0))
                             .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(format!("📎 {mime}"))
-                                        .size(FS_TINY)
-                                        .color(c_text_muted()),
-                                );
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    ui.label(crate::ui::chrome::icon_glyph_rich(
+                                        ICON_ATTACH,
+                                        FS_TINY,
+                                        c_text_muted(),
+                                    ));
+                                    ui.label(
+                                        RichText::new(mime).size(FS_TINY).color(c_text_muted()),
+                                    );
+                                });
                             });
                     }
                 }
@@ -1168,6 +1144,48 @@ fn render_explored_cluster(ui: &mut Ui, ctx: ExploredClusterCtx<'_>) {
     ui.add_space(4.0);
 }
 
+/// Frameless thinking body: no card, just a thin accent rail on the left and airy
+/// proportional text. Collapse/expand behavior matches the monospace panels; while
+/// live-streaming the collapsed view is pinned to the tail (newest reasoning).
+fn render_thinking_text_panel(
+    ui: &mut Ui,
+    max_preview_lines: usize,
+    persist_id: Id,
+    content_overflows: bool,
+    text: &str,
+    tail: bool,
+) {
+    let frame = Frame::none()
+        .inner_margin(Margin {
+            left: 12.0,
+            right: 4.0,
+            top: 2.0,
+            bottom: 2.0,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let inner = ui.available_width().max(40.0);
+            let display = if !content_overflows || is_expanded(ui, persist_id) {
+                text.to_string()
+            } else if tail {
+                crate::ui::preview_expand::truncate_lines_tail_preview(text, max_preview_lines)
+            } else {
+                truncate_lines_preview(text, max_preview_lines)
+            };
+            let allow_select = !content_overflows || is_expanded(ui, persist_id);
+            selectable_layout_job(ui, thinking_wrapped_job(display, inner), allow_select);
+        });
+    let r = frame.response.rect;
+    ui.painter().vline(
+        r.left() + 1.0,
+        (r.top() + 2.0)..=(r.bottom() - 2.0),
+        Stroke::new(2.0, c_thinking_rail()),
+    );
+    if content_overflows {
+        clickable_expand_overlay_quiet(ui, r, persist_id);
+    }
+}
+
 fn render_thinking_group_block(
     ui: &mut Ui,
     msg_idx: usize,
@@ -1175,48 +1193,74 @@ fn render_thinking_group_block(
     combined: String,
     live: bool,
 ) {
+    let bubble_w = content_wrap_width(ui);
+    ui.set_width(bubble_w);
+    let overflow = combined.lines().count() > BLOCK_PREVIEW_LINES;
+    let persist_id = expand_persist_id(Id::new((
+        msg_idx,
+        salt,
+        "thinking_body",
+        block_state_tag(live),
+    )));
+
     if live {
         ui.horizontal(|ui| {
             animated_status_label(ui, "Thinking", FS_TINY);
         });
-        ui.add_space(4.0);
-    }
-    let bubble_w = content_wrap_width(ui);
-    ui.set_width(bubble_w);
-    let overflow = combined.lines().count() > BLOCK_PREVIEW_LINES;
-    // While the model is actively streaming reasoning, keep the view pinned to the newest
-    // text (tail) so you can follow along instead of seeing a frozen first page.
-    if overflow && live {
-        render_expandable_monospace_panel_tail(
-            ui,
-            c_bg_elevated(),
-            BLOCK_PREVIEW_LINES,
-            expand_persist_id(Id::new((
-                msg_idx,
-                salt,
-                "thinking_body",
-                block_state_tag(live),
-            ))),
-            overflow,
-            combined.as_str(),
-            c_text_muted(),
-        )
     } else {
-        render_expandable_monospace_panel(
-            ui,
-            c_bg_elevated(),
-            BLOCK_PREVIEW_LINES,
-            expand_persist_id(Id::new((
-                msg_idx,
-                salt,
-                "thinking_body",
-                block_state_tag(live),
-            ))),
-            overflow,
-            combined.as_str(),
-            c_text_muted(),
-        )
-    };
+        // Quiet caption; clickable (with a chevron) when there is more to unfold.
+        let expanded = is_expanded(ui, persist_id);
+        let row = ui.horizontal(|ui| {
+            if overflow {
+                let chevron = if expanded {
+                    ICON_ANGLE_UP
+                } else {
+                    ICON_ANGLE_DOWN
+                };
+                ui.add(
+                    Label::new(
+                        RichText::new(chevron)
+                            .font(FontId::new(10.0, icon_font()))
+                            .color(c_text_faint()),
+                    )
+                    .selectable(false),
+                );
+            }
+            ui.add(
+                Label::new(
+                    RichText::new("Thinking")
+                        .size(FS_TINY)
+                        .color(c_text_faint()),
+                )
+                .selectable(false),
+            );
+        });
+        if overflow {
+            let resp = ui.interact(
+                row.response.rect,
+                persist_id.with("thinking_caption"),
+                egui::Sense::click(),
+            );
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                toggle_expanded(ui, persist_id);
+            }
+        }
+    }
+    ui.add_space(4.0);
+
+    // While the model is actively streaming reasoning, keep the collapsed view pinned to
+    // the newest text (tail) so you can follow along instead of seeing a frozen first page.
+    render_thinking_text_panel(
+        ui,
+        BLOCK_PREVIEW_LINES,
+        persist_id,
+        overflow,
+        combined.as_str(),
+        live,
+    );
     ui.add_space(8.0);
 }
 

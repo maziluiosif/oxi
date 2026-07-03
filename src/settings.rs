@@ -15,9 +15,9 @@ pub enum LlmProviderKind {
     GptCodex,
     /// OpenCode Go subscription models (OpenAI/Anthropic-compatible endpoints).
     OpenCodeGo,
-    /// LM Studio local server (OpenAI-compatible API, e.g. a Mac mini on the LAN).
+    /// LM Studio local server (OpenAI-compatible API, on this machine or a LAN host).
     LmStudio,
-    /// Ollama local server (OpenAI-compatible API at `/v1`, e.g. a Mac mini on the LAN).
+    /// Ollama local server (OpenAI-compatible API at `/v1`, on this machine or a LAN host).
     Ollama,
 }
 
@@ -39,9 +39,9 @@ impl LlmProviderKind {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => "https://api.openai.com/v1",
             LlmProviderKind::OpenRouter => "https://openrouter.ai/api/v1",
             LlmProviderKind::OpenCodeGo => "https://opencode.ai/zen/go",
-            // LM Studio's built-in server speaks plain HTTP on port 1234; the Mac mini host
-            // resolves on the LAN/Tailscale. (HTTPS would need a separate reverse proxy.)
-            LlmProviderKind::LmStudio => "http://mac-mini:1234/v1",
+            // LM Studio's built-in server speaks plain HTTP on port 1234 by default.
+            // (HTTPS would need a separate reverse proxy.)
+            LlmProviderKind::LmStudio => "http://localhost:1234/v1",
             // Ollama's OpenAI-compatible API lives under `/v1` on its default port 11434.
             LlmProviderKind::Ollama => "http://localhost:11434/v1",
         }
@@ -84,8 +84,8 @@ impl LlmProviderKind {
 
     /// Whether HTTP clients for this provider should accept self-signed / invalid TLS certs.
     ///
-    /// Enabled for LM Studio and Ollama, which typically run on a LAN host (e.g. a Mac mini)
-    /// behind HTTPS with a self-signed cert — same trust model as the local SearXNG instance.
+    /// Enabled for LM Studio and Ollama, which often run on a trusted LAN host behind
+    /// HTTPS with a self-signed cert — same trust model as a local SearXNG instance.
     /// Stays off for public providers so their certs are always validated.
     pub fn allows_self_signed_tls(&self) -> bool {
         matches!(self, LlmProviderKind::LmStudio | LlmProviderKind::Ollama)
@@ -96,8 +96,8 @@ impl LlmProviderKind {
 ///
 /// `Local` covers the common case (the runtime listens on this machine, or on a LAN host
 /// reachable directly via `base_url`). `RemoteSsh` tunnels the connection through SSH port
-/// forwarding so a runtime bound to `127.0.0.1` on a remote host (e.g. a Mac mini reachable
-/// only over SSH) can still be reached as if it were local. See [`crate::compute`].
+/// forwarding so a runtime bound to `127.0.0.1` on a remote host (reachable only over SSH)
+/// can still be reached as if it were local. See [`crate::compute`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ComputeLocation {
@@ -341,7 +341,9 @@ fn default_tools_enabled() -> Vec<bool> {
 }
 
 fn default_searxng_url() -> String {
-    "https://search.mac-mini".to_string()
+    // No universal public SearXNG instance exists (public ones rate-limit and rarely
+    // expose the JSON API), so web_search ships unconfigured until the user sets one.
+    String::new()
 }
 
 fn default_sidebar_width() -> f32 {
@@ -502,9 +504,6 @@ impl AppSettings {
         // newly-added tools default to enabled.
         if self.tools_enabled.len() != ALL_TOOL_NAMES.len() {
             self.tools_enabled.resize(ALL_TOOL_NAMES.len(), true);
-        }
-        if self.searxng_url.trim().is_empty() {
-            self.searxng_url = default_searxng_url();
         }
         if self.system_prompt.trim().is_empty() {
             self.system_prompt = crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string();
@@ -735,13 +734,13 @@ mod tests {
     fn ssh_config_returns_some_for_remote() {
         let mut p = ProviderProfile::new("test", LlmProviderKind::Ollama, "test");
         p.location = ComputeLocation::RemoteSsh(SshConfig {
-            host: "mac-mini".to_string(),
+            host: "test-host".to_string(),
             port: 22,
-            user: "ioan".to_string(),
+            user: "testuser".to_string(),
             remote_runtime_port: 11434,
         });
         let cfg = p.ssh_config().expect("remote ssh config");
-        assert_eq!(cfg.host, "mac-mini");
+        assert_eq!(cfg.host, "test-host");
         assert_eq!(cfg.remote_runtime_port, 11434);
     }
 
@@ -756,9 +755,9 @@ mod tests {
     #[test]
     fn ssh_config_serde_roundtrip() {
         let loc = ComputeLocation::RemoteSsh(SshConfig {
-            host: "mac-mini.local".to_string(),
+            host: "test-host.local".to_string(),
             port: 2222,
-            user: "ioan".to_string(),
+            user: "testuser".to_string(),
             remote_runtime_port: 1234,
         });
         let json = serde_json::to_string(&loc).unwrap();

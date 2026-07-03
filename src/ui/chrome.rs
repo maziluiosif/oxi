@@ -11,7 +11,7 @@ pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
     Frame::none()
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(7.0)
+        .rounding(RADIUS_BUTTON)
         .inner_margin(Margin::symmetric(8.0, 4.0))
         .show(ui, |ui| {
             ui.add(
@@ -61,7 +61,7 @@ pub fn nested_card_frame() -> Frame {
     Frame::none()
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(8.0)
+        .rounding(RADIUS_CHIP)
         .inner_margin(Margin::symmetric(10.0, 8.0))
 }
 
@@ -146,7 +146,7 @@ pub fn icon_button(ui: &mut Ui, icon: &str, height: f32, active: bool) -> Respon
         egui::Button::new(icon_glyph_rich(icon, FS_SMALL, color))
             .fill(c_bg_elevated())
             .stroke(Stroke::new(1.0, c_border_subtle()))
-            .rounding(8.0)
+            .rounding(RADIUS_CHIP)
             .min_size(egui::vec2(height, height)),
     )
 }
@@ -165,6 +165,28 @@ pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> 
             .fill(Color32::TRANSPARENT)
             .min_size(egui::vec2(height, height)),
     )
+}
+
+/// Tiny frameless icon button for list rows (18px square on 22px rows). Hand-allocated
+/// because a plain `Button` inherits the global `button_padding`/`interact_size` and
+/// inflates well past the row; the hover fill uses `c_row_active` so it still reads on
+/// top of an already-hovered row.
+pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color32) -> Response {
+    const SIDE: f32 = 18.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(SIDE, SIDE), Sense::click());
+    let hovered = resp.hovered();
+    if hovered {
+        ui.painter()
+            .rect_filled(rect, Rounding::same(4.0), c_row_active());
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        FontId::new(glyph_size, icon_font()),
+        if hovered { c_text() } else { color },
+    );
+    resp
 }
 
 /// Small pill-style status badge: `running` / `done` / `failed`. Uses the shared semantic badge
@@ -242,7 +264,7 @@ pub fn primary_button_widget(label: &str) -> egui::Button<'_> {
     egui::Button::new(rich)
         .fill(c_accent())
         .stroke(Stroke::NONE)
-        .rounding(7.0)
+        .rounding(RADIUS_BUTTON)
         .min_size(egui::vec2(0.0, 26.0))
 }
 pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
@@ -255,7 +277,7 @@ pub fn primary_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Bu
     egui::Button::new(text)
         .fill(c_accent())
         .stroke(Stroke::NONE)
-        .rounding(7.0)
+        .rounding(RADIUS_BUTTON)
         .min_size(egui::vec2(0.0, 26.0))
 }
 pub fn primary_button_icon(ui: &mut Ui, icon: &str, label: &str) -> Response {
@@ -272,7 +294,7 @@ pub fn ghost_button_widget(label: &str, danger: bool) -> egui::Button<'_> {
     egui::Button::new(RichText::new(label).size(FS_SMALL).color(color))
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(7.0)
+        .rounding(RADIUS_BUTTON)
         .min_size(egui::vec2(0.0, 26.0))
 }
 pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
@@ -294,7 +316,7 @@ pub fn ghost_button_icon_widget<'a>(
     let btn = egui::Button::new(text)
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(7.0)
+        .rounding(RADIUS_BUTTON)
         .min_size(egui::vec2(0.0, 26.0));
     btn
 }
