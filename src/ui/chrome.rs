@@ -171,7 +171,11 @@ pub fn icon_button_core(
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let fill = if hovered { look.hover_fill } else { look.fill };
-    let stroke = if hovered { look.hover_stroke } else { look.stroke };
+    let stroke = if hovered {
+        look.hover_stroke
+    } else {
+        look.stroke
+    };
     if fill != Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, look.rounding, fill);
     }
@@ -431,7 +435,11 @@ fn icon_text_button_core(
     let (rect, response) = ui.allocate_exact_size(size, sense);
     let hovered = enabled && response.hovered();
     let fill = if hovered { look.hover_fill } else { look.fill };
-    let stroke = if hovered { look.hover_stroke } else { look.stroke };
+    let stroke = if hovered {
+        look.hover_stroke
+    } else {
+        look.stroke
+    };
     if fill != Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, look.rounding, fill);
     }

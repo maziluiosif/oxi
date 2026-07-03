@@ -723,8 +723,12 @@ mod tests {
     #[ignore = "hits the real Bing endpoint"]
     fn web_search_bing_zero_config_live() {
         use crate::settings::WebSearchBackend;
-        let out = tool_web_search("", WebSearchBackend::Bing, &serde_json::json!({"query": "rust programming language", "count": 5}))
-            .expect("zero-config web_search failed");
+        let out = tool_web_search(
+            "",
+            WebSearchBackend::Bing,
+            &serde_json::json!({"query": "rust programming language", "count": 5}),
+        )
+        .expect("zero-config web_search failed");
         println!("{out}");
         assert!(out.contains("Search results for:"));
     }

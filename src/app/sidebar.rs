@@ -157,7 +157,11 @@ impl OxiApp {
                     egui::Align2::CENTER_CENTER,
                     ICON_PLUS,
                     FontId::new(FS_TINY, icon_font()),
-                    if plus_hovered { c_accent() } else { c_text_faint() },
+                    if plus_hovered {
+                        c_accent()
+                    } else {
+                        c_text_faint()
+                    },
                 );
             }
             if plus_clicked {
@@ -397,7 +401,9 @@ impl OxiApp {
                         let title_color = if selected { c_text() } else { c_text_muted() };
                         ui.add(
                             Label::new(
-                                RichText::new(title.as_str()).size(FS_SMALL).color(title_color),
+                                RichText::new(title.as_str())
+                                    .size(FS_SMALL)
+                                    .color(title_color),
                             )
                             .truncate()
                             .halign(Align::LEFT),

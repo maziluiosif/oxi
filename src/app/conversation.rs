@@ -282,8 +282,13 @@ impl OxiApp {
             ui.add_space(18.0);
 
             ui.horizontal_wrapped(|ui| {
-                if crate::ui::chrome::ghost_button_icon(ui, ICON_FOLDER_PLUS, "Add workspace", false)
-                    .clicked()
+                if crate::ui::chrome::ghost_button_icon(
+                    ui,
+                    ICON_FOLDER_PLUS,
+                    "Add workspace",
+                    false,
+                )
+                .clicked()
                 {
                     self.open_workspace_folder();
                 }
