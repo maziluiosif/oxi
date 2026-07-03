@@ -81,6 +81,9 @@ pub struct Session {
     pub input_text: String,
     /// Per-session staged image attachments.
     pub pending_images: Vec<(String, Vec<u8>)>,
+    /// Last activity: file mtime at load time, bumped to `now` on every save.
+    /// Drives the relative "6h" age label on sidebar rows.
+    pub modified: std::time::SystemTime,
 }
 
 pub fn make_session_title(text: &str) -> String {

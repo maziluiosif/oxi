@@ -50,6 +50,8 @@ pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
 
 pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(), String> {
     dedupe_trailing_duplicate_messages(&mut session.messages);
+    // Any save counts as activity; keeps the sidebar age label in sync with file mtime.
+    session.modified = std::time::SystemTime::now();
 
     let session_path = session_file_path(root_path, session)?;
     if let Some(parent) = session_path.parent() {

@@ -344,6 +344,18 @@ pub struct AppSettings {
     /// System prompt for the "generate commit message" feature.
     #[serde(default = "default_commit_msg_system_prompt")]
     pub commit_msg_system_prompt: String,
+    /// Sidebar workspaces (project folders) and their fold state, restored on startup.
+    /// The cwd workspace is always present at runtime even if missing here.
+    #[serde(default)]
+    pub workspaces: Vec<WorkspaceEntry>,
+}
+
+/// One persisted sidebar workspace: its root folder and whether its chat list is folded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceEntry {
+    pub root_path: String,
+    #[serde(default)]
+    pub folded: bool,
 }
 
 fn default_require_approval() -> bool {
@@ -457,6 +469,7 @@ impl Default for AppSettings {
             context_window_default: default_context_window(),
             commit_msg_profile_id: String::new(),
             commit_msg_system_prompt: default_commit_msg_system_prompt(),
+            workspaces: Vec::new(),
         }
     }
 }
@@ -601,6 +614,11 @@ impl AppSettings {
         if self.active_profile().is_none() {
             self.active_profile_id = self.profiles[0].id.clone();
         }
+        // Workspaces: drop entries whose folder vanished, dedupe by path.
+        let mut seen = std::collections::HashSet::new();
+        self.workspaces.retain(|w| {
+            std::path::Path::new(&w.root_path).is_dir() && seen.insert(w.root_path.clone())
+        });
     }
 
     pub fn save(&self) -> Result<(), String> {
