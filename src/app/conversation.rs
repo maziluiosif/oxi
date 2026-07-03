@@ -177,7 +177,7 @@ impl OxiApp {
                                         [30.0, 28.0],
                                         Button::new(crate::ui::chrome::icon_glyph_rich(
                                             ICON_MENU,
-                                            14.0,
+                                            FS_SMALL,
                                             c_text_muted(),
                                         ))
                                         .fill(c_bg_elevated())
@@ -192,11 +192,13 @@ impl OxiApp {
 
                             let workspace =
                                 workspace_sidebar_label(&self.active_workspace().root_path);
+                            let session_title =
+                                sidebar_session_title_display(&self.active_session().title);
                             ui.vertical(|ui| {
                                 ui.set_width(ui.available_width());
                                 ui.add(
                                     Label::new(
-                                        RichText::new("Chat")
+                                        RichText::new(session_title)
                                             .size(FS_SMALL)
                                             .color(c_text())
                                             .strong(),
@@ -254,20 +256,36 @@ impl OxiApp {
             )
         };
 
-        Frame::none()
-            .fill(c_bg_input())
-            .stroke(Stroke::new(1.0, c_border_subtle()))
-            .rounding(Rounding::same(999.0))
-            .inner_margin(Margin::symmetric(9.0, 4.0))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 5.0;
-                    ui.label(RichText::new("●").size(8.0).color(dot));
-                    ui.label(RichText::new(label).size(FS_TINY).color(c_text_muted()));
-                });
-            })
-            .response
-            .on_hover_text(hover);
+        // Hand-painted at the same 28px height as the neighboring header buttons —
+        // a Frame sizes itself to the text and sits visually off-line next to them.
+        const H: f32 = 28.0;
+        const PAD_X: f32 = 10.0;
+        const GAP: f32 = 5.0;
+        let text_galley =
+            ui.painter()
+                .layout_no_wrap(label, FontId::proportional(FS_TINY), c_text_muted());
+        let dot_galley =
+            ui.painter()
+                .layout_no_wrap("●".to_string(), FontId::proportional(8.0), dot);
+        let w = PAD_X * 2.0 + text_galley.rect.width() + GAP + dot_galley.rect.width();
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, H), egui::Sense::hover());
+        ui.painter().rect(
+            rect,
+            Rounding::same(999.0),
+            c_bg_input(),
+            Stroke::new(1.0, c_border_subtle()),
+        );
+        let text_pos = egui::pos2(
+            rect.left() + PAD_X,
+            rect.center().y - text_galley.rect.height() * 0.5,
+        );
+        let dot_pos = egui::pos2(
+            rect.left() + PAD_X + text_galley.rect.width() + GAP,
+            rect.center().y - dot_galley.rect.height() * 0.5,
+        );
+        ui.painter().galley(text_pos, text_galley, c_text_muted());
+        ui.painter().galley(dot_pos, dot_galley, dot);
+        resp.on_hover_text(hover);
     }
 
     pub(crate) fn render_empty_state(&mut self, ui: &mut Ui) {

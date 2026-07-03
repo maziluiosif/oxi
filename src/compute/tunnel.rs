@@ -9,7 +9,7 @@
 //! Host key verification is intentionally permissive (trust-on-every-connect): this is a
 //! convenience tunnel to a host the user explicitly typed in, not a general-purpose SSH
 //! client. A future version could pin/verify keys; v1 favors "it just works" for a single
-//! trusted LAN host like a Mac mini.
+//! trusted LAN host.
 
 use std::collections::HashMap;
 use std::sync::Arc;
