@@ -929,12 +929,9 @@ impl OxiApp {
                 .changed()
             };
             ui.label(
-                RichText::new(
-                    "Stored in ssh_credentials.json (plaintext, like oauth.json), \
-                     never in settings.json.",
-                )
-                .size(FS_TINY)
-                .color(c_text_faint()),
+                RichText::new("Stored in the OS keychain, never in settings.json.")
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
             );
             if changed {
                 let pw = self

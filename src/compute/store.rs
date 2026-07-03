@@ -1,13 +1,13 @@
-//! Persist SSH passwords for remote compute targets, separate from `settings.json`
-//! (`~/.config/oxi/ssh_credentials.json`), keyed by [`crate::settings::ProviderProfile::id`].
-//!
-//! Same trust model as `oauth.json` (see [`crate::oauth::store`]): plaintext JSON on disk
-//! in the app config directory, not an OS keychain. Kept out of `settings.json` so the
-//! password isn't dragged along whenever settings are read, logged, or exported.
+//! Persist SSH passwords for remote compute targets in the OS keychain (see
+//! `crate::secrets`), under the account `"ssh-credentials"`, keyed internally by
+//! [`crate::settings::ProviderProfile::id`]. Used to live as plaintext JSON at
+//! `~/.config/oxi/ssh_credentials.json`; [`load_ssh_credentials`] migrates any leftover
+//! file from that era on first read.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,14 @@ pub struct SshCredentialStore {
     passwords: HashMap<String, String>,
 }
 
-pub fn ssh_credentials_path() -> PathBuf {
+const KEYCHAIN_ACCOUNT: &str = "ssh-credentials";
+
+/// In-process cache so repeated lazy-loads in the settings UI don't each round-trip to
+/// the OS keychain. Kept in sync by [`save_ssh_credentials`].
+static CACHE: Mutex<Option<SshCredentialStore>> = Mutex::new(None);
+
+/// Legacy location from before SSH passwords moved into the OS keychain.
+fn legacy_credentials_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("oxi")
@@ -26,36 +33,45 @@ pub fn ssh_credentials_path() -> PathBuf {
 }
 
 pub fn load_ssh_credentials() -> SshCredentialStore {
-    let path = ssh_credentials_path();
-    if let Ok(bytes) = fs::read(&path) {
-        if let Ok(s) = serde_json::from_slice::<SshCredentialStore>(&bytes) {
-            return s;
+    if let Some(s) = CACHE.lock().unwrap().as_ref() {
+        return s.clone();
+    }
+    let stored = crate::secrets::load(KEYCHAIN_ACCOUNT);
+    let store = if !stored.is_empty() {
+        serde_json::from_str(&stored).unwrap_or_default()
+    } else {
+        migrate_legacy_file().unwrap_or_default()
+    };
+    *CACHE.lock().unwrap() = Some(store.clone());
+    store
+}
+
+/// One-time migration: if a pre-keychain `ssh_credentials.json` exists, push its contents
+/// into the keychain and delete the file. Runs at most once per process (guarded by the
+/// cache check in [`load_ssh_credentials`]).
+fn migrate_legacy_file() -> Option<SshCredentialStore> {
+    let path = legacy_credentials_path();
+    let bytes = fs::read(&path).ok()?;
+    let store: SshCredentialStore = serde_json::from_slice(&bytes).ok()?;
+    if !store.passwords.is_empty() {
+        if let Ok(json) = serde_json::to_string(&store) {
+            let _ = crate::secrets::store(KEYCHAIN_ACCOUNT, &json);
         }
     }
-    SshCredentialStore::default()
+    let _ = fs::remove_file(&path);
+    Some(store)
 }
 
 pub fn save_ssh_credentials(store: &SshCredentialStore) -> Result<(), String> {
-    let path = ssh_credentials_path();
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| e.to_string())?;
-    restrict_permissions(&path);
-    Ok(())
+    let result = if store.passwords.is_empty() {
+        crate::secrets::delete(KEYCHAIN_ACCOUNT)
+    } else {
+        let json = serde_json::to_string(store).map_err(|e| e.to_string())?;
+        crate::secrets::store(KEYCHAIN_ACCOUNT, &json)
+    };
+    *CACHE.lock().unwrap() = Some(store.clone());
+    result
 }
-
-/// Best-effort: restrict the credentials file to owner read/write on Unix. A failure here
-/// shouldn't block saving the credentials.
-#[cfg(unix)]
-fn restrict_permissions(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-}
-
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &std::path::Path) {}
 
 impl SshCredentialStore {
     pub fn get(&self, profile_id: &str) -> Option<&str> {
