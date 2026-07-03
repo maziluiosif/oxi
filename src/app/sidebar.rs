@@ -48,7 +48,7 @@ impl OxiApp {
             .id_salt("sidebar_main_scroll")
             .max_height(scroll_h)
             .auto_shrink([false, false])
-            .scroll_bar_visibility(ScrollBarVisibility::VisibleWhenNeeded)
+            .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
@@ -261,9 +261,8 @@ impl OxiApp {
                             );
 
                             // Hover-only delete button, mirroring the context-menu action.
-                            let can_delete = wi == self.conv.active_workspace
-                                && n_sessions > 1
-                                && !running;
+                            let can_delete =
+                                wi == self.conv.active_workspace && n_sessions > 1 && !running;
                             if can_delete && ui.rect_contains_pointer(rect) {
                                 let trash_rect = egui::Rect::from_min_max(
                                     egui::pos2(rect.right() - 24.0, rect.top()),
@@ -273,37 +272,30 @@ impl OxiApp {
                                 ui.painter().rect_filled(
                                     trash_rect,
                                     Rounding::same(6.0),
-                                    if selected { c_row_active() } else { c_row_hover() },
+                                    if selected {
+                                        c_row_active()
+                                    } else {
+                                        c_row_hover()
+                                    },
                                 );
-                                let clicked = ui
-                                    .allocate_new_ui(
-                                        egui::UiBuilder::new().max_rect(trash_rect),
-                                        |ui| {
-                                            ui.with_layout(
-                                                Layout::centered_and_justified(
-                                                    egui::Direction::LeftToRight,
-                                                ),
-                                                |ui| {
-                                                    ui.add(
-                                                        Button::new(
-                                                            crate::ui::chrome::icon_glyph_rich(
-                                                                ICON_TRASH,
-                                                                FS_TINY,
-                                                                c_text_faint(),
-                                                            ),
-                                                        )
-                                                        .frame(false)
-                                                        .fill(Color32::TRANSPARENT),
-                                                    )
-                                                    .on_hover_text("Delete chat")
-                                                    .clicked()
-                                                },
-                                            )
-                                            .inner
-                                        },
-                                    )
-                                    .inner;
-                                if clicked {
+                                // Painted + interacted in place, never allocated: a
+                                // hover-only widget that allocates nudges the layout
+                                // every time it appears.
+                                let trash_resp = ui
+                                    .interact(trash_rect, ui.id().with("row_trash"), Sense::click())
+                                    .on_hover_text("Delete chat");
+                                ui.painter().text(
+                                    trash_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    ICON_TRASH,
+                                    FontId::new(FS_TINY, icon_font()),
+                                    if trash_resp.hovered() {
+                                        c_text()
+                                    } else {
+                                        c_text_faint()
+                                    },
+                                );
+                                if trash_resp.clicked() {
                                     self.delete_session(si);
                                     sidebar_changed = true;
                                 }
@@ -501,7 +493,6 @@ impl OxiApp {
                                 // Diff viewer replaces the chat transcript + composer.
                                 let diff_h =
                                     (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                                let chat_rect = ui.max_rect();
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(ui.available_width(), diff_h),
                                     egui::Layout::top_down(egui::Align::Min),
@@ -509,7 +500,10 @@ impl OxiApp {
                                         if let Some((title, diff_text)) = self.conv.git.diff.clone()
                                         {
                                             self.render_diff_view(
-                                                ui, &title, &diff_text, chat_rect,
+                                                ui,
+                                                &title,
+                                                &diff_text,
+                                                column_center_w,
                                             );
                                         }
                                     },

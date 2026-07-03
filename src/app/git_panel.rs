@@ -2,8 +2,7 @@
 
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{
-    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
-    Sense, Ui,
+    self, Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense, Ui,
 };
 
 use crate::git::{GitEntry, GitOp, GitState};
@@ -313,8 +312,8 @@ impl OxiApp {
                 }
             });
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                 if ui
                     .add(crate::ui::chrome::mini_button_icon_widget(
                         ICON_DOWNLOAD,
@@ -350,8 +349,8 @@ impl OxiApp {
     }
 
     fn render_git_tabs(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
             for (tab, label) in [
                 (GitTab::Changes, "Changes"),
                 (GitTab::Branches, "Branches"),
@@ -404,13 +403,13 @@ impl OxiApp {
         let gen_active = self.commit_gen_active();
         let staged_empty = self.conv.git.staged.is_empty();
         let msg_empty = self.conv.git_commit_message.trim().is_empty();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
             let commit_resp = ui
-                .add_enabled_ui(!staged_empty && !msg_empty, |ui| {
-                    crate::ui::chrome::primary_button_icon(ui, ICON_CHECK, "Commit")
-                })
-                .inner
+                .add_enabled(
+                    !staged_empty && !msg_empty,
+                    crate::ui::chrome::primary_button_icon_widget(ICON_CHECK, "Commit"),
+                )
                 .on_hover_text("Commit staged changes")
                 .on_disabled_hover_text(if staged_empty {
                     "Stage some changes first"
@@ -422,16 +421,13 @@ impl OxiApp {
                 self.request(GitOp::Commit(msg));
                 self.conv.git_commit_message.clear();
             }
-            let gen_resp = ui
-                .add_enabled_ui(!gen_active, |ui| {
-                    if gen_active {
-                        crate::ui::chrome::ghost_button(ui, "Generating…", false)
-                    } else {
-                        crate::ui::chrome::ghost_button_icon(ui, ICON_MAGIC, "Generate", false)
-                    }
-                })
-                .inner;
-            if gen_resp
+            let gen_widget = if gen_active {
+                crate::ui::chrome::ghost_button_widget("Generating…", false)
+            } else {
+                crate::ui::chrome::ghost_button_icon_widget(ICON_MAGIC, "Generate", false)
+            };
+            if ui
+                .add_enabled(!gen_active, gen_widget)
                 .on_hover_text(
                     "Generate a commit message from the staged diff with the configured model",
                 )
@@ -444,10 +440,10 @@ impl OxiApp {
             }
             let has_unstaged = !self.conv.git.unstaged.is_empty();
             if ui
-                .add_enabled_ui(has_unstaged, |ui| {
-                    crate::ui::chrome::ghost_button(ui, "Stage all", false)
-                })
-                .inner
+                .add_enabled(
+                    has_unstaged,
+                    crate::ui::chrome::ghost_button_widget("Stage all", false),
+                )
                 .clicked()
             {
                 let paths: Vec<String> = self
@@ -460,10 +456,10 @@ impl OxiApp {
                 self.request(GitOp::Stage(paths));
             }
             if ui
-                .add_enabled_ui(!staged_empty, |ui| {
-                    crate::ui::chrome::ghost_button(ui, "Unstage all", false)
-                })
-                .inner
+                .add_enabled(
+                    !staged_empty,
+                    crate::ui::chrome::ghost_button_widget("Unstage all", false),
+                )
                 .clicked()
             {
                 let paths: Vec<String> = self
@@ -499,6 +495,7 @@ impl OxiApp {
             .id_salt("git_changes_scroll")
             .max_height(available_h)
             .auto_shrink([false, true])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .show(ui, |ui| {
                 if !staged.is_empty() {
                     self.render_section(ui, "Staged Changes", &staged, true);
@@ -577,7 +574,8 @@ impl OxiApp {
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, Rounding::same(5.0), fill);
+        ui.painter()
+            .rect_filled(rect, Rounding::same(crate::theme::RADIUS_ROW), fill);
 
         ui.allocate_new_ui(
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))),
@@ -585,37 +583,27 @@ impl OxiApp {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     // Action button: stage (when unstaged) / unstage (when staged)
                     if staged {
-                        if ui
-                            .add(
-                                Button::new(crate::ui::chrome::icon_glyph_rich(
-                                    ICON_CLOSE,
-                                    FS_SMALL,
-                                    c_text_muted(),
-                                ))
-                                .frame(false)
-                                .fill(Color32::TRANSPARENT),
-                            )
-                            .on_hover_text("Unstage")
-                            .clicked()
+                        if crate::ui::chrome::icon_button_inline(
+                            ui,
+                            ICON_CLOSE,
+                            FS_TINY,
+                            c_text_muted(),
+                        )
+                        .on_hover_text("Unstage")
+                        .clicked()
                         {
                             self.request(GitOp::Unstage(vec![entry.path.clone()]));
                         }
-                    } else {
-                        if ui
-                            .add(
-                                Button::new(crate::ui::chrome::icon_glyph_rich(
-                                    ICON_PLUS,
-                                    FS_SMALL,
-                                    c_text_muted(),
-                                ))
-                                .frame(false)
-                                .fill(Color32::TRANSPARENT),
-                            )
-                            .on_hover_text("Stage")
-                            .clicked()
-                        {
-                            self.request(GitOp::Stage(vec![entry.path.clone()]));
-                        }
+                    } else if crate::ui::chrome::icon_button_inline(
+                        ui,
+                        ICON_PLUS,
+                        FS_TINY,
+                        c_text_muted(),
+                    )
+                    .on_hover_text("Stage")
+                    .clicked()
+                    {
+                        self.request(GitOp::Stage(vec![entry.path.clone()]));
                     }
                     ui.add_space(6.0);
                     ui.label(
@@ -643,24 +631,34 @@ impl OxiApp {
                             TextFormat::simple(FontId::proportional(FS_TINY), c_text_faint()),
                         );
                     }
-                    ui.add(egui::Label::new(job).truncate());
+                    // Always reserve a fixed slot on the right for the hover-only
+                    // discard button — a truncating label otherwise swallows the
+                    // whole row width and the button never gets space on narrow
+                    // panels. Reserving it on staged rows too keeps both sections
+                    // truncating at the same column.
+                    const ACTION_W: f32 = 22.0;
+                    let label_w = (ui.available_width() - ACTION_W).max(0.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(label_w, ui.available_height()),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.set_width(label_w);
+                            ui.add(egui::Label::new(job).truncate());
+                        },
+                    );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         // Discard is destructive — keep it hover-only so it doesn't
                         // read as part of every row.
                         if !staged
                             && row_hot
-                            && ui
-                                .add(
-                                    Button::new(crate::ui::chrome::icon_glyph_rich(
-                                        ICON_TRASH,
-                                        FS_TINY,
-                                        c_text_faint(),
-                                    ))
-                                    .frame(false)
-                                    .fill(Color32::TRANSPARENT),
-                                )
-                                .on_hover_text("Discard changes")
-                                .clicked()
+                            && crate::ui::chrome::icon_button_inline(
+                                ui,
+                                ICON_TRASH,
+                                FS_TINY,
+                                c_text_faint(),
+                            )
+                            .on_hover_text("Discard changes")
+                            .clicked()
                         {
                             self.request(GitOp::Discard(vec![entry.path.clone()]));
                         }
@@ -683,56 +681,80 @@ impl OxiApp {
     }
 
     /// Full-area diff viewer that replaces the chat window while a diff is open.
-    /// Rendered inside the chat column allocation, so it spans the same area as
-    /// the transcript + composer would. Easy to close via the close button or Esc.
+    /// Constrained to the same centered column as the chat header/transcript so it
+    /// stays aligned when the side panels are closed. Easy to close via the close
+    /// button or Esc.
     pub(crate) fn render_diff_view(
         &mut self,
         ui: &mut Ui,
         title: &str,
         diff_text: &str,
-        chat_rect: egui::Rect,
+        column_center_w: f32,
     ) {
-        let _ = chat_rect;
-        ui.set_min_width(ui.available_width());
-
         // Close the viewer on Esc.
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.request(GitOp::ClearDiff);
             self.conv.diff_view_open = false;
         }
 
-        // Header bar: title + metadata on the left, close button on the right.
+        let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+        let pad = ((column_center_w - col_w) * 0.5).max(0.0);
+
+        // Header bar: title + metadata on the left, close button on the right,
+        // constrained to the centered chat column like the chat header above it.
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(RichText::new("Diff").size(FS_H3).color(c_text()).strong());
-            ui.label(
-                RichText::new(title)
-                    .size(FS_SMALL)
-                    .color(c_text_muted())
-                    .monospace(),
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if pad > 0.0 {
+                ui.add_space(pad);
+            }
+            ui.allocate_ui_with_layout(
+                egui::vec2(col_w, 24.0),
+                egui::Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(RichText::new("Diff").size(FS_H3).color(c_text()).strong());
+                    ui.label(
+                        RichText::new(title)
+                            .size(FS_SMALL)
+                            .color(c_text_muted())
+                            .monospace(),
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
+                            .on_hover_text("Close diff (Esc)")
+                            .clicked()
+                        {
+                            self.request(GitOp::ClearDiff);
+                            self.conv.diff_view_open = false;
+                        }
+                    });
+                },
             );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
-                    .on_hover_text("Close diff (Esc)")
-                    .clicked()
-                {
-                    self.request(GitOp::ClearDiff);
-                    self.conv.diff_view_open = false;
-                }
-            });
         });
         ui.add_space(4.0);
-        crate::ui::chrome::hairline(ui);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if pad > 0.0 {
+                ui.add_space(pad);
+            }
+            ui.allocate_ui(egui::vec2(col_w, 1.0), |ui| {
+                crate::ui::chrome::hairline(ui);
+            });
+        });
         ui.add_space(6.0);
 
+        // Full-size scroll area; the diff text is centered inside it (same pattern
+        // as the transcript in `render_conversation`).
         let avail_h = ui.available_height();
         ScrollArea::vertical()
             .id_salt("diff_view_scroll")
             .max_height(avail_h)
             .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let wrap_width = ui.available_width().max(200.0);
+                let viewport_w = ui.max_rect().width();
+                ui.set_max_width(viewport_w);
+                let wrap_width = col_w.max(200.0);
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 std::hash::Hash::hash(title, &mut hasher);
                 std::hash::Hash::hash(diff_text, &mut hasher);
@@ -746,9 +768,18 @@ impl OxiApp {
                     let job = colorize_diff(diff_text, wrap_width);
                     self.conv.diff_job_cache = Some((key.0, key.1, job));
                 }
-                if let Some((_, _, job)) = &self.conv.diff_job_cache {
-                    ui.label(job.clone());
-                }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if pad > 0.0 {
+                        ui.add_space(pad);
+                    }
+                    ui.vertical(|ui| {
+                        ui.set_width(wrap_width);
+                        if let Some((_, _, job)) = &self.conv.diff_job_cache {
+                            ui.label(job.clone());
+                        }
+                    });
+                });
             });
     }
 
@@ -786,6 +817,7 @@ impl OxiApp {
             .id_salt("git_branches_scroll")
             .max_height(ui.available_height())
             .auto_shrink([false, true])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .show(ui, |ui| {
                 for (i, b) in branches.iter().enumerate() {
                     ui.push_id(("branch", i), |ui| {
@@ -801,9 +833,13 @@ impl OxiApp {
                         } else {
                             Color32::TRANSPARENT
                         };
-                        ui.painter().rect_filled(rect, Rounding::same(5.0), fill);
+                        ui.painter().rect_filled(
+                            rect,
+                            Rounding::same(crate::theme::RADIUS_ROW),
+                            fill,
+                        );
                         ui.allocate_new_ui(
-                            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(8.0, 0.0))),
+                            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))),
                             |ui| {
                                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                                     ui.label(
@@ -816,11 +852,14 @@ impl OxiApp {
                                             }),
                                     );
                                     ui.add_space(6.0);
-                                    ui.label(
-                                        RichText::new(b.clone())
-                                            .size(FS_SMALL)
-                                            .color(c_text())
-                                            .monospace(),
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(b.clone())
+                                                .size(FS_SMALL)
+                                                .color(c_text())
+                                                .monospace(),
+                                        )
+                                        .truncate(),
                                     );
                                 });
                             },
@@ -842,6 +881,7 @@ impl OxiApp {
             .id_salt("git_history_scroll")
             .max_height(ui.available_height())
             .auto_shrink([false, true])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .show(ui, |ui| {
                 if log.is_empty() {
                     ui.label(
@@ -868,9 +908,10 @@ impl OxiApp {
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, Rounding::same(5.0), fill);
+        ui.painter()
+            .rect_filled(rect, Rounding::same(crate::theme::RADIUS_ROW), fill);
         ui.allocate_new_ui(
-            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(8.0, 4.0))),
+            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 4.0))),
             |ui| {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
@@ -972,7 +1013,7 @@ fn colorize_diff(text: &str, wrap_width: f32) -> LayoutJob {
             leading_space: 0.0,
             byte_range: start..end,
             format: TextFormat {
-                font_id: FontId::monospace(FS_TINY),
+                font_id: FontId::monospace(FS_CODE),
                 color,
                 background: bg,
                 ..Default::default()

@@ -71,7 +71,7 @@ fn clickable_expand_overlay_impl(ui: &mut Ui, rect: Rect, persist_id: Id, hover_
         if hover_border {
             ui.painter().rect_stroke(
                 rect,
-                Rounding::same(8.0),
+                Rounding::same(crate::theme::RADIUS_CHIP),
                 Stroke::new(1.0, crate::theme::c_border()),
             );
         }

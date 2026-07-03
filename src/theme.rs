@@ -68,7 +68,7 @@ pub const ICON_PLUS: &str = "\u{f067}";
 /// Plus inside a filled square — primary "new chat" button (`nf-fa-plus-square`).
 pub const ICON_PLUS_SQUARE: &str = "\u{f0fe}";
 /// Chevron pointed left — "back" / hide panel (`nf-fa-chevron-left`).
-pub const ICON_CHEVRON_LEFT: &str = "\u{f060}";
+pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
 /// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
 pub const ICON_CHEVRON_RIGHT: &str = "\u{f054}";
 /// Hamburger menu — toggle sidebar (`nf-fa-bars`).
@@ -780,10 +780,16 @@ pub fn apply_theme(ctx: &egui::Context, id: &str) {
 /// Max width for message/composer column (left-aligned; extra space stays on the right).
 pub const CHAT_COLUMN_MAX: f32 = 720.0;
 
+/// Shared corner radii — every rounded surface should use one of these tokens.
+pub const RADIUS_ROW: f32 = 5.0;
+pub const RADIUS_BUTTON: f32 = 7.0;
+pub const RADIUS_CHIP: f32 = 8.0;
+pub const RADIUS_PANEL: f32 = 14.0;
+
 /// Draggable strip between sidebar and chat (must match `render_main_area`).
 pub const SIDEBAR_RESIZE_SEP_W: f32 = 5.0;
 pub const CHAT_VIEW_MARGIN_LEFT: f32 = 12.0;
-pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 24.0;
+pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 8.0;
 /// Inner margin of the chat [`Frame`] (transcript + composer stack).
 pub const CHAT_FRAME_TOP: f32 = 10.0;
 pub const CHAT_FRAME_BOTTOM: f32 = 10.0;
@@ -943,7 +949,12 @@ pub fn setup_style(ctx: &egui::Context) {
     style.spacing.menu_margin = egui::Margin::same(6.0);
     style.spacing.window_margin = egui::Margin::same(10.0);
     style.spacing.combo_width = 220.0;
-    style.spacing.scroll.bar_width = 8.0;
+    // Floating bar with a *reserved* gutter: `floating_allocated_width` keeps a constant
+    // 10px strip so the handle never overlays content and hovering never reflows layout
+    // (with `AlwaysVisible` the gutter is allocated every frame).
+    style.spacing.scroll.bar_width = 6.0;
+    style.spacing.scroll.floating_width = 3.0;
+    style.spacing.scroll.floating_allocated_width = 10.0;
     style.spacing.scroll.handle_min_length = 24.0;
     style.spacing.scroll.floating = true;
     ctx.set_style(style);
