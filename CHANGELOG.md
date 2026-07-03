@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-03
+
+### Added
+- Move provider API keys, OAuth tokens, and SSH passwords into the OS keychain (macOS Keychain Services, Windows Credential Manager, Linux Secret Service)
+- Add crash logging to `<config_dir>/oxi/crash.log`
+- Add end-to-end agent-loop integration tests with wiremock
+- Add regression tests for bash deny-list obfuscation handling
+- Add session file corruption/malformation test coverage
+- Add CONTRIBUTING.md with build, test, and code convention guidance
+- Add cargo-audit and rust-cache to CI
+
+### Changed
+- Harden bash deny-list normalization to strip quote and backslash characters
+- Restrict settings.json permissions to 0600 on Unix
+- Refactor large modules into submodules: ui/messages.rs, app/settings_ui.rs, app/git_panel.rs, markdown.rs, settings.rs, theme.rs (no behavior change)
+
+### Fixed
+- Fix CI release pipeline JSON parsing when LLM response contains unescaped backslashes
+- Resolve cargo-audit vulnerabilities by updating rustls-webpki and quinn-proto; document exceptions for quick-xml and rsa
+
+### Security
+- Credentials now stored in OS keychain instead of plaintext JSON files
+- Harden bash command validation to catch obfuscations like `s\udo` and `'sudo'`
+
+
 ### Added
 - Panic hook that logs crashes to `<config_dir>/oxi/crash.log` before the default handler
   prints to stderr, so failures in background threads leave a trace to report
@@ -177,7 +202,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/maziluiosif/oxi/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/maziluiosif/oxi/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/maziluiosif/oxi/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/maziluiosif/oxi/compare/v0.5.0...v0.6.0
