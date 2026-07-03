@@ -2,8 +2,8 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
-    Sense, Stroke, Ui,
+    self, Align, Color32, FontFamily, FontId, Frame, Layout, Margin, RichText, Rounding,
+    ScrollArea, Sense, Stroke, Ui,
 };
 
 use crate::theme::*;
@@ -228,17 +228,25 @@ impl OxiApp {
                                     ui.close_menu();
                                 }
                             });
-                            self.render_session_row_inner(
-                                ui, rect, wi, si, running, selected, title,
-                            );
-
                             // Hover-only delete button, mirroring the context-menu action.
+                            // `rect_contains_pointer`, not `response.hovered()`: the
+                            // trash button interacted below overlaps this rect and
+                            // would otherwise steal hover from the row response,
+                            // flickering show/hide every other frame.
                             let can_delete =
                                 wi == self.conv.active_workspace && n_sessions > 1 && !running;
-                            if can_delete && ui.rect_contains_pointer(rect) {
+                            let show_trash = can_delete && ui.rect_contains_pointer(rect);
+                            self.render_session_row_inner(
+                                ui, rect, wi, si, running, selected, title, show_trash,
+                            );
+
+                            if show_trash {
+                                // Flush against the same right edge the time label
+                                // sits at, so it swaps in instead of crowding it.
+                                const TIME_W: f32 = 34.0;
                                 let trash_rect = egui::Rect::from_min_max(
-                                    egui::pos2(rect.right() - 24.0, rect.top()),
-                                    egui::pos2(rect.right() - 2.0, rect.bottom()),
+                                    egui::pos2(rect.right() - 3.0 - TIME_W, rect.top() + 2.0),
+                                    egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
                                 );
                                 // Backing fill keeps the icon legible over long titles.
                                 ui.painter().rect_filled(
@@ -308,6 +316,7 @@ impl OxiApp {
         running: bool,
         selected: bool,
         title: String,
+        hide_time: bool,
     ) {
         const ROW_INNER_H: f32 = 20.0;
         const ROW_VMARGIN: f32 = 2.0;
@@ -321,7 +330,12 @@ impl OxiApp {
             let time_w = if running { 40.0 } else { 34.0 };
             let spin_reserve = if running { 14.0 } else { 0.0 };
             let sx = ui.spacing().item_spacing.x;
-            let time_label = if running {
+            // Space is always reserved for the time label so the title never
+            // reflows; when hidden the delete button is painted over that
+            // same slot instead.
+            let time_label = if hide_time {
+                None
+            } else if running {
                 self.stream_started_at_for(wi, si)
                     .map(|t| format_stream_elapsed(t.elapsed()))
             } else {
@@ -377,21 +391,27 @@ impl OxiApp {
                         );
                     },
                 );
-                if let Some(ref s) = time_label {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(time_w, ROW_INNER_H),
-                        egui::Layout::right_to_left(Align::Center),
-                        |ui| {
-                            ui.label(
-                                RichText::new(s)
-                                    .size(FS_TINY)
-                                    .color(c_text_muted())
-                                    .monospace(),
-                            );
-                        },
-                    );
-                }
             });
+            // Painted at an absolute rect (flush against `inner`'s right edge)
+            // rather than placed in the sequential layout, so it lines up
+            // pixel-for-pixel with the hover-only trash button that swaps
+            // into this same spot.
+            if let Some(ref s) = time_label {
+                let time_rect = egui::Rect::from_min_max(
+                    egui::pos2(inner.right() - time_w, inner.top()),
+                    egui::pos2(inner.right(), inner.bottom()),
+                );
+                // Nudged left off the flush-right edge (~2 monospace chars)
+                // so it doesn't sit exactly under the trash icon's center.
+                const TEXT_NUDGE: f32 = 14.0;
+                ui.painter().text(
+                    time_rect.right_center() - egui::vec2(TEXT_NUDGE, 0.0),
+                    egui::Align2::RIGHT_CENTER,
+                    s,
+                    FontId::new(FS_TINY, FontFamily::Monospace),
+                    c_text_muted(),
+                );
+            }
         });
     }
 
