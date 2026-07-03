@@ -291,11 +291,15 @@ impl OxiApp {
             self.ensure_active_session_loaded();
             return;
         }
+        let workspace_changed = workspace_idx != self.conv.active_workspace;
         self.swap_session_input(workspace_idx, session_idx);
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
         self.conv.scroll_to_bottom_once = true;
         self.ensure_active_session_loaded();
+        if workspace_changed {
+            self.refresh_git_cwd();
+        }
     }
 
     pub(crate) fn blank_session(title: impl Into<String>) -> Session {

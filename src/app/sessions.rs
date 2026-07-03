@@ -309,4 +309,64 @@ impl OxiApp {
         }
         self.run_state_mut(self.active_session_key()).stream_error = None;
     }
+
+    /// Removes a workspace from the sidebar. Doesn't touch its files on disk (chats
+    /// live under the project's own root, so they'll reappear if it's re-added).
+    /// Index 0 is the cwd workspace and is always kept.
+    pub(crate) fn delete_workspace(&mut self, wi: usize) {
+        if wi == 0 || wi >= self.conv.workspaces.len() {
+            return;
+        }
+        let running = (0..self.conv.workspaces[wi].sessions.len()).any(|si| {
+            self.run_state(self.session_key(wi, si))
+                .is_some_and(|state| state.waiting_response)
+        });
+        if running {
+            return;
+        }
+
+        let deleting_active = wi == self.conv.active_workspace;
+        if deleting_active {
+            let active = self.active_workspace().active;
+            let session_file = self.active_workspace().sessions[active].session_file.clone();
+            if session_file.as_deref() == self.flow.current_backend_session_file.as_deref() {
+                self.flow.current_backend_session_file = None;
+            }
+        }
+
+        self.conv.workspaces.remove(wi);
+
+        self.flow.sessions = std::mem::take(&mut self.flow.sessions)
+            .into_iter()
+            .filter_map(|(mut key, state)| {
+                if key.workspace_idx == wi {
+                    return None;
+                }
+                if key.workspace_idx > wi {
+                    key.workspace_idx -= 1;
+                }
+                Some((key, state))
+            })
+            .collect();
+
+        if self.conv.active_workspace > wi {
+            self.conv.active_workspace -= 1;
+        } else if deleting_active {
+            self.conv.active_workspace = 0;
+            self.flow.pending_session_idx = None;
+            self.flow.pending_load_session_idx = None;
+            let new_si = self.active_workspace().active;
+            self.conv.input =
+                std::mem::take(&mut self.active_workspace_mut().sessions[new_si].input_text);
+            self.conv.pending_images =
+                std::mem::take(&mut self.active_workspace_mut().sessions[new_si].pending_images);
+            self.conv.input_history_index = None;
+            self.conv.input_history_draft.clear();
+            self.conv.scroll_to_bottom_once = true;
+            self.ensure_active_session_loaded();
+            self.refresh_git_cwd();
+        }
+
+        self.sync_workspaces_to_settings();
+    }
 }

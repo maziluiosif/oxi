@@ -167,6 +167,16 @@ impl OxiApp {
                 self.conv.workspaces[wi].sidebar_folded = !folded;
                 self.sync_workspaces_to_settings();
             }
+            // The cwd workspace (index 0) is always present, so it gets no delete option.
+            if wi != 0 {
+                response.context_menu(|ui| {
+                    if ui.button("Delete workspace").clicked() {
+                        self.delete_workspace(wi);
+                        sidebar_changed = true;
+                        ui.close_menu();
+                    }
+                });
+            }
             ui.add_space(1.0);
             if sidebar_changed {
                 return;
@@ -403,7 +413,7 @@ impl OxiApp {
                 );
                 // Nudged left off the flush-right edge (~2 monospace chars)
                 // so it doesn't sit exactly under the trash icon's center.
-                const TEXT_NUDGE: f32 = 14.0;
+                const TEXT_NUDGE: f32 = 7.0;
                 ui.painter().text(
                     time_rect.right_center() - egui::vec2(TEXT_NUDGE, 0.0),
                     egui::Align2::RIGHT_CENTER,
