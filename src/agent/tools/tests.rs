@@ -3,7 +3,7 @@ use super::shell_search::validate_bash_command;
 use super::{
     paths::resolve_under_cwd, run_tool, tool_definitions_json, ToolEnv, MAX_TOOL_OUTPUT_CHARS,
 };
-use crate::settings::ALL_TOOL_NAMES;
+use crate::settings::{WebSearchBackend, ALL_TOOL_NAMES};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -23,6 +23,7 @@ fn all_enabled() -> ToolEnv {
     ToolEnv {
         enabled: vec![true; ALL_TOOL_NAMES.len()],
         web_search_url: "https://search.invalid".to_string(),
+        web_search_backend: WebSearchBackend::default(),
     }
 }
 

@@ -132,7 +132,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": "web_search",
-                    "description": "Search the web via a SearXNG instance. Returns a list of titles, URLs, and snippets. Use web_fetch to read a result in full.",
+                    "description": "Search the web (DuckDuckGo, or a configured SearXNG instance). Returns a list of titles, URLs, and snippets. Use web_fetch to read a result in full.",
                     "parameters": {
                         "type": "object",
                         "properties": {

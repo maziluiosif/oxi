@@ -20,9 +20,10 @@ pub fn truncate_lines_preview(s: &str, max_lines: usize) -> String {
     preview
 }
 
-/// Last `max_lines` lines; prepends a `…` line when the source continues. Used for live
-/// streaming panels (e.g. the thinking bubble) so the newest text is always visible while
-/// the model is reasoning, instead of the now-stale first lines.
+/// Last `max_lines` lines; prepends a `…` line when the source continues. Kept for the
+/// tail-preview tests even though the live thinking panel now uses a capped ScrollArea
+/// instead — see `render_thinking_text_panel`.
+#[allow(dead_code)]
 pub fn truncate_lines_tail_preview(s: &str, max_lines: usize) -> String {
     let all: Vec<&str> = s.lines().collect();
     let truncated = all.len() > max_lines;

@@ -71,7 +71,7 @@ impl OxiApp {
             let sess = self.session_mut_by_key(key);
             if let Some(last) = sess.messages.last_mut() {
                 if last.role == MsgRole::Assistant {
-                    last.streaming = false;
+                    last.finish_streaming();
                     last.blocks = vec![AssistantBlock::Answer(format!("[Send error] {e}"))];
                 }
             }
@@ -95,6 +95,8 @@ impl OxiApp {
             attachments: attachments.to_vec(),
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         });
         sess.messages.push(ChatMessage {
             role: MsgRole::Assistant,
@@ -102,6 +104,8 @@ impl OxiApp {
             attachments: vec![],
             blocks: vec![],
             streaming: true,
+            started_at: Some(std::time::Instant::now()),
+            worked_duration: None,
         });
     }
 
@@ -314,7 +318,7 @@ impl OxiApp {
             .rev()
             .find(|m| m.role == MsgRole::Assistant)
         {
-            last.streaming = false;
+            last.finish_streaming();
         }
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
         if let Err(e) =
