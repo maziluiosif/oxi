@@ -105,6 +105,8 @@ mod tests {
             attachments: vec![],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         }
     }
 
@@ -115,6 +117,8 @@ mod tests {
             attachments: vec![],
             blocks: vec![AssistantBlock::Answer(answer.into())],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         }
     }
 
@@ -205,6 +209,8 @@ mod tests {
             }],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let b = ChatMessage {
             role: MsgRole::User,
@@ -215,6 +221,8 @@ mod tests {
             }],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         assert!(chat_messages_equal(&a, &b));
     }
@@ -230,6 +238,8 @@ mod tests {
             }],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let b = ChatMessage {
             role: MsgRole::User,
@@ -240,6 +250,8 @@ mod tests {
             }],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         assert!(!chat_messages_equal(&a, &b));
     }

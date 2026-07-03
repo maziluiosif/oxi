@@ -640,6 +640,52 @@ impl AppSettings {
         }
     }
 
+    /// First profile of the given provider kind, if one exists. Used to resolve which
+    /// profile becomes active when the composer's provider dropdown picks a kind rather
+    /// than a specific profile.
+    pub fn first_profile_for(&self, kind: LlmProviderKind) -> Option<&ProviderProfile> {
+        self.profiles.iter().find(|p| p.provider == kind)
+    }
+
+    /// Provider kinds the user has actually configured (has usable credentials for),
+    /// in the same display order as [`LlmProviderKind::ALL`]. Local runtimes (Ollama, LM
+    /// Studio) need no key so they always count as configured; hosted providers need a
+    /// profile API key or the matching env var (mirrors the fallback chain in
+    /// `agent::runner::configured_*_key`); GPT Codex additionally counts as configured via
+    /// its "Sign in with ChatGPT" OAuth token.
+    pub fn configured_provider_kinds(
+        &self,
+        oauth: &crate::oauth::OAuthStore,
+    ) -> Vec<LlmProviderKind> {
+        let has_profile_key = |kind: LlmProviderKind| {
+            self.profiles
+                .iter()
+                .any(|p| p.provider == kind && !p.api_key.trim().is_empty())
+        };
+        LlmProviderKind::ALL
+            .into_iter()
+            .filter(|&kind| match kind {
+                LlmProviderKind::LmStudio | LlmProviderKind::Ollama => true,
+                LlmProviderKind::OpenAi => {
+                    has_profile_key(kind) || std::env::var("OPENAI_API_KEY").is_ok()
+                }
+                LlmProviderKind::OpenRouter => {
+                    has_profile_key(kind) || std::env::var("OPENROUTER_API_KEY").is_ok()
+                }
+                LlmProviderKind::OpenCodeGo => {
+                    has_profile_key(kind)
+                        || std::env::var("OPENCODE_GO_API_KEY").is_ok()
+                        || std::env::var("OPENCODE_API_KEY").is_ok()
+                }
+                LlmProviderKind::GptCodex => {
+                    oauth.openai_codex.is_some()
+                        || has_profile_key(kind)
+                        || std::env::var("OPENAI_API_KEY").is_ok()
+                }
+            })
+            .collect()
+    }
+
     /// URL passed to the `web_search` tool as its base.
     ///
     /// Returns the SearXNG URL only when the SearXNG backend is selected; otherwise returns

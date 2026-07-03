@@ -191,6 +191,8 @@ mod tests {
             attachments: vec![],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -209,6 +211,8 @@ mod tests {
             }],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -229,6 +233,8 @@ mod tests {
                 AssistantBlock::Answer("result".into()),
             ],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -254,6 +260,8 @@ mod tests {
                 output_truncated: false,
             }],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 2); // assistant + toolResult
@@ -279,6 +287,8 @@ mod tests {
                 output_truncated: true,
             }],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         let result = &entries[1];
@@ -301,6 +311,8 @@ mod tests {
                 AssistantBlock::Answer("".into()),
             ],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         let content = entries[0]["content"].as_array().unwrap();
