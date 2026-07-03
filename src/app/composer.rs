@@ -109,7 +109,7 @@ impl OxiApp {
                 Frame::none()
                     .fill(c_bg_elevated())
                     .stroke(Stroke::new(1.0, card_border))
-                    .rounding(14.0)
+                    .rounding(crate::theme::RADIUS_PANEL)
                     .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN))
                     .show(ui, |ui| {
                         // === Attachment thumbnails (above the text, like Cursor) ===
@@ -354,7 +354,7 @@ impl OxiApp {
                 let frame = Frame::none()
                     .fill(c_bg_input())
                     .stroke(Stroke::new(1.0, c_border()))
-                    .rounding(Rounding::same(8.0))
+                    .rounding(Rounding::same(crate::theme::RADIUS_CHIP))
                     .inner_margin(Margin::same(0.0))
                     .show(ui, |ui| {
                         if let Some(tex) = tex {
@@ -365,7 +365,10 @@ impl OxiApp {
                             if sz.x > THUMB_MAX_W {
                                 sz *= THUMB_MAX_W / sz.x;
                             }
-                            ui.add(Image::new((tex.id(), sz)).rounding(Rounding::same(8.0)));
+                            ui.add(
+                                Image::new((tex.id(), sz))
+                                    .rounding(Rounding::same(crate::theme::RADIUS_CHIP)),
+                            );
                         } else {
                             let short = mime.strip_prefix("image/").unwrap_or(mime.as_str());
                             ui.allocate_ui(egui::vec2(THUMB_H * 1.6, THUMB_H), |ui| {

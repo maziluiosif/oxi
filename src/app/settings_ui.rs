@@ -71,11 +71,16 @@ impl OxiApp {
                         ScrollArea::vertical()
                             .id_salt("settings_page_scroll")
                             .auto_shrink([false, false])
+                            .scroll_bar_visibility(
+                                egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                            )
                             .show(ui, |ui| {
                                 Frame::none()
                                     .inner_margin(Margin {
                                         left: 36.0,
-                                        right: 36.0,
+                                        // The reserved 10px scroll gutter adds to this;
+                                        // 26 + 10 keeps optical symmetry with the left.
+                                        right: 26.0,
                                         top: 24.0,
                                         bottom: 48.0,
                                     })
@@ -387,7 +392,7 @@ impl OxiApp {
             ui.add_space(4.0);
             ui.add(
                 TextEdit::singleline(&mut self.conv.settings.searxng_url)
-                    .hint_text("https://search.mac-mini")
+                    .hint_text("https://searxng.example.com")
                     .desired_width(f32::INFINITY),
             )
             .on_hover_text(
@@ -425,7 +430,7 @@ impl OxiApp {
         card_frame().show(ui, |ui| {
             ui.label(
                 RichText::new(
-                    "The ✨ Generate button in the git panel drafts a commit message from \
+                    "The Generate button in the git panel drafts a commit message from \
                      the staged diff. Pick which provider profile it uses and its own system \
                      prompt, kept separate from the agent prompt above.",
                 )
@@ -775,7 +780,7 @@ impl OxiApp {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(
-                        "Runs the model on another host (e.g. a Mac mini) reached over SSH. \
+                        "Runs the model on another host (e.g. a machine on your LAN) reached over SSH. \
                          The runtime must be listening on 127.0.0.1 on that host; oxi \
                          forwards a local port to it.",
                     )
@@ -790,7 +795,7 @@ impl OxiApp {
                         ui.add(
                             TextEdit::singleline(&mut cfg.host)
                                 .desired_width(200.0)
-                                .hint_text("mac-mini.local")
+                                .hint_text("192.168.1.10 or myhost.local")
                                 .margin(Margin::symmetric(8.0, 5.0)),
                         );
                     });

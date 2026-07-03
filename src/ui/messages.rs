@@ -152,7 +152,9 @@ fn short_path(path: &str, max_segments: usize) -> String {
 
 /// "https://www.example.com/a/b?x=1" → "example.com/a/b?x=1…" (scheme + www stripped, truncated).
 fn short_url(url: &str, max_chars: usize) -> String {
-    let s = url.trim_start_matches("https://").trim_start_matches("http://");
+    let s = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
     let s = s.strip_prefix("www.").unwrap_or(s);
     let s = s.trim_end_matches('/');
     let mut out: String = s.chars().take(max_chars).collect();
@@ -383,7 +385,7 @@ fn tool_icon(name: &str) -> &'static str {
         "ls" => "\u{f0645}",    // nf-md-folder_open
         "web_search" => crate::theme::ICON_WEB_SEARCH,
         "web_fetch" => crate::theme::ICON_GLOBE,
-        _ => "\u{f0214}",       // nf-md-file
+        _ => "\u{f0214}", // nf-md-file
     }
 }
 
@@ -690,11 +692,17 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                             .rounding(Rounding::same(6.0))
                             .inner_margin(Margin::symmetric(8.0, 4.0))
                             .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(format!("📎 {mime}"))
-                                        .size(FS_TINY)
-                                        .color(c_text_muted()),
-                                );
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    ui.label(crate::ui::chrome::icon_glyph_rich(
+                                        ICON_ATTACH,
+                                        FS_TINY,
+                                        c_text_muted(),
+                                    ));
+                                    ui.label(
+                                        RichText::new(mime).size(FS_TINY).color(c_text_muted()),
+                                    );
+                                });
                             });
                     }
                 }
