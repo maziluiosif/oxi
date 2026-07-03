@@ -228,13 +228,6 @@ impl OxiApp {
                                 Color32::TRANSPARENT
                             };
                             ui.painter().rect_filled(rect, Rounding::same(7.0), fill);
-                            if selected {
-                                ui.painter().rect_stroke(
-                                    rect,
-                                    Rounding::same(7.0),
-                                    Stroke::new(1.0, c_border_subtle()),
-                                );
-                            }
                             if response.clicked() {
                                 self.select_session_in_workspace(wi, si);
                             }
