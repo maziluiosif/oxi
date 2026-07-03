@@ -188,3 +188,160 @@ fn extract_first_user_message(message: &Value) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    /// Writes `bytes` to a fresh temp file and returns its path. Session files on disk
+    /// can be corrupted by a crash mid-write, manual editing, or a bug in an older
+    /// version, so `load_session_messages`/`parse_session_header_and_messages` need to
+    /// degrade gracefully rather than panic on any of these shapes.
+    fn temp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("oxi-session-io-test-{nanos}"));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        let mut f = File::create(&path).unwrap();
+        f.write_all(bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn load_session_messages_empty_file_returns_none() {
+        let path = temp_file("empty.jsonl", b"");
+        assert!(load_session_messages(path.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn load_session_messages_missing_file_returns_none() {
+        assert!(load_session_messages("/nonexistent/path/session.jsonl").is_none());
+    }
+
+    #[test]
+    fn load_session_messages_missing_header_returns_none() {
+        let path = temp_file(
+            "no-header.jsonl",
+            b"{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+        );
+        assert!(load_session_messages(path.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn load_session_messages_wrong_header_type_returns_none() {
+        let path = temp_file(
+            "wrong-header.jsonl",
+            b"{\"type\":\"not_session\",\"id\":\"abc\"}\n",
+        );
+        assert!(load_session_messages(path.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn load_session_messages_header_missing_id_returns_none() {
+        let path = temp_file("no-id.jsonl", b"{\"type\":\"session\"}\n");
+        assert!(load_session_messages(path.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn load_session_messages_invalid_json_line_returns_none() {
+        let path = temp_file(
+            "bad-json.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\nnot json at all\n",
+        );
+        assert!(load_session_messages(path.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn load_session_messages_truncated_last_line_returns_none() {
+        // Simulates a crash mid-`writeln!`: the file ends with a half-written JSON object
+        // (valid UTF-8, invalid JSON), which fails the `serde_json::from_str(..).ok()?`
+        // in the read loop and bails the whole call out to `None`.
+        let path = temp_file(
+            "truncated.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n{\"type\":\"message\",\"message\":{\"rol",
+        );
+        assert!(load_session_messages(path.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn load_session_messages_non_utf8_line_is_silently_dropped_not_panicking() {
+        // `BufReader::lines()` yields an `Err` for a non-UTF-8 line; the read loop uses
+        // `.map_while(Result::ok)`, which stops iterating at that first `Err` rather than
+        // propagating it. So a non-UTF-8 line doesn't fail the load the way a UTF-8-but-
+        // invalid-JSON line does (see the truncated-line test above) — everything read
+        // before the bad line is kept, and nothing after it is. Documented here as the
+        // actual (silent-truncation) behavior, not a panic.
+        let path = temp_file(
+            "non-utf8.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"kept\"}}\n\
+              \xff\xfe\x00garbage\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"dropped\"}}\n",
+        );
+        let messages = load_session_messages(path.to_str().unwrap()).expect("header was valid");
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn load_session_messages_valid_file_returns_messages() {
+        let path = temp_file(
+            "valid.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
+        );
+        assert!(load_session_messages(path.to_str().unwrap()).is_some());
+    }
+
+    #[test]
+    fn parse_session_header_and_messages_empty_file_returns_none() {
+        let path = temp_file("empty2.jsonl", b"");
+        assert!(parse_session_header_and_messages(&path).is_none());
+    }
+
+    #[test]
+    fn parse_session_header_and_messages_missing_header_returns_none() {
+        let path = temp_file(
+            "no-header2.jsonl",
+            b"{\"type\":\"session_info\",\"name\":\"Chat\"}\n",
+        );
+        assert!(parse_session_header_and_messages(&path).is_none());
+    }
+
+    #[test]
+    fn parse_session_header_and_messages_invalid_json_returns_none() {
+        let path = temp_file(
+            "bad-json2.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n{{{\n",
+        );
+        assert!(parse_session_header_and_messages(&path).is_none());
+    }
+
+    #[test]
+    fn parse_session_header_and_messages_header_only_returns_empty_fields() {
+        let path = temp_file(
+            "header-only.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n",
+        );
+        let (name, first_message) = parse_session_header_and_messages(&path).unwrap();
+        assert_eq!(name, None);
+        assert_eq!(first_message, None);
+    }
+
+    #[test]
+    fn parse_session_header_and_messages_extracts_name_and_first_user_message() {
+        let path = temp_file(
+            "full.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n\
+              {\"type\":\"session_info\",\"name\":\"My Chat\"}\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hello there\"}}\n",
+        );
+        let (name, first_message) = parse_session_header_and_messages(&path).unwrap();
+        assert_eq!(name, Some("My Chat".to_string()));
+        assert_eq!(first_message, Some("hello there".to_string()));
+    }
+}

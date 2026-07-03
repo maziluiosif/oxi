@@ -20,11 +20,29 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          # RUSTSEC-2026-0194 / -0195 (quick-xml): pinned by eframe's Linux-only
+          # accessibility (accesskit/atspi) and wayland-scanner transitive deps via
+          # strict `^0.30`/`^0.39` requirements upstream hasn't relaxed yet — no
+          # semver-compatible fix is available, and these run at build/codegen time on
+          # Linux only, not on attacker-controlled input at runtime.
+          # RUSTSEC-2023-0071 (rsa, Marvin Attack): pulled in transitively by russh for
+          # SSH auth; upstream has published no fix for this timing side-channel.
+          # Re-check these on each dependency bump in case a fix lands.
+          cargo audit \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195 \
+            --ignore RUSTSEC-2023-0071
 
       - name: cargo test
         run: cargo test
