@@ -20,11 +20,18 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
 
       - name: cargo test
         run: cargo test
