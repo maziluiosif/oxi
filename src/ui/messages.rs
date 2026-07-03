@@ -1385,7 +1385,6 @@ fn render_thinking_text_panel(
                     thinking_wrapped_job(text.to_string(), inner),
                     allow_select,
                 );
-                return;
             }
             // Done + overflowing + folded: guard — render nothing. Unreachable via the
             // caller's `show_body` gate, kept for safety if the panel is ever called directly.

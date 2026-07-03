@@ -64,7 +64,7 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     .get("workedSecs")
                     .and_then(|x| x.as_f64())
                     .filter(|s| *s > 0.0)
-                    .map(|s| Duration::from_secs_f64(s));
+                    .map(Duration::from_secs_f64);
                 out.push(ChatMessage {
                     role: MsgRole::Assistant,
                     text: String::new(),

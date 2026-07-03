@@ -968,27 +968,33 @@ mod tests {
 
     #[test]
     fn effective_web_search_url_duckduckgo_is_empty() {
-        let mut s = AppSettings::default();
-        s.web_search_backend = WebSearchBackend::DuckDuckGo;
-        s.searxng_url = "https://searxng.example.com".to_string();
+        let s = AppSettings {
+            web_search_backend: WebSearchBackend::DuckDuckGo,
+            searxng_url: "https://searxng.example.com".to_string(),
+            ..Default::default()
+        };
         // Even with a URL set, DuckDuckGo backend ignores it.
         assert_eq!(s.effective_web_search_url(), "");
     }
 
     #[test]
     fn effective_web_search_url_searxng_returns_url() {
-        let mut s = AppSettings::default();
-        s.web_search_backend = WebSearchBackend::SearXng;
-        s.searxng_url = "https://searxng.example.com/".to_string();
+        let s = AppSettings {
+            web_search_backend: WebSearchBackend::SearXng,
+            searxng_url: "https://searxng.example.com/".to_string(),
+            ..Default::default()
+        };
         // Trailing slash trimmed.
         assert_eq!(s.effective_web_search_url(), "https://searxng.example.com");
     }
 
     #[test]
     fn effective_web_search_url_searxng_empty_returns_empty_for_tool_error() {
-        let mut s = AppSettings::default();
-        s.web_search_backend = WebSearchBackend::SearXng;
-        s.searxng_url = String::new();
+        let s = AppSettings {
+            web_search_backend: WebSearchBackend::SearXng,
+            searxng_url: String::new(),
+            ..Default::default()
+        };
         // Empty URL is passed through so the tool can report a SearXNG configuration error.
         assert_eq!(s.effective_web_search_url(), "");
     }
