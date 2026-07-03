@@ -133,6 +133,25 @@ impl OxiApp {
             sidebar_folded: false,
         });
         self.select_workspace(self.conv.workspaces.len() - 1);
+        self.sync_workspaces_to_settings();
+    }
+
+    /// Mirrors the runtime workspace list (paths + fold state) into settings and saves,
+    /// so sidebar projects survive a restart.
+    pub(crate) fn sync_workspaces_to_settings(&mut self) {
+        self.conv.settings.workspaces = self
+            .conv
+            .workspaces
+            .iter()
+            .map(|w| crate::settings::WorkspaceEntry {
+                root_path: w.root_path.clone(),
+                folded: w.sidebar_folded,
+            })
+            .collect();
+        if let Err(e) = self.conv.settings.save() {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
+        }
     }
 
     pub(crate) fn pick_image_attachment(&mut self) {

@@ -45,6 +45,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             messages_loaded: false,
             input_text: String::new(),
             pending_images: Vec::new(),
+            modified: session.modified,
         })
         .collect()
 }
@@ -195,6 +196,7 @@ mod tests {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            modified: SystemTime::now(),
         };
 
         save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
@@ -251,6 +253,7 @@ mod tests {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            modified: SystemTime::now(),
         };
 
         save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
@@ -292,6 +295,7 @@ mod tests {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            modified: SystemTime::now(),
         };
 
         save_session_messages(root.to_str().unwrap(), &mut session).unwrap();

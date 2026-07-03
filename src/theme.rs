@@ -65,8 +65,6 @@ pub const ICON_CHECK: &str = "\u{f00c}";
 pub const ICON_SETTINGS: &str = "\u{f013}";
 /// Plus — "new" / "add" actions (new chat, add profile) (`nf-fa-plus`).
 pub const ICON_PLUS: &str = "\u{f067}";
-/// Plus inside a filled square — primary "new chat" button (`nf-fa-plus-square`).
-pub const ICON_PLUS_SQUARE: &str = "\u{f0fe}";
 /// Chevron pointed left — "back" / hide panel (`nf-fa-chevron-left`).
 pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
 /// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
@@ -91,6 +89,10 @@ pub const ICON_EXTERNAL: &str = "\u{f08e}";
 pub const ICON_TRASH: &str = "\u{f1f8}";
 /// Folder plus — "add workspace" (`nf-md-folder-plus`).
 pub const ICON_FOLDER_PLUS: &str = "\u{f0257}";
+/// Closed folder — folded workspace row in the sidebar (`nf-md-folder`).
+pub const ICON_FOLDER: &str = "\u{f024b}";
+/// Open folder — unfolded workspace row in the sidebar (`nf-md-folder_open`).
+pub const ICON_FOLDER_OPEN: &str = "\u{f0770}";
 /// Check inside a circle — affirmative pill ("Signed in", committed) (`nf-fa-check-circle`).
 pub const ICON_CHECK_CIRCLE: &str = "\u{f058}";
 /// Up angle chevron — "stage" direction / collapse hint (`nf-fa-angle-up`).
@@ -1023,6 +1025,26 @@ pub fn format_stream_elapsed(d: Duration) -> String {
     format!("{m}m{rs:02}")
 }
 
+/// Coarse "time ago" label for sidebar rows: "now", "5m", "6h", "18h", "3d".
+pub fn format_relative_time(t: std::time::SystemTime) -> String {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(t)
+        .unwrap_or_default();
+    let s = elapsed.as_secs();
+    if s < 60 {
+        return "now".to_string();
+    }
+    let m = s / 60;
+    if m < 60 {
+        return format!("{m}m");
+    }
+    let h = m / 60;
+    if h < 24 {
+        return format!("{h}h");
+    }
+    format!("{}d", h / 24)
+}
+
 /// Short label for a workspace root path (last two path segments, e.g. `owner/repo`).
 pub fn workspace_sidebar_label(root_path: &str) -> String {
     let path = std::path::Path::new(root_path);
@@ -1065,6 +1087,29 @@ pub fn tool_status_label(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_relative_time_coarse_units() {
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::now();
+        assert_eq!(format_relative_time(now), "now");
+        assert_eq!(format_relative_time(now - Duration::from_secs(59)), "now");
+        assert_eq!(format_relative_time(now - Duration::from_secs(5 * 60)), "5m");
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(6 * 3600)),
+            "6h"
+        );
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(18 * 3600)),
+            "18h"
+        );
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(3 * 86_400)),
+            "3d"
+        );
+        // Future timestamps (clock skew) clamp to "now" rather than underflowing.
+        assert_eq!(format_relative_time(now + Duration::from_secs(3600)), "now");
+    }
 
     #[test]
     fn builtin_themes_present_and_unique() {
