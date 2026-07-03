@@ -387,3 +387,221 @@ fn process_sse_line(
         }
     }
 }
+
+/// End-to-end coverage for the full agent turn: fake provider SSE response -> tool-call
+/// parsing -> the approval gate -> a real tool execution against the filesystem -> the
+/// tool result serialized back into the next request -> a second round producing the
+/// final answer. Every other test in this module/crate exercises one of these pieces in
+/// isolation (SSE parsing here, `ApprovalGate` in `approval.rs`, tool dispatch in
+/// `tools/tests.rs`); this is the one place that proves they actually fit together.
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::agent::approval::{ApprovalDecision, ApprovalGate};
+    use crate::agent::loop_ctx::LoopCtx;
+    use crate::agent::tools::ToolEnv;
+    use crate::settings::{WebSearchBackend, ALL_TOOL_NAMES};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use wiremock::matchers::{method, path as path_matcher};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    fn temp_workspace(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("oxi-agent-loop-test-{name}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sse_body(chunks: &[Value]) -> String {
+        let mut body = String::new();
+        for chunk in chunks {
+            body.push_str("data: ");
+            body.push_str(&chunk.to_string());
+            body.push_str("\n\n");
+        }
+        body.push_str("data: [DONE]\n\n");
+        body
+    }
+
+    /// First request served returns a streamed `write` tool call; every request after
+    /// that returns a final text answer. Mirrors a real two-round agent turn (tool call
+    /// -> tool result -> final answer) without depending on wiremock's mock
+    /// ordering/priority rules for sequencing responses.
+    struct RoundResponder {
+        call_count: AtomicUsize,
+    }
+
+    impl Respond for RoundResponder {
+        fn respond(&self, _req: &Request) -> ResponseTemplate {
+            let n = self.call_count.fetch_add(1, AtomicOrdering::SeqCst);
+            let body = if n == 0 {
+                sse_body(&[
+                    json!({"choices": [{"index": 0, "delta": {"tool_calls": [
+                        {"index": 0, "id": "call_1", "type": "function",
+                         "function": {"name": "write", "arguments": ""}}
+                    ]}}]}),
+                    json!({"choices": [{"index": 0, "delta": {"tool_calls": [
+                        {"index": 0, "function": {"arguments":
+                            "{\"path\":\"hello.txt\",\"content\":\"hi from the model\"}"}}
+                    ]}}]}),
+                    json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+                ])
+            } else {
+                sse_body(&[
+                    json!({"choices": [{"index": 0, "delta": {"content": "Done!"}}]}),
+                    json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+                ])
+            };
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+    }
+
+    #[tokio::test]
+    async fn full_loop_drives_tool_call_through_approval_to_final_answer() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_matcher("/chat/completions"))
+            .respond_with(RoundResponder {
+                call_count: AtomicUsize::new(0),
+            })
+            .mount(&server)
+            .await;
+
+        let cwd = temp_workspace("full-loop");
+        let client = reqwest::Client::new();
+        let (tx, rx) = mpsc::channel::<AgentEvent>();
+        let (approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
+        // `ApprovalGate::request` blocks on this channel; since it's an unbounded std
+        // channel, sending the decision before the gate asks for it is fine — it's just
+        // sitting in the buffer by the time `write` triggers the approval request.
+        approval_tx.send(ApprovalDecision::Approve).unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut gate = ApprovalGate::new(true, approval_rx);
+        let env = ToolEnv {
+            enabled: vec![true; ALL_TOOL_NAMES.len()],
+            web_search_url: String::new(),
+            web_search_backend: WebSearchBackend::default(),
+        };
+        let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
+        let tools = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "write",
+                "description": "write a file",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        })];
+        let base_url = server.uri();
+
+        let mut ctx = LoopCtx {
+            client: &client,
+            base_url: &base_url,
+            model: "test-model",
+            cwd: &cwd,
+            env: &env,
+            tx: &tx,
+            cancel: &cancel,
+            gate: &mut gate,
+            max_rounds: 10,
+        };
+        let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
+        assert!(result.is_ok(), "agent loop failed: {result:?}");
+
+        // The `write` tool call actually ran against the real filesystem after approval.
+        let written = std::fs::read_to_string(cwd.join("hello.txt")).unwrap();
+        assert_eq!(written, "hi from the model");
+
+        // The tool result made it back into the conversation history sent to the model.
+        let tool_messages: Vec<&Value> = messages
+            .iter()
+            .filter(|m| m.get("role").and_then(Value::as_str) == Some("tool"))
+            .collect();
+        assert_eq!(tool_messages.len(), 1);
+
+        // The event stream reflects the full round trip: an approval request for the
+        // mutating tool, the regular tool lifecycle, then the final answer.
+        let events: Vec<AgentEvent> = rx.try_iter().collect();
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ApprovalRequest { name, .. } if name == "write")));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolEnd {
+                is_error: Some(false),
+                ..
+            }
+        )));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::AgentEnd)));
+    }
+
+    #[tokio::test]
+    async fn full_loop_denied_approval_reports_error_to_model_without_running_tool() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_matcher("/chat/completions"))
+            .respond_with(RoundResponder {
+                call_count: AtomicUsize::new(0),
+            })
+            .mount(&server)
+            .await;
+
+        let cwd = temp_workspace("full-loop-denied");
+        let client = reqwest::Client::new();
+        let (tx, _rx) = mpsc::channel::<AgentEvent>();
+        let (approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
+        approval_tx.send(ApprovalDecision::Deny).unwrap();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut gate = ApprovalGate::new(true, approval_rx);
+        let env = ToolEnv {
+            enabled: vec![true; ALL_TOOL_NAMES.len()],
+            web_search_url: String::new(),
+            web_search_backend: WebSearchBackend::default(),
+        };
+        let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
+        let tools = vec![json!({
+            "type": "function",
+            "function": {"name": "write", "description": "write a file",
+                          "parameters": {"type": "object", "properties": {}}}
+        })];
+        let base_url = server.uri();
+
+        let mut ctx = LoopCtx {
+            client: &client,
+            base_url: &base_url,
+            model: "test-model",
+            cwd: &cwd,
+            env: &env,
+            tx: &tx,
+            cancel: &cancel,
+            gate: &mut gate,
+            max_rounds: 10,
+        };
+        let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
+        assert!(result.is_ok(), "agent loop failed: {result:?}");
+
+        // Denied: the file must never have been written...
+        assert!(!cwd.join("hello.txt").exists());
+        // ...but the model still gets a tool-result message explaining the denial, so it
+        // can react instead of the conversation just hanging.
+        let tool_message = messages
+            .iter()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("tool"))
+            .expect("a tool result message for the denied call");
+        let content = tool_message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(content.contains("denied"), "unexpected content: {content}");
+    }
+}
