@@ -6,6 +6,7 @@ mod hydrate;
 mod markdown;
 mod model;
 mod oauth;
+mod secrets;
 mod session_store;
 mod settings;
 mod terminal;

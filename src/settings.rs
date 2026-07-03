@@ -154,6 +154,10 @@ pub struct ProviderProfile {
     pub model_id: String,
     /// Override base URL (empty = use default for provider).
     pub base_url: String,
+    /// Never written to `settings.json` — persisted in the OS keychain instead, keyed
+    /// by [`ProviderProfile::id`]. See [`AppSettings::migrate_secrets_to_keychain`] for
+    /// how an existing plaintext key gets moved out on first load with this version.
+    #[serde(default, skip_serializing)]
     pub api_key: String,
     pub openrouter_http_referer: String,
     pub openrouter_title: String,
@@ -484,18 +488,39 @@ impl AppSettings {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        if let Ok(bytes) = fs::read(&path) {
+        let mut settings = if let Ok(bytes) = fs::read(&path) {
             if let Ok(mut s) = serde_json::from_slice::<AppSettings>(&bytes) {
                 s.normalize();
-                return s;
-            }
-            if let Ok(old) = serde_json::from_slice::<LegacyAppSettings>(&bytes) {
+                s
+            } else if let Ok(old) = serde_json::from_slice::<LegacyAppSettings>(&bytes) {
                 let mut s = Self::from_legacy(old);
                 s.normalize();
-                return s;
+                s
+            } else {
+                Self::default()
+            }
+        } else {
+            Self::default()
+        };
+        settings.migrate_secrets_to_keychain();
+        settings
+    }
+
+    /// Provider API keys used to be written to `settings.json` in plaintext; the field is
+    /// now `skip_serializing`, so freshly-parsed JSON either has no `api_key` at all
+    /// (already migrated), or still has a leftover plaintext value from before this
+    /// version. For each profile: a non-empty value just parsed from the file is legacy
+    /// plaintext — push it into the keychain so it becomes the source of truth. Otherwise,
+    /// pull whatever is already in the keychain into memory for this session to use.
+    fn migrate_secrets_to_keychain(&mut self) {
+        for profile in &mut self.profiles {
+            let account = format!("api-key:{}", profile.id);
+            if !profile.api_key.is_empty() {
+                let _ = crate::secrets::store(&account, &profile.api_key);
+            } else {
+                profile.api_key = crate::secrets::load(&account);
             }
         }
-        Self::default()
     }
 
     #[allow(clippy::field_reassign_with_default)]
@@ -622,14 +647,19 @@ impl AppSettings {
     }
 
     pub fn save(&self) -> Result<(), String> {
+        for profile in &self.profiles {
+            let account = format!("api-key:{}", profile.id);
+            let _ = crate::secrets::store(&account, &profile.api_key);
+        }
         let path = Self::config_path();
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         fs::write(&path, json).map_err(|e| e.to_string())?;
-        // Provider API keys are stored in this file in plaintext; restrict it to the
-        // owner so other local accounts on shared machines can't read it off disk.
+        // Restrict to the owner as defense in depth for the rest of this file (base
+        // URLs, model ids, etc.); the actual secrets (API keys) live in the OS keychain,
+        // not here.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -757,6 +787,7 @@ impl AppSettings {
             return;
         }
         let removed_active = self.active_profile_id == id;
+        let _ = crate::secrets::delete(&format!("api-key:{id}"));
         self.profiles.retain(|p| p.id != id);
         if self.profiles.is_empty() {
             *self = Self::default();
@@ -791,6 +822,28 @@ mod tests {
         let s = AppSettings::default();
         assert!(!s.profiles.is_empty());
         assert!(s.active_profile().is_some());
+    }
+
+    /// Provider API keys must never be written to `settings.json` — they live in the OS
+    /// keychain (see `migrate_secrets_to_keychain`). This doesn't touch the real keychain,
+    /// just the serde attribute on `ProviderProfile::api_key`.
+    #[test]
+    fn api_key_not_serialized_to_json() {
+        let mut s = AppSettings::default();
+        s.profiles[0].api_key = "sk-super-secret-value".to_string();
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("sk-super-secret-value"));
+        assert!(!json.contains("api_key"));
+    }
+
+    /// A `settings.json` written by a pre-keychain version of oxi still has a plaintext
+    /// `api_key` in it; deserializing must still read that value so
+    /// `migrate_secrets_to_keychain` has something to migrate out on first load.
+    #[test]
+    fn legacy_plaintext_api_key_still_deserializes() {
+        let json = r#"{"id":"t","name":"t","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"sk-legacy","openrouter_http_referer":"","openrouter_title":""}"#;
+        let p: ProviderProfile = serde_json::from_str(json).unwrap();
+        assert_eq!(p.api_key, "sk-legacy");
     }
 
     #[test]

@@ -281,9 +281,9 @@ Behavior visible in code (`src/compute/`):
   convenience tunnel to a host you typed in yourself, not a general-purpose SSH client
 - the Settings UI exposes host / SSH port / user / remote runtime port fields plus a
   password field and a **Test connection** button
-- SSH passwords are stored in `~/.config/oxi/ssh_credentials.json`, keyed by profile id —
-  **not** in `settings.json` — so they aren't dragged along whenever settings are read,
-  logged, or exported (same plaintext-JSON trust model as `oauth.json`)
+- SSH passwords are stored in the OS keychain, keyed by profile id — **not** in
+  `settings.json` — so they aren't dragged along whenever settings are read, logged, or
+  exported (same trust model as OAuth tokens, below)
 
 ## OAuth flows
 
@@ -295,7 +295,7 @@ Behavior visible in code:
 
 - the app opens the browser for login
 - it listens on `http://localhost:1455/auth/callback`
-- access and refresh tokens are stored in `oauth.json`
+- access and refresh tokens are stored in the OS keychain
 - the access token is refreshed automatically before expiry
 - the callback port `1455` must be available
 
@@ -332,13 +332,11 @@ Settings are stored at:
 - `~/.config/oxi/settings.json` on systems where `dirs::config_dir()` resolves there
 - or the platform-equivalent config directory
 
-OAuth tokens are stored separately at:
-
-- `~/.config/oxi/oauth.json`
-
-SSH passwords for Remote compute targets are stored separately at:
-
-- `~/.config/oxi/ssh_credentials.json`
+Provider API keys, OAuth tokens, and SSH passwords for Remote compute targets are **not**
+in that file — they're stored in the OS credential store (see `src/secrets.rs` and
+[Current limitations and safety notes](#current-limitations-and-safety-notes)). If
+`oauth.json` or `ssh_credentials.json` exist from an older version, they're migrated into
+the keychain and deleted the next time oxi reads them.
 
 The settings model currently contains:
 
@@ -428,11 +426,15 @@ Based on the current source code:
 
 - `bash` safety checks are basic and not a real sandbox
 - tool execution can modify files inside the selected workspace
-- provider API keys (`settings.json`), OAuth tokens (`oauth.json`), and SSH passwords for
-  Remote compute targets (`ssh_credentials.json`) are all stored as plaintext JSON on disk,
-  not in an OS keychain. On Unix these files are written with `0600` permissions (owner-only)
-  as a baseline protection against other local accounts; there is no protection against
-  another process running as the same user, and no such restriction is applied on Windows
+- provider API keys, OAuth tokens, and SSH passwords for Remote compute targets are stored
+  in the OS credential store (Keychain Services on macOS, Credential Manager on Windows,
+  Secret Service over D-Bus on Linux) rather than as plaintext JSON — see `src/secrets.rs`.
+  Settings previously written by an older version (plaintext `api_key` in `settings.json`,
+  `oauth.json`, `ssh_credentials.json`) are migrated into the keychain and the plaintext
+  removed on next load/save. This still doesn't protect against another process running as
+  the same OS user with permission to query the credential store on your behalf
+- `settings.json` itself is written with `0600` permissions on Unix as defense in depth for
+  its non-secret contents (base URLs, model ids); no such restriction is applied on Windows
 - Remote SSH tunnels trust the remote host key on every connection (no pinning/known_hosts
   verification) — only point this at hosts you control
 - workspace path protections apply to file-based tools, but you should still use the app on trusted repositories
@@ -453,7 +455,8 @@ Based on the current source code:
 - `src/app/sessions.rs` — workspaces, attachments, and session deletion behavior
 - `src/session_store.rs` — session persistence entry points
 - `src/compute/tunnel.rs` — SSH tunnel manager (`russh`) for Remote compute targets
-- `src/compute/store.rs` — SSH credential storage (`ssh_credentials.json`)
+- `src/compute/store.rs` — SSH credential storage (OS keychain)
+- `src/secrets.rs` — OS keychain wrapper shared by settings, OAuth, and SSH credentials
 
 ## License
 
