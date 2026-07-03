@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::settings::ALL_TOOL_NAMES;
+use crate::settings::{ALL_TOOL_NAMES, WebSearchBackend};
 
 /// Result returned by [`run_tool`] — carries both the text output and an optional unified diff
 /// generated locally for `edit` and `write` so the UI can render a diff block.
@@ -34,6 +34,9 @@ pub use definitions::tool_definitions_json;
 pub struct ToolEnv {
     pub enabled: Vec<bool>,
     pub web_search_url: String,
+    /// Which zero-config search backend to prefer when `web_search_url` is empty (i.e. not
+    /// routing through a user-configured SearXNG instance).
+    pub web_search_backend: WebSearchBackend,
 }
 
 pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResult {
@@ -62,7 +65,9 @@ pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResu
                 "grep" => shell_search::tool_grep(cwd, args),
                 "find" => shell_search::tool_find(cwd, args),
                 "ls" => shell_search::tool_ls(cwd, args),
-                "web_search" => web::tool_web_search(&env.web_search_url, args),
+                "web_search" => {
+                    web::tool_web_search(&env.web_search_url, env.web_search_backend, args)
+                }
                 "web_fetch" => web::tool_web_fetch(args),
                 _ => Err(paths::err("unknown tool")),
             };

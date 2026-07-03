@@ -17,11 +17,16 @@ const MAX_SEARCH_COUNT: usize = 20;
 const DEFAULT_FETCH_CHARS: usize = 20_000;
 const HTTP_TIMEOUT_SECS: u64 = 20;
 
-const DEFAULT_USER_AGENT: &str = "oxi/0.4";
-/// Zero-config search backend used when no SearXNG URL is set. DuckDuckGo's HTML endpoint
+const DEFAULT_USER_AGENT: &str = "oxi/0.6";
+/// Zero-config search backends used when no SearXNG URL is set. DuckDuckGo's HTML endpoint
 /// needs no API key, but it serves an anomaly-challenge page (HTTP 202) to clients that
 /// don't look like a browser, so requests to it carry a full browser header set.
 const DDG_HTML_URL: &str = "https://html.duckduckgo.com/html/";
+/// Bing offers a stable, zero-config RSS feed of its search results at `?format=rss`. It is
+/// plain XML (title/link/description per item), tolerant of any User-Agent, and not gated by a
+/// bot-challenge page like DuckDuckGo's HTML endpoint, so it is the preferred zero-config
+/// backend. Bing caps the feed at ~10 items regardless of a `count=` parameter; we just trim.
+const BING_RSS_URL: &str = "https://www.bing.com/search";
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
      AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const BROWSER_HEADERS: &[(&str, &str)] = &[
@@ -84,7 +89,11 @@ fn http_get(
     })
 }
 
-pub(crate) fn tool_web_search(base_url: &str, args: &Value) -> Result<String, String> {
+pub(crate) fn tool_web_search(
+    base_url: &str,
+    backend: crate::settings::WebSearchBackend,
+    args: &Value,
+) -> Result<String, String> {
     let query = args
         .get("query")
         .and_then(|x| x.as_str())
@@ -99,8 +108,10 @@ pub(crate) fn tool_web_search(base_url: &str, args: &Value) -> Result<String, St
 
     let base = base_url.trim().trim_end_matches('/');
     if base.is_empty() {
-        // No SearXNG configured: fall back to the built-in zero-config DuckDuckGo backend.
-        return ddg_search(query, count);
+        // No SearXNG configured: use exactly the backend the user picked — no fallback.
+        // Surfacing its error directly makes misconfiguration visible instead of silently
+        // masking it with another backend's results.
+        return zero_config_search(query, count, backend);
     }
     let url = format!("{base}/search");
     let resp = http_get(
@@ -148,6 +159,103 @@ pub(crate) fn tool_web_search(base_url: &str, args: &Value) -> Result<String, St
         }
     }
     Ok(truncate(out, MAX_TOOL_OUTPUT_CHARS))
+}
+
+/// Zero-config search with no API key or setup: use exactly the backend the user picked.
+/// Bing is preferred because it serves plain XML with no bot-challenge page; DuckDuckGo's
+/// HTML endpoint is currently blocked by an anomaly challenge. Whatever the selection, its
+/// error is returned directly so the user sees what failed rather than another backend's
+/// results masking the problem.
+fn zero_config_search(
+    query: &str,
+    count: usize,
+    backend: crate::settings::WebSearchBackend,
+) -> Result<String, String> {
+    use crate::settings::WebSearchBackend;
+    match backend {
+        WebSearchBackend::Bing => bing_search(query, count),
+        WebSearchBackend::DuckDuckGo => ddg_search(query, count),
+        WebSearchBackend::SearXng => Err(err(
+            "SearXNG backend selected but no SearXNG URL is configured in Settings → Tools → Web search",
+        )),
+    }
+}
+
+/// Search Bing's RSS endpoint and format the results like the SearXNG path.
+fn bing_search(query: &str, count: usize) -> Result<String, String> {
+    let resp = http_get(
+        BING_RSS_URL,
+        &[("q", query), ("format", "rss")],
+        false,
+        DEFAULT_USER_AGENT,
+        &[],
+    )?;
+    if resp.status >= 400 {
+        return Err(format!("Bing returned HTTP {}", resp.status));
+    }
+
+    let results = parse_rss_items(&resp.body, count);
+    if results.is_empty() {
+        return Ok(format!("No results for: {query}"));
+    }
+
+    let mut out = format!("Search results for: {query}\n");
+    for (title, link, snippet) in results {
+        out.push_str(&format!("\n- {title}\n  {link}\n"));
+        if !snippet.is_empty() {
+            out.push_str(&format!("  {snippet}\n"));
+        }
+    }
+    Ok(truncate(out, MAX_TOOL_OUTPUT_CHARS))
+}
+
+/// Extract `(title, url, snippet)` triples from an RSS 2.0 feed (Bing's search feed Dieses).
+/// String-based like the rest of the parsers: each `<item>…</item>` carries a `<title>`,
+/// `<link>` and `<description>`. RSS puts the URL as element *text* (not an attribute), unlike
+/// HTML, so we grab the text between the open and close tags directly.
+fn parse_rss_items(xml: &str, count: usize) -> Vec<(String, String, String)> {
+    let lower = xml.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    while out.len() < count {
+        let Some(rel) = lower[cursor..].find("<item>") else {
+            break;
+        };
+        let start = cursor + rel + "<item>".len();
+        let end = match lower[start..].find("</item>") {
+            Some(r) => start + r,
+            None => break,
+        };
+        cursor = end + "</item>".len();
+        let block = &xml[start..end];
+        let block_lower = &lower[start..end];
+
+        let title = extract_tag_text(block, block_lower, "title")
+            .map(|s| clean_fragment(&s))
+            .filter(|s| !s.is_empty());
+        let link = extract_tag_text(block, block_lower, "link")
+            .map(|s| clean_fragment(&s))
+            .filter(|s| !s.is_empty());
+        let snippet = extract_tag_text(block, block_lower, "description")
+            .map(|s| clean_fragment(&s))
+            .unwrap_or_default();
+        match (title, link) {
+            (Some(title), Some(link)) => out.push((title, link, snippet)),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Text between `<tag>…</tag>` for the first occurrence, with the entity-decoding deferred to
+/// the caller. `lower` is the same slice lowercased so the tag search is case-insensitive
+/// (RSS tags are lowercase in practice, but be lenient like the rest of the parsers).
+fn extract_tag_text<'a>(html: &'a str, lower: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = lower.find(&open)? + open.len();
+    let end = start + lower[start..].find(&close)?;
+    Some(&html[start..end])
 }
 
 /// Search DuckDuckGo's HTML endpoint and format the results like the SearXNG path.
@@ -504,7 +612,11 @@ mod tests {
 
     #[test]
     fn web_search_requires_query() {
-        let res = tool_web_search("https://example.invalid", &serde_json::json!({}));
+        let res = tool_web_search(
+            "https://example.invalid",
+            crate::settings::WebSearchBackend::Bing,
+            &serde_json::json!({}),
+        );
         assert!(res.is_err());
     }
 
@@ -550,6 +662,71 @@ mod tests {
         println!("{out}");
         assert!(out.contains("Search results for:"));
         assert!(out.contains("https://"));
+    }
+
+    #[test]
+    fn parse_rss_items_extracts_title_link_snippet() {
+        let xml = concat!(
+            "<rss version=\"2.0\"><channel>",
+            "<item><title>The <b>Rust</b> Language</title>",
+            "<link>https://www.rust-lang.org/</link>",
+            "<description>Blazingly fast &amp; memory-efficient.</description></item>",
+            "<item><title>Second</title><link>https://example.com</link></item>",
+            "<item><link>https://no-title.example</link></item>",
+            "</channel></rss>"
+        );
+        let results = parse_rss_items(xml, 10);
+        // The third item has no title, so it is dropped.
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "The Rust Language");
+        assert_eq!(results[0].1, "https://www.rust-lang.org/");
+        assert_eq!(results[0].2, "Blazingly fast & memory-efficient.");
+        assert!(results[1].2.is_empty());
+    }
+
+    #[test]
+    fn parse_rss_items_respects_count() {
+        let mut xml = String::from("<rss><channel>");
+        for n in 0..15 {
+            xml.push_str(&format!(
+                "<item><title>r{n}</title><link>https://x{n}.example</link></item>"
+            ));
+        }
+        xml.push_str("</channel></rss>");
+        let results = parse_rss_items(&xml, 3);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0, "r0");
+        assert_eq!(results[2].0, "r2");
+    }
+
+    #[test]
+    fn parse_rss_items_empty_feed_returns_nothing() {
+        let xml = "<rss><channel></channel></rss>";
+        assert!(parse_rss_items(xml, 10).is_empty());
+        // No items at all.
+        assert!(parse_rss_items("", 10).is_empty());
+    }
+
+    /// Live network test: `cargo test bing_search_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "hits the real Bing endpoint"]
+    fn bing_search_live() {
+        let out = bing_search("rust programming language", 5).expect("bing_search failed");
+        println!("{out}");
+        assert!(out.contains("Search results for:"));
+        assert!(out.contains("https://"));
+    }
+
+    /// Live network test: `cargo test web_search_bing_zero_config_live -- --ignored --nocapture`.
+    /// Exercises the full zero-config path (empty base URL -> selected Bing backend).
+    #[test]
+    #[ignore = "hits the real Bing endpoint"]
+    fn web_search_bing_zero_config_live() {
+        use crate::settings::WebSearchBackend;
+        let out = tool_web_search("", WebSearchBackend::Bing, &serde_json::json!({"query": "rust programming language", "count": 5}))
+            .expect("zero-config web_search failed");
+        println!("{out}");
+        assert!(out.contains("Search results for:"));
     }
 
     #[test]
