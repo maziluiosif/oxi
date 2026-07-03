@@ -6,6 +6,7 @@ mod codex_responses;
 pub mod complete;
 pub mod events;
 mod history;
+mod loop_ctx;
 pub mod models;
 mod net;
 mod openai;

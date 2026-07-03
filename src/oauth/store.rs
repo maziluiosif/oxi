@@ -41,8 +41,21 @@ pub fn save_oauth_store(store: &OAuthStore) -> Result<(), String> {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let json = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| e.to_string())
+    fs::write(&path, json).map_err(|e| e.to_string())?;
+    restrict_permissions(&path);
+    Ok(())
 }
+
+/// Best-effort: restrict the credentials file to owner read/write on Unix. A failure here
+/// shouldn't block saving the credentials.
+#[cfg(unix)]
+fn restrict_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn restrict_permissions(_path: &std::path::Path) {}
 
 pub fn merge_codex(store: &mut OAuthStore, rec: CodexOAuthRecord) {
     store.openai_codex = Some(rec);
