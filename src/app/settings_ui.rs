@@ -392,12 +392,13 @@ impl OxiApp {
             ui.add_space(4.0);
             ui.add(
                 TextEdit::singleline(&mut self.conv.settings.searxng_url)
-                    .hint_text("https://searxng.example.com")
+                    .hint_text("Empty = DuckDuckGo (no setup) — or https://searxng.example.com")
                     .desired_width(f32::INFINITY),
             )
             .on_hover_text(
-                "Base URL of the SearXNG instance queried by the web_search tool. \
-                 Its JSON output format must be enabled (search.formats: [html, json]).",
+                "Optional. Leave empty to search via DuckDuckGo with no configuration. \
+                 To use your own SearXNG instance instead, set its base URL here — its JSON \
+                 output format must be enabled (search.formats: [html, json]).",
             );
         });
 
