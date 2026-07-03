@@ -21,8 +21,54 @@ use crate::ui::preview_expand::{
     clickable_expand_overlay, clickable_expand_overlay_quiet, expand_persist_id, is_expanded,
     toggle_expanded, truncate_lines_preview,
 };
+use std::time::{Duration, Instant};
 
 const BLOCK_PREVIEW_LINES: usize = 10;
+/// Max visual rows the *thinking* bubble shows while collapsed (live tail or done-folded
+/// preview). Larger than the tool/code preview cap because reasoning reads as a side note
+/// and benefits from more context per glance.
+const THINKING_PREVIEW_LINES: usize = 15;
+/// Stable id (independent of the live/done tag) for a thinking group's wall-clock timer,
+/// so the start instant recorded while live can be read back after the group goes done.
+fn thinking_timer_id(msg_idx: usize, salt: usize) -> Id {
+    Id::new(("thinking_timer", msg_idx, salt))
+}
+
+/// Read/refresh the per-group thinking timer. While `live`, returns the running elapsed
+/// (recording the start instant on first sight); once `live` flips false, the elapsed is
+/// frozen once and reused thereafter. State lives in egui *temp* memory (not persisted):
+/// `Instant` isn't serializable and, like the turn-level `started_at`, the timer only
+/// matters for the live session that produced it.
+fn thinking_elapsed(ui: &Ui, msg_idx: usize, salt: usize, live: bool) -> Option<Duration> {
+    let id = thinking_timer_id(msg_idx, salt);
+    let (start, frozen): (Option<Instant>, Option<Duration>) = ui
+        .ctx()
+        .data_mut(|d| d.get_temp(id).unwrap_or((None, None)));
+    if live {
+        let now = Instant::now();
+        if start.is_none() {
+            ui.ctx().data_mut(|d| {
+                d.insert_temp::<(Option<Instant>, Option<Duration>)>(id, (Some(now), None))
+            });
+        }
+        Some(now.duration_since(start.unwrap_or(now)))
+    } else {
+        match frozen {
+            Some(d) => Some(d),
+            None => {
+                // Transition frame: freeze from the recorded start (or nothing if we
+                // never saw it live, e.g. a freshly-reloaded done group).
+                let d = start.map(|s| s.elapsed());
+                if start.is_some() {
+                    ui.ctx().data_mut(|dmap| {
+                        dmap.insert_temp::<(Option<Instant>, Option<Duration>)>(id, (start, d))
+                    });
+                }
+                d
+            }
+        }
+    }
+}
 const EDIT_PREVIEW_LINES: usize = 10;
 /// Max tool pills visible in the scroll window while streaming (last N are shown, oldest scroll away).
 const MAX_VISIBLE_STREAMING_TOOL_PILLS: usize = 5;
@@ -1276,15 +1322,74 @@ fn render_thinking_text_panel(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let inner = ui.available_width().max(40.0);
-            let display = if !content_overflows || is_expanded(ui, persist_id) {
-                text.to_string()
-            } else if tail {
-                crate::ui::preview_expand::truncate_lines_tail_preview(text, max_preview_lines)
-            } else {
-                truncate_lines_preview(text, max_preview_lines)
-            };
-            let allow_select = !content_overflows || is_expanded(ui, persist_id);
-            selectable_layout_job(ui, thinking_wrapped_job(display, inner), allow_select);
+            let expanded = is_expanded(ui, persist_id);
+            let allow_select = !content_overflows || expanded;
+
+            // While the model is actively streaming reasoning (`tail`), keep the whole body
+            // inside a fixed-height, bottom-stuck scroll window — even before it crosses the
+            // preview limit. This avoids the flicker where the block would grow past the cap
+            // (~2x) while wrapping settled and then snap back to the truncated view. Wheel
+            // scrolling is disabled so events still reach the outer transcript ScrollArea.
+            if tail {
+                let line_h = FS_SMALL * 1.45;
+                let max_h = max_preview_lines as f32 * line_h;
+                // Size the box to the actual content (1 row while there's only one line),
+                // capped at `max_preview_lines` — grows as reasoning streams in instead of
+                // reserving the full N-line height up front.
+                let rows = thinking_visual_row_count(ui, text, inner)
+                    .max(1)
+                    .min(max_preview_lines);
+                let box_h = rows as f32 * line_h;
+                // `ScrollArea::max_height` only *caps* the size — internally it still clamps
+                // to `ui.available_rect_before_wrap()`, which shrinks (often to near-zero) the
+                // deeper a widget sits inside a long scrolled transcript, since the outer
+                // transcript ScrollArea's content `max_rect` is fixed to the viewport height,
+                // not infinite. Without an explicit reservation the tail box silently collapses
+                // to whatever sliver of layout budget is left instead of the requested N lines.
+                // Pre-allocating an exact-size rect (same trick as the activity-summary row
+                // above) gives the nested ScrollArea a fresh, unshrunk budget to clamp against.
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), box_h),
+                    egui::Sense::hover(),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ScrollArea::vertical()
+                        .id_salt((persist_id, "thinking_live_tail"))
+                        .auto_shrink([false, false])
+                        .max_height(max_h)
+                        // egui defaults `min_scrolled_height` to 64.0 (~3.5 rows at this font
+                        // size) for any scroll-enabled axis, which floors the box well above
+                        // our 1-row minimum. Match it to a single row so it can start as small
+                        // as the content actually is.
+                        .min_scrolled_height(line_h)
+                        .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
+                        .stick_to_bottom(true)
+                        .enable_scrolling(false)
+                        .show(ui, |ui| {
+                            selectable_layout_job(
+                                ui,
+                                thinking_wrapped_job(text.to_string(), inner),
+                                allow_select,
+                            );
+                        });
+                });
+                return;
+            }
+
+            // Done (not streaming). A short body (under the preview limit) renders inline,
+            // and so does an *unfolded* overflowing one — expanding a thinking block reveals
+            // the FULL reasoning, not a capped scroll window. The folded overflowing state
+            // (caption-only) never reaches here: the caller skips this panel entirely.
+            if !content_overflows || expanded {
+                selectable_layout_job(
+                    ui,
+                    thinking_wrapped_job(text.to_string(), inner),
+                    allow_select,
+                );
+                return;
+            }
+            // Done + overflowing + folded: guard — render nothing. Unreachable via the
+            // caller's `show_body` gate, kept for safety if the panel is ever called directly.
         });
     let r = frame.response.rect;
     ui.painter().vline(
@@ -1311,7 +1416,7 @@ fn render_thinking_group_block(
     // preview at the same threshold the body would otherwise reach, instead of overshooting
     // the limit and snapping back once enough newlines stream in (flicker).
     let inner_w = (bubble_w - 16.0).max(40.0);
-    let overflow = thinking_visual_row_count(ui, &combined, inner_w) > BLOCK_PREVIEW_LINES;
+    let overflow = thinking_visual_row_count(ui, &combined, inner_w) > THINKING_PREVIEW_LINES;
     let persist_id = expand_persist_id(Id::new((
         msg_idx,
         salt,
@@ -1319,54 +1424,68 @@ fn render_thinking_group_block(
         block_state_tag(live),
     )));
 
+    // Per-group wall-clock timer (ms/s/min). While live it ticks from the first frame we
+    // saw the group streaming; once thinking ends it freezes once into "Thought for Xs".
+    // The caption id (`persist_id`) switches with the live/done tag, so the expand state
+    // resets to collapsed at the live→done transition — i.e. the block auto-folds when
+    // thinking finishes, matching the "Worked for X" summary behavior.
+    let elapsed = thinking_elapsed(ui, msg_idx, salt, live);
     if live {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
             animated_status_label(ui, "Thinking", FS_TINY);
+            if let Some(d) = elapsed {
+                ui.label(
+                    RichText::new(format!(" for {}", format_stream_elapsed(d)))
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                );
+            }
         });
     } else {
-        // Quiet caption; clickable (with a chevron) when there is more to unfold.
+        // Quiet caption; always clickable (with a chevron) — done thinking blocks are
+        // folded by default regardless of length, so the chevron is the only way to reveal
+        // even a short block's body.
         let expanded = is_expanded(ui, persist_id);
-        if overflow {
-            let chevron = if expanded {
-                ICON_ANGLE_UP
-            } else {
-                ICON_ANGLE_DOWN
-            };
-            if crate::ui::chrome::flat_button_icon(
-                ui,
-                chevron,
-                "Thinking",
-                FS_TINY,
-                egui::vec2(0.0, 18.0),
-                c_text_faint(),
-            )
-            .clicked()
-            {
-                toggle_expanded(ui, persist_id);
-            }
+        let caption = match elapsed {
+            Some(d) => format!("Thought for {}", format_stream_elapsed(d)),
+            None => "Thought".to_string(),
+        };
+        let chevron = if expanded {
+            ICON_ANGLE_UP
         } else {
-            ui.add(
-                Label::new(
-                    RichText::new("Thinking")
-                        .size(FS_TINY)
-                        .color(c_text_faint()),
-                )
-                .selectable(false),
-            );
+            ICON_ANGLE_DOWN
+        };
+        if crate::ui::chrome::flat_button_icon(
+            ui,
+            chevron,
+            &caption,
+            FS_TINY,
+            egui::vec2(0.0, 18.0),
+            c_text_faint(),
+        )
+        .clicked()
+        {
+            toggle_expanded(ui, persist_id);
         }
     }
     ui.add_space(4.0);
 
     // While the model is actively streaming reasoning, keep the collapsed view pinned to
     // the newest text (tail) so you can follow along instead of seeing a frozen first page.
-    render_thinking_text_panel(
-        ui,
-        BLOCK_PREVIEW_LINES,
-        persist_id,
-        overflow,
-        combined.as_str(),
-        live,
-    );
+    // Once done, every thinking block hides its body entirely — only the "Thought for Xs"
+    // caption remains — until the user unfolds it, regardless of how short it is.
+    let show_body = live || is_expanded(ui, persist_id);
+    if show_body {
+        render_thinking_text_panel(
+            ui,
+            THINKING_PREVIEW_LINES,
+            persist_id,
+            overflow,
+            combined.as_str(),
+            live,
+        );
+    }
     ui.add_space(8.0);
 }
 
