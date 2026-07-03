@@ -22,7 +22,7 @@ impl OxiApp {
             ui.label(
                 RichText::new("oxi")
                     .size(FS_H3)
-                    .color(crate::theme::c_text())
+                    .color(crate::theme::c_accent())
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -48,7 +48,7 @@ impl OxiApp {
             .id_salt("sidebar_main_scroll")
             .max_height(scroll_h)
             .auto_shrink([false, false])
-            .scroll_bar_visibility(ScrollBarVisibility::VisibleWhenNeeded)
+            .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
@@ -138,9 +138,12 @@ impl OxiApp {
             if sidebar_changed {
                 return;
             }
-            let root_label = workspace_sidebar_label(&self.conv.workspaces[wi].root_path);
             let active_si = self.conv.workspaces[wi].active;
             let n_sessions = self.conv.workspaces[wi].sessions.len();
+            let mut root_label = workspace_sidebar_label(&self.conv.workspaces[wi].root_path);
+            if n_sessions > 0 {
+                root_label = format!("{root_label} · {n_sessions}");
+            }
             let folded = self.conv.workspaces[wi].sidebar_folded;
             ui.add_space(1.0);
 
@@ -229,6 +232,9 @@ impl OxiApp {
                                 Sense::click(),
                             );
                             let hovered = response.hovered();
+                            if hovered {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
                             let fill = if selected {
                                 c_row_active()
                             } else if hovered {
@@ -253,6 +259,47 @@ impl OxiApp {
                             self.render_session_row_inner(
                                 ui, rect, wi, si, running, selected, title,
                             );
+
+                            // Hover-only delete button, mirroring the context-menu action.
+                            let can_delete =
+                                wi == self.conv.active_workspace && n_sessions > 1 && !running;
+                            if can_delete && ui.rect_contains_pointer(rect) {
+                                let trash_rect = egui::Rect::from_min_max(
+                                    egui::pos2(rect.right() - 24.0, rect.top()),
+                                    egui::pos2(rect.right() - 2.0, rect.bottom()),
+                                );
+                                // Backing fill keeps the icon legible over long titles.
+                                ui.painter().rect_filled(
+                                    trash_rect,
+                                    Rounding::same(6.0),
+                                    if selected {
+                                        c_row_active()
+                                    } else {
+                                        c_row_hover()
+                                    },
+                                );
+                                // Painted + interacted in place, never allocated: a
+                                // hover-only widget that allocates nudges the layout
+                                // every time it appears.
+                                let trash_resp = ui
+                                    .interact(trash_rect, ui.id().with("row_trash"), Sense::click())
+                                    .on_hover_text("Delete chat");
+                                ui.painter().text(
+                                    trash_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    ICON_TRASH,
+                                    FontId::new(FS_TINY, icon_font()),
+                                    if trash_resp.hovered() {
+                                        c_text()
+                                    } else {
+                                        c_text_faint()
+                                    },
+                                );
+                                if trash_resp.clicked() {
+                                    self.delete_session(si);
+                                    sidebar_changed = true;
+                                }
+                            }
                         });
                     });
                 });
@@ -321,7 +368,10 @@ impl OxiApp {
                         egui::vec2(lead_w, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
-                            ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                            // Dot only on the active chat — a bullet on every row is noise.
+                            if selected {
+                                ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                            }
                         },
                     );
                     ui.add_space(BULLET_GAP);
@@ -443,7 +493,6 @@ impl OxiApp {
                                 // Diff viewer replaces the chat transcript + composer.
                                 let diff_h =
                                     (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                                let chat_rect = ui.max_rect();
                                 ui.allocate_ui_with_layout(
                                     egui::vec2(ui.available_width(), diff_h),
                                     egui::Layout::top_down(egui::Align::Min),
@@ -451,7 +500,10 @@ impl OxiApp {
                                         if let Some((title, diff_text)) = self.conv.git.diff.clone()
                                         {
                                             self.render_diff_view(
-                                                ui, &title, &diff_text, chat_rect,
+                                                ui,
+                                                &title,
+                                                &diff_text,
+                                                column_center_w,
                                             );
                                         }
                                     },
@@ -586,10 +638,12 @@ impl OxiApp {
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        ui.painter().vline(
-            boundary_x,
-            sep_rect.y_range(),
-            Stroke::new(1.0, crate::theme::c_border_subtle()),
-        );
+        let col = if sep.hovered() || sep.dragged() {
+            c_accent()
+        } else {
+            crate::theme::c_border_subtle()
+        };
+        ui.painter()
+            .vline(boundary_x, sep_rect.y_range(), Stroke::new(1.0, col));
     }
 }

@@ -3,6 +3,7 @@ target/
 
 # Claude Code local / machine-specific state
 .claude/settings.local.json
+.claude/loops/
 .claude/scheduled_tasks.lock
 .claude/skills/
 

@@ -34,7 +34,7 @@ pub struct OxiApp {
     pub conv: ConversationState,
     /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
     pub terminal: Option<crate::terminal::TerminalSession>,
-    /// SSH tunnels for `RemoteSsh` provider profiles (e.g. Ollama/LM Studio on a Mac mini).
+    /// SSH tunnels for `RemoteSsh` provider profiles (e.g. Ollama/LM Studio on a LAN host).
     /// Cheap to clone; the actual tunnels live on a dedicated background thread/runtime
     /// started once here and kept alive for the life of the app.
     pub tunnels: crate::compute::TunnelManager,
