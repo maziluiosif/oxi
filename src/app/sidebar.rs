@@ -77,6 +77,9 @@ impl OxiApp {
     }
 
     fn render_sidebar_session_list(&mut self, ui: &mut Ui) {
+        // Workspace headers sit a step above the chat rows' default size, matching
+        // the app-wide type scale (theme.rs) so it still tracks the UI density zoom.
+        const FS_WORKSPACE: f32 = FS_SMALL + 1.5;
         let q = self.conv.sidebar_search.trim().to_lowercase();
         let mut sidebar_changed = false;
 
@@ -126,7 +129,7 @@ impl OxiApp {
                     ui.add(
                         egui::Label::new(
                             RichText::new(&root_label)
-                                .size(FS_TINY)
+                                .size(FS_WORKSPACE)
                                 .color(c_sidebar_section()),
                         )
                         .truncate()
@@ -206,8 +209,8 @@ impl OxiApp {
                             let selected = wi == self.conv.active_workspace && si == active_si;
                             let running = self.session_row_is_running(wi, si);
                             let title = row_title.clone();
-                            const ROW_INNER_H: f32 = 20.0;
-                            const ROW_VMARGIN: f32 = 2.0;
+                            const ROW_INNER_H: f32 = 22.0;
+                            const ROW_VMARGIN: f32 = 4.0;
                             let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(row_w, row_outer_h),
@@ -224,7 +227,14 @@ impl OxiApp {
                             } else {
                                 Color32::TRANSPARENT
                             };
-                            ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
+                            ui.painter().rect_filled(rect, Rounding::same(7.0), fill);
+                            if selected {
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    Rounding::same(7.0),
+                                    Stroke::new(1.0, c_border_subtle()),
+                                );
+                            }
                             if response.clicked() {
                                 self.select_session_in_workspace(wi, si);
                             }
@@ -261,7 +271,7 @@ impl OxiApp {
                                 // Backing fill keeps the icon legible over long titles.
                                 ui.painter().rect_filled(
                                     trash_rect,
-                                    Rounding::same(6.0),
+                                    Rounding::same(7.0),
                                     if selected {
                                         c_row_active()
                                     } else {
@@ -296,7 +306,6 @@ impl OxiApp {
                         });
                     });
                 });
-                ui.add_space(1.0);
                 if sidebar_changed {
                     return;
                 }
@@ -328,8 +337,8 @@ impl OxiApp {
         title: String,
         hide_time: bool,
     ) {
-        const ROW_INNER_H: f32 = 20.0;
-        const ROW_VMARGIN: f32 = 2.0;
+        const ROW_INNER_H: f32 = 22.0;
+        const ROW_VMARGIN: f32 = 4.0;
         const BULLET_GAP: f32 = 4.0;
         const SPINNER_GAP: f32 = 4.0;
 
@@ -392,9 +401,10 @@ impl OxiApp {
                     egui::Layout::left_to_right(Align::Center),
                     |ui| {
                         use eframe::egui::Label;
+                        let title_color = if selected { c_text() } else { c_text_muted() };
                         ui.add(
                             Label::new(
-                                RichText::new(title.as_str()).size(FS_SMALL).color(c_text()),
+                                RichText::new(title.as_str()).size(FS_SMALL).color(title_color),
                             )
                             .truncate()
                             .halign(Align::LEFT),
@@ -444,10 +454,10 @@ impl OxiApp {
                         Frame::none()
                             .fill(c_bg_sidebar())
                             .inner_margin(Margin {
-                                left: 8.0,
-                                right: 6.0,
-                                top: 6.0,
-                                bottom: 8.0,
+                                left: 12.0,
+                                right: 10.0,
+                                top: 12.0,
+                                bottom: 12.0,
                             })
                             .show(ui, |ui| {
                                 ui.set_min_width(ui.max_rect().width());
