@@ -1,0 +1,166 @@
+//! Small formatting/animation helpers used throughout the transcript and sidebar UI.
+
+use std::time::Duration;
+
+use eframe::egui::text::{LayoutJob, TextFormat};
+use eframe::egui::{Color32, FontId, Label, Ui};
+
+use super::palette::{c_accent, c_text_muted};
+
+pub fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {
+    let mix = t.clamp(0.0, 1.0);
+    let lerp = |a: u8, b: u8| -> u8 {
+        let af = a as f32;
+        let bf = b as f32;
+        (af + (bf - af) * mix).round().clamp(0.0, 255.0) as u8
+    };
+    Color32::from_rgba_unmultiplied(
+        lerp(from.r(), to.r()),
+        lerp(from.g(), to.g()),
+        lerp(from.b(), to.b()),
+        lerp(from.a(), to.a()),
+    )
+}
+
+pub fn animated_status_job(label: &str, size: f32, time: f64) -> LayoutJob {
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = f32::INFINITY;
+    let chars: Vec<char> = label.chars().collect();
+    let len = chars.len().max(1) as f64;
+    let highlight = (time * 7.0) % (len + 3.0);
+    for (idx, ch) in chars.iter().enumerate() {
+        let dist = (idx as f64 - highlight).abs();
+        let mix = if dist < 0.6 {
+            1.0
+        } else if dist < 1.4 {
+            0.55
+        } else if dist < 2.2 {
+            0.22
+        } else {
+            0.0
+        };
+        let color = blend_color(c_text_muted(), c_accent(), mix as f32);
+        job.append(
+            &ch.to_string(),
+            0.0,
+            TextFormat::simple(FontId::proportional(size), color),
+        );
+    }
+    job
+}
+
+pub fn animated_status_label(ui: &mut Ui, label: &str, size: f32) {
+    let time = ui.input(|i| i.time);
+    ui.add(Label::new(animated_status_job(label, size, time)).selectable(false));
+}
+
+pub fn format_stream_elapsed(d: Duration) -> String {
+    let total_ms = d.as_millis() as u64;
+    if total_ms < 1000 {
+        return format!("{total_ms}ms");
+    }
+    let s = total_ms / 1000;
+    if s < 60 {
+        return format!("{s}s");
+    }
+    let m = s / 60;
+    let rs = s % 60;
+    format!("{m}m{rs:02}")
+}
+
+/// Coarse "time ago" label for sidebar rows: "now", "5m", "6h", "18h", "3d".
+pub fn format_relative_time(t: std::time::SystemTime) -> String {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(t)
+        .unwrap_or_default();
+    let s = elapsed.as_secs();
+    if s < 60 {
+        return "now".to_string();
+    }
+    let m = s / 60;
+    if m < 60 {
+        return format!("{m}m");
+    }
+    let h = m / 60;
+    if h < 24 {
+        return format!("{h}h");
+    }
+    format!("{}d", h / 24)
+}
+
+/// Short label for a workspace root path (last two path segments, e.g. `owner/repo`).
+pub fn workspace_sidebar_label(root_path: &str) -> String {
+    let path = std::path::Path::new(root_path);
+    let parts: Vec<&str> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    match parts.len() {
+        0 => root_path.to_string(),
+        1 => parts[0].to_string(),
+        _ => format!("{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]),
+    }
+}
+
+/// Full title for sidebar rows; empty/whitespace shows as "New chat". Ellipsis is handled by
+/// [`egui::Label::truncate`] with the row’s title width.
+pub fn sidebar_session_title_display(title: &str) -> String {
+    let t = title.trim();
+    if t.is_empty() {
+        "New chat".to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+pub fn tool_status_label(name: &str) -> String {
+    let trimmed = name.trim().replace('_', " ");
+    if trimmed.is_empty() {
+        "Running".to_string()
+    } else {
+        let mut chars = trimmed.chars();
+        let first = chars
+            .next()
+            .map(|ch| ch.to_uppercase().collect::<String>())
+            .unwrap_or_default();
+        format!("{}{rest}", first, rest = chars.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_relative_time_coarse_units() {
+        use std::time::SystemTime;
+        let now = SystemTime::now();
+        assert_eq!(format_relative_time(now), "now");
+        assert_eq!(format_relative_time(now - Duration::from_secs(59)), "now");
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(5 * 60)),
+            "5m"
+        );
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(6 * 3600)),
+            "6h"
+        );
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(18 * 3600)),
+            "18h"
+        );
+        assert_eq!(
+            format_relative_time(now - Duration::from_secs(3 * 86_400)),
+            "3d"
+        );
+        // Future timestamps (clock skew) clamp to "now" rather than underflowing.
+        assert_eq!(format_relative_time(now + Duration::from_secs(3600)), "now");
+    }
+
+    #[test]
+    fn tool_status_label_humanizes_names() {
+        assert_eq!(tool_status_label("web_search"), "Web search");
+        assert_eq!(tool_status_label("bash"), "Bash");
+        assert_eq!(tool_status_label("  "), "Running");
+    }
+}

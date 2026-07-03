@@ -15,6 +15,7 @@ use crate::agent::anthropic::run_anthropic_loop;
 use crate::agent::approval::ApprovalGate;
 use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
+use crate::agent::loop_ctx::LoopCtx;
 use crate::agent::openai::run_chat_loop;
 use crate::agent::runner::{
     configured_lmstudio_key, configured_ollama_key, configured_openai_key,
@@ -103,28 +104,33 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
     let (agent_tx, agent_rx) = mpsc::channel::<AgentEvent>();
     let collector = tokio::spawn(collect_deltas(agent_rx, tx.clone(), max_chars));
 
+    let cwd = std::path::Path::new(".");
+    let tool_env = crate::agent::tools::ToolEnv {
+        enabled: Vec::new(),
+        web_search_url: String::new(),
+        web_search_backend: WebSearchBackend::default(),
+    };
+
     let r = match profile.provider {
         LlmProviderKind::OpenAi => {
             let key = configured_openai_key(&profile)?;
             let base = profile.effective_base_url();
             run_chat_loop(
-                &client,
-                &base,
+                &mut LoopCtx {
+                    client: &client,
+                    base_url: &base,
+                    model: &model,
+                    cwd,
+                    env: &tool_env,
+                    tx: &agent_tx,
+                    cancel: &cancel,
+                    gate: &mut gate,
+                    max_rounds,
+                },
                 &key,
-                &model,
                 &[],
                 &mut messages,
                 &tools,
-                std::path::Path::new("."),
-                &crate::agent::tools::ToolEnv {
-                    enabled: Vec::new(),
-                    web_search_url: String::new(),
-                    web_search_backend: WebSearchBackend::default(),
-                },
-                &agent_tx,
-                &cancel,
-                &mut gate,
-                max_rounds,
             )
             .await
         }
@@ -132,23 +138,21 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             let key = configured_openrouter_key(&profile)?;
             let base = profile.effective_base_url();
             run_chat_loop(
-                &client,
-                &base,
+                &mut LoopCtx {
+                    client: &client,
+                    base_url: &base,
+                    model: &model,
+                    cwd,
+                    env: &tool_env,
+                    tx: &agent_tx,
+                    cancel: &cancel,
+                    gate: &mut gate,
+                    max_rounds,
+                },
                 &key,
-                &model,
                 &openrouter_extra_headers(&profile),
                 &mut messages,
                 &tools,
-                std::path::Path::new("."),
-                &crate::agent::tools::ToolEnv {
-                    enabled: Vec::new(),
-                    web_search_url: String::new(),
-                    web_search_backend: WebSearchBackend::default(),
-                },
-                &agent_tx,
-                &cancel,
-                &mut gate,
-                max_rounds,
             )
             .await
         }
@@ -156,23 +160,21 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             let key = configured_lmstudio_key(&profile);
             let base = profile.effective_base_url();
             run_chat_loop(
-                &client,
-                &base,
+                &mut LoopCtx {
+                    client: &client,
+                    base_url: &base,
+                    model: &model,
+                    cwd,
+                    env: &tool_env,
+                    tx: &agent_tx,
+                    cancel: &cancel,
+                    gate: &mut gate,
+                    max_rounds,
+                },
                 &key,
-                &model,
                 &[],
                 &mut messages,
                 &tools,
-                std::path::Path::new("."),
-                &crate::agent::tools::ToolEnv {
-                    enabled: Vec::new(),
-                    web_search_url: String::new(),
-                    web_search_backend: WebSearchBackend::default(),
-                },
-                &agent_tx,
-                &cancel,
-                &mut gate,
-                max_rounds,
             )
             .await
         }
@@ -180,23 +182,21 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             let key = configured_ollama_key(&profile);
             let base = profile.effective_base_url();
             run_chat_loop(
-                &client,
-                &base,
+                &mut LoopCtx {
+                    client: &client,
+                    base_url: &base,
+                    model: &model,
+                    cwd,
+                    env: &tool_env,
+                    tx: &agent_tx,
+                    cancel: &cancel,
+                    gate: &mut gate,
+                    max_rounds,
+                },
                 &key,
-                &model,
                 &[],
                 &mut messages,
                 &tools,
-                std::path::Path::new("."),
-                &crate::agent::tools::ToolEnv {
-                    enabled: Vec::new(),
-                    web_search_url: String::new(),
-                    web_search_backend: WebSearchBackend::default(),
-                },
-                &agent_tx,
-                &cancel,
-                &mut gate,
-                max_rounds,
             )
             .await
         }
@@ -210,46 +210,42 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     profile.effective_base_url()
                 };
                 run_codex_responses_loop(
-                    &client,
-                    &base,
+                    &mut LoopCtx {
+                        client: &client,
+                        base_url: &base,
+                        model: &model,
+                        cwd,
+                        env: &tool_env,
+                        tx: &agent_tx,
+                        cancel: &cancel,
+                        gate: &mut gate,
+                        max_rounds,
+                    },
                     &creds.0,
                     &creds.1,
-                    &model,
                     &mut messages,
                     &tools,
-                    std::path::Path::new("."),
-                    &crate::agent::tools::ToolEnv {
-                        enabled: Vec::new(),
-                        web_search_url: String::new(),
-                        web_search_backend: WebSearchBackend::default(),
-                    },
-                    &agent_tx,
-                    &cancel,
-                    &mut gate,
-                    max_rounds,
                 )
                 .await
             } else {
                 let key = configured_openai_key(&profile)?;
                 let base = profile.effective_base_url();
                 run_chat_loop(
-                    &client,
-                    &base,
+                    &mut LoopCtx {
+                        client: &client,
+                        base_url: &base,
+                        model: &model,
+                        cwd,
+                        env: &tool_env,
+                        tx: &agent_tx,
+                        cancel: &cancel,
+                        gate: &mut gate,
+                        max_rounds,
+                    },
                     &key,
-                    &model,
                     &[],
                     &mut messages,
                     &tools,
-                    std::path::Path::new("."),
-                    &crate::agent::tools::ToolEnv {
-                        enabled: Vec::new(),
-                        web_search_url: String::new(),
-                        web_search_backend: WebSearchBackend::default(),
-                    },
-                    &agent_tx,
-                    &cancel,
-                    &mut gate,
-                    max_rounds,
                 )
                 .await
             }
@@ -264,23 +260,21 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             if opencode_go_model_uses_anthropic(&model) {
                 let anthropic_base = base.trim_end_matches("/v1").to_string();
                 run_anthropic_loop(
-                    &client,
-                    &anthropic_base,
+                    &mut LoopCtx {
+                        client: &client,
+                        base_url: &anthropic_base,
+                        model: &model,
+                        cwd,
+                        env: &tool_env,
+                        tx: &agent_tx,
+                        cancel: &cancel,
+                        gate: &mut gate,
+                        max_rounds,
+                    },
                     &key,
-                    &model,
                     &[],
                     &mut messages,
                     &tools,
-                    std::path::Path::new("."),
-                    &crate::agent::tools::ToolEnv {
-                        enabled: Vec::new(),
-                        web_search_url: String::new(),
-                        web_search_backend: WebSearchBackend::default(),
-                    },
-                    &agent_tx,
-                    &cancel,
-                    &mut gate,
-                    max_rounds,
                 )
                 .await
             } else {
@@ -290,23 +284,21 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     format!("{}/v1", base.trim_end_matches('/'))
                 };
                 run_chat_loop(
-                    &client,
-                    &chat_base,
+                    &mut LoopCtx {
+                        client: &client,
+                        base_url: &chat_base,
+                        model: &model,
+                        cwd,
+                        env: &tool_env,
+                        tx: &agent_tx,
+                        cancel: &cancel,
+                        gate: &mut gate,
+                        max_rounds,
+                    },
                     &key,
-                    &model,
                     &[],
                     &mut messages,
                     &tools,
-                    std::path::Path::new("."),
-                    &crate::agent::tools::ToolEnv {
-                        enabled: Vec::new(),
-                        web_search_url: String::new(),
-                        web_search_backend: WebSearchBackend::default(),
-                    },
-                    &agent_tx,
-                    &cancel,
-                    &mut gate,
-                    max_rounds,
                 )
                 .await
             }

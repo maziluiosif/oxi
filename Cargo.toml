@@ -32,3 +32,7 @@ webbrowser = "1"
 url = "2"
 portable-pty = "0.8"
 vt100 = "0.15"
+keyring = { version = "4.1.2", features = ["apple-native-keyring-store"] }
+
+[dev-dependencies]
+wiremock = "0.6"

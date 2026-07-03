@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Panic hook that logs crashes to `<config_dir>/oxi/crash.log` before the default handler
+  prints to stderr, so failures in background threads leave a trace to report
+
+### Security
+- Move provider API keys, OAuth tokens, and SSH passwords into the OS keychain (macOS
+  Keychain Services, Windows Credential Manager, Linux Secret Service) instead of
+  plaintext JSON on disk; existing `settings.json`/`oauth.json`/`ssh_credentials.json`
+  values are migrated in automatically and the plaintext is removed
+- Restrict `settings.json` to owner-only permissions (`0600`) on Unix when saving, as
+  defense in depth for its remaining (non-secret) contents
+
 ## [0.7.0] - 2026-07-03
 
 ### Added

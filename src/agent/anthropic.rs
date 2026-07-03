@@ -1,19 +1,17 @@
 //! Anthropic Messages API streaming (used by OpenCode Go's Anthropic-compatible models).
 
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
 
-use super::approval::ApprovalGate;
 use super::events::AgentEvent;
+use super::loop_ctx::LoopCtx;
 use super::net::{backoff_delay, send_with_retry, sleep_cancellable, MAX_STREAM_RETRIES};
-use super::tools::{run_tool, ToolEnv, ToolResult};
+use super::tools::{run_tool, ToolResult};
 
 #[derive(Default, Clone)]
 struct ToolUseAccum {
@@ -196,22 +194,22 @@ fn supports_extended_thinking(model: &str) -> bool {
         || m.starts_with("claude-3-5-sonnet")
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run_anthropic_loop(
-    client: &reqwest::Client,
-    base_url: &str,
+    ctx: &mut LoopCtx<'_>,
     bearer_token: &str,
-    model: &str,
     extra_headers: &[(String, String)],
     openai_messages: &mut Vec<Value>,
     tools_openai: &[Value],
-    cwd: &Path,
-    env: &ToolEnv,
-    tx: &Sender<AgentEvent>,
-    cancel: &Arc<AtomicBool>,
-    gate: &mut ApprovalGate,
-    max_rounds: u32,
 ) -> Result<(), String> {
+    let client = ctx.client;
+    let base_url = ctx.base_url;
+    let model = ctx.model;
+    let cwd = ctx.cwd;
+    let env = ctx.env;
+    let tx = ctx.tx;
+    let cancel = ctx.cancel;
+    let max_rounds = ctx.max_rounds;
+    let gate = &mut *ctx.gate;
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let anthropic_tools = to_anthropic_tools(tools_openai);
     let cache_control = Some(json!({ "type": "ephemeral" }));
