@@ -100,6 +100,8 @@ mod tests {
             }],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let assistant = ChatMessage {
             role: MsgRole::Assistant,
@@ -120,6 +122,8 @@ mod tests {
                 AssistantBlock::Answer("done".into()),
             ],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let mut messages = vec![user.clone(), assistant.clone(), user, assistant];
 
@@ -137,6 +141,8 @@ mod tests {
                 attachments: vec![],
                 blocks: vec![],
                 streaming: false,
+                started_at: None,
+                worked_duration: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -144,6 +150,8 @@ mod tests {
                 attachments: vec![],
                 blocks: vec![AssistantBlock::Answer("first".into())],
                 streaming: false,
+                started_at: None,
+                worked_duration: None,
             },
             ChatMessage {
                 role: MsgRole::User,
@@ -151,6 +159,8 @@ mod tests {
                 attachments: vec![],
                 blocks: vec![],
                 streaming: false,
+                started_at: None,
+                worked_duration: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -158,6 +168,8 @@ mod tests {
                 attachments: vec![],
                 blocks: vec![AssistantBlock::Answer("second".into())],
                 streaming: false,
+                started_at: None,
+                worked_duration: None,
             },
         ];
 
@@ -209,6 +221,8 @@ mod tests {
                     }],
                     blocks: vec![],
                     streaming: false,
+                    started_at: None,
+                    worked_duration: None,
                 },
                 ChatMessage {
                     role: MsgRole::Assistant,
@@ -229,6 +243,8 @@ mod tests {
                         AssistantBlock::Answer("done".into()),
                     ],
                     streaming: false,
+                    started_at: None,
+                    worked_duration: None,
                 },
             ],
             session_file: None,

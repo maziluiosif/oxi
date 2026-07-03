@@ -1153,7 +1153,7 @@ impl OxiApp {
     // ── Model list fetch ─────────────────────────────────────────────────────
     /// Kick off a background `/v1/models` fetch for the profile at `idx`, if one isn't
     /// already in flight. Results arrive on `conv.model_rx` and are drained each frame.
-    fn spawn_model_fetch(&mut self, ctx: &egui::Context, idx: usize) {
+    pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, idx: usize) {
         let profile = match self.conv.settings.profiles.get(idx) {
             Some(p) => p.clone(),
             None => return,

@@ -799,11 +799,15 @@ pub fn render_assistant_message_run(
     let col_w = content_wrap_width(ui);
     let mut blocks = Vec::new();
     let mut streaming = false;
+    let mut started_at = None;
+    let mut worked_duration = None;
     for msg in messages {
         if msg.role != MsgRole::Assistant {
             continue;
         }
         streaming |= msg.streaming;
+        started_at = started_at.or(msg.started_at);
+        worked_duration = worked_duration.or(msg.worked_duration);
         blocks.extend(msg.blocks.iter().cloned());
     }
 
@@ -813,7 +817,15 @@ pub fn render_assistant_message_run(
 
     ui.vertical(|ui| {
         ui.set_width(col_w);
-        render_assistant_blocks(ui, msg_idx, &blocks, streaming, agent_ack);
+        render_assistant_blocks(
+            ui,
+            msg_idx,
+            &blocks,
+            streaming,
+            agent_ack,
+            started_at,
+            worked_duration,
+        );
     });
     ui.add_space(8.0);
 }
@@ -1426,12 +1438,95 @@ fn render_activity_range(
     }
 }
 
+/// Formats an elapsed duration for the Cursor-style "Worked for ..." summary row.
+fn format_worked_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m {}s", secs / 60, secs % 60)
+    }
+}
+
+/// Single collapsed-by-default summary row ("Worked for Xm Ys ›") standing in for a turn's
+/// thinking + tool-call activity, Cursor-style. Expanded live while streaming so progress
+/// stays visible; collapses automatically once the turn finishes. A manual click overrides
+/// the default expand state for that message.
+fn render_activity_summary(
+    ui: &mut Ui,
+    msg_idx: usize,
+    blocks: &[AssistantBlock],
+    worked_end: usize,
+    streaming: bool,
+    started_at: Option<std::time::Instant>,
+    worked_duration: Option<std::time::Duration>,
+) {
+    // `started_at`/`worked_duration` are `None` for turns hydrated from a saved session
+    // (never tracked at save time) — fall back to a plain "Worked" with no duration rather
+    // than a misleading "Worked for 0s".
+    let label = if streaming {
+        match started_at {
+            Some(t) => format!("Working for {}", format_worked_duration(t.elapsed())),
+            None => "Working".to_string(),
+        }
+    } else {
+        match worked_duration {
+            Some(d) => format!("Worked for {}", format_worked_duration(d)),
+            None => "Worked".to_string(),
+        }
+    };
+
+    // While the turn is still streaming it always stays unfolded (live progress shouldn't
+    // be foldable mid-flight); only once it's done does a manual click's collapsed/expanded
+    // choice take effect, defaulting to collapsed.
+    let persist_id = expand_persist_id(Id::new(("activity_summary", msg_idx)));
+    let expanded = if streaming {
+        true
+    } else {
+        ui.ctx()
+            .data_mut(|d| d.get_persisted::<bool>(persist_id))
+            .unwrap_or(false)
+    };
+
+    let row = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(
+                RichText::new(if expanded { ICON_ANGLE_UP } else { ICON_ANGLE_DOWN })
+                    .font(FontId::new(FS_TINY, icon_font()))
+                    .color(c_text_faint()),
+            );
+            ui.label(RichText::new(label).size(FS_SMALL).color(c_text_muted()));
+        })
+        .response;
+
+    let click = ui.interact(
+        row.rect,
+        persist_id.with("activity_summary_click"),
+        egui::Sense::click(),
+    );
+    if click.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if !streaming && click.clicked() {
+        ui.ctx()
+            .data_mut(|d| d.insert_persisted(persist_id, !expanded));
+    }
+
+    if expanded {
+        ui.add_space(3.0);
+        render_activity_range(ui, msg_idx, blocks, 0, worked_end, streaming);
+    }
+}
+
 pub fn render_assistant_blocks(
     ui: &mut Ui,
     msg_idx: usize,
     blocks: &[AssistantBlock],
     streaming: bool,
     _agent_ack: bool,
+    started_at: Option<std::time::Instant>,
+    worked_duration: Option<std::time::Duration>,
 ) {
     if assistant_is_effectively_empty(blocks, streaming) {
         if streaming {
@@ -1465,7 +1560,15 @@ pub fn render_assistant_blocks(
 
     let worked_end = trailing_answer_start(blocks);
     if worked_end > 0 {
-        render_activity_range(ui, msg_idx, blocks, 0, worked_end, streaming);
+        render_activity_summary(
+            ui,
+            msg_idx,
+            blocks,
+            worked_end,
+            streaming,
+            started_at,
+            worked_duration,
+        );
         ui.add_space(4.0);
     }
 

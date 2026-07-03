@@ -267,34 +267,44 @@ impl OxiApp {
         });
     }
 
-    /// Borderless model dropdown styled as quiet text with a chevron.
+    /// Two borderless dropdowns styled as quiet text with a chevron: provider (only
+    /// providers the user has actually configured), then model within that provider's
+    /// active profile.
     fn render_model_selector(&mut self, ui: &mut Ui) {
-        let label = self
-            .conv
-            .settings
-            .active_profile()
-            .map(|p| p.subtitle())
-            .unwrap_or_else(|| "No profile".to_string());
+        let oauth = crate::oauth::load_oauth_store();
+        let configured = self.conv.settings.configured_provider_kinds(&oauth);
+        let active_provider = self.conv.settings.active_profile().map(|p| p.provider);
 
         ui.scope(|ui| {
             quiet_combo_style(ui);
 
-            let resp = ComboBox::from_id_salt("profile_combo")
+            let label = active_provider
+                .map(|p| p.label().to_string())
+                .unwrap_or_else(|| "No provider".to_string());
+            let resp = ComboBox::from_id_salt("provider_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
-                .width(190.0)
+                .width(150.0)
                 .show_ui(ui, |ui| {
-                    let current_id = self.conv.settings.active_profile_id.clone();
-                    let items: Vec<(String, String)> = self
-                        .conv
-                        .settings
-                        .profiles
-                        .iter()
-                        .map(|p| (p.id.clone(), p.subtitle()))
-                        .collect();
-                    for (id, label) in items {
-                        if ui.selectable_label(current_id == id, label).clicked() {
-                            self.conv.settings.set_active_profile(&id);
+                    for kind in &configured {
+                        let selected = active_provider == Some(*kind);
+                        if ui.selectable_label(selected, kind.label()).clicked() && !selected {
+                            if let Some(id) = self
+                                .conv
+                                .settings
+                                .first_profile_for(*kind)
+                                .map(|p| p.id.clone())
+                            {
+                                self.conv.settings.set_active_profile(&id);
+                                // Refresh the model list for the newly active profile so the
+                                // model dropdown offers the full catalog; the profile keeps
+                                // whatever model id it last had selected in the meantime.
+                                if let Some(idx) =
+                                    self.conv.settings.profiles.iter().position(|p| p.id == id)
+                                {
+                                    self.spawn_model_fetch(ui.ctx(), idx);
+                                }
+                            }
                         }
                     }
                 });
@@ -302,48 +312,55 @@ impl OxiApp {
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
         });
 
-        // Second row: model picker for the active profile, populated from the fetched model list.
+        // Second dropdown: model within the active profile, populated from the fetched
+        // model list (falling back to just the current model id so it's never empty).
         if let Some(p) = self.conv.settings.active_profile() {
             let pid = p.id.clone();
+            let current = p.model_id.clone();
             let fetched = self
                 .conv
                 .fetched_models
                 .get(&pid)
                 .map(|f| f.models.clone())
                 .unwrap_or_default();
-            let current = p.model_id.clone();
-            if !fetched.is_empty() {
-                ui.scope(|ui| {
-                    quiet_combo_style(ui);
+            let items: Vec<String> = if !fetched.is_empty() {
+                fetched
+            } else if !current.is_empty() {
+                vec![current.clone()]
+            } else {
+                Vec::new()
+            };
 
-                    let label = if current.is_empty() {
-                        "(custom)".to_string()
-                    } else {
-                        current.clone()
-                    };
-                    let resp = ComboBox::from_id_salt("active_model_combo")
-                        .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
-                        .icon(quiet_combo_icon)
-                        .width(190.0)
-                        .show_ui(ui, |ui| {
-                            for m in &fetched {
-                                if ui.selectable_label(m == &current, m.clone()).clicked() {
-                                    if let Some(p) = self
-                                        .conv
-                                        .settings
-                                        .profiles
-                                        .iter_mut()
-                                        .find(|pp| pp.id == pid)
-                                    {
-                                        p.model_id = m.clone();
-                                    }
+            ui.scope(|ui| {
+                quiet_combo_style(ui);
+
+                let label = if current.is_empty() {
+                    "(custom)".to_string()
+                } else {
+                    current.clone()
+                };
+                let resp = ComboBox::from_id_salt("active_model_combo")
+                    .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
+                    .icon(quiet_combo_icon)
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for m in &items {
+                            if ui.selectable_label(m == &current, m.clone()).clicked() {
+                                if let Some(p) = self
+                                    .conv
+                                    .settings
+                                    .profiles
+                                    .iter_mut()
+                                    .find(|pp| pp.id == pid)
+                                {
+                                    p.model_id = m.clone();
                                 }
                             }
-                        });
-                    resp.response
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                });
-            }
+                        }
+                    });
+                resp.response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+            });
         }
     }
 

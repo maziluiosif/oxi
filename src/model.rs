@@ -46,6 +46,28 @@ pub struct ChatMessage {
     pub blocks: Vec<AssistantBlock>,
     /// Assistant message still receiving stream.
     pub streaming: bool,
+    /// Assistant only: wall-clock time this message started streaming. Not persisted
+    /// (session save/load never touches this field), so history loaded from disk has
+    /// `None` here. Used to show a live "Working for..." timer.
+    pub started_at: Option<std::time::Instant>,
+    /// Assistant only: elapsed time frozen once streaming finishes, for the collapsed
+    /// "Worked for Xm Ys" summary. Set once by [`ChatMessage::finish_streaming`].
+    pub worked_duration: Option<std::time::Duration>,
+}
+
+impl ChatMessage {
+    /// Marks the message as done streaming and freezes [`ChatMessage::worked_duration`]
+    /// from [`ChatMessage::started_at`] (a no-op if already frozen).
+    pub fn finish_streaming(&mut self) {
+        self.streaming = false;
+        if self.worked_duration.is_none() {
+            self.worked_duration = Some(
+                self.started_at
+                    .map(|t| t.elapsed())
+                    .unwrap_or_default(),
+            );
+        }
+    }
 }
 
 pub struct Session {

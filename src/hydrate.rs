@@ -47,6 +47,8 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     attachments,
                     blocks: vec![],
                     streaming: false,
+                    started_at: None,
+                    worked_duration: None,
                 });
             }
             "assistant" => {
@@ -60,6 +62,8 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     attachments: vec![],
                     blocks,
                     streaming: false,
+                    started_at: None,
+                    worked_duration: None,
                 });
             }
             "toolResult" => {
@@ -240,6 +244,8 @@ fn merge_tool_result(out: &mut Vec<ChatMessage>, m: &Value) {
             output_truncated,
         }],
         streaming: false,
+        started_at: None,
+        worked_duration: None,
     });
 }
 
