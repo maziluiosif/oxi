@@ -170,19 +170,22 @@ impl OxiApp {
         ui.spacing_mut().item_spacing.x = 6.0;
 
         // ── Left: round attach button ──────────────────────────────────────
-        let attach = ui
-            .add(
-                Button::new(crate::ui::chrome::icon_glyph_rich(
-                    ICON_ATTACH,
-                    15.0,
-                    c_text_muted(),
-                ))
-                .min_size(egui::vec2(ATTACH_DIAM, ATTACH_DIAM))
-                .fill(c_bg_input())
-                .stroke(Stroke::new(1.0, c_border_subtle()))
-                .rounding(ATTACH_DIAM * 0.5),
-            )
-            .on_hover_text("Attach image");
+        let attach = crate::ui::chrome::icon_button_core(
+            ui,
+            ICON_ATTACH,
+            egui::vec2(ATTACH_DIAM, ATTACH_DIAM),
+            15.0,
+            false,
+            &crate::ui::chrome::IconButtonLook {
+                fill: c_bg_input(),
+                hover_fill: c_row_hover(),
+                stroke: c_border_subtle(),
+                hover_stroke: c_border(),
+                rounding: Rounding::same(ATTACH_DIAM * 0.5),
+                glyph: c_text_muted(),
+            },
+        )
+        .on_hover_text("Attach image");
         if attach.clicked() {
             self.pick_image_attachment();
         }
@@ -236,6 +239,7 @@ impl OxiApp {
                         .stroke(Stroke::NONE)
                         .rounding(SEND_DIAM * 0.5),
                 )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(hover)
                 .clicked();
             if clicked {
@@ -388,20 +392,23 @@ impl OxiApp {
                     .order(Order::Foreground)
                     .fixed_pos(x_pos)
                     .show(ui.ctx(), |ui| {
-                        if ui
-                            .add(
-                                Button::new(crate::ui::chrome::icon_glyph_rich(
-                                    ICON_CLOSE,
-                                    12.0,
-                                    c_text(),
-                                ))
-                                .min_size(egui::vec2(15.0, 15.0))
-                                .fill(c_bg_main())
-                                .stroke(Stroke::new(1.0, c_border()))
-                                .rounding(7.5),
-                            )
-                            .on_hover_text("Remove image")
-                            .clicked()
+                        if crate::ui::chrome::icon_button_core(
+                            ui,
+                            ICON_CLOSE,
+                            egui::vec2(15.0, 15.0),
+                            12.0,
+                            false,
+                            &crate::ui::chrome::IconButtonLook {
+                                fill: c_bg_main(),
+                                hover_fill: c_bg_main(),
+                                stroke: c_border(),
+                                hover_stroke: c_border(),
+                                rounding: Rounding::same(7.5),
+                                glyph: c_text(),
+                            },
+                        )
+                        .on_hover_text("Remove image")
+                        .clicked()
                         {
                             remove_idx = Some(i);
                         }

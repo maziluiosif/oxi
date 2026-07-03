@@ -459,21 +459,22 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
 /// [ icon  ToolName  arg_scurt ]  cu o linie de output on-hover/expand.
 fn render_tool_pill(
     ui: &mut Ui,
-    _msg_idx: usize,
-    _block_idx: usize,
+    msg_idx: usize,
+    block_idx: usize,
     block: &AssistantBlock,
     streaming: bool,
     is_last_in_run: bool,
+    expandable: bool,
 ) {
     let AssistantBlock::Tool {
+        tool_call_id,
         name,
         output,
         args_summary,
         is_error,
         diff,
-        full_output_path: _,
-        output_truncated: _,
-        ..
+        full_output_path,
+        output_truncated,
     } = block
     else {
         return;
@@ -529,60 +530,138 @@ fn render_tool_pill(
         running,
     );
 
-    let draw_pill = |ui: &mut Ui| {
-        Frame::none()
-            .fill(pill_bg)
-            .stroke(Stroke::new(1.0, pill_border))
-            .rounding(Rounding::same(7.0))
-            .inner_margin(Margin::symmetric(10.0, 5.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 7.0;
-                    ui.label(
-                        RichText::new(icon)
-                            .font(FontId::new(FS_SMALL + 0.5, icon_font()))
-                            .color(icon_color),
-                    );
-                    ui.label(
-                        RichText::new(tool_status_label(name))
+    // Click-to-expand: keyed on the stable provider tool-call id so the fold state survives
+    // re-layout; falls back to the transcript position when the id is missing.
+    let persist_id = expand_persist_id(if tool_call_id.is_empty() {
+        Id::new(("tool_pill", msg_idx, block_idx))
+    } else {
+        Id::new(("tool_pill", tool_call_id.as_str()))
+    });
+    let can_expand = expandable && !running && (has_output || has_diff);
+    let expanded = can_expand && is_expanded(ui, persist_id);
+
+    let frame = Frame::none()
+        .fill(pill_bg)
+        .stroke(Stroke::new(1.0, pill_border))
+        .rounding(Rounding::same(7.0))
+        .inner_margin(Margin::symmetric(10.0, 5.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 7.0;
+                ui.label(
+                    RichText::new(icon)
+                        .font(FontId::new(FS_SMALL + 0.5, icon_font()))
+                        .color(icon_color),
+                );
+                ui.label(
+                    RichText::new(tool_status_label(name))
+                        .size(FS_SMALL)
+                        .color(name_color),
+                );
+                ui.add(
+                    Label::new(
+                        RichText::new(summary.as_str())
                             .size(FS_SMALL)
-                            .color(name_color),
-                    );
-                    ui.add(
-                        Label::new(
-                            RichText::new(summary.as_str())
-                                .size(FS_SMALL)
-                                .color(summary_color)
-                                .monospace(),
-                        )
-                        .truncate(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if running {
-                            ui.add(
-                                eframe::egui::Spinner::new()
-                                    .size(10.0)
-                                    .color(c_text_muted()),
-                            );
-                            ui.add_space(4.0);
-                            crate::ui::chrome::running_badge(ui);
-                        } else if has_error {
-                            crate::ui::chrome::failed_badge(ui);
-                        } else if status_done {
-                            crate::ui::chrome::done_badge(ui);
-                        }
-                    });
+                            .color(summary_color)
+                            .monospace(),
+                    )
+                    .truncate(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if can_expand {
+                        ui.add(
+                            Label::new(
+                                RichText::new(if expanded {
+                                    ICON_ANGLE_UP
+                                } else {
+                                    ICON_ANGLE_DOWN
+                                })
+                                .font(FontId::new(FS_TINY, icon_font()))
+                                .color(c_text_faint()),
+                            )
+                            .selectable(false),
+                        );
+                        ui.add_space(2.0);
+                    }
+                    if running {
+                        ui.add(
+                            eframe::egui::Spinner::new()
+                                .size(10.0)
+                                .color(c_text_muted()),
+                        );
+                        ui.add_space(4.0);
+                        crate::ui::chrome::running_badge(ui);
+                    } else if has_error {
+                        crate::ui::chrome::failed_badge(ui);
+                    } else if status_done {
+                        crate::ui::chrome::done_badge(ui);
+                    }
                 });
             });
-    };
+        });
+    if can_expand {
+        clickable_expand_overlay(ui, frame.response.rect, persist_id);
+    }
 
-    draw_pill(ui);
-
-    // Keep the transcript compact: the pill itself is the visible tool-call bubble.
-    // Do not render the raw tool output underneath it, otherwise each tool appears twice
-    // (once as the bubble and once again as normal text below it).
+    // Folded, the pill is the whole tool-call bubble (keeps the transcript compact); a click
+    // unfolds the raw output / diff below it, and the next click folds it back.
+    if expanded {
+        ui.add_space(3.0);
+        let bubble_w = ui.available_width().max(40.0);
+        let detail_id = persist_id.with("detail");
+        if let Some(diff_text) = diff.as_deref().filter(|t| !t.trim().is_empty()) {
+            let overflow =
+                diff_text.lines().count() > EDIT_PREVIEW_LINES || diff_text.len() > 2000;
+            let preview = truncate_lines_preview(diff_text, EDIT_PREVIEW_LINES);
+            render_static_preview_job_panel(
+                ui,
+                crate::theme::c_tool_diff_bg(),
+                diff_wrapped_job(&preview, bubble_w),
+                |inner| diff_wrapped_job(diff_text, inner),
+                detail_id,
+                overflow,
+            );
+        } else {
+            let text = output.trim_end();
+            let overflow = text.lines().count() > BLOCK_PREVIEW_LINES || text.len() > 2000;
+            let preview = truncate_lines_preview(text, BLOCK_PREVIEW_LINES);
+            render_static_preview_job_panel(
+                ui,
+                crate::theme::c_tool_diff_bg(),
+                mono_output_job(&preview, bubble_w),
+                |inner| mono_output_job(text, inner),
+                detail_id,
+                overflow,
+            );
+        }
+        if *output_truncated || full_output_path.is_some() {
+            let caption = match full_output_path.as_deref() {
+                Some(path) => format!("output truncated — full output: {path}"),
+                None => "output truncated".to_string(),
+            };
+            ui.label(RichText::new(caption).size(FS_TINY).color(c_text_faint()));
+        }
+    }
     ui.add_space(3.0);
+}
+
+/// Plain monospace layout job for raw tool output shown under an expanded tool pill.
+fn mono_output_job(text: &str, wrap_width: f32) -> LayoutJob {
+    let mut job = LayoutJob {
+        wrap: TextWrapping {
+            max_width: wrap_width,
+            ..Default::default()
+        },
+        break_on_newline: true,
+        ..Default::default()
+    };
+    job.append(
+        text,
+        0.0,
+        TextFormat::simple(FontId::monospace(FS_TINY), c_text_muted()),
+    );
+    job
 }
 
 fn block_state_tag(streaming: bool) -> &'static str {
@@ -781,7 +860,7 @@ fn render_single_tool_block(
         return;
     }
 
-    render_tool_pill(ui, msg_idx, bi, block, streaming, streaming);
+    render_tool_pill(ui, msg_idx, bi, block, streaming, streaming, true);
 }
 
 fn render_edit_tool_block(
@@ -1017,11 +1096,14 @@ fn render_explored_tool_pill_run(
     let last_tool_idx = ctx.last_tool_idx;
     let streaming = ctx.streaming;
 
+    // While the streaming strip is capped to a fixed-height scroll region, an expanded pill
+    // would overflow it — pills become expandable once the run leaves the capped strip.
+    let expandable = !ctx.needs_scroll;
     let render_pills = |ui: &mut Ui| {
         for &ti in visible_run {
             let block = &blocks[ti];
             let is_last = Some(ti) == last_tool_idx;
-            render_tool_pill(ui, msg_idx, ti, block, streaming, is_last);
+            render_tool_pill(ui, msg_idx, ti, block, streaming, is_last, expandable);
             ui.add_space(TOOL_PILL_GAP);
         }
     };
@@ -1210,22 +1292,25 @@ fn render_thinking_group_block(
     } else {
         // Quiet caption; clickable (with a chevron) when there is more to unfold.
         let expanded = is_expanded(ui, persist_id);
-        let row = ui.horizontal(|ui| {
-            if overflow {
-                let chevron = if expanded {
-                    ICON_ANGLE_UP
-                } else {
-                    ICON_ANGLE_DOWN
-                };
-                ui.add(
-                    Label::new(
-                        RichText::new(chevron)
-                            .font(FontId::new(10.0, icon_font()))
-                            .color(c_text_faint()),
-                    )
-                    .selectable(false),
-                );
+        if overflow {
+            let chevron = if expanded {
+                ICON_ANGLE_UP
+            } else {
+                ICON_ANGLE_DOWN
+            };
+            if crate::ui::chrome::flat_button_icon(
+                ui,
+                chevron,
+                "Thinking",
+                FS_TINY,
+                egui::vec2(0.0, 18.0),
+                c_text_faint(),
+            )
+            .clicked()
+            {
+                toggle_expanded(ui, persist_id);
             }
+        } else {
             ui.add(
                 Label::new(
                     RichText::new("Thinking")
@@ -1234,19 +1319,6 @@ fn render_thinking_group_block(
                 )
                 .selectable(false),
             );
-        });
-        if overflow {
-            let resp = ui.interact(
-                row.response.rect,
-                persist_id.with("thinking_caption"),
-                egui::Sense::click(),
-            );
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if resp.clicked() {
-                toggle_expanded(ui, persist_id);
-            }
         }
     }
     ui.add_space(4.0);

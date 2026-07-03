@@ -59,26 +59,16 @@ impl OxiApp {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui
-                        .add(crate::ui::chrome::primary_button_widget("Approve"))
-                        .clicked()
-                    {
+                    if crate::ui::chrome::primary_button(ui, "Approve").clicked() {
                         self.respond_to_approval(ApprovalDecision::Approve);
                     }
-                    if ui
-                        .add(crate::ui::chrome::ghost_button_widget(
-                            "Approve rest",
-                            false,
-                        ))
+                    if crate::ui::chrome::ghost_button(ui, "Approve rest", false)
                         .on_hover_text("Run this and auto-approve the rest of this turn")
                         .clicked()
                     {
                         self.respond_to_approval(ApprovalDecision::ApproveRest);
                     }
-                    if ui
-                        .add(crate::ui::chrome::ghost_button_widget("Deny", true))
-                        .clicked()
-                    {
+                    if crate::ui::chrome::ghost_button(ui, "Deny", true).clicked() {
                         self.respond_to_approval(ApprovalDecision::Deny);
                     }
                 });
@@ -119,44 +109,33 @@ impl OxiApp {
                                     .stroke(Stroke::NONE)
                                     .rounding(8.0),
                                 )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .on_hover_text("Start a new chat in this workspace")
                                 .clicked()
                             {
                                 self.new_chat();
                             }
                             let term_on = self.conv.terminal_open;
-                            if ui
-                                .add_sized(
-                                    [34.0, 28.0],
-                                    Button::new(crate::ui::chrome::icon_glyph_rich(
-                                        ICON_TERMINAL,
-                                        FS_SMALL,
-                                        if term_on { c_accent() } else { c_text() },
-                                    ))
-                                    .fill(c_bg_elevated())
-                                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                                    .rounding(8.0),
-                                )
-                                .on_hover_text("Toggle terminal panel")
-                                .clicked()
+                            if crate::ui::chrome::icon_button_framed(
+                                ui,
+                                ICON_TERMINAL,
+                                egui::vec2(34.0, 28.0),
+                                term_on,
+                            )
+                            .on_hover_text("Toggle terminal panel")
+                            .clicked()
                             {
                                 self.toggle_terminal();
                             }
                             let git_on = self.conv.git_open;
-                            if ui
-                                .add_sized(
-                                    [34.0, 28.0],
-                                    Button::new(crate::ui::chrome::icon_glyph_rich(
-                                        ICON_GIT,
-                                        FS_SMALL,
-                                        if git_on { c_accent() } else { c_text() },
-                                    ))
-                                    .fill(c_bg_elevated())
-                                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                                    .rounding(8.0),
-                                )
-                                .on_hover_text("Toggle source-control (git) panel")
-                                .clicked()
+                            if crate::ui::chrome::icon_button_framed(
+                                ui,
+                                ICON_GIT,
+                                egui::vec2(34.0, 28.0),
+                                git_on,
+                            )
+                            .on_hover_text("Toggle source-control (git) panel")
+                            .clicked()
                             {
                                 self.toggle_git_panel();
                             }
@@ -172,20 +151,14 @@ impl OxiApp {
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             if !self.conv.sidebar_open
-                                && ui
-                                    .add_sized(
-                                        [30.0, 28.0],
-                                        Button::new(crate::ui::chrome::icon_glyph_rich(
-                                            ICON_MENU,
-                                            FS_SMALL,
-                                            c_text_muted(),
-                                        ))
-                                        .fill(c_bg_elevated())
-                                        .stroke(Stroke::new(1.0, c_border_subtle()))
-                                        .rounding(8.0),
-                                    )
-                                    .on_hover_text("Show sidebar")
-                                    .clicked()
+                                && crate::ui::chrome::icon_button_framed(
+                                    ui,
+                                    ICON_MENU,
+                                    egui::vec2(30.0, 28.0),
+                                    false,
+                                )
+                                .on_hover_text("Show sidebar")
+                                .clicked()
                             {
                                 self.conv.sidebar_open = true;
                             }
@@ -309,22 +282,12 @@ impl OxiApp {
             ui.add_space(18.0);
 
             ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add(crate::ui::chrome::ghost_button_icon_widget(
-                        ICON_FOLDER_PLUS,
-                        "Add workspace",
-                        false,
-                    ))
+                if crate::ui::chrome::ghost_button_icon(ui, ICON_FOLDER_PLUS, "Add workspace", false)
                     .clicked()
                 {
                     self.open_workspace_folder();
                 }
-                if ui
-                    .add(crate::ui::chrome::ghost_button_icon_widget(
-                        ICON_SETTINGS,
-                        "Open settings",
-                        false,
-                    ))
+                if crate::ui::chrome::ghost_button_icon(ui, ICON_SETTINGS, "Open settings", false)
                     .clicked()
                 {
                     self.conv.settings_open = true;

@@ -1,7 +1,7 @@
 //! Settings page: profiles panel, system prompt panel, OAuth sections.
 
 use eframe::egui::{
-    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
+    self, Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
     Sense, Stroke, TextEdit, Ui,
 };
 
@@ -147,19 +147,16 @@ impl OxiApp {
     fn render_settings_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
-        if ui
-            .add(
-                Button::new(crate::ui::chrome::icon_label_job(
-                    ICON_CHEVRON_LEFT,
-                    "Back to chat",
-                    FS_SMALL,
-                    c_text_muted(),
-                ))
-                .frame(false)
-                .fill(Color32::TRANSPARENT),
-            )
-            .on_hover_text("Close settings")
-            .clicked()
+        if crate::ui::chrome::flat_button_icon(
+            ui,
+            ICON_CHEVRON_LEFT,
+            "Back to chat",
+            FS_SMALL,
+            egui::vec2(0.0, 24.0),
+            c_text_muted(),
+        )
+        .on_hover_text("Close settings")
+        .clicked()
         {
             self.conv.settings_open = false;
         }
@@ -1098,6 +1095,7 @@ impl OxiApp {
                         !self.conv.oauth_busy,
                         crate::ui::chrome::primary_button_widget("Sign in with ChatGPT"),
                     )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
                     self.spawn_codex_oauth(ui.ctx());
@@ -1107,6 +1105,7 @@ impl OxiApp {
                         signed_in,
                         crate::ui::chrome::ghost_button_widget("Sign out", false),
                     )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
                     let mut s = load_oauth_store();
@@ -1310,12 +1309,14 @@ fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Response {
     let icon = if enabled { ICON_CHECK } else { "·" };
     let label_fid = egui::FontId::proportional(FS_SMALL);
     let icon_fid = egui::FontId::new(FS_SMALL, icon_font());
-    let label_galley = ui
-        .painter()
-        .layout_no_wrap(name.to_string(), label_fid.clone(), c_text());
+    // PLACEHOLDER so the paint-time colors below actually apply — a galley laid out with a
+    // concrete color ignores the fallback passed to `painter().galley()`.
+    let label_galley =
+        ui.painter()
+            .layout_no_wrap(name.to_string(), label_fid.clone(), Color32::PLACEHOLDER);
     let icon_galley = ui
         .painter()
-        .layout_no_wrap(icon.to_string(), icon_fid, c_accent());
+        .layout_no_wrap(icon.to_string(), icon_fid, Color32::PLACEHOLDER);
 
     let pad = egui::vec2(12.0, 6.0);
     let icon_gap = 8.0;

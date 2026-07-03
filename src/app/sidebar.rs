@@ -2,7 +2,7 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
+    self, Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
     Sense, Stroke, Ui,
 };
 
@@ -55,21 +55,14 @@ impl OxiApp {
 
         ui.add_space(8.0);
         // Settings footer row: same rounded pill styling
-        if ui
-            .add_sized(
-                [ui.available_width(), 30.0],
-                Button::new(crate::ui::chrome::icon_label_job(
-                    ICON_SETTINGS,
-                    "Settings",
-                    FS_SMALL,
-                    c_text(),
-                ))
-                .fill(c_bg_elevated())
-                .stroke(Stroke::new(1.0, c_border_subtle()))
-                .rounding(8.0),
-            )
-            .on_hover_text("Open settings")
-            .clicked()
+        if crate::ui::chrome::row_button_icon(
+            ui,
+            ICON_SETTINGS,
+            "Settings",
+            egui::vec2(ui.available_width(), 30.0),
+        )
+        .on_hover_text("Open settings")
+        .clicked()
         {
             self.conv.settings_open = true;
         }
@@ -77,51 +70,12 @@ impl OxiApp {
     }
 
     fn render_sidebar_add_workspace(&mut self, ui: &mut Ui) {
-        const H: f32 = 30.0;
-        const R: f32 = 8.0;
-        let full_w = ui.available_width();
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, H), Sense::click());
-        let hovered = response.hovered();
-        let fill = if hovered {
-            c_row_hover()
-        } else {
-            c_bg_elevated()
-        };
-        let rounding = Rounding::same(R);
-        ui.painter().rect_filled(rect, rounding, fill);
-        ui.painter().rect_stroke(
-            rect,
-            rounding,
-            Stroke::new(
-                1.0,
-                if hovered {
-                    c_border()
-                } else {
-                    c_border_subtle()
-                },
-            ),
+        let response = crate::ui::chrome::row_button_icon(
+            ui,
+            ICON_FOLDER_PLUS,
+            "Add workspace",
+            egui::vec2(ui.available_width(), 30.0),
         );
-        ui.allocate_new_ui(
-            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
-            |ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(ICON_FOLDER_PLUS)
-                            .font(FontId::new(FS_SMALL, icon_font()))
-                            .color(if hovered { c_accent() } else { c_text_muted() }),
-                    );
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("Add workspace")
-                            .size(FS_SMALL)
-                            .color(c_text()),
-                    );
-                });
-            },
-        );
-        if hovered {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
         if response.clicked() {
             self.open_workspace_folder();
         }
@@ -162,35 +116,21 @@ impl OxiApp {
                     0.0
                 };
                 let row_w = (ui.available_width() - plus_reserved).max(40.0);
-                if ui
-                    .add(
-                        Button::new(crate::ui::chrome::icon_label_job(
-                            chev,
-                            &root_label,
-                            FS_TINY,
-                            c_sidebar_section(),
-                        ))
-                        .frame(false)
-                        .fill(Color32::TRANSPARENT)
-                        .min_size(egui::vec2(row_w, ROW_H)),
-                    )
-                    .on_hover_text("Fold or unfold chats")
-                    .clicked()
+                if crate::ui::chrome::flat_button_icon(
+                    ui,
+                    chev,
+                    &root_label,
+                    FS_TINY,
+                    egui::vec2(row_w, ROW_H),
+                    c_sidebar_section(),
+                )
+                .on_hover_text("Fold or unfold chats")
+                .clicked()
                 {
                     self.conv.workspaces[wi].sidebar_folded = !folded;
                 }
                 if wi == self.conv.active_workspace
-                    && ui
-                        .add(
-                            Button::new(crate::ui::chrome::icon_glyph_rich(
-                                ICON_PLUS_SQUARE,
-                                FS_TINY,
-                                c_text_muted(),
-                            ))
-                            .frame(false)
-                            .fill(Color32::TRANSPARENT)
-                            .min_size(egui::vec2(PLUS_W, ROW_H)),
-                        )
+                    && crate::ui::chrome::icon_button_plain(ui, ICON_PLUS_SQUARE, PLUS_W, false)
                         .on_hover_text("New chat in this workspace")
                         .clicked()
                 {
@@ -290,11 +230,14 @@ impl OxiApp {
                                     ICON_TRASH,
                                     FontId::new(FS_TINY, icon_font()),
                                     if trash_resp.hovered() {
-                                        c_text()
+                                        c_accent()
                                     } else {
                                         c_text_faint()
                                     },
                                 );
+                                if trash_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
                                 if trash_resp.clicked() {
                                     self.delete_session(si);
                                     sidebar_changed = true;
