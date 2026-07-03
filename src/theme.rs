@@ -339,8 +339,6 @@ palette_accessors! {
     c_text_faint => text_faint,
     c_sidebar_section => sidebar_section,
     c_user_bubble => user_bubble,
-    c_row_active => row_active,
-    c_row_hover => row_hover,
     c_success => success,
     c_danger => danger,
     c_diff_add_fg => diff_add_fg,
@@ -442,6 +440,18 @@ pub fn c_info_bg() -> Color32 {
 /// quiet hairline, not a highlight.
 pub fn c_thinking_rail() -> Color32 {
     tint_on_panels(c_accent(), 90)
+}
+
+/// Selected-row background, app-wide (sidebar rows, settings nav, git panel, …) —
+/// an accent tint rather than a neutral grey, so the active item reads as "accent"
+/// consistently everywhere a row/button has a selected or pressed state.
+pub fn c_row_active() -> Color32 {
+    tint_on_panels(c_accent(), 40)
+}
+/// Hover background, app-wide — the same accent tint dialed down, so hover reads
+/// as a preview of the active-row treatment rather than a mismatched grey.
+pub fn c_row_hover() -> Color32 {
+    tint_on_panels(c_accent(), 16)
 }
 
 /// Foreground for text/icons drawn on an accent-filled surface (primary buttons, send).
