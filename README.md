@@ -234,7 +234,7 @@ Backend selection is model-dependent:
 
 Defaults:
 
-- base URL: `http://mac-mini:1234/v1` (point this at whichever host runs LM Studio)
+- base URL: `http://localhost:1234/v1` (point this at whichever host runs LM Studio)
 - default model: `local-model` (use the profile's "Load available models" button to pick
   whatever is actually loaded)
 
@@ -266,7 +266,7 @@ LM Studio and Ollama profiles support a **compute target**, configurable per pro
 Settings → Providers:
 
 - **Local** (default) — connect directly to `effective_base_url()` as before.
-- **Remote (SSH)** — run the model on another host (e.g. a Mac mini) reached over SSH,
+- **Remote (SSH)** — run the model on another host (e.g. a machine on your LAN) reached over SSH,
   with the runtime bound to `127.0.0.1` on that host. oxi opens an SSH tunnel and forwards
   a local port to the remote runtime port, so the rest of the app talks to it exactly like
   a local server.

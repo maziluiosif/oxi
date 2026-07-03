@@ -68,7 +68,7 @@ pub const ICON_PLUS: &str = "\u{f067}";
 /// Plus inside a filled square — primary "new chat" button (`nf-fa-plus-square`).
 pub const ICON_PLUS_SQUARE: &str = "\u{f0fe}";
 /// Chevron pointed left — "back" / hide panel (`nf-fa-chevron-left`).
-pub const ICON_CHEVRON_LEFT: &str = "\u{f060}";
+pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
 /// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
 pub const ICON_CHEVRON_RIGHT: &str = "\u{f054}";
 /// Hamburger menu — toggle sidebar (`nf-fa-bars`).
@@ -77,8 +77,8 @@ pub const ICON_MENU: &str = "\u{f02a}";
 pub const ICON_TERMINAL: &str = "\u{f120}";
 /// Git — source-control panel and header (`nf-fa-git`).
 pub const ICON_GIT: &str = "\u{f1d3}";
-/// Rotate / refresh (`nf-fa-arrows-rotate`).
-pub const ICON_REFRESH: &str = "\u{f450}";
+/// Rotate / refresh (`nf-fa-refresh`).
+pub const ICON_REFRESH: &str = "\u{f021}";
 /// Arrow pointing up — send message button (`nf-fa-arrow-up`).
 pub const ICON_SEND: &str = "\u{f062}";
 /// Filled stop square — stop streaming (`nf-fa-stop`).
@@ -103,6 +103,12 @@ pub const ICON_MAGIC: &str = "\u{f135}";
 pub const ICON_DOWNLOAD: &str = "\u{f019}";
 /// Cloud upload / arrow up — push to remote (`nf-fa-cloud-upload`).
 pub const ICON_UPLOAD: &str = "\u{f0aa}";
+/// Magnifier over a globe — web search tool pill (`nf-md-search_web`).
+pub const ICON_WEB_SEARCH: &str = "\u{f070f}";
+/// Globe — web fetch / URL tool pill (`nf-fa-globe`).
+pub const ICON_GLOBE: &str = "\u{f0ac}";
+/// Git branch — current-branch line in the source-control panel (`nf-oct-git_branch`).
+pub const ICON_BRANCH: &str = "\u{f418}";
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
 //
@@ -428,6 +434,12 @@ pub fn c_info_bg() -> Color32 {
     tint_on_panels(c_accent(), 30)
 }
 
+/// Left rail on thinking blocks — accent sunk toward the panel so it reads as a
+/// quiet hairline, not a highlight.
+pub fn c_thinking_rail() -> Color32 {
+    tint_on_panels(c_accent(), 90)
+}
+
 /// Foreground for text/icons drawn on an accent-filled surface (primary buttons, send).
 /// The dark themes use a light copper accent, so ink on it must be near-black; on light
 /// themes the accent is dark enough for white.
@@ -450,6 +462,13 @@ pub fn c_pill_selected_bg() -> Color32 {
 pub fn c_pill_selected_border() -> Color32 {
     let p = active_palette();
     surface_tint(p.border, p.accent, 120)
+}
+
+/// Composer card border while the input has keyboard focus — border nudged toward
+/// the accent so the field reads as "live" without shouting.
+pub fn c_composer_focus_border() -> Color32 {
+    let p = active_palette();
+    surface_tint(p.border, p.accent, 115)
 }
 
 // ── Tool pill palettes (single source of truth for the transcript tool pills + edit blocks) ──
@@ -761,10 +780,16 @@ pub fn apply_theme(ctx: &egui::Context, id: &str) {
 /// Max width for message/composer column (left-aligned; extra space stays on the right).
 pub const CHAT_COLUMN_MAX: f32 = 720.0;
 
+/// Shared corner radii — every rounded surface should use one of these tokens.
+pub const RADIUS_ROW: f32 = 5.0;
+pub const RADIUS_BUTTON: f32 = 7.0;
+pub const RADIUS_CHIP: f32 = 8.0;
+pub const RADIUS_PANEL: f32 = 14.0;
+
 /// Draggable strip between sidebar and chat (must match `render_main_area`).
 pub const SIDEBAR_RESIZE_SEP_W: f32 = 5.0;
 pub const CHAT_VIEW_MARGIN_LEFT: f32 = 12.0;
-pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 24.0;
+pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 8.0;
 /// Inner margin of the chat [`Frame`] (transcript + composer stack).
 pub const CHAT_FRAME_TOP: f32 = 10.0;
 pub const CHAT_FRAME_BOTTOM: f32 = 10.0;
@@ -924,7 +949,12 @@ pub fn setup_style(ctx: &egui::Context) {
     style.spacing.menu_margin = egui::Margin::same(6.0);
     style.spacing.window_margin = egui::Margin::same(10.0);
     style.spacing.combo_width = 220.0;
-    style.spacing.scroll.bar_width = 8.0;
+    // Floating bar with a *reserved* gutter: `floating_allocated_width` keeps a constant
+    // 10px strip so the handle never overlays content and hovering never reflows layout
+    // (with `AlwaysVisible` the gutter is allocated every frame).
+    style.spacing.scroll.bar_width = 6.0;
+    style.spacing.scroll.floating_width = 3.0;
+    style.spacing.scroll.floating_allocated_width = 10.0;
     style.spacing.scroll.handle_min_length = 24.0;
     style.spacing.scroll.floating = true;
     ctx.set_style(style);
@@ -1017,7 +1047,7 @@ pub fn sidebar_session_title_display(title: &str) -> String {
 }
 
 pub fn tool_status_label(name: &str) -> String {
-    let trimmed = name.trim();
+    let trimmed = name.trim().replace('_', " ");
     if trimmed.is_empty() {
         "Running".to_string()
     } else {
@@ -1072,6 +1102,13 @@ mod tests {
         // Restore default so other tests are not affected by global state.
         set_active_palette(Palette::DARK);
         assert_eq!(c_bg_main(), Palette::DARK.bg_main);
+    }
+
+    #[test]
+    fn tool_status_label_humanizes_names() {
+        assert_eq!(tool_status_label("web_search"), "Web search");
+        assert_eq!(tool_status_label("bash"), "Bash");
+        assert_eq!(tool_status_label("  "), "Running");
     }
 
     #[test]

@@ -54,15 +54,27 @@ pub fn toggle_expanded(ui: &Ui, persist_id: Id) {
 }
 
 pub fn clickable_expand_overlay(ui: &mut Ui, rect: Rect, persist_id: Id) {
+    clickable_expand_overlay_impl(ui, rect, persist_id, true);
+}
+
+/// Like [`clickable_expand_overlay`] but without the hover border — for frameless panels
+/// (thinking blocks) where a stroked rectangle would read heavier than the content itself.
+pub fn clickable_expand_overlay_quiet(ui: &mut Ui, rect: Rect, persist_id: Id) {
+    clickable_expand_overlay_impl(ui, rect, persist_id, false);
+}
+
+fn clickable_expand_overlay_impl(ui: &mut Ui, rect: Rect, persist_id: Id, hover_border: bool) {
     let id = persist_id.with("preview_click");
     let response = ui.interact(rect, id, Sense::hover());
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-        ui.painter().rect_stroke(
-            rect,
-            Rounding::same(8.0),
-            Stroke::new(1.0, crate::theme::c_border()),
-        );
+        if hover_border {
+            ui.painter().rect_stroke(
+                rect,
+                Rounding::same(crate::theme::RADIUS_CHIP),
+                Stroke::new(1.0, crate::theme::c_border()),
+            );
+        }
     }
     if response.hovered()
         && ui.ctx().input(|i| {

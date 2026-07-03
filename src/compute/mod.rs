@@ -1,5 +1,5 @@
 //! Remote compute targets: SSH tunnels to model runtimes (Ollama / LM Studio) running on
-//! another host, e.g. a Mac mini reachable only over SSH.
+//! another host reachable only over SSH.
 
 pub mod store;
 mod tunnel;
