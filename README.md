@@ -94,9 +94,15 @@ Behavior confirmed in `src/agent/tools/`:
 - `web_search` queries the SearXNG JSON API (configure the URL in Settings → Tools; its JSON format must be enabled)
 - `web_fetch` only accepts `http://` / `https://` URLs and strips HTML to plain text
 - `web_search` and `web_fetch` run as read-only tools (no approval prompt)
+- `bash`, `write`, and `edit` require explicit user approval before each call (or
+  "approve rest of this run") when the approval gate is enabled in Settings
 - tool output is truncated when too large
 - `bash` defaults to a 15s timeout and is capped at 30s
-- `bash` blocks only a small deny-list of risky command substrings, not full sandboxing
+- `bash` blocks a small deny-list of risky command substrings (privilege escalation,
+  destructive filesystem/disk operations, reverse shells, etc.) as a best-effort
+  deterrent — it does not understand shell quoting, variable expansion, or encoding, so
+  it is not a sandbox and should not be relied on alone; the approval prompt showing the
+  raw command before it runs is the real safety boundary
 - `write` and `edit` generate unified diffs for the UI
 
 ### Streaming coding UI
