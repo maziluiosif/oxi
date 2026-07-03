@@ -140,7 +140,8 @@ pub fn spawn_agent_run(
             let tools = tool_definitions_json(&settings.tools_enabled);
             let tool_env = ToolEnv {
                 enabled: settings.tools_enabled.clone(),
-                web_search_url: settings.searxng_url.clone(),
+                web_search_url: settings.effective_web_search_url(),
+                web_search_backend: settings.web_search_backend,
             };
             let model = profile.model_id.clone();
             // No total request timeout: it would also cover the streamed body and kill

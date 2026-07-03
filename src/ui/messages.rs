@@ -21,8 +21,54 @@ use crate::ui::preview_expand::{
     clickable_expand_overlay, clickable_expand_overlay_quiet, expand_persist_id, is_expanded,
     toggle_expanded, truncate_lines_preview,
 };
+use std::time::{Duration, Instant};
 
 const BLOCK_PREVIEW_LINES: usize = 10;
+/// Max visual rows the *thinking* bubble shows while collapsed (live tail or done-folded
+/// preview). Larger than the tool/code preview cap because reasoning reads as a side note
+/// and benefits from more context per glance.
+const THINKING_PREVIEW_LINES: usize = 15;
+/// Stable id (independent of the live/done tag) for a thinking group's wall-clock timer,
+/// so the start instant recorded while live can be read back after the group goes done.
+fn thinking_timer_id(msg_idx: usize, salt: usize) -> Id {
+    Id::new(("thinking_timer", msg_idx, salt))
+}
+
+/// Read/refresh the per-group thinking timer. While `live`, returns the running elapsed
+/// (recording the start instant on first sight); once `live` flips false, the elapsed is
+/// frozen once and reused thereafter. State lives in egui *temp* memory (not persisted):
+/// `Instant` isn't serializable and, like the turn-level `started_at`, the timer only
+/// matters for the live session that produced it.
+fn thinking_elapsed(ui: &Ui, msg_idx: usize, salt: usize, live: bool) -> Option<Duration> {
+    let id = thinking_timer_id(msg_idx, salt);
+    let (start, frozen): (Option<Instant>, Option<Duration>) = ui
+        .ctx()
+        .data_mut(|d| d.get_temp(id).unwrap_or((None, None)));
+    if live {
+        let now = Instant::now();
+        if start.is_none() {
+            ui.ctx().data_mut(|d| {
+                d.insert_temp::<(Option<Instant>, Option<Duration>)>(id, (Some(now), None))
+            });
+        }
+        Some(now.duration_since(start.unwrap_or(now)))
+    } else {
+        match frozen {
+            Some(d) => Some(d),
+            None => {
+                // Transition frame: freeze from the recorded start (or nothing if we
+                // never saw it live, e.g. a freshly-reloaded done group).
+                let d = start.map(|s| s.elapsed());
+                if start.is_some() {
+                    ui.ctx().data_mut(|dmap| {
+                        dmap.insert_temp::<(Option<Instant>, Option<Duration>)>(id, (start, d))
+                    });
+                }
+                d
+            }
+        }
+    }
+}
 const EDIT_PREVIEW_LINES: usize = 10;
 /// Max tool pills visible in the scroll window while streaming (last N are shown, oldest scroll away).
 const MAX_VISIBLE_STREAMING_TOOL_PILLS: usize = 5;
@@ -61,6 +107,23 @@ fn thinking_wrapped_job(text: String, wrap_width: f32) -> LayoutJob {
         break_on_newline: true,
         ..Default::default()
     }
+}
+
+/// Number of *visual* rows the thinking text occupies once wrapped at `wrap_width` (counting
+/// both explicit newlines and soft-wraps). The thinking block folds based on this instead of
+/// `str::lines().count()`: a single very long paragraph wraps onto many rows, so counting only
+/// logical lines would let the panel grow past the preview limit and then snap back to the
+/// truncated view the moment enough newlines arrive — a visible flicker while streaming.
+fn thinking_visual_row_count(ui: &Ui, text: &str, wrap_width: f32) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    ui.fonts(|fonts| {
+        fonts
+            .layout_job(thinking_wrapped_job(text.to_string(), wrap_width))
+            .rows
+            .len()
+    })
 }
 
 fn diff_counts(diff: &str) -> (usize, usize) {
@@ -459,21 +522,22 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
 /// [ icon  ToolName  arg_scurt ]  cu o linie de output on-hover/expand.
 fn render_tool_pill(
     ui: &mut Ui,
-    _msg_idx: usize,
-    _block_idx: usize,
+    msg_idx: usize,
+    block_idx: usize,
     block: &AssistantBlock,
     streaming: bool,
     is_last_in_run: bool,
+    expandable: bool,
 ) {
     let AssistantBlock::Tool {
+        tool_call_id,
         name,
         output,
         args_summary,
         is_error,
         diff,
-        full_output_path: _,
-        output_truncated: _,
-        ..
+        full_output_path,
+        output_truncated,
     } = block
     else {
         return;
@@ -529,60 +593,137 @@ fn render_tool_pill(
         running,
     );
 
-    let draw_pill = |ui: &mut Ui| {
-        Frame::none()
-            .fill(pill_bg)
-            .stroke(Stroke::new(1.0, pill_border))
-            .rounding(Rounding::same(7.0))
-            .inner_margin(Margin::symmetric(10.0, 5.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 7.0;
-                    ui.label(
-                        RichText::new(icon)
-                            .font(FontId::new(FS_SMALL + 0.5, icon_font()))
-                            .color(icon_color),
-                    );
-                    ui.label(
-                        RichText::new(tool_status_label(name))
+    // Click-to-expand: keyed on the stable provider tool-call id so the fold state survives
+    // re-layout; falls back to the transcript position when the id is missing.
+    let persist_id = expand_persist_id(if tool_call_id.is_empty() {
+        Id::new(("tool_pill", msg_idx, block_idx))
+    } else {
+        Id::new(("tool_pill", tool_call_id.as_str()))
+    });
+    let can_expand = expandable && !running && (has_output || has_diff);
+    let expanded = can_expand && is_expanded(ui, persist_id);
+
+    let frame = Frame::none()
+        .fill(pill_bg)
+        .stroke(Stroke::new(1.0, pill_border))
+        .rounding(Rounding::same(7.0))
+        .inner_margin(Margin::symmetric(10.0, 5.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 7.0;
+                ui.label(
+                    RichText::new(icon)
+                        .font(FontId::new(FS_SMALL + 0.5, icon_font()))
+                        .color(icon_color),
+                );
+                ui.label(
+                    RichText::new(tool_status_label(name))
+                        .size(FS_SMALL)
+                        .color(name_color),
+                );
+                ui.add(
+                    Label::new(
+                        RichText::new(summary.as_str())
                             .size(FS_SMALL)
-                            .color(name_color),
-                    );
-                    ui.add(
-                        Label::new(
-                            RichText::new(summary.as_str())
-                                .size(FS_SMALL)
-                                .color(summary_color)
-                                .monospace(),
-                        )
-                        .truncate(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if running {
-                            ui.add(
-                                eframe::egui::Spinner::new()
-                                    .size(10.0)
-                                    .color(c_text_muted()),
-                            );
-                            ui.add_space(4.0);
-                            crate::ui::chrome::running_badge(ui);
-                        } else if has_error {
-                            crate::ui::chrome::failed_badge(ui);
-                        } else if status_done {
-                            crate::ui::chrome::done_badge(ui);
-                        }
-                    });
+                            .color(summary_color)
+                            .monospace(),
+                    )
+                    .truncate(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if can_expand {
+                        ui.add(
+                            Label::new(
+                                RichText::new(if expanded {
+                                    ICON_ANGLE_UP
+                                } else {
+                                    ICON_ANGLE_DOWN
+                                })
+                                .font(FontId::new(FS_TINY, icon_font()))
+                                .color(c_text_faint()),
+                            )
+                            .selectable(false),
+                        );
+                        ui.add_space(2.0);
+                    }
+                    if running {
+                        ui.add(
+                            eframe::egui::Spinner::new()
+                                .size(10.0)
+                                .color(c_text_muted()),
+                        );
+                        ui.add_space(4.0);
+                        crate::ui::chrome::running_badge(ui);
+                    } else if has_error {
+                        crate::ui::chrome::failed_badge(ui);
+                    } else if status_done {
+                        crate::ui::chrome::done_badge(ui);
+                    }
                 });
             });
-    };
+        });
+    if can_expand {
+        clickable_expand_overlay(ui, frame.response.rect, persist_id);
+    }
 
-    draw_pill(ui);
-
-    // Keep the transcript compact: the pill itself is the visible tool-call bubble.
-    // Do not render the raw tool output underneath it, otherwise each tool appears twice
-    // (once as the bubble and once again as normal text below it).
+    // Folded, the pill is the whole tool-call bubble (keeps the transcript compact); a click
+    // unfolds the raw output / diff below it, and the next click folds it back.
+    if expanded {
+        ui.add_space(3.0);
+        let bubble_w = ui.available_width().max(40.0);
+        let detail_id = persist_id.with("detail");
+        if let Some(diff_text) = diff.as_deref().filter(|t| !t.trim().is_empty()) {
+            let overflow = diff_text.lines().count() > EDIT_PREVIEW_LINES || diff_text.len() > 2000;
+            let preview = truncate_lines_preview(diff_text, EDIT_PREVIEW_LINES);
+            render_static_preview_job_panel(
+                ui,
+                crate::theme::c_tool_diff_bg(),
+                diff_wrapped_job(&preview, bubble_w),
+                |inner| diff_wrapped_job(diff_text, inner),
+                detail_id,
+                overflow,
+            );
+        } else {
+            let text = output.trim_end();
+            let overflow = text.lines().count() > BLOCK_PREVIEW_LINES || text.len() > 2000;
+            let preview = truncate_lines_preview(text, BLOCK_PREVIEW_LINES);
+            render_static_preview_job_panel(
+                ui,
+                crate::theme::c_tool_diff_bg(),
+                mono_output_job(&preview, bubble_w),
+                |inner| mono_output_job(text, inner),
+                detail_id,
+                overflow,
+            );
+        }
+        if *output_truncated || full_output_path.is_some() {
+            let caption = match full_output_path.as_deref() {
+                Some(path) => format!("output truncated — full output: {path}"),
+                None => "output truncated".to_string(),
+            };
+            ui.label(RichText::new(caption).size(FS_TINY).color(c_text_faint()));
+        }
+    }
     ui.add_space(3.0);
+}
+
+/// Plain monospace layout job for raw tool output shown under an expanded tool pill.
+fn mono_output_job(text: &str, wrap_width: f32) -> LayoutJob {
+    let mut job = LayoutJob {
+        wrap: TextWrapping {
+            max_width: wrap_width,
+            ..Default::default()
+        },
+        break_on_newline: true,
+        ..Default::default()
+    };
+    job.append(
+        text,
+        0.0,
+        TextFormat::simple(FontId::monospace(FS_TINY), c_text_muted()),
+    );
+    job
 }
 
 fn block_state_tag(streaming: bool) -> &'static str {
@@ -720,11 +861,15 @@ pub fn render_assistant_message_run(
     let col_w = content_wrap_width(ui);
     let mut blocks = Vec::new();
     let mut streaming = false;
+    let mut started_at = None;
+    let mut worked_duration = None;
     for msg in messages {
         if msg.role != MsgRole::Assistant {
             continue;
         }
         streaming |= msg.streaming;
+        started_at = started_at.or(msg.started_at);
+        worked_duration = worked_duration.or(msg.worked_duration);
         blocks.extend(msg.blocks.iter().cloned());
     }
 
@@ -734,7 +879,15 @@ pub fn render_assistant_message_run(
 
     ui.vertical(|ui| {
         ui.set_width(col_w);
-        render_assistant_blocks(ui, msg_idx, &blocks, streaming, agent_ack);
+        render_assistant_blocks(
+            ui,
+            msg_idx,
+            &blocks,
+            streaming,
+            agent_ack,
+            started_at,
+            worked_duration,
+        );
     });
     ui.add_space(8.0);
 }
@@ -781,7 +934,7 @@ fn render_single_tool_block(
         return;
     }
 
-    render_tool_pill(ui, msg_idx, bi, block, streaming, streaming);
+    render_tool_pill(ui, msg_idx, bi, block, streaming, streaming, true);
 }
 
 fn render_edit_tool_block(
@@ -1017,11 +1170,14 @@ fn render_explored_tool_pill_run(
     let last_tool_idx = ctx.last_tool_idx;
     let streaming = ctx.streaming;
 
+    // While the streaming strip is capped to a fixed-height scroll region, an expanded pill
+    // would overflow it — pills become expandable once the run leaves the capped strip.
+    let expandable = !ctx.needs_scroll;
     let render_pills = |ui: &mut Ui| {
         for &ti in visible_run {
             let block = &blocks[ti];
             let is_last = Some(ti) == last_tool_idx;
-            render_tool_pill(ui, msg_idx, ti, block, streaming, is_last);
+            render_tool_pill(ui, msg_idx, ti, block, streaming, is_last, expandable);
             ui.add_space(TOOL_PILL_GAP);
         }
     };
@@ -1165,15 +1321,73 @@ fn render_thinking_text_panel(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let inner = ui.available_width().max(40.0);
-            let display = if !content_overflows || is_expanded(ui, persist_id) {
-                text.to_string()
-            } else if tail {
-                crate::ui::preview_expand::truncate_lines_tail_preview(text, max_preview_lines)
-            } else {
-                truncate_lines_preview(text, max_preview_lines)
-            };
-            let allow_select = !content_overflows || is_expanded(ui, persist_id);
-            selectable_layout_job(ui, thinking_wrapped_job(display, inner), allow_select);
+            let expanded = is_expanded(ui, persist_id);
+            let allow_select = !content_overflows || expanded;
+
+            // While the model is actively streaming reasoning (`tail`), keep the whole body
+            // inside a fixed-height, bottom-stuck scroll window — even before it crosses the
+            // preview limit. This avoids the flicker where the block would grow past the cap
+            // (~2x) while wrapping settled and then snap back to the truncated view. Wheel
+            // scrolling is disabled so events still reach the outer transcript ScrollArea.
+            if tail {
+                let line_h = FS_SMALL * 1.45;
+                let max_h = max_preview_lines as f32 * line_h;
+                // Size the box to the actual content (1 row while there's only one line),
+                // capped at `max_preview_lines` — grows as reasoning streams in instead of
+                // reserving the full N-line height up front.
+                let rows = thinking_visual_row_count(ui, text, inner)
+                    .max(1)
+                    .min(max_preview_lines);
+                let box_h = rows as f32 * line_h;
+                // `ScrollArea::max_height` only *caps* the size — internally it still clamps
+                // to `ui.available_rect_before_wrap()`, which shrinks (often to near-zero) the
+                // deeper a widget sits inside a long scrolled transcript, since the outer
+                // transcript ScrollArea's content `max_rect` is fixed to the viewport height,
+                // not infinite. Without an explicit reservation the tail box silently collapses
+                // to whatever sliver of layout budget is left instead of the requested N lines.
+                // Pre-allocating an exact-size rect (same trick as the activity-summary row
+                // above) gives the nested ScrollArea a fresh, unshrunk budget to clamp against.
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), box_h),
+                    egui::Sense::hover(),
+                );
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ScrollArea::vertical()
+                        .id_salt((persist_id, "thinking_live_tail"))
+                        .auto_shrink([false, false])
+                        .max_height(max_h)
+                        // egui defaults `min_scrolled_height` to 64.0 (~3.5 rows at this font
+                        // size) for any scroll-enabled axis, which floors the box well above
+                        // our 1-row minimum. Match it to a single row so it can start as small
+                        // as the content actually is.
+                        .min_scrolled_height(line_h)
+                        .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
+                        .stick_to_bottom(true)
+                        .enable_scrolling(false)
+                        .show(ui, |ui| {
+                            selectable_layout_job(
+                                ui,
+                                thinking_wrapped_job(text.to_string(), inner),
+                                allow_select,
+                            );
+                        });
+                });
+                return;
+            }
+
+            // Done (not streaming). A short body (under the preview limit) renders inline,
+            // and so does an *unfolded* overflowing one — expanding a thinking block reveals
+            // the FULL reasoning, not a capped scroll window. The folded overflowing state
+            // (caption-only) never reaches here: the caller skips this panel entirely.
+            if !content_overflows || expanded {
+                selectable_layout_job(
+                    ui,
+                    thinking_wrapped_job(text.to_string(), inner),
+                    allow_select,
+                );
+            }
+            // Done + overflowing + folded: guard — render nothing. Unreachable via the
+            // caller's `show_body` gate, kept for safety if the panel is ever called directly.
         });
     let r = frame.response.rect;
     ui.painter().vline(
@@ -1195,7 +1409,12 @@ fn render_thinking_group_block(
 ) {
     let bubble_w = content_wrap_width(ui);
     ui.set_width(bubble_w);
-    let overflow = combined.lines().count() > BLOCK_PREVIEW_LINES;
+    // Fold based on *visual* rows (after wrapping), not logical `\n` line count: a long
+    // paragraph without newlines still wraps onto many rows and must trigger the truncated
+    // preview at the same threshold the body would otherwise reach, instead of overshooting
+    // the limit and snapping back once enough newlines stream in (flicker).
+    let inner_w = (bubble_w - 16.0).max(40.0);
+    let overflow = thinking_visual_row_count(ui, &combined, inner_w) > THINKING_PREVIEW_LINES;
     let persist_id = expand_persist_id(Id::new((
         msg_idx,
         salt,
@@ -1203,64 +1422,68 @@ fn render_thinking_group_block(
         block_state_tag(live),
     )));
 
+    // Per-group wall-clock timer (ms/s/min). While live it ticks from the first frame we
+    // saw the group streaming; once thinking ends it freezes once into "Thought for Xs".
+    // The caption id (`persist_id`) switches with the live/done tag, so the expand state
+    // resets to collapsed at the live→done transition — i.e. the block auto-folds when
+    // thinking finishes, matching the "Worked for X" summary behavior.
+    let elapsed = thinking_elapsed(ui, msg_idx, salt, live);
     if live {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
             animated_status_label(ui, "Thinking", FS_TINY);
-        });
-    } else {
-        // Quiet caption; clickable (with a chevron) when there is more to unfold.
-        let expanded = is_expanded(ui, persist_id);
-        let row = ui.horizontal(|ui| {
-            if overflow {
-                let chevron = if expanded {
-                    ICON_ANGLE_UP
-                } else {
-                    ICON_ANGLE_DOWN
-                };
-                ui.add(
-                    Label::new(
-                        RichText::new(chevron)
-                            .font(FontId::new(10.0, icon_font()))
-                            .color(c_text_faint()),
-                    )
-                    .selectable(false),
+            if let Some(d) = elapsed {
+                ui.label(
+                    RichText::new(format!(" for {}", format_stream_elapsed(d)))
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
                 );
             }
-            ui.add(
-                Label::new(
-                    RichText::new("Thinking")
-                        .size(FS_TINY)
-                        .color(c_text_faint()),
-                )
-                .selectable(false),
-            );
         });
-        if overflow {
-            let resp = ui.interact(
-                row.response.rect,
-                persist_id.with("thinking_caption"),
-                egui::Sense::click(),
-            );
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if resp.clicked() {
-                toggle_expanded(ui, persist_id);
-            }
+    } else {
+        // Quiet caption; always clickable (with a chevron) — done thinking blocks are
+        // folded by default regardless of length, so the chevron is the only way to reveal
+        // even a short block's body.
+        let expanded = is_expanded(ui, persist_id);
+        let caption = match elapsed {
+            Some(d) => format!("Thought for {}", format_stream_elapsed(d)),
+            None => "Thought".to_string(),
+        };
+        let chevron = if expanded {
+            ICON_ANGLE_UP
+        } else {
+            ICON_ANGLE_DOWN
+        };
+        if crate::ui::chrome::flat_button_icon(
+            ui,
+            chevron,
+            &caption,
+            FS_TINY,
+            egui::vec2(0.0, 18.0),
+            c_text_faint(),
+        )
+        .clicked()
+        {
+            toggle_expanded(ui, persist_id);
         }
     }
     ui.add_space(4.0);
 
     // While the model is actively streaming reasoning, keep the collapsed view pinned to
     // the newest text (tail) so you can follow along instead of seeing a frozen first page.
-    render_thinking_text_panel(
-        ui,
-        BLOCK_PREVIEW_LINES,
-        persist_id,
-        overflow,
-        combined.as_str(),
-        live,
-    );
+    // Once done, every thinking block hides its body entirely — only the "Thought for Xs"
+    // caption remains — until the user unfolds it, regardless of how short it is.
+    let show_body = live || is_expanded(ui, persist_id);
+    if show_body {
+        render_thinking_text_panel(
+            ui,
+            THINKING_PREVIEW_LINES,
+            persist_id,
+            overflow,
+            combined.as_str(),
+            live,
+        );
+    }
     ui.add_space(8.0);
 }
 
@@ -1354,12 +1577,114 @@ fn render_activity_range(
     }
 }
 
+/// Formats an elapsed duration for the Cursor-style "Worked for ..." summary row.
+fn format_worked_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m {}s", secs / 60, secs % 60)
+    }
+}
+
+/// Single collapsed-by-default summary row ("Worked for Xm Ys ›") standing in for a turn's
+/// thinking + tool-call activity, Cursor-style. Expanded live while streaming so progress
+/// stays visible; collapses automatically once the turn finishes. A manual click overrides
+/// the default expand state for that message.
+fn render_activity_summary(
+    ui: &mut Ui,
+    msg_idx: usize,
+    blocks: &[AssistantBlock],
+    worked_end: usize,
+    streaming: bool,
+    started_at: Option<std::time::Instant>,
+    worked_duration: Option<std::time::Duration>,
+) {
+    // `started_at`/`worked_duration` are `None` for turns hydrated from a saved session
+    // (never tracked at save time) — fall back to a plain "Worked" with no duration rather
+    // than a misleading "Worked for 0s".
+    let label = if streaming {
+        match started_at {
+            Some(t) => format!("Working for {}", format_worked_duration(t.elapsed())),
+            None => "Working".to_string(),
+        }
+    } else {
+        match worked_duration {
+            Some(d) => format!("Worked for {}", format_worked_duration(d)),
+            None => "Worked".to_string(),
+        }
+    };
+
+    // While the turn is still streaming it always stays unfolded (live progress shouldn't
+    // be foldable mid-flight); only once it's done does a manual click's collapsed/expanded
+    // choice take effect, defaulting to collapsed.
+    let persist_id = expand_persist_id(Id::new(("activity_summary", msg_idx)));
+    let expanded = if streaming {
+        true
+    } else {
+        ui.ctx()
+            .data_mut(|d| d.get_persisted::<bool>(persist_id))
+            .unwrap_or(false)
+    };
+
+    // Allocate the row rect up front so we can read hover state *before* painting, then
+    // tint the chevron with the accent (copper) color on hover — matching the Thinking
+    // block behavior. The "Worked..." text stays in its quiet muted tone so the row
+    // doesn't shout.
+    let row_height = ui.spacing().interact_size.y;
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), row_height),
+        egui::Sense::click(),
+    );
+    let click = ui.interact(
+        rect,
+        persist_id.with("activity_summary_click"),
+        egui::Sense::click(),
+    );
+    let hovered = click.hovered();
+    // Only the chevron lights up on hover (matching the Thinking block behavior); the
+    // "Worked..." text stays in its quiet muted tone so the row doesn't shout.
+    let chevron_col = if hovered { c_accent() } else { c_text_faint() };
+
+    // Paint the chevron + label inside the reserved rect.
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(
+                RichText::new(if expanded {
+                    ICON_ANGLE_UP
+                } else {
+                    ICON_ANGLE_DOWN
+                })
+                .font(FontId::new(FS_TINY, icon_font()))
+                .color(chevron_col),
+            );
+            ui.label(RichText::new(label).size(FS_SMALL).color(c_text_muted()));
+        });
+    });
+
+    if click.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if !streaming && click.clicked() {
+        ui.ctx()
+            .data_mut(|d| d.insert_persisted(persist_id, !expanded));
+    }
+
+    if expanded {
+        ui.add_space(3.0);
+        render_activity_range(ui, msg_idx, blocks, 0, worked_end, streaming);
+    }
+}
+
 pub fn render_assistant_blocks(
     ui: &mut Ui,
     msg_idx: usize,
     blocks: &[AssistantBlock],
     streaming: bool,
     _agent_ack: bool,
+    started_at: Option<std::time::Instant>,
+    worked_duration: Option<std::time::Duration>,
 ) {
     if assistant_is_effectively_empty(blocks, streaming) {
         if streaming {
@@ -1393,7 +1718,15 @@ pub fn render_assistant_blocks(
 
     let worked_end = trailing_answer_start(blocks);
     if worked_end > 0 {
-        render_activity_range(ui, msg_idx, blocks, 0, worked_end, streaming);
+        render_activity_summary(
+            ui,
+            msg_idx,
+            blocks,
+            worked_end,
+            streaming,
+            started_at,
+            worked_duration,
+        );
         ui.add_space(4.0);
     }
 

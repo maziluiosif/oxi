@@ -22,7 +22,7 @@ use crate::agent::runner::{
     openrouter_extra_headers,
 };
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
-use crate::settings::{LlmProviderKind, ProviderProfile};
+use crate::settings::{LlmProviderKind, ProviderProfile, WebSearchBackend};
 
 /// One streaming event from a completion run.
 #[derive(Debug)]
@@ -119,6 +119,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 &crate::agent::tools::ToolEnv {
                     enabled: Vec::new(),
                     web_search_url: String::new(),
+                    web_search_backend: WebSearchBackend::default(),
                 },
                 &agent_tx,
                 &cancel,
@@ -142,6 +143,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 &crate::agent::tools::ToolEnv {
                     enabled: Vec::new(),
                     web_search_url: String::new(),
+                    web_search_backend: WebSearchBackend::default(),
                 },
                 &agent_tx,
                 &cancel,
@@ -165,6 +167,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 &crate::agent::tools::ToolEnv {
                     enabled: Vec::new(),
                     web_search_url: String::new(),
+                    web_search_backend: WebSearchBackend::default(),
                 },
                 &agent_tx,
                 &cancel,
@@ -188,6 +191,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 &crate::agent::tools::ToolEnv {
                     enabled: Vec::new(),
                     web_search_url: String::new(),
+                    web_search_backend: WebSearchBackend::default(),
                 },
                 &agent_tx,
                 &cancel,
@@ -217,6 +221,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     &crate::agent::tools::ToolEnv {
                         enabled: Vec::new(),
                         web_search_url: String::new(),
+                        web_search_backend: WebSearchBackend::default(),
                     },
                     &agent_tx,
                     &cancel,
@@ -239,6 +244,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     &crate::agent::tools::ToolEnv {
                         enabled: Vec::new(),
                         web_search_url: String::new(),
+                        web_search_backend: WebSearchBackend::default(),
                     },
                     &agent_tx,
                     &cancel,
@@ -269,6 +275,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     &crate::agent::tools::ToolEnv {
                         enabled: Vec::new(),
                         web_search_url: String::new(),
+                        web_search_backend: WebSearchBackend::default(),
                     },
                     &agent_tx,
                     &cancel,
@@ -294,6 +301,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     &crate::agent::tools::ToolEnv {
                         enabled: Vec::new(),
                         web_search_url: String::new(),
+                        web_search_backend: WebSearchBackend::default(),
                     },
                     &agent_tx,
                     &cancel,

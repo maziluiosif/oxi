@@ -4,7 +4,7 @@ mod codex;
 mod store;
 
 pub use codex::{ensure_codex_access_token, login_openai_codex};
-pub use store::{clear_codex, load_oauth_store, save_oauth_store};
+pub use store::{clear_codex, load_oauth_store, save_oauth_store, OAuthStore};
 
 /// Messages from background OAuth threads to the UI (drain each frame).
 #[derive(Debug)]
