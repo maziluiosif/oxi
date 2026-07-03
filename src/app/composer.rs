@@ -285,6 +285,7 @@ impl OxiApp {
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
                 .width(150.0)
+                .height(300.0) // matching height
                 .show_ui(ui, |ui| {
                     for kind in &configured {
                         let selected = active_provider == Some(*kind);
@@ -343,6 +344,7 @@ impl OxiApp {
                     .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                     .icon(quiet_combo_icon)
                     .width(150.0)
+                    .height(300.0) // Set explicit high height for the dropdown popup
                     .show_ui(ui, |ui| {
                         for m in &items {
                             if ui.selectable_label(m == &current, m.clone()).clicked() {

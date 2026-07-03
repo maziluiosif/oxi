@@ -21,7 +21,20 @@ pub fn chat_message_to_json_entries(message: &ChatMessage) -> Vec<Value> {
             "role": "user",
             "content": user_content_to_json(&message.text, &message.attachments),
         })],
-        MsgRole::Assistant => assistant_message_to_json_entries(&message.blocks),
+        MsgRole::Assistant => {
+            let mut entries = assistant_message_to_json_entries(&message.blocks);
+            // Persist the frozen work duration on the leading assistant entry so the
+            // collapsed "Worked for Xs" summary survives a reload. Skipped while
+            // still streaming (duration not yet known) and for zero/None values.
+            if let Some(entry) = entries.first_mut() {
+                if let Some(d) = message.worked_duration {
+                    if !message.streaming && d.as_secs_f64() > 0.0 {
+                        entry["workedSecs"] = json!(d.as_secs_f64());
+                    }
+                }
+            }
+            entries
+        }
     }
 }
 

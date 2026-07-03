@@ -1151,6 +1151,25 @@ impl OxiApp {
     }
 
     // ── Model list fetch ─────────────────────────────────────────────────────
+    /// Ensure the active profile's model catalog has been fetched at least once
+    /// (e.g. on startup) so the composer model dropdown offers the full list
+    /// instead of falling back to just the current model id.
+    pub(crate) fn ensure_active_models_fetched(&mut self, ctx: &egui::Context) {
+        let Some(active) = self.conv.settings.active_profile() else {
+            return;
+        };
+        let pid = active.id.clone();
+        // Already fetched (or in flight)? Then nothing to do.
+        if let Some(f) = self.conv.fetched_models.get(&pid) {
+            if f.loading || !f.models.is_empty() {
+                return;
+            }
+        }
+        if let Some(idx) = self.conv.settings.profiles.iter().position(|p| p.id == pid) {
+            self.spawn_model_fetch(ctx, idx);
+        }
+    }
+
     /// Kick off a background `/v1/models` fetch for the profile at `idx`, if one isn't
     /// already in flight. Results arrive on `conv.model_rx` and are drained each frame.
     pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, idx: usize) {
