@@ -231,17 +231,16 @@ fn parse_rss_items(xml: &str, count: usize) -> Vec<(String, String, String)> {
         let block_lower = &lower[start..end];
 
         let title = extract_tag_text(block, block_lower, "title")
-            .map(|s| clean_fragment(&s))
+            .map(clean_fragment)
             .filter(|s| !s.is_empty());
         let link = extract_tag_text(block, block_lower, "link")
-            .map(|s| clean_fragment(&s))
+            .map(clean_fragment)
             .filter(|s| !s.is_empty());
         let snippet = extract_tag_text(block, block_lower, "description")
-            .map(|s| clean_fragment(&s))
+            .map(clean_fragment)
             .unwrap_or_default();
-        match (title, link) {
-            (Some(title), Some(link)) => out.push((title, link, snippet)),
-            _ => {}
+        if let (Some(title), Some(link)) = (title, link) {
+            out.push((title, link, snippet))
         }
     }
     out
