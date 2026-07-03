@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-03
+
+### Added
+- Track streaming duration with `started_at` and `worked_duration` fields on chat messages
+- Collapsible activity summary showing 'Worked for…' duration (Cursor-style)
+- Web search backend selection (Bing, DuckDuckGo, SearXNG) with Bing as default
+- Zero-config DuckDuckGo search fallback when no SearXNG URL is configured
+- Delete button on chat row hover (replaces timestamp on hover)
+- Hover feedback and pointing-hand cursor on all interactive buttons
+- Click-to-expand tool pills showing raw output/diff
+
+### Changed
+- Improved accent color consistency across app
+- Improved chat entry spacing
+- Improved git functionality across multiple workspaces
+- New sidebar design
+- Redesigned composer model selector with provider and model dropdowns
+- Unified button rendering with consistent icon button styling
+- Persist assistant `worked_duration` across reload
+- Fold thinking blocks by visual row count to reduce streaming flicker
+
+### Fixed
+- Composer dropdowns, thinking block folding, and reload state
+- UI thinking blocks display
+- Icon-font vertical centering and hover accent-color transitions
+- `tint_on_panels` blend order and dark-theme badge colors
+- Clippy lints and code formatting
+
+
 ## [0.6.1] - 2026-07-03
 
 ### Changed
@@ -136,7 +165,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/maziluiosif/oxi/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/maziluiosif/oxi/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/maziluiosif/oxi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/maziluiosif/oxi/compare/v0.4.1...v0.5.0
