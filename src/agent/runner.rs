@@ -11,6 +11,7 @@ use crate::agent::approval::{ApprovalDecision, ApprovalGate};
 use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
 use crate::agent::history::build_openai_messages;
+use crate::agent::loop_ctx::LoopCtx;
 use crate::agent::openai::run_chat_loop;
 use crate::agent::prompt::build_system_prompt;
 use crate::agent::tools::{tool_definitions_json, ToolEnv};
@@ -179,19 +180,21 @@ pub fn spawn_agent_run(
                             profile.effective_base_url()
                         };
                         run_codex_responses_loop(
-                            &client,
-                            &base,
+                            &mut LoopCtx {
+                                client: &client,
+                                base_url: &base,
+                                model: &model,
+                                cwd: cwd_ref,
+                                env: &tool_env,
+                                tx: &tx,
+                                cancel: &cancel,
+                                gate: &mut gate,
+                                max_rounds,
+                            },
                             &creds.0,
                             &creds.1,
-                            &model,
                             &mut messages,
                             &tools,
-                            cwd_ref,
-                            &tool_env,
-                            &tx,
-                            &cancel,
-                            &mut gate,
-                            max_rounds,
                         )
                         .await
                     } else {
@@ -204,19 +207,21 @@ pub fn spawn_agent_run(
                         };
                         let base = profile.effective_base_url();
                         run_chat_loop(
-                            &client,
-                            &base,
+                            &mut LoopCtx {
+                                client: &client,
+                                base_url: &base,
+                                model: &model,
+                                cwd: cwd_ref,
+                                env: &tool_env,
+                                tx: &tx,
+                                cancel: &cancel,
+                                gate: &mut gate,
+                                max_rounds,
+                            },
                             &key,
-                            &model,
                             &[],
                             &mut messages,
                             &tools,
-                            cwd_ref,
-                            &tool_env,
-                            &tx,
-                            &cancel,
-                            &mut gate,
-                            max_rounds,
                         )
                         .await
                     }
@@ -231,19 +236,21 @@ pub fn spawn_agent_run(
                     };
                     let base = profile.effective_base_url();
                     run_chat_loop(
-                        &client,
-                        &base,
+                        &mut LoopCtx {
+                            client: &client,
+                            base_url: &base,
+                            model: &model,
+                            cwd: cwd_ref,
+                            env: &tool_env,
+                            tx: &tx,
+                            cancel: &cancel,
+                            gate: &mut gate,
+                            max_rounds,
+                        },
                         &key,
-                        &model,
                         &[],
                         &mut messages,
                         &tools,
-                        cwd_ref,
-                        &tool_env,
-                        &tx,
-                        &cancel,
-                        &mut gate,
-                        max_rounds,
                     )
                     .await
                 }
@@ -257,19 +264,21 @@ pub fn spawn_agent_run(
                     };
                     let base = profile.effective_base_url();
                     run_chat_loop(
-                        &client,
-                        &base,
+                        &mut LoopCtx {
+                            client: &client,
+                            base_url: &base,
+                            model: &model,
+                            cwd: cwd_ref,
+                            env: &tool_env,
+                            tx: &tx,
+                            cancel: &cancel,
+                            gate: &mut gate,
+                            max_rounds,
+                        },
                         &key,
-                        &model,
                         &openrouter_extra_headers(&profile),
                         &mut messages,
                         &tools,
-                        cwd_ref,
-                        &tool_env,
-                        &tx,
-                        &cancel,
-                        &mut gate,
-                        max_rounds,
                     )
                     .await
                 }
@@ -283,19 +292,21 @@ pub fn spawn_agent_run(
                         }
                     };
                     run_chat_loop(
-                        &client,
-                        &base,
+                        &mut LoopCtx {
+                            client: &client,
+                            base_url: &base,
+                            model: &model,
+                            cwd: cwd_ref,
+                            env: &tool_env,
+                            tx: &tx,
+                            cancel: &cancel,
+                            gate: &mut gate,
+                            max_rounds,
+                        },
                         &key,
-                        &model,
                         &[],
                         &mut messages,
                         &tools,
-                        cwd_ref,
-                        &tool_env,
-                        &tx,
-                        &cancel,
-                        &mut gate,
-                        max_rounds,
                     )
                     .await
                 }
@@ -309,19 +320,21 @@ pub fn spawn_agent_run(
                         }
                     };
                     run_chat_loop(
-                        &client,
-                        &base,
+                        &mut LoopCtx {
+                            client: &client,
+                            base_url: &base,
+                            model: &model,
+                            cwd: cwd_ref,
+                            env: &tool_env,
+                            tx: &tx,
+                            cancel: &cancel,
+                            gate: &mut gate,
+                            max_rounds,
+                        },
                         &key,
-                        &model,
                         &[],
                         &mut messages,
                         &tools,
-                        cwd_ref,
-                        &tool_env,
-                        &tx,
-                        &cancel,
-                        &mut gate,
-                        max_rounds,
                     )
                     .await
                 }
@@ -344,19 +357,21 @@ pub fn spawn_agent_run(
                         // appends `/v1/messages`, so pass the base without `/v1`.
                         let anthropic_base = base.trim_end_matches("/v1").to_string();
                         run_anthropic_loop(
-                            &client,
-                            &anthropic_base,
+                            &mut LoopCtx {
+                                client: &client,
+                                base_url: &anthropic_base,
+                                model: &model,
+                                cwd: cwd_ref,
+                                env: &tool_env,
+                                tx: &tx,
+                                cancel: &cancel,
+                                gate: &mut gate,
+                                max_rounds,
+                            },
                             &key,
-                            &model,
                             &[],
                             &mut messages,
                             &tools,
-                            cwd_ref,
-                            &tool_env,
-                            &tx,
-                            &cancel,
-                            &mut gate,
-                            max_rounds,
                         )
                         .await
                     } else {
@@ -369,19 +384,21 @@ pub fn spawn_agent_run(
                             format!("{}/v1", base.trim_end_matches('/'))
                         };
                         run_chat_loop(
-                            &client,
-                            &chat_base,
+                            &mut LoopCtx {
+                                client: &client,
+                                base_url: &chat_base,
+                                model: &model,
+                                cwd: cwd_ref,
+                                env: &tool_env,
+                                tx: &tx,
+                                cancel: &cancel,
+                                gate: &mut gate,
+                                max_rounds,
+                            },
                             &key,
-                            &model,
                             &[],
                             &mut messages,
                             &tools,
-                            cwd_ref,
-                            &tool_env,
-                            &tx,
-                            &cancel,
-                            &mut gate,
-                            max_rounds,
                         )
                         .await
                     }
