@@ -1,0 +1,373 @@
+//! The three top-level settings panels: Models & providers, Agent, and Appearance.
+
+use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
+
+use crate::settings::{LlmProviderKind, ALL_TOOL_NAMES};
+use crate::theme::*;
+use crate::ui::chrome::{
+    card_frame, field_label, hairline, pill_tab, primary_button_icon, settings_caption,
+    settings_section_title,
+};
+
+use super::super::OxiApp;
+use super::layout::tool_chip;
+
+impl OxiApp {
+    pub(super) fn render_settings_providers_panel(&mut self, ui: &mut Ui) {
+        settings_section_title(
+            ui,
+            "Models & providers",
+            Some("Configure LLM providers, API keys, and the default model."),
+        );
+
+        // Provider pill bar
+        settings_caption(ui, "Provider");
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for provider in LlmProviderKind::ALL {
+                let selected = self.conv.settings_provider_tab == provider;
+                if pill_tab(ui, provider.label(), selected) {
+                    self.conv.settings_provider_tab = provider;
+                }
+            }
+        });
+        ui.add_space(16.0);
+
+        let provider = self.conv.settings_provider_tab;
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("{} profiles", provider.label()))
+                    .size(FS_BODY)
+                    .color(c_text())
+                    .strong(),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if primary_button_icon(ui, ICON_PLUS, "Add profile")
+                    .on_hover_text("Create a new profile for this provider")
+                    .clicked()
+                {
+                    let id = self.conv.settings.add_profile(provider);
+                    self.conv.settings.set_active_profile(&id);
+                }
+            });
+        });
+        ui.add_space(10.0);
+
+        let profile_indices: Vec<usize> = self
+            .conv
+            .settings
+            .profiles
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.provider == provider)
+            .map(|(i, _)| i)
+            .collect();
+
+        if profile_indices.is_empty() {
+            card_frame().show(ui, |ui| {
+                ui.label(
+                    RichText::new("No profiles for this provider yet.")
+                        .size(FS_SMALL)
+                        .color(c_text_muted()),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Click \"+ Add profile\" above to create one.")
+                        .size(FS_TINY)
+                        .color(c_text_faint()),
+                );
+            });
+            ui.add_space(12.0);
+        }
+
+        for idx in profile_indices {
+            self.render_profile_card(ui, idx);
+            ui.add_space(10.0);
+        }
+
+        // Provider OAuth (single section below cards, for clarity)
+        if provider == LlmProviderKind::GptCodex {
+            ui.add_space(6.0);
+            settings_caption(ui, "OAuth");
+            ui.add_space(6.0);
+            self.render_codex_oauth_section(ui);
+            ui.add_space(10.0);
+        }
+
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(
+                "If a profile key is empty, the app falls back to environment variables. \
+                 OAuth still takes precedence where available.",
+            )
+            .size(FS_TINY)
+            .color(c_text_faint()),
+        );
+    }
+
+    pub(super) fn render_settings_agent_panel(&mut self, ui: &mut Ui) {
+        // Tools section
+        settings_section_title(
+            ui,
+            "Agent",
+            Some("Control which tools the agent can call, approval behavior, and web search."),
+        );
+        settings_caption(ui, "Tools");
+        ui.add_space(4.0);
+        card_frame().show(ui, |ui| {
+            let n = ALL_TOOL_NAMES.len();
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+                for (i, name) in ALL_TOOL_NAMES.iter().enumerate().take(n) {
+                    let enabled = self.conv.settings.tools_enabled[i];
+                    if tool_chip(ui, name, enabled).clicked() {
+                        self.conv.settings.tools_enabled[i] = !enabled;
+                    }
+                }
+            });
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
+            let mut require_approval = self.conv.settings.require_approval;
+            if ui
+                .checkbox(
+                    &mut require_approval,
+                    RichText::new("Ask before running bash / write / edit")
+                        .size(FS_SMALL)
+                        .color(c_text()),
+                )
+                .on_hover_text(
+                    "When on, the agent pauses for your approval before each mutating tool call.",
+                )
+                .changed()
+            {
+                self.conv.settings.require_approval = require_approval;
+            }
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
+            field_label(ui, "Max tool calls per run (0 = unlimited)");
+            let mut max_rounds = self.conv.settings.max_tool_rounds.to_string();
+            let resp = ui.add(
+                TextEdit::singleline(&mut max_rounds)
+                    .desired_width(180.0)
+                    .hint_text("0")
+                    .margin(Margin::symmetric(8.0, 5.0)),
+            );
+            if resp.changed() {
+                let trimmed = max_rounds.trim();
+                if trimmed.is_empty() {
+                    self.conv.settings.max_tool_rounds = 0;
+                } else if let Ok(n) = trimmed.parse::<u32>() {
+                    self.conv.settings.max_tool_rounds = n;
+                }
+            }
+            ui.label(
+                RichText::new(
+                    "Caps the number of tool-call rounds in a single agent run. 0 disables the cap (unlimited, the default).",
+                )
+                .size(FS_TINY)
+                .color(c_text_muted()),
+            );
+        });
+
+        // Web search section
+        ui.add_space(16.0);
+        settings_caption(ui, "Web search");
+        ui.add_space(4.0);
+        card_frame().show(ui, |ui| {
+            ui.label(
+                RichText::new("Search backend (web_search)")
+                    .size(FS_SMALL)
+                    .color(c_text()),
+            );
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let current = self.conv.settings.web_search_backend;
+                for b in crate::settings::WebSearchBackend::ALL {
+                    if pill_tab(ui, b.label(), b == current) && b != current {
+                        self.conv.settings.web_search_backend = b;
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            match self.conv.settings.web_search_backend {
+                crate::settings::WebSearchBackend::Bing => {
+                    ui.label(
+                        RichText::new(
+                            "Zero-config. Searches Bing's stable RSS results feed with no API \
+                             key or setup. No fallback is used; if Bing fails, the error is shown.",
+                        )
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                    );
+                }
+                crate::settings::WebSearchBackend::DuckDuckGo => {
+                    ui.label(
+                        RichText::new(
+                            "Zero-config. Searches DuckDuckGo's HTML endpoint with no API key \
+                             or setup. May rate-limit under heavy use. Note: DuckDuckGo now \
+                             serves a bot-challenge page, so Bing is recommended instead.",
+                        )
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                    );
+                }
+                crate::settings::WebSearchBackend::SearXng => {
+                    ui.label(
+                        RichText::new("SearXNG instance URL")
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        TextEdit::singleline(&mut self.conv.settings.searxng_url)
+                            .hint_text("https://searxng.example.com")
+                            .desired_width(f32::INFINITY),
+                    )
+                    .on_hover_text(
+                        "Base URL of your SearXNG instance. Its JSON output format must be \
+                         enabled (search.formats: [html, json]). No fallback is used; if this \
+                         URL is missing or invalid, the error is shown.",
+                    );
+                    ui.add_space(4.0);
+                    if self.conv.settings.searxng_url.trim().is_empty() {
+                        ui.label(
+                            RichText::new(
+                                "No URL set — web_search will report a configuration error until \
+                                 you add one.",
+                            )
+                            .size(FS_TINY)
+                            .color(c_text_faint()),
+                        );
+                    }
+                }
+            }
+        });
+
+        // System prompt section
+        ui.add_space(16.0);
+        settings_caption(ui, "System prompt");
+        ui.add_space(4.0);
+        card_frame().show(ui, |ui| {
+            ui.label(
+                RichText::new(
+                    "Single editable prompt. Use {tools_list} to inject the currently enabled tools.",
+                )
+                .size(FS_TINY)
+                .color(c_text_muted()),
+            );
+            ui.add_space(4.0);
+            ui.add(
+                TextEdit::multiline(&mut self.conv.settings.system_prompt)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(20)
+                    .margin(Margin::symmetric(8.0, 6.0))
+                    .hint_text(crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT),
+            );
+        });
+
+        // Commit-message generator section
+        ui.add_space(16.0);
+        settings_caption(ui, "Commit message generator");
+        ui.add_space(4.0);
+        card_frame().show(ui, |ui| {
+            ui.label(
+                RichText::new(
+                    "The Generate button in the git panel drafts a commit message from \
+                     the staged diff. Pick which provider profile it uses and its own system \
+                     prompt, kept separate from the agent prompt above.",
+                )
+                .size(FS_TINY)
+                .color(c_text_muted()),
+            );
+
+            ui.add_space(8.0);
+            settings_caption(ui, "Model profile");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let current = self.conv.settings.commit_msg_profile_id.clone();
+                if pill_tab(ui, "Active profile", current.trim().is_empty())
+                    && !current.trim().is_empty()
+                {
+                    self.conv.settings.commit_msg_profile_id.clear();
+                }
+                let profiles: Vec<(String, String)> = self
+                    .conv
+                    .settings
+                    .profiles
+                    .iter()
+                    .map(|p| (p.id.clone(), p.name.clone()))
+                    .collect();
+                for (id, name) in profiles {
+                    if pill_tab(ui, &name, id == current) && id != current {
+                        self.conv.settings.commit_msg_profile_id = id;
+                    }
+                }
+            });
+
+            ui.add_space(10.0);
+            settings_caption(ui, "System prompt");
+            ui.add_space(4.0);
+            ui.add(
+                TextEdit::multiline(&mut self.conv.settings.commit_msg_system_prompt)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(8)
+                    .margin(Margin::symmetric(8.0, 6.0))
+                    .hint_text(crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT),
+            );
+        });
+
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new("Tip: changes are saved automatically.")
+                .size(FS_TINY)
+                .color(c_text_faint()),
+        );
+    }
+
+    pub(super) fn render_settings_appearance_panel(&mut self, ui: &mut Ui) {
+        settings_section_title(
+            ui,
+            "Appearance",
+            Some("Switch the color theme. Built-in themes plus any custom themes found on disk."),
+        );
+        card_frame().show(ui, |ui| {
+            let themes = crate::theme::available_themes();
+            let current = self.conv.settings.theme_id.clone();
+            settings_caption(ui, "Theme");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for t in &themes {
+                    if pill_tab(ui, &t.name, t.id == current) && t.id != current {
+                        self.conv.settings.theme_id = t.id.clone();
+                        crate::theme::apply_theme(ui.ctx(), &t.id);
+                    }
+                }
+            });
+
+            ui.add_space(12.0);
+            let current_density = self.conv.settings.ui_density;
+            settings_caption(ui, "Text size");
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for d in crate::settings::UiDensity::ALL {
+                    if pill_tab(ui, d.label(), d == current_density) && d != current_density {
+                        self.conv.settings.ui_density = d;
+                        ui.ctx().set_zoom_factor(d.zoom_factor());
+                    }
+                }
+            });
+        });
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new(format!(
+                "Add a custom theme by dropping a <name>.json file in {}.",
+                crate::theme::custom_themes_dir().display()
+            ))
+            .size(FS_TINY)
+            .color(c_text_faint()),
+        );
+    }
+}

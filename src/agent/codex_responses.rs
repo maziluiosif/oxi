@@ -1,18 +1,16 @@
 //! OpenAI Codex ChatGPT backend (`/codex/responses` SSE) — OAuth access token + `chatgpt-account-id`.
 
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Value};
 
-use super::approval::ApprovalGate;
 use super::events::AgentEvent;
+use super::loop_ctx::LoopCtx;
 use super::net::{backoff_delay, send_with_retry, sleep_cancellable, MAX_STREAM_RETRIES};
-use super::tools::{run_tool, ToolEnv, ToolResult};
+use super::tools::{run_tool, ToolResult};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -386,22 +384,22 @@ fn process_responses_event(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run_codex_responses_loop(
-    client: &reqwest::Client,
-    base_url: &str,
+    ctx: &mut LoopCtx<'_>,
     access_token: &str,
     account_id: &str,
-    model: &str,
     messages: &mut Vec<Value>,
     tools: &[Value],
-    cwd: &Path,
-    env: &ToolEnv,
-    tx: &Sender<AgentEvent>,
-    cancel: &Arc<AtomicBool>,
-    gate: &mut ApprovalGate,
-    max_rounds: u32,
 ) -> Result<(), String> {
+    let client = ctx.client;
+    let base_url = ctx.base_url;
+    let model = ctx.model;
+    let cwd = ctx.cwd;
+    let env = ctx.env;
+    let tx = ctx.tx;
+    let cancel = ctx.cancel;
+    let max_rounds = ctx.max_rounds;
+    let gate = &mut *ctx.gate;
     let url = resolve_codex_post_url(base_url);
     let rtools = responses_tools(tools);
     let mut round = 0u32;
