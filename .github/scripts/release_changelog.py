@@ -140,7 +140,15 @@ def parse_llm_json(content: str) -> dict:
     start, end = content.find("{"), content.rfind("}")
     if start == -1 or end == -1:
         sys.exit(f"LLM did not return JSON:\n{content}")
-    obj = json.loads(content[start : end + 1])
+    raw = content[start : end + 1]
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        # Models sometimes emit a bare backslash (e.g. from a code snippet like
+        # `.unwrap()` or a Windows path) that isn't a valid JSON escape. Escape
+        # any backslash not already part of one before giving up.
+        fixed = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r"\\\\", raw)
+        obj = json.loads(fixed)
     bump = obj.get("bump", "patch")
     if bump not in ("major", "minor", "patch"):
         bump = "patch"
