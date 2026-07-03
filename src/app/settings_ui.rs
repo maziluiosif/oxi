@@ -385,21 +385,73 @@ impl OxiApp {
         ui.add_space(4.0);
         card_frame().show(ui, |ui| {
             ui.label(
-                RichText::new("SearXNG URL (web_search)")
+                RichText::new("Search backend (web_search)")
                     .size(FS_SMALL)
                     .color(c_text()),
             );
-            ui.add_space(4.0);
-            ui.add(
-                TextEdit::singleline(&mut self.conv.settings.searxng_url)
-                    .hint_text("Empty = DuckDuckGo (no setup) — or https://searxng.example.com")
-                    .desired_width(f32::INFINITY),
-            )
-            .on_hover_text(
-                "Optional. Leave empty to search via DuckDuckGo with no configuration. \
-                 To use your own SearXNG instance instead, set its base URL here — its JSON \
-                 output format must be enabled (search.formats: [html, json]).",
-            );
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let current = self.conv.settings.web_search_backend;
+                for b in crate::settings::WebSearchBackend::ALL {
+                    if pill_tab(ui, b.label(), b == current) && b != current {
+                        self.conv.settings.web_search_backend = b;
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            match self.conv.settings.web_search_backend {
+                crate::settings::WebSearchBackend::Bing => {
+                    ui.label(
+                        RichText::new(
+                            "Zero-config. Searches Bing's stable RSS results feed with no API \
+                             key or setup. No fallback is used; if Bing fails, the error is shown.",
+                        )
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                    );
+                }
+                crate::settings::WebSearchBackend::DuckDuckGo => {
+                    ui.label(
+                        RichText::new(
+                            "Zero-config. Searches DuckDuckGo's HTML endpoint with no API key \
+                             or setup. May rate-limit under heavy use. Note: DuckDuckGo now \
+                             serves a bot-challenge page, so Bing is recommended instead.",
+                        )
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                    );
+                }
+                crate::settings::WebSearchBackend::SearXng => {
+                    ui.label(
+                        RichText::new("SearXNG instance URL")
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        TextEdit::singleline(&mut self.conv.settings.searxng_url)
+                            .hint_text("https://searxng.example.com")
+                            .desired_width(f32::INFINITY),
+                    )
+                    .on_hover_text(
+                        "Base URL of your SearXNG instance. Its JSON output format must be \
+                         enabled (search.formats: [html, json]). No fallback is used; if this \
+                         URL is missing or invalid, the error is shown.",
+                    );
+                    ui.add_space(4.0);
+                    if self.conv.settings.searxng_url.trim().is_empty() {
+                        ui.label(
+                            RichText::new(
+                                "No URL set — web_search will report a configuration error until \
+                                 you add one.",
+                            )
+                            .size(FS_TINY)
+                            .color(c_text_faint()),
+                        );
+                    }
+                }
+            }
         });
 
         // System prompt section
