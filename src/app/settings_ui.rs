@@ -1,8 +1,8 @@
 //! Settings page: profiles panel, system prompt panel, OAuth sections.
 
 use eframe::egui::{
-    self, Align, Button, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
-    Sense, Stroke, TextEdit, Ui,
+    self, Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Sense,
+    Stroke, TextEdit, Ui,
 };
 
 use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
@@ -147,19 +147,16 @@ impl OxiApp {
     fn render_settings_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
-        if ui
-            .add(
-                Button::new(crate::ui::chrome::icon_label_job(
-                    ICON_CHEVRON_LEFT,
-                    "Back to chat",
-                    FS_SMALL,
-                    c_text_muted(),
-                ))
-                .frame(false)
-                .fill(Color32::TRANSPARENT),
-            )
-            .on_hover_text("Close settings")
-            .clicked()
+        if crate::ui::chrome::flat_button_icon(
+            ui,
+            ICON_CHEVRON_LEFT,
+            "Back to chat",
+            FS_SMALL,
+            egui::vec2(0.0, 24.0),
+            c_text_muted(),
+        )
+        .on_hover_text("Close settings")
+        .clicked()
         {
             self.conv.settings_open = false;
         }
@@ -385,20 +382,73 @@ impl OxiApp {
         ui.add_space(4.0);
         card_frame().show(ui, |ui| {
             ui.label(
-                RichText::new("SearXNG URL (web_search)")
+                RichText::new("Search backend (web_search)")
                     .size(FS_SMALL)
                     .color(c_text()),
             );
-            ui.add_space(4.0);
-            ui.add(
-                TextEdit::singleline(&mut self.conv.settings.searxng_url)
-                    .hint_text("https://searxng.example.com")
-                    .desired_width(f32::INFINITY),
-            )
-            .on_hover_text(
-                "Base URL of the SearXNG instance queried by the web_search tool. \
-                 Its JSON output format must be enabled (search.formats: [html, json]).",
-            );
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let current = self.conv.settings.web_search_backend;
+                for b in crate::settings::WebSearchBackend::ALL {
+                    if pill_tab(ui, b.label(), b == current) && b != current {
+                        self.conv.settings.web_search_backend = b;
+                    }
+                }
+            });
+            ui.add_space(6.0);
+            match self.conv.settings.web_search_backend {
+                crate::settings::WebSearchBackend::Bing => {
+                    ui.label(
+                        RichText::new(
+                            "Zero-config. Searches Bing's stable RSS results feed with no API \
+                             key or setup. No fallback is used; if Bing fails, the error is shown.",
+                        )
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                    );
+                }
+                crate::settings::WebSearchBackend::DuckDuckGo => {
+                    ui.label(
+                        RichText::new(
+                            "Zero-config. Searches DuckDuckGo's HTML endpoint with no API key \
+                             or setup. May rate-limit under heavy use. Note: DuckDuckGo now \
+                             serves a bot-challenge page, so Bing is recommended instead.",
+                        )
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                    );
+                }
+                crate::settings::WebSearchBackend::SearXng => {
+                    ui.label(
+                        RichText::new("SearXNG instance URL")
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        TextEdit::singleline(&mut self.conv.settings.searxng_url)
+                            .hint_text("https://searxng.example.com")
+                            .desired_width(f32::INFINITY),
+                    )
+                    .on_hover_text(
+                        "Base URL of your SearXNG instance. Its JSON output format must be \
+                         enabled (search.formats: [html, json]). No fallback is used; if this \
+                         URL is missing or invalid, the error is shown.",
+                    );
+                    ui.add_space(4.0);
+                    if self.conv.settings.searxng_url.trim().is_empty() {
+                        ui.label(
+                            RichText::new(
+                                "No URL set — web_search will report a configuration error until \
+                                 you add one.",
+                            )
+                            .size(FS_TINY)
+                            .color(c_text_faint()),
+                        );
+                    }
+                }
+            }
         });
 
         // System prompt section
@@ -1045,6 +1095,7 @@ impl OxiApp {
                         !self.conv.oauth_busy,
                         crate::ui::chrome::primary_button_widget("Sign in with ChatGPT"),
                     )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
                     self.spawn_codex_oauth(ui.ctx());
@@ -1054,6 +1105,7 @@ impl OxiApp {
                         signed_in,
                         crate::ui::chrome::ghost_button_widget("Sign out", false),
                     )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
                 {
                     let mut s = load_oauth_store();
@@ -1099,9 +1151,28 @@ impl OxiApp {
     }
 
     // ── Model list fetch ─────────────────────────────────────────────────────
+    /// Ensure the active profile's model catalog has been fetched at least once
+    /// (e.g. on startup) so the composer model dropdown offers the full list
+    /// instead of falling back to just the current model id.
+    pub(crate) fn ensure_active_models_fetched(&mut self, ctx: &egui::Context) {
+        let Some(active) = self.conv.settings.active_profile() else {
+            return;
+        };
+        let pid = active.id.clone();
+        // Already fetched (or in flight)? Then nothing to do.
+        if let Some(f) = self.conv.fetched_models.get(&pid) {
+            if f.loading || !f.models.is_empty() {
+                return;
+            }
+        }
+        if let Some(idx) = self.conv.settings.profiles.iter().position(|p| p.id == pid) {
+            self.spawn_model_fetch(ctx, idx);
+        }
+    }
+
     /// Kick off a background `/v1/models` fetch for the profile at `idx`, if one isn't
     /// already in flight. Results arrive on `conv.model_rx` and are drained each frame.
-    fn spawn_model_fetch(&mut self, ctx: &egui::Context, idx: usize) {
+    pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, idx: usize) {
         let profile = match self.conv.settings.profiles.get(idx) {
             Some(p) => p.clone(),
             None => return,
@@ -1257,12 +1328,14 @@ fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Response {
     let icon = if enabled { ICON_CHECK } else { "·" };
     let label_fid = egui::FontId::proportional(FS_SMALL);
     let icon_fid = egui::FontId::new(FS_SMALL, icon_font());
-    let label_galley = ui
-        .painter()
-        .layout_no_wrap(name.to_string(), label_fid.clone(), c_text());
+    // PLACEHOLDER so the paint-time colors below actually apply — a galley laid out with a
+    // concrete color ignores the fallback passed to `painter().galley()`.
+    let label_galley =
+        ui.painter()
+            .layout_no_wrap(name.to_string(), label_fid.clone(), Color32::PLACEHOLDER);
     let icon_galley = ui
         .painter()
-        .layout_no_wrap(icon.to_string(), icon_fid, c_accent());
+        .layout_no_wrap(icon.to_string(), icon_fid, Color32::PLACEHOLDER);
 
     let pad = egui::vec2(12.0, 6.0);
     let icon_gap = 8.0;

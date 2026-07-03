@@ -218,6 +218,36 @@ impl ProviderProfile {
     }
 }
 
+/// Which web search backend the `web_search` tool uses. Bing is the zero-config default:
+/// it serves a stable RSS feed of results with no API key and no bot-challenge page.
+/// DuckDuckGo's HTML endpoint is available as an explicit selection, but is currently
+/// blocked by an anomaly challenge. SearXNG routes through a user-configured instance
+/// (see `searxng_url`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WebSearchBackend {
+    #[default]
+    Bing,
+    DuckDuckGo,
+    SearXng,
+}
+
+impl WebSearchBackend {
+    pub const ALL: [WebSearchBackend; 3] = [
+        WebSearchBackend::Bing,
+        WebSearchBackend::DuckDuckGo,
+        WebSearchBackend::SearXng,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WebSearchBackend::Bing => "Bing",
+            WebSearchBackend::DuckDuckGo => "DuckDuckGo",
+            WebSearchBackend::SearXng => "SearXNG",
+        }
+    }
+}
+
 /// Overall text/UI density. Applied via egui's zoom factor so fonts and spacing scale together
 /// and the layout stays coherent at every step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -265,7 +295,13 @@ pub struct AppSettings {
     /// current tool count, enabling any newly-added tools by default.
     #[serde(default = "default_tools_enabled")]
     pub tools_enabled: Vec<bool>,
-    /// Base URL of the SearXNG instance used by the `web_search` tool.
+    /// Which web search backend the `web_search` tool uses. See [`WebSearchBackend`].
+    #[serde(default)]
+    pub web_search_backend: WebSearchBackend,
+    /// Base URL of the SearXNG instance used by the `web_search` tool when
+    /// [`AppSettings::web_search_backend`] is [`WebSearchBackend::SearXng`]. If the backend
+    /// is set to SearXNG but this is empty, `web_search` returns a configuration error rather
+    /// than falling back to another provider.
     #[serde(default = "default_searxng_url")]
     pub searxng_url: String,
     /// Require explicit user approval before each mutating tool (`bash` / `write` / `edit`).
@@ -308,6 +344,18 @@ pub struct AppSettings {
     /// System prompt for the "generate commit message" feature.
     #[serde(default = "default_commit_msg_system_prompt")]
     pub commit_msg_system_prompt: String,
+    /// Sidebar workspaces (project folders) and their fold state, restored on startup.
+    /// The cwd workspace is always present at runtime even if missing here.
+    #[serde(default)]
+    pub workspaces: Vec<WorkspaceEntry>,
+}
+
+/// One persisted sidebar workspace: its root folder and whether its chat list is folded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceEntry {
+    pub root_path: String,
+    #[serde(default)]
+    pub folded: bool,
 }
 
 fn default_require_approval() -> bool {
@@ -342,7 +390,8 @@ fn default_tools_enabled() -> Vec<bool> {
 
 fn default_searxng_url() -> String {
     // No universal public SearXNG instance exists (public ones rate-limit and rarely
-    // expose the JSON API), so web_search ships unconfigured until the user sets one.
+    // expose the JSON API), so this ships empty. When SearXNG is selected, the user must
+    // configure an instance URL; web_search will not fall back to another provider.
     String::new()
 }
 
@@ -406,6 +455,7 @@ impl Default for AppSettings {
             profiles,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
             tools_enabled: default_tools_enabled(),
+            web_search_backend: WebSearchBackend::default(),
             searxng_url: default_searxng_url(),
             require_approval: default_require_approval(),
             sidebar_width: default_sidebar_width(),
@@ -419,6 +469,7 @@ impl Default for AppSettings {
             context_window_default: default_context_window(),
             commit_msg_profile_id: String::new(),
             commit_msg_system_prompt: default_commit_msg_system_prompt(),
+            workspaces: Vec::new(),
         }
     }
 }
@@ -500,6 +551,17 @@ impl AppSettings {
     }
 
     fn normalize(&mut self) {
+        // Migrate: older settings files had only `searxng_url` (no `web_search_backend`),
+        // wrote the then-default `"duckduckgo"` explicitly. If such a file also has a
+        // non-empty SearXNG URL configured, assume the user meant the SearXNG backend;
+        // leaving it on DuckDuckGo would silently ignore the configured URL.
+        // (A missing `web_search_backend` field now deserializes to the current default,
+        // Bing — which is zero-config like DuckDuckGo, so no migration is needed for it.)
+        if !self.searxng_url.trim().is_empty()
+            && self.web_search_backend == WebSearchBackend::DuckDuckGo
+        {
+            self.web_search_backend = WebSearchBackend::SearXng;
+        }
         // Resize to the current tool count: older settings files have fewer flags, and any
         // newly-added tools default to enabled.
         if self.tools_enabled.len() != ALL_TOOL_NAMES.len() {
@@ -552,6 +614,11 @@ impl AppSettings {
         if self.active_profile().is_none() {
             self.active_profile_id = self.profiles[0].id.clone();
         }
+        // Workspaces: drop entries whose folder vanished, dedupe by path.
+        let mut seen = std::collections::HashSet::new();
+        self.workspaces.retain(|w| {
+            std::path::Path::new(&w.root_path).is_dir() && seen.insert(w.root_path.clone())
+        });
     }
 
     pub fn save(&self) -> Result<(), String> {
@@ -588,6 +655,68 @@ impl AppSettings {
         let id = id.as_ref();
         if self.profiles.iter().any(|p| p.id == id) {
             self.active_profile_id = id.to_string();
+        }
+    }
+
+    /// First profile of the given provider kind, if one exists. Used to resolve which
+    /// profile becomes active when the composer's provider dropdown picks a kind rather
+    /// than a specific profile.
+    pub fn first_profile_for(&self, kind: LlmProviderKind) -> Option<&ProviderProfile> {
+        self.profiles.iter().find(|p| p.provider == kind)
+    }
+
+    /// Provider kinds the user has actually configured (has usable credentials for),
+    /// in the same display order as [`LlmProviderKind::ALL`]. Local runtimes (Ollama, LM
+    /// Studio) need no key so they always count as configured; hosted providers need a
+    /// profile API key or the matching env var (mirrors the fallback chain in
+    /// `agent::runner::configured_*_key`); GPT Codex additionally counts as configured via
+    /// its "Sign in with ChatGPT" OAuth token.
+    pub fn configured_provider_kinds(
+        &self,
+        oauth: &crate::oauth::OAuthStore,
+    ) -> Vec<LlmProviderKind> {
+        let has_profile_key = |kind: LlmProviderKind| {
+            self.profiles
+                .iter()
+                .any(|p| p.provider == kind && !p.api_key.trim().is_empty())
+        };
+        LlmProviderKind::ALL
+            .into_iter()
+            .filter(|&kind| match kind {
+                LlmProviderKind::LmStudio | LlmProviderKind::Ollama => true,
+                LlmProviderKind::OpenAi => {
+                    has_profile_key(kind) || std::env::var("OPENAI_API_KEY").is_ok()
+                }
+                LlmProviderKind::OpenRouter => {
+                    has_profile_key(kind) || std::env::var("OPENROUTER_API_KEY").is_ok()
+                }
+                LlmProviderKind::OpenCodeGo => {
+                    has_profile_key(kind)
+                        || std::env::var("OPENCODE_GO_API_KEY").is_ok()
+                        || std::env::var("OPENCODE_API_KEY").is_ok()
+                }
+                LlmProviderKind::GptCodex => {
+                    oauth.openai_codex.is_some()
+                        || has_profile_key(kind)
+                        || std::env::var("OPENAI_API_KEY").is_ok()
+                }
+            })
+            .collect()
+    }
+
+    /// URL passed to the `web_search` tool as its base.
+    ///
+    /// Returns the SearXNG URL only when the SearXNG backend is selected; otherwise returns
+    /// empty so `web_search` can call the selected zero-config backend directly. If SearXNG
+    /// is selected and the URL is empty, this returns empty and the tool reports a
+    /// configuration error rather than falling back to another provider.
+    pub fn effective_web_search_url(&self) -> String {
+        match self.web_search_backend {
+            WebSearchBackend::SearXng => {
+                let u = self.searxng_url.trim().trim_end_matches('/').to_string();
+                u
+            }
+            WebSearchBackend::Bing | WebSearchBackend::DuckDuckGo => String::new(),
         }
     }
 
@@ -835,5 +964,72 @@ mod tests {
         assert!(s.tools_enabled[8]);
         // Missing searxng_url falls back to the default.
         assert_eq!(s.searxng_url, default_searxng_url());
+    }
+
+    #[test]
+    fn effective_web_search_url_duckduckgo_is_empty() {
+        let s = AppSettings {
+            web_search_backend: WebSearchBackend::DuckDuckGo,
+            searxng_url: "https://searxng.example.com".to_string(),
+            ..Default::default()
+        };
+        // Even with a URL set, DuckDuckGo backend ignores it.
+        assert_eq!(s.effective_web_search_url(), "");
+    }
+
+    #[test]
+    fn effective_web_search_url_searxng_returns_url() {
+        let s = AppSettings {
+            web_search_backend: WebSearchBackend::SearXng,
+            searxng_url: "https://searxng.example.com/".to_string(),
+            ..Default::default()
+        };
+        // Trailing slash trimmed.
+        assert_eq!(s.effective_web_search_url(), "https://searxng.example.com");
+    }
+
+    #[test]
+    fn effective_web_search_url_searxng_empty_returns_empty_for_tool_error() {
+        let s = AppSettings {
+            web_search_backend: WebSearchBackend::SearXng,
+            searxng_url: String::new(),
+            ..Default::default()
+        };
+        // Empty URL is passed through so the tool can report a SearXNG configuration error.
+        assert_eq!(s.effective_web_search_url(), "");
+    }
+
+    #[test]
+    fn normalize_migrates_nonempty_url_to_searxng_backend() {
+        // Older settings.json: explicit `web_search_backend: "duckduckgo"` (the old default)
+        // and a non-empty searxng_url. normalize() should migrate to SearXng.
+        let json = r#"{
+            "active_profile_id": "openai-default",
+            "profiles": [{"id":"openai-default","name":"x","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}],
+            "system_prompt": "hi",
+            "tools_enabled": [true, true, true, true, true, true, true, true, true],
+            "web_search_backend": "duckduckgo",
+            "searxng_url": "https://searxng.example.com"
+        }"#;
+        let mut s: AppSettings = serde_json::from_str(json).unwrap();
+        s.normalize();
+        assert_eq!(s.web_search_backend, WebSearchBackend::SearXng);
+        assert_eq!(s.effective_web_search_url(), "https://searxng.example.com");
+    }
+
+    #[test]
+    fn normalize_keeps_default_when_no_url() {
+        // Older settings.json: no `web_search_backend` field and empty searxng_url.
+        // Deserializes to Bing (current default) and stays on Bing.
+        let json = r#"{
+            "active_profile_id": "openai-default",
+            "profiles": [{"id":"openai-default","name":"x","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}],
+            "system_prompt": "hi",
+            "tools_enabled": [true, true, true, true, true, true, true, true, true]
+        }"#;
+        let mut s: AppSettings = serde_json::from_str(json).unwrap();
+        s.normalize();
+        assert_eq!(s.web_search_backend, WebSearchBackend::Bing);
+        assert_eq!(s.effective_web_search_url(), "");
     }
 }

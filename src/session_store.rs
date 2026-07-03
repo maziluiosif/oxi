@@ -45,6 +45,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             messages_loaded: false,
             input_text: String::new(),
             pending_images: Vec::new(),
+            modified: session.modified,
         })
         .collect()
 }
@@ -100,6 +101,8 @@ mod tests {
             }],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let assistant = ChatMessage {
             role: MsgRole::Assistant,
@@ -120,6 +123,8 @@ mod tests {
                 AssistantBlock::Answer("done".into()),
             ],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         };
         let mut messages = vec![user.clone(), assistant.clone(), user, assistant];
 
@@ -137,6 +142,8 @@ mod tests {
                 attachments: vec![],
                 blocks: vec![],
                 streaming: false,
+                started_at: None,
+                worked_duration: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -144,6 +151,8 @@ mod tests {
                 attachments: vec![],
                 blocks: vec![AssistantBlock::Answer("first".into())],
                 streaming: false,
+                started_at: None,
+                worked_duration: None,
             },
             ChatMessage {
                 role: MsgRole::User,
@@ -151,6 +160,8 @@ mod tests {
                 attachments: vec![],
                 blocks: vec![],
                 streaming: false,
+                started_at: None,
+                worked_duration: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -158,6 +169,8 @@ mod tests {
                 attachments: vec![],
                 blocks: vec![AssistantBlock::Answer("second".into())],
                 streaming: false,
+                started_at: None,
+                worked_duration: None,
             },
         ];
 
@@ -183,6 +196,7 @@ mod tests {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            modified: SystemTime::now(),
         };
 
         save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
@@ -209,6 +223,8 @@ mod tests {
                     }],
                     blocks: vec![],
                     streaming: false,
+                    started_at: None,
+                    worked_duration: None,
                 },
                 ChatMessage {
                     role: MsgRole::Assistant,
@@ -229,12 +245,15 @@ mod tests {
                         AssistantBlock::Answer("done".into()),
                     ],
                     streaming: false,
+                    started_at: None,
+                    worked_duration: None,
                 },
             ],
             session_file: None,
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            modified: SystemTime::now(),
         };
 
         save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
@@ -243,5 +262,46 @@ mod tests {
         assert_eq!(loaded.len(), session.messages.len());
         assert!(chat_messages_equal(&loaded[0], &session.messages[0]));
         assert!(chat_messages_equal(&loaded[1], &session.messages[1]));
+    }
+
+    #[test]
+    fn save_and_reload_preserves_worked_duration() {
+        // The collapsed "Worked for Xs" summary depends on `worked_duration` surviving
+        // a save/reload round-trip (the live `started_at` Instant cannot be persisted).
+        let root = temp_root("worked-duration-roundtrip");
+        let mut session = Session {
+            title: "Chat".into(),
+            messages: vec![
+                ChatMessage {
+                    role: MsgRole::User,
+                    text: "hello".into(),
+                    attachments: vec![],
+                    blocks: vec![],
+                    streaming: false,
+                    started_at: None,
+                    worked_duration: None,
+                },
+                ChatMessage {
+                    role: MsgRole::Assistant,
+                    text: String::new(),
+                    attachments: vec![],
+                    blocks: vec![AssistantBlock::Answer("hi there".into())],
+                    streaming: false,
+                    started_at: None,
+                    worked_duration: Some(Duration::from_secs(67)),
+                },
+            ],
+            session_file: None,
+            messages_loaded: true,
+            input_text: String::new(),
+            pending_images: Vec::new(),
+            modified: SystemTime::now(),
+        };
+
+        save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
+        let loaded = load_session_messages(session.session_file.as_deref().unwrap()).unwrap();
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[1].worked_duration, Some(Duration::from_secs(67)));
     }
 }

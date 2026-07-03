@@ -2,6 +2,7 @@
 
 use base64::Engine;
 use serde_json::Value;
+use std::time::Duration;
 
 use crate::model::{AssistantBlock, ChatMessage, MsgRole, UserAttachment};
 
@@ -47,6 +48,8 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     attachments,
                     blocks: vec![],
                     streaming: false,
+                    started_at: None,
+                    worked_duration: None,
                 });
             }
             "assistant" => {
@@ -54,12 +57,22 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                 if blocks.is_empty() {
                     continue;
                 }
+                // Restore the wall-clock work duration persisted alongside the assistant
+                // message so the collapsed "Worked for Xs" summary survives a reload
+                // (the live `started_at`/`Instant` cannot be persisted).
+                let worked_duration = m
+                    .get("workedSecs")
+                    .and_then(|x| x.as_f64())
+                    .filter(|s| *s > 0.0)
+                    .map(Duration::from_secs_f64);
                 out.push(ChatMessage {
                     role: MsgRole::Assistant,
                     text: String::new(),
                     attachments: vec![],
                     blocks,
                     streaming: false,
+                    started_at: None,
+                    worked_duration,
                 });
             }
             "toolResult" => {
@@ -240,6 +253,8 @@ fn merge_tool_result(out: &mut Vec<ChatMessage>, m: &Value) {
             output_truncated,
         }],
         streaming: false,
+        started_at: None,
+        worked_duration: None,
     });
 }
 

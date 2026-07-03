@@ -209,6 +209,8 @@ mod tests {
             attachments: vec![],
             blocks: vec![],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         }
     }
 
@@ -219,6 +221,8 @@ mod tests {
             attachments: vec![],
             blocks: vec![AssistantBlock::Answer(answer.to_string())],
             streaming: false,
+            started_at: None,
+            worked_duration: None,
         }
     }
 

@@ -121,7 +121,15 @@ pub fn icon_label_job(icon: &str, label: &str, size: f32, color: Color32) -> egu
     }
     let mut job = LayoutJob::default();
     job.wrap.max_width = f32::INFINITY;
-    let icon_fmt = TextFormat::simple(FontId::new(size, icon_font()), color);
+    // Center the icon span vertically: the Nerd-Font glyph box has a deeper descent than the
+    // proportional text font, so baseline alignment (the `TextFormat::simple` default) leaves
+    // the icon visually riding below the label.
+    let icon_fmt = TextFormat {
+        font_id: FontId::new(size, icon_font()),
+        color,
+        valign: Align::Center,
+        ..Default::default()
+    };
     let label_fmt = TextFormat::simple(FontId::proportional(size), color);
     job.append(icon, 0.0, icon_fmt);
     job.append(" ", 0.0, label_fmt.clone());
@@ -137,33 +145,105 @@ pub fn icon_glyph_rich(icon: &str, size: f32, color: Color32) -> RichText {
         .font(FontId::new(size, icon_font()))
 }
 
-/// Compact square icon button for toolbars (refresh, hide, close, etc.) —uses the shared
+/// Visual spec for [`icon_button_core`]: rest/hover fills and strokes plus the resting glyph ink.
+/// The hover glyph ink is always the accent — every clickable icon in the app shares the sidebar
+/// "Add workspace" hover language.
+pub struct IconButtonLook {
+    pub fill: Color32,
+    pub hover_fill: Color32,
+    pub stroke: Color32,
+    pub hover_stroke: Color32,
+    pub rounding: Rounding,
+    pub glyph: Color32,
+}
+
+/// Two-pass icon button: allocate + sense first, then paint by hover state — an `egui::Button`
+/// bakes its galley color at construction, so it can never recolor the glyph on hover. Painting
+/// the glyph with `Align2::CENTER_CENTER` also sidesteps icon-font baseline drift.
+pub fn icon_button_core(
+    ui: &mut Ui,
+    icon: &str,
+    size: egui::Vec2,
+    glyph_size: f32,
+    active: bool,
+    look: &IconButtonLook,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let fill = if hovered { look.hover_fill } else { look.fill };
+    let stroke = if hovered {
+        look.hover_stroke
+    } else {
+        look.stroke
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, look.rounding, fill);
+    }
+    if stroke != Color32::TRANSPARENT {
+        ui.painter()
+            .rect_stroke(rect, look.rounding, Stroke::new(1.0, stroke));
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        FontId::new(glyph_size, icon_font()),
+        if active || hovered {
+            c_accent()
+        } else {
+            look.glyph
+        },
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// Compact square icon button for toolbars (refresh, hide, close, etc.) — uses the shared
 /// elevated fill, subtle border, and 8px rounding so every toolbar chip in the app matches.
-/// `active` swaps the icon to the accent color ("on" state for toggle buttons).
+/// `active` keeps the icon on the accent color ("on" state for toggle buttons); hover swaps
+/// the icon to the accent as well.
 pub fn icon_button(ui: &mut Ui, icon: &str, height: f32, active: bool) -> Response {
-    let color = if active { c_accent() } else { c_text_muted() };
-    ui.add(
-        egui::Button::new(icon_glyph_rich(icon, FS_SMALL, color))
-            .fill(c_bg_elevated())
-            .stroke(Stroke::new(1.0, c_border_subtle()))
-            .rounding(RADIUS_CHIP)
-            .min_size(egui::vec2(height, height)),
+    icon_button_framed(ui, icon, egui::vec2(height, height), active)
+}
+
+/// [`icon_button`] with an arbitrary width × height — for the wider header chips.
+pub fn icon_button_framed(ui: &mut Ui, icon: &str, size: egui::Vec2, active: bool) -> Response {
+    icon_button_core(
+        ui,
+        icon,
+        size,
+        FS_SMALL,
+        active,
+        &IconButtonLook {
+            fill: c_bg_elevated(),
+            hover_fill: c_row_hover(),
+            stroke: c_border_subtle(),
+            hover_stroke: c_border(),
+            rounding: Rounding::same(RADIUS_CHIP),
+            glyph: c_text_muted(),
+        },
     )
 }
 
 /// Borderless, transparent square icon button for tight chrome strips (sidebar hide,
-/// top-row toggles). Hover uses `c_row_hover` only; no frame.
+/// top-row toggles). Hover uses `c_row_hover` plus the accent glyph; no frame.
 pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> Response {
-    let color = if active {
-        c_accent()
-    } else {
-        c_sidebar_section()
-    };
-    ui.add(
-        egui::Button::new(icon_glyph_rich(icon, FS_SMALL, color))
-            .frame(false)
-            .fill(Color32::TRANSPARENT)
-            .min_size(egui::vec2(height, height)),
+    icon_button_core(
+        ui,
+        icon,
+        egui::vec2(height, height),
+        FS_SMALL,
+        active,
+        &IconButtonLook {
+            fill: Color32::TRANSPARENT,
+            hover_fill: c_row_hover(),
+            stroke: Color32::TRANSPARENT,
+            hover_stroke: Color32::TRANSPARENT,
+            rounding: Rounding::same(RADIUS_CHIP),
+            glyph: c_sidebar_section(),
+        },
     )
 }
 
@@ -184,8 +264,11 @@ pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color
         egui::Align2::CENTER_CENTER,
         icon,
         FontId::new(glyph_size, icon_font()),
-        if hovered { c_text() } else { color },
+        if hovered { c_accent() } else { color },
     );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     resp
 }
 
@@ -219,9 +302,13 @@ pub fn failed_badge(ui: &mut Ui) {
 /// Pill-style tab used for provider selection or sub-tabs. Returns `true` when clicked.
 pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     let text_size = FS_SMALL;
-    let galley =
-        ui.painter()
-            .layout_no_wrap(label.to_string(), FontId::proportional(text_size), c_text());
+    // PLACEHOLDER so the paint-time color (selected/hover state) actually applies — a galley
+    // laid out with a concrete color ignores the fallback passed to `painter().galley()`.
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        FontId::proportional(text_size),
+        Color32::PLACEHOLDER,
+    );
     let pad = egui::vec2(14.0, 6.0);
     let size = egui::vec2(
         galley.rect.width() + pad.x * 2.0,
@@ -269,6 +356,7 @@ pub fn primary_button_widget(label: &str) -> egui::Button<'_> {
 }
 pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
     ui.add(primary_button_widget(label))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Primary filled button with a leading Nerd-Font icon glyph.
@@ -282,6 +370,7 @@ pub fn primary_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Bu
 }
 pub fn primary_button_icon(ui: &mut Ui, icon: &str, label: &str) -> Response {
     ui.add(primary_button_icon_widget(icon, label))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Neutral secondary button — used for Sign out, Delete, etc. (with `danger` color swap).
@@ -299,41 +388,211 @@ pub fn ghost_button_widget(label: &str, danger: bool) -> egui::Button<'_> {
 }
 pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
     ui.add(ghost_button_widget(label, danger))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Ghost (neutral) secondary button with a leading Nerd-Font icon glyph.
-pub fn ghost_button_icon_widget<'a>(
-    icon: &'a str,
-    label: &'a str,
-    danger: bool,
-) -> egui::Button<'a> {
-    let color = if danger {
-        crate::theme::c_danger()
+/// Two-pass icon + label button (painted, not an `egui::Button`) so the icon can recolor to the
+/// accent on hover and both spans render vertically centered (no icon-font baseline drift).
+/// `hover_glyph` lets destructive buttons keep the danger ink instead of the accent. When
+/// `enabled` is false the button paints faint and only senses hover.
+#[allow(clippy::too_many_arguments)]
+fn icon_text_button_core(
+    ui: &mut Ui,
+    icon: &str,
+    label: &str,
+    text_size: f32,
+    min_size: egui::Vec2,
+    look: &IconButtonLook,
+    label_color: Color32,
+    hover_glyph: Color32,
+    enabled: bool,
+) -> Response {
+    let pad_x = 8.0;
+    let gap = 5.0;
+    let icon_font_id = FontId::new(text_size, icon_font());
+    let label_font_id = FontId::proportional(text_size);
+    let icon_w = if icon.is_empty() {
+        0.0
     } else {
-        c_text()
+        ui.painter()
+            .layout_no_wrap(icon.to_string(), icon_font_id.clone(), look.glyph)
+            .rect
+            .width()
+            + gap
     };
-    let text = icon_label_job(icon, label, FS_SMALL, color);
-    let btn = egui::Button::new(text)
-        .fill(c_bg_elevated_2())
-        .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(RADIUS_BUTTON)
-        .min_size(egui::vec2(0.0, 26.0));
-    btn
+    let label_galley =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), label_font_id.clone(), label_color);
+    let size = egui::vec2(
+        (pad_x * 2.0 + icon_w + label_galley.rect.width()).max(min_size.x),
+        (label_galley.rect.height() + 8.0).max(min_size.y),
+    );
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    let hovered = enabled && response.hovered();
+    let fill = if hovered { look.hover_fill } else { look.fill };
+    let stroke = if hovered {
+        look.hover_stroke
+    } else {
+        look.stroke
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, look.rounding, fill);
+    }
+    if stroke != Color32::TRANSPARENT {
+        ui.painter()
+            .rect_stroke(rect, look.rounding, Stroke::new(1.0, stroke));
+    }
+    let (glyph_ink, label_ink) = if !enabled {
+        (c_text_faint(), c_text_faint())
+    } else if hovered {
+        (hover_glyph, label_color)
+    } else {
+        (look.glyph, label_color)
+    };
+    let mut x = rect.left() + pad_x;
+    if !icon.is_empty() {
+        let painted = ui.painter().text(
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            icon,
+            icon_font_id,
+            glyph_ink,
+        );
+        x = painted.right() + gap;
+    }
+    ui.painter().text(
+        egui::pos2(x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        label_font_id,
+        label_ink,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
 }
+
+/// Ghost (neutral) secondary button with a leading Nerd-Font icon glyph. Hover recolors the
+/// icon to the accent (danger buttons keep the danger ink).
 pub fn ghost_button_icon(ui: &mut Ui, icon: &str, label: &str, danger: bool) -> Response {
-    ui.add(ghost_button_icon_widget(icon, label, danger))
+    ghost_button_icon_enabled(ui, icon, label, danger, true)
+}
+pub fn ghost_button_icon_enabled(
+    ui: &mut Ui,
+    icon: &str,
+    label: &str,
+    danger: bool,
+    enabled: bool,
+) -> Response {
+    let danger_ink = crate::theme::c_danger();
+    let (label_ink, glyph_ink, hover_glyph) = if danger {
+        (danger_ink, danger_ink, danger_ink)
+    } else {
+        (c_text(), c_text_muted(), c_accent())
+    };
+    icon_text_button_core(
+        ui,
+        icon,
+        label,
+        FS_SMALL,
+        egui::vec2(0.0, 26.0),
+        &IconButtonLook {
+            fill: c_bg_elevated_2(),
+            hover_fill: c_row_hover(),
+            stroke: c_border_subtle(),
+            hover_stroke: c_border(),
+            rounding: Rounding::same(RADIUS_BUTTON),
+            glyph: glyph_ink,
+        },
+        label_ink,
+        hover_glyph,
+        enabled,
+    )
 }
 
 /// Compact chip-style button for tight toolbar rows (git Pull/Push/Fetch, etc.) — shares the
-/// ghost-button fill/border/rounding palette but renders at `FS_TINY` on `c_bg_elevated` with
-/// 6px rounding, so the small action chips share one language across the app. Leading icon
-/// glyph variant.
-pub fn mini_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Button<'a> {
-    let text = icon_label_job(icon, label, FS_TINY, c_text_muted());
-    egui::Button::new(text)
-        .fill(c_bg_elevated())
-        .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(6.0)
+/// ghost-button border palette but renders at `FS_TINY` on `c_bg_elevated` with 6px rounding,
+/// so the small action chips share one language across the app. Leading icon glyph variant.
+pub fn mini_button_icon(ui: &mut Ui, icon: &str, label: &str) -> Response {
+    icon_text_button_core(
+        ui,
+        icon,
+        label,
+        FS_TINY,
+        egui::vec2(0.0, 24.0),
+        &IconButtonLook {
+            fill: c_bg_elevated(),
+            hover_fill: c_row_hover(),
+            stroke: c_border_subtle(),
+            hover_stroke: c_border(),
+            rounding: Rounding::same(6.0),
+            glyph: c_text_muted(),
+        },
+        c_text_muted(),
+        c_accent(),
+        true,
+    )
+}
+
+/// Frameless icon + label button (transparent at rest, `c_row_hover` fill + accent icon on
+/// hover) — for quiet inline actions like "Back to chat" or fold headers. `min_size` lets a
+/// caller stretch it into a full-width row.
+pub fn flat_button_icon(
+    ui: &mut Ui,
+    icon: &str,
+    label: &str,
+    text_size: f32,
+    min_size: egui::Vec2,
+    color: Color32,
+) -> Response {
+    icon_text_button_core(
+        ui,
+        icon,
+        label,
+        text_size,
+        min_size,
+        &IconButtonLook {
+            fill: Color32::TRANSPARENT,
+            hover_fill: c_row_hover(),
+            stroke: Color32::TRANSPARENT,
+            hover_stroke: Color32::TRANSPARENT,
+            rounding: Rounding::same(RADIUS_BUTTON),
+            glyph: color,
+        },
+        color,
+        c_accent(),
+        true,
+    )
+}
+
+/// Full-width elevated row button with icon + label — the sidebar "Add workspace" look as a
+/// reusable widget (elevated fill → `c_row_hover`, subtle border → `c_border`, accent icon on
+/// hover). Used for sidebar-style rows like the Settings footer.
+pub fn row_button_icon(ui: &mut Ui, icon: &str, label: &str, min_size: egui::Vec2) -> Response {
+    icon_text_button_core(
+        ui,
+        icon,
+        label,
+        FS_SMALL,
+        min_size,
+        &IconButtonLook {
+            fill: c_bg_elevated(),
+            hover_fill: c_row_hover(),
+            stroke: c_border_subtle(),
+            hover_stroke: c_border(),
+            rounding: Rounding::same(RADIUS_CHIP),
+            glyph: c_text_muted(),
+        },
+        c_text(),
+        c_accent(),
+        true,
+    )
 }
 
 /// Settings-page sidebar nav row (icon + label, rounded pill row).
@@ -366,7 +625,11 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
                     RichText::new(icon)
                         .size(FS_BODY)
                         .font(FontId::new(FS_BODY, icon_font()))
-                        .color(if selected { c_accent() } else { c_text_faint() }),
+                        .color(if selected || hovered {
+                            c_accent()
+                        } else {
+                            c_text_faint()
+                        }),
                 );
                 ui.add_space(8.0);
                 ui.add(

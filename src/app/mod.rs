@@ -43,11 +43,34 @@ pub struct OxiApp {
 impl OxiApp {
     pub fn new() -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
         let root_path = cwd.to_string_lossy().to_string();
         let settings = AppSettings::load();
         let git_open = settings.git_open;
         let git_width = settings.git_width;
-        let sessions = Self::initial_workspace_sessions(&root_path, false);
+        // Restore persisted workspaces; the cwd workspace is always present, first, and active.
+        let cwd_folded = settings
+            .workspaces
+            .iter()
+            .find(|w| w.root_path == root_path)
+            .is_some_and(|w| w.folded);
+        let mut workspaces = vec![Workspace {
+            root_path: root_path.clone(),
+            sessions: Self::initial_workspace_sessions(&root_path, false),
+            active: 0,
+            sidebar_folded: cwd_folded,
+        }];
+        for entry in &settings.workspaces {
+            if entry.root_path == root_path {
+                continue;
+            }
+            workspaces.push(Workspace {
+                root_path: entry.root_path.clone(),
+                sessions: Self::initial_workspace_sessions(&entry.root_path, false),
+                active: 0,
+                sidebar_folded: entry.folded,
+            });
+        }
         let mut app = Self {
             conn: ConnectionState {
                 connect_error: None,
@@ -61,12 +84,7 @@ impl OxiApp {
                 pending_load_session_idx: None,
             },
             conv: ConversationState {
-                workspaces: vec![Workspace {
-                    root_path,
-                    sessions,
-                    active: 0,
-                    sidebar_folded: false,
-                }],
+                workspaces,
                 active_workspace: 0,
                 input: String::new(),
                 sidebar_search: String::new(),
@@ -273,11 +291,15 @@ impl OxiApp {
             self.ensure_active_session_loaded();
             return;
         }
+        let workspace_changed = workspace_idx != self.conv.active_workspace;
         self.swap_session_input(workspace_idx, session_idx);
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
         self.conv.scroll_to_bottom_once = true;
         self.ensure_active_session_loaded();
+        if workspace_changed {
+            self.refresh_git_cwd();
+        }
     }
 
     pub(crate) fn blank_session(title: impl Into<String>) -> Session {
@@ -288,6 +310,7 @@ impl OxiApp {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            modified: std::time::SystemTime::now(),
         }
     }
 
