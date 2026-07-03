@@ -63,6 +63,23 @@ fn thinking_wrapped_job(text: String, wrap_width: f32) -> LayoutJob {
     }
 }
 
+/// Number of *visual* rows the thinking text occupies once wrapped at `wrap_width` (counting
+/// both explicit newlines and soft-wraps). The thinking block folds based on this instead of
+/// `str::lines().count()`: a single very long paragraph wraps onto many rows, so counting only
+/// logical lines would let the panel grow past the preview limit and then snap back to the
+/// truncated view the moment enough newlines arrive — a visible flicker while streaming.
+fn thinking_visual_row_count(ui: &Ui, text: &str, wrap_width: f32) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    ui.fonts(|fonts| {
+        fonts
+            .layout_job(thinking_wrapped_job(text.to_string(), wrap_width))
+            .rows
+            .len()
+    })
+}
+
 fn diff_counts(diff: &str) -> (usize, usize) {
     let mut added = 0;
     let mut removed = 0;
@@ -1289,7 +1306,12 @@ fn render_thinking_group_block(
 ) {
     let bubble_w = content_wrap_width(ui);
     ui.set_width(bubble_w);
-    let overflow = combined.lines().count() > BLOCK_PREVIEW_LINES;
+    // Fold based on *visual* rows (after wrapping), not logical `\n` line count: a long
+    // paragraph without newlines still wraps onto many rows and must trigger the truncated
+    // preview at the same threshold the body would otherwise reach, instead of overshooting
+    // the limit and snapping back once enough newlines stream in (flicker).
+    let inner_w = (bubble_w - 16.0).max(40.0);
+    let overflow = thinking_visual_row_count(ui, &combined, inner_w) > BLOCK_PREVIEW_LINES;
     let persist_id = expand_persist_id(Id::new((
         msg_idx,
         salt,
@@ -1488,23 +1510,38 @@ fn render_activity_summary(
             .unwrap_or(false)
     };
 
-    let row = ui
-        .horizontal(|ui| {
+    // Allocate the row rect up front so we can read hover state *before* painting, then
+    // tint the chevron with the accent (copper) color on hover — matching the Thinking
+    // block behavior. The "Worked..." text stays in its quiet muted tone so the row
+    // doesn't shout.
+    let row_height = ui.spacing().interact_size.y;
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), row_height),
+        egui::Sense::click(),
+    );
+    let click = ui.interact(
+        rect,
+        persist_id.with("activity_summary_click"),
+        egui::Sense::click(),
+    );
+    let hovered = click.hovered();
+    // Only the chevron lights up on hover (matching the Thinking block behavior); the
+    // "Worked..." text stays in its quiet muted tone so the row doesn't shout.
+    let chevron_col = if hovered { c_accent() } else { c_text_faint() };
+
+    // Paint the chevron + label inside the reserved rect.
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
             ui.label(
                 RichText::new(if expanded { ICON_ANGLE_UP } else { ICON_ANGLE_DOWN })
                     .font(FontId::new(FS_TINY, icon_font()))
-                    .color(c_text_faint()),
+                    .color(chevron_col),
             );
             ui.label(RichText::new(label).size(FS_SMALL).color(c_text_muted()));
-        })
-        .response;
+        });
+    });
 
-    let click = ui.interact(
-        row.rect,
-        persist_id.with("activity_summary_click"),
-        egui::Sense::click(),
-    );
     if click.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
