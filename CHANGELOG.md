@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-04
+
+### Added
+- Settings now includes Prompts and About tabs for better organization
+- App displays its version in the About tab
+- Automatic update checker runs on startup and can be triggered from About tab; sidebar shows a quiet indicator when updates are available
+- View release button in About tab to access the latest GitHub release
+
+### Changed
+- Settings reorganized: agent system prompt and commit-message generator moved to Prompts tab; Agent tab now focuses on tools, approval, and web search
+- Provider configuration simplified from multiple profiles per provider to one config per provider kind
+- API keys now keychain-keyed by provider slug instead of profile ID
+- settings.json automatically migrated on first load with immediate rewrite to ensure migration runs exactly once
+- Commit-message generation now pins provider and model directly instead of profile ID
+
+
 ## [0.8.0] - 2026-07-03
 
 ### Added
@@ -202,7 +218,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/maziluiosif/oxi/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/maziluiosif/oxi/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/maziluiosif/oxi/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/maziluiosif/oxi/compare/v0.6.0...v0.6.1
