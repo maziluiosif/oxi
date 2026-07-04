@@ -15,6 +15,8 @@ impl eframe::App for OxiApp {
         self.drain_models(ctx);
         self.drain_ssh_test(ctx);
         self.drain_oauth(ctx);
+        self.ensure_update_checked(ctx, false);
+        self.drain_update_check(ctx);
         self.bind_git_ctx(ctx);
         self.ensure_active_models_fetched(ctx);
         self.drain_git(ctx);

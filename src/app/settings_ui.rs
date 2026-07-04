@@ -1,10 +1,10 @@
-//! Settings page: profiles panel, system prompt panel, OAuth sections.
+//! Settings page: providers panel, agent/prompt panels, OAuth sections.
 //!
 //! Split by responsibility: [`layout`] (page scaffolding: header/sidebar/body dispatch,
-//! small pill/chip widgets), [`panels`] (the three top-level panels: providers, agent,
-//! appearance), and [`profile`] (per-profile editing, compute-target/SSH, Codex OAuth,
-//! and model-list fetching).
+//! small pill/chip widgets), [`panels`] (the top-level panels: providers, agent, prompts,
+//! appearance, about), and [`provider_panel`] (per-provider config editing,
+//! compute-target/SSH, Codex OAuth, and model-list fetching).
 
 mod layout;
 mod panels;
-mod profile;
+mod provider_panel;

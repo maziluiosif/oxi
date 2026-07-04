@@ -22,6 +22,7 @@ mod state;
 mod streaming;
 mod task_runner;
 mod terminal_panel;
+mod update_check;
 
 pub use state::{
     ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState, SessionKey,
@@ -34,7 +35,7 @@ pub struct OxiApp {
     pub conv: ConversationState,
     /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
     pub terminal: Option<crate::terminal::TerminalSession>,
-    /// SSH tunnels for `RemoteSsh` provider profiles (e.g. Ollama/LM Studio on a LAN host).
+    /// SSH tunnels for `RemoteSsh` provider configs (e.g. Ollama/LM Studio on a LAN host).
     /// Cheap to clone; the actual tunnels live on a dedicated background thread/runtime
     /// started once here and kept alive for the life of the app.
     pub tunnels: crate::compute::TunnelManager,
@@ -125,6 +126,10 @@ impl OxiApp {
                 ssh_password_drafts: std::collections::HashMap::new(),
                 ssh_test: std::collections::HashMap::new(),
                 ssh_test_rx: None,
+                update_check_started: false,
+                update_checking: false,
+                update_result: None,
+                update_rx: None,
             },
             terminal: None,
             tunnels: crate::compute::TunnelManager::spawn(),

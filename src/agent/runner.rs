@@ -17,47 +17,47 @@ use crate::agent::prompt::build_system_prompt;
 use crate::agent::tools::{tool_definitions_json, ToolEnv};
 use crate::model::ChatMessage;
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
-use crate::settings::{AppSettings, LlmProviderKind, ProviderProfile};
+use crate::settings::{AppSettings, LlmProviderKind, ProviderConfig};
 
 fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
     let _ = tx.send(AgentEvent::StreamError(msg.into()));
     let _ = tx.send(AgentEvent::AgentEnd);
 }
 
-pub(super) fn configured_openai_key(profile: &ProviderProfile) -> Result<String, String> {
-    let key = profile.api_key.trim();
+pub(super) fn configured_openai_key(cfg: &ProviderConfig) -> Result<String, String> {
+    let key = cfg.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
     }
     std::env::var("OPENAI_API_KEY")
-        .map_err(|_| "Set OpenAI API key in profile or OPENAI_API_KEY, or sign in with ChatGPT (Codex) OAuth.".into())
+        .map_err(|_| "Set OpenAI API key in Settings or OPENAI_API_KEY, or sign in with ChatGPT (Codex) OAuth.".into())
 }
 
-pub(super) fn configured_openrouter_key(profile: &ProviderProfile) -> Result<String, String> {
-    let key = profile.api_key.trim();
+pub(super) fn configured_openrouter_key(cfg: &ProviderConfig) -> Result<String, String> {
+    let key = cfg.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
     }
     std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-        "Set OpenRouter API key in profile or OPENROUTER_API_KEY in the environment.".into()
+        "Set OpenRouter API key in Settings or OPENROUTER_API_KEY in the environment.".into()
     })
 }
 
-pub(super) fn configured_opencode_go_key(profile: &ProviderProfile) -> Result<String, String> {
-    let key = profile.api_key.trim();
+pub(super) fn configured_opencode_go_key(cfg: &ProviderConfig) -> Result<String, String> {
+    let key = cfg.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
     }
     std::env::var("OPENCODE_GO_API_KEY").or_else(|_| std::env::var("OPENCODE_API_KEY")).map_err(|_| {
-        "Set OpenCode Go API key in profile or OPENCODE_GO_API_KEY / OPENCODE_API_KEY in the environment."
+        "Set OpenCode Go API key in Settings or OPENCODE_GO_API_KEY / OPENCODE_API_KEY in the environment."
             .into()
     })
 }
 
 /// LM Studio's local server ignores the bearer token, so an API key is optional. Use the
-/// profile value (or `LMSTUDIO_API_KEY`) if present, otherwise fall back to an empty key.
-pub(super) fn configured_lmstudio_key(profile: &ProviderProfile) -> String {
-    let key = profile.api_key.trim();
+/// configured value (or `LMSTUDIO_API_KEY`) if present, otherwise fall back to an empty key.
+pub(super) fn configured_lmstudio_key(cfg: &ProviderConfig) -> String {
+    let key = cfg.api_key.trim();
     if !key.is_empty() {
         return key.to_string();
     }
@@ -65,9 +65,9 @@ pub(super) fn configured_lmstudio_key(profile: &ProviderProfile) -> String {
 }
 
 /// Ollama's local server has no auth by default, so an API key is optional. Use the
-/// profile value (or `OLLAMA_API_KEY`) if present, otherwise fall back to an empty key.
-pub(super) fn configured_ollama_key(profile: &ProviderProfile) -> String {
-    let key = profile.api_key.trim();
+/// configured value (or `OLLAMA_API_KEY`) if present, otherwise fall back to an empty key.
+pub(super) fn configured_ollama_key(cfg: &ProviderConfig) -> String {
+    let key = cfg.api_key.trim();
     if !key.is_empty() {
         return key.to_string();
     }
@@ -83,20 +83,20 @@ pub(super) fn opencode_go_model_uses_anthropic(model: &str) -> bool {
     m.starts_with("minimax-") || m.starts_with("qwen")
 }
 
-pub fn openrouter_extra_headers(profile: &ProviderProfile) -> Vec<(String, String)> {
+pub fn openrouter_extra_headers(cfg: &ProviderConfig) -> Vec<(String, String)> {
     let mut h = Vec::new();
-    let referer = if profile.openrouter_http_referer.trim().is_empty() {
+    let referer = if cfg.openrouter_http_referer.trim().is_empty() {
         std::env::var("OPENROUTER_HTTP_REFERER").ok()
     } else {
-        Some(profile.openrouter_http_referer.trim().to_string())
+        Some(cfg.openrouter_http_referer.trim().to_string())
     };
     if let Some(r) = referer.filter(|s| !s.is_empty()) {
         h.push(("HTTP-Referer".to_string(), r));
     }
-    let title = if profile.openrouter_title.trim().is_empty() {
+    let title = if cfg.openrouter_title.trim().is_empty() {
         std::env::var("OPENROUTER_TITLE").ok()
     } else {
-        Some(profile.openrouter_title.trim().to_string())
+        Some(cfg.openrouter_title.trim().to_string())
     };
     if let Some(t) = title.filter(|s| !s.is_empty()) {
         h.push(("X-Title".to_string(), t));
@@ -125,15 +125,9 @@ pub fn spawn_agent_run(
         };
         rt.block_on(async move {
             let cwd_ref = cwd.as_path();
-            let profile = match settings.active_profile().cloned() {
-                Some(p) => p,
-                None => {
-                    finish_with_error(&tx, "No active profile configured.");
-                    return;
-                }
-            };
+            let cfg = settings.active_config().clone();
             let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
-            let context_tokens = profile.effective_context_window(settings.context_window_default);
+            let context_tokens = cfg.effective_context_window(settings.context_window_default);
             let context_budget =
                 crate::agent::history::context_char_budget_from_tokens(context_tokens);
             let max_rounds = settings.max_tool_rounds;
@@ -144,7 +138,7 @@ pub fn spawn_agent_run(
                 web_search_url: settings.effective_web_search_url(),
                 web_search_backend: settings.web_search_backend,
             };
-            let model = profile.model_id.clone();
+            let model = cfg.model_id.clone();
             // No total request timeout: it would also cover the streamed body and kill
             // long turns mid-stream. Instead bound connect time and idle time between
             // chunks, and keep the TCP connection alive through NATs/proxies.
@@ -152,7 +146,7 @@ pub fn spawn_agent_run(
                 .connect_timeout(std::time::Duration::from_secs(30))
                 .read_timeout(std::time::Duration::from_secs(180))
                 .tcp_keepalive(std::time::Duration::from_secs(60))
-                .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
+                .danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
                 .build()
             {
                 Ok(c) => c,
@@ -164,7 +158,7 @@ pub fn spawn_agent_run(
             let mut oauth = load_oauth_store();
             let mut gate = ApprovalGate::new(settings.require_approval, approval_rx);
 
-            let r = match profile.provider {
+            let r = match cfg.provider {
                 LlmProviderKind::GptCodex => {
                     if oauth.openai_codex.is_some() {
                         let creds = match ensure_codex_access_token(&client, &mut oauth).await {
@@ -174,10 +168,10 @@ pub fn spawn_agent_run(
                                 return;
                             }
                         };
-                        let base = if profile.base_url.trim().is_empty() {
+                        let base = if cfg.base_url.trim().is_empty() {
                             "https://chatgpt.com/backend-api".to_string()
                         } else {
-                            profile.effective_base_url()
+                            cfg.effective_base_url()
                         };
                         run_codex_responses_loop(
                             &mut LoopCtx {
@@ -198,14 +192,14 @@ pub fn spawn_agent_run(
                         )
                         .await
                     } else {
-                        let key = match configured_openai_key(&profile) {
+                        let key = match configured_openai_key(&cfg) {
                             Ok(k) => k,
                             Err(e) => {
                                 finish_with_error(&tx, e);
                                 return;
                             }
                         };
-                        let base = profile.effective_base_url();
+                        let base = cfg.effective_base_url();
                         run_chat_loop(
                             &mut LoopCtx {
                                 client: &client,
@@ -227,14 +221,14 @@ pub fn spawn_agent_run(
                     }
                 }
                 LlmProviderKind::OpenAi => {
-                    let key = match configured_openai_key(&profile) {
+                    let key = match configured_openai_key(&cfg) {
                         Ok(k) => k,
                         Err(e) => {
                             finish_with_error(&tx, e);
                             return;
                         }
                     };
-                    let base = profile.effective_base_url();
+                    let base = cfg.effective_base_url();
                     run_chat_loop(
                         &mut LoopCtx {
                             client: &client,
@@ -255,14 +249,14 @@ pub fn spawn_agent_run(
                     .await
                 }
                 LlmProviderKind::OpenRouter => {
-                    let key = match configured_openrouter_key(&profile) {
+                    let key = match configured_openrouter_key(&cfg) {
                         Ok(k) => k,
                         Err(e) => {
                             finish_with_error(&tx, e);
                             return;
                         }
                     };
-                    let base = profile.effective_base_url();
+                    let base = cfg.effective_base_url();
                     run_chat_loop(
                         &mut LoopCtx {
                             client: &client,
@@ -276,15 +270,15 @@ pub fn spawn_agent_run(
                             max_rounds,
                         },
                         &key,
-                        &openrouter_extra_headers(&profile),
+                        &openrouter_extra_headers(&cfg),
                         &mut messages,
                         &tools,
                     )
                     .await
                 }
                 LlmProviderKind::LmStudio => {
-                    let key = configured_lmstudio_key(&profile);
-                    let base = match crate::compute::resolve_base_url(&profile, &tunnels).await {
+                    let key = configured_lmstudio_key(&cfg);
+                    let base = match crate::compute::resolve_base_url(&cfg, &tunnels).await {
                         Ok(b) => b,
                         Err(e) => {
                             finish_with_error(&tx, e);
@@ -311,8 +305,8 @@ pub fn spawn_agent_run(
                     .await
                 }
                 LlmProviderKind::Ollama => {
-                    let key = configured_ollama_key(&profile);
-                    let base = match crate::compute::resolve_base_url(&profile, &tunnels).await {
+                    let key = configured_ollama_key(&cfg);
+                    let base = match crate::compute::resolve_base_url(&cfg, &tunnels).await {
                         Ok(b) => b,
                         Err(e) => {
                             finish_with_error(&tx, e);
@@ -339,14 +333,14 @@ pub fn spawn_agent_run(
                     .await
                 }
                 LlmProviderKind::OpenCodeGo => {
-                    let key = match configured_opencode_go_key(&profile) {
+                    let key = match configured_opencode_go_key(&cfg) {
                         Ok(k) => k,
                         Err(e) => {
                             finish_with_error(&tx, e);
                             return;
                         }
                     };
-                    let base = profile.effective_base_url();
+                    let base = cfg.effective_base_url();
                     let model = model
                         .strip_prefix("opencode-go/")
                         .unwrap_or(&model)
@@ -447,41 +441,41 @@ mod tests {
         assert!(!opencode_go_model_uses_anthropic(""));
     }
 
-    fn profile_with_key(key: &str) -> ProviderProfile {
-        let mut p = ProviderProfile::new("t", LlmProviderKind::OpenAi, "t");
-        p.api_key = key.to_string();
-        p
+    fn cfg_with_key(key: &str) -> ProviderConfig {
+        let mut c = ProviderConfig::new(LlmProviderKind::OpenAi);
+        c.api_key = key.to_string();
+        c
     }
 
     #[test]
-    fn ollama_key_prefers_profile_value() {
-        let mut p = ProviderProfile::new("t", LlmProviderKind::Ollama, "t");
-        p.api_key = "ollama-profile".to_string();
-        assert_eq!(configured_ollama_key(&p), "ollama-profile");
+    fn ollama_key_prefers_configured_value() {
+        let mut c = ProviderConfig::new(LlmProviderKind::Ollama);
+        c.api_key = "ollama-config".to_string();
+        assert_eq!(configured_ollama_key(&c), "ollama-config");
     }
 
     #[test]
-    fn ollama_key_defaults_empty_without_profile_or_env() {
-        let p = ProviderProfile::new("t", LlmProviderKind::Ollama, "t");
-        // No profile key set and (in test environments) no OLLAMA_API_KEY: falls back to "".
+    fn ollama_key_defaults_empty_without_config_or_env() {
+        let c = ProviderConfig::new(LlmProviderKind::Ollama);
+        // No key configured and (in test environments) no OLLAMA_API_KEY: falls back to "".
         if std::env::var("OLLAMA_API_KEY").is_err() {
-            assert_eq!(configured_ollama_key(&p), "");
+            assert_eq!(configured_ollama_key(&c), "");
         }
     }
 
     #[test]
-    fn configured_key_prefers_profile_value() {
-        // A non-empty profile key is returned regardless of environment.
+    fn configured_key_prefers_configured_value() {
+        // A non-empty configured key is returned regardless of environment.
         assert_eq!(
-            configured_openai_key(&profile_with_key("sk-profile")).unwrap(),
+            configured_openai_key(&cfg_with_key("sk-profile")).unwrap(),
             "sk-profile"
         );
         assert_eq!(
-            configured_openrouter_key(&profile_with_key("or-profile")).unwrap(),
+            configured_openrouter_key(&cfg_with_key("or-profile")).unwrap(),
             "or-profile"
         );
         assert_eq!(
-            configured_opencode_go_key(&profile_with_key("og-profile")).unwrap(),
+            configured_opencode_go_key(&cfg_with_key("og-profile")).unwrap(),
             "og-profile"
         );
     }
@@ -489,7 +483,7 @@ mod tests {
     #[test]
     fn configured_key_trims_whitespace() {
         assert_eq!(
-            configured_openai_key(&profile_with_key("  sk-padded  ")).unwrap(),
+            configured_openai_key(&cfg_with_key("  sk-padded  ")).unwrap(),
             "sk-padded"
         );
     }
