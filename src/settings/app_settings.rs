@@ -1,14 +1,14 @@
 //! The top-level [`AppSettings`] struct: defaults, on-disk load/save, migration from
-//! older settings shapes, and profile-management methods.
+//! older settings shapes, and per-provider config accessors.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::provider::{
-    sanitize_profile_name, ComputeLocation, LlmProviderKind, ProviderProfile, UiDensity,
-    WebSearchBackend,
+    ComputeLocation, LlmProviderKind, ProviderConfig, ProviderProfile, UiDensity, WebSearchBackend,
 };
 
 pub const ALL_TOOL_NAMES: [&str; 9] = [
@@ -25,8 +25,14 @@ pub const ALL_TOOL_NAMES: [&str; 9] = [
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
-    pub active_profile_id: String,
-    pub profiles: Vec<ProviderProfile>,
+    /// Which provider the composer currently talks to.
+    #[serde(default)]
+    pub active_provider: LlmProviderKind,
+    /// One config per provider kind. Serialized as a JSON object keyed by
+    /// [`LlmProviderKind::slug`]; [`AppSettings::normalize`] guarantees every kind has an
+    /// entry, so lookups through [`AppSettings::provider`] are infallible.
+    #[serde(default)]
+    pub providers: BTreeMap<LlmProviderKind, ProviderConfig>,
     /// Single editable system prompt template.
     pub system_prompt: String,
     /// One flag per entry in [`ALL_TOOL_NAMES`]. Stored as a `Vec` so older settings files
@@ -75,11 +81,14 @@ pub struct AppSettings {
     /// match is found. Defaults to 128k (safe across all current providers).
     #[serde(default = "default_context_window")]
     pub context_window_default: usize,
-    /// Profile id used by the "generate commit message" feature. Empty = use the active
-    /// profile. Must reference an existing [`ProviderProfile`] id; unknown ids fall back
-    /// to the active profile at use time.
+    /// Provider pinned for the "generate commit message" feature. `None` = use the
+    /// active provider.
     #[serde(default)]
-    pub commit_msg_profile_id: String,
+    pub commit_msg_provider: Option<LlmProviderKind>,
+    /// Model pinned for the "generate commit message" feature. Empty = use the pinned
+    /// (or active) provider's selected model.
+    #[serde(default)]
+    pub commit_msg_model_id: String,
     /// System prompt for the "generate commit message" feature.
     #[serde(default = "default_commit_msg_system_prompt")]
     pub commit_msg_system_prompt: String,
@@ -169,29 +178,13 @@ struct LegacyAppSettings {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        let profiles = vec![
-            ProviderProfile::new("openai-default", LlmProviderKind::OpenAi, "OpenAI default"),
-            ProviderProfile::new(
-                "openrouter-default",
-                LlmProviderKind::OpenRouter,
-                "OpenRouter default",
-            ),
-            ProviderProfile::new("codex-default", LlmProviderKind::GptCodex, "Codex default"),
-            ProviderProfile::new(
-                "opencode-go-default",
-                LlmProviderKind::OpenCodeGo,
-                "OpenCode Go default",
-            ),
-            ProviderProfile::new(
-                "lmstudio-default",
-                LlmProviderKind::LmStudio,
-                "LM Studio default",
-            ),
-            ProviderProfile::new("ollama-default", LlmProviderKind::Ollama, "Ollama default"),
-        ];
+        let providers = LlmProviderKind::ALL
+            .into_iter()
+            .map(|kind| (kind, ProviderConfig::new(kind)))
+            .collect();
         Self {
-            active_profile_id: "openai-default".to_string(),
-            profiles,
+            active_provider: LlmProviderKind::OpenAi,
+            providers,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
             tools_enabled: default_tools_enabled(),
             web_search_backend: WebSearchBackend::default(),
@@ -206,7 +199,8 @@ impl Default for AppSettings {
             ui_density: UiDensity::Normal,
             max_tool_rounds: default_max_tool_rounds(),
             context_window_default: default_context_window(),
-            commit_msg_profile_id: String::new(),
+            commit_msg_provider: None,
+            commit_msg_model_id: String::new(),
             commit_msg_system_prompt: default_commit_msg_system_prompt(),
             workspaces: Vec::new(),
         }
@@ -223,90 +217,178 @@ impl AppSettings {
 
     pub fn load() -> Self {
         let path = Self::config_path();
-        let mut settings = if let Ok(bytes) = fs::read(&path) {
-            if let Ok(mut s) = serde_json::from_slice::<AppSettings>(&bytes) {
-                s.normalize();
-                s
-            } else if let Ok(old) = serde_json::from_slice::<LegacyAppSettings>(&bytes) {
-                let mut s = Self::from_legacy(old);
-                s.normalize();
-                s
-            } else {
-                Self::default()
+        let bytes = fs::read(&path).unwrap_or_default();
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        // Sniff the on-disk shape by its distinctive keys rather than trying typed parses
+        // in sequence: a profiles-era file must never silently parse as the new shape
+        // (it would come out with empty provider configs and drop the user's setup).
+        let (mut settings, ssh_renames, migrated) = if value.get("providers").is_some() {
+            let s = serde_json::from_value::<AppSettings>(value).unwrap_or_default();
+            (s, Vec::new(), false)
+        } else if value.get("profiles").is_some() {
+            let (s, renames) = Self::from_profiles_era(value, |profile_id| {
+                crate::secrets::load(&format!("api-key:{profile_id}"))
+            });
+            (s, renames, true)
+        } else if value.get("provider").is_some() {
+            match serde_json::from_value::<LegacyAppSettings>(value) {
+                Ok(old) => (Self::from_legacy(old), Vec::new(), true),
+                Err(_) => (Self::default(), Vec::new(), false),
             }
         } else {
-            Self::default()
+            (Self::default(), Vec::new(), false)
         };
+        settings.normalize();
         settings.migrate_secrets_to_keychain();
+        if migrated {
+            Self::migrate_ssh_credentials(&ssh_renames);
+            // Rewrite settings.json in the new shape right away so the migration runs
+            // exactly once; from here on the file parses via the `providers` branch.
+            let _ = settings.save();
+        }
         settings
     }
 
     /// Provider API keys used to be written to `settings.json` in plaintext; the field is
     /// now `skip_serializing`, so freshly-parsed JSON either has no `api_key` at all
     /// (already migrated), or still has a leftover plaintext value from before this
-    /// version. For each profile: a non-empty value just parsed from the file is legacy
-    /// plaintext — push it into the keychain so it becomes the source of truth. Otherwise,
-    /// pull whatever is already in the keychain into memory for this session to use.
+    /// version. For each provider: a non-empty value just parsed from the file (or carried
+    /// over by migration) is pushed into the keychain so it becomes the source of truth.
+    /// Otherwise, pull whatever is already in the keychain into memory for this session.
     fn migrate_secrets_to_keychain(&mut self) {
-        for profile in &mut self.profiles {
-            let account = format!("api-key:{}", profile.id);
-            if !profile.api_key.is_empty() {
-                let _ = crate::secrets::store(&account, &profile.api_key);
+        for (kind, cfg) in &mut self.providers {
+            let account = format!("api-key:{}", kind.slug());
+            if !cfg.api_key.is_empty() {
+                let _ = crate::secrets::store(&account, &cfg.api_key);
             } else {
-                profile.api_key = crate::secrets::load(&account);
+                cfg.api_key = crate::secrets::load(&account);
             }
         }
     }
 
-    #[allow(clippy::field_reassign_with_default)]
+    /// Migrate a profiles-era `settings.json` (multiple named profiles per provider,
+    /// selected via `active_profile_id`) into the per-provider shape.
+    ///
+    /// Collapsing rule per provider kind: the active profile wins for its own kind;
+    /// otherwise the first profile of that kind with a configured API key (so an empty
+    /// default placeholder never shadows the one the user actually set up); otherwise the
+    /// first profile of that kind; otherwise defaults. `hydrate_key` resolves a profile
+    /// id to its keychain API key (injectable so migration tests don't touch the OS
+    /// keychain). Returns the settings plus `(old profile id, kind)` pairs whose SSH
+    /// credentials need re-keying.
+    ///
+    /// The old `api-key:{profile-id}` keychain entries are deliberately *not* deleted:
+    /// they are orphaned but recoverable, so a migration bug can never lose a key. The
+    /// new entries live under `api-key:{slug}`, a namespace old ids can't collide with.
+    fn from_profiles_era(
+        value: serde_json::Value,
+        hydrate_key: impl Fn(&str) -> String,
+    ) -> (Self, Vec<(String, LlmProviderKind)>) {
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct ProfilesEra {
+            active_profile_id: String,
+            profiles: Vec<ProviderProfile>,
+            commit_msg_profile_id: String,
+        }
+        let era: ProfilesEra = serde_json::from_value(value.clone()).unwrap_or_default();
+        // All shared (non-profile) fields parse straight into the new struct; the
+        // profile-era keys are ignored as unknown fields and `providers` starts empty.
+        let mut s: AppSettings = serde_json::from_value(value).unwrap_or_default();
+
+        let mut profiles = era.profiles;
+        for p in &mut profiles {
+            if p.api_key.is_empty() {
+                p.api_key = hydrate_key(&p.id);
+            }
+        }
+        let active = profiles.iter().find(|p| p.id == era.active_profile_id);
+        s.active_provider = active
+            .or(profiles.first())
+            .map(|p| p.provider)
+            .unwrap_or_default();
+
+        let mut ssh_renames = Vec::new();
+        s.providers.clear();
+        for kind in LlmProviderKind::ALL {
+            let chosen = active
+                .filter(|p| p.provider == kind)
+                .or_else(|| {
+                    profiles
+                        .iter()
+                        .find(|p| p.provider == kind && !p.api_key.trim().is_empty())
+                })
+                .or_else(|| profiles.iter().find(|p| p.provider == kind));
+            let cfg = match chosen {
+                Some(p) => {
+                    if matches!(p.location, ComputeLocation::RemoteSsh(_)) {
+                        ssh_renames.push((p.id.clone(), kind));
+                    }
+                    ProviderConfig::from(p.clone())
+                }
+                None => ProviderConfig::new(kind),
+            };
+            s.providers.insert(kind, cfg);
+        }
+
+        // Preserve the commit-message generator's intent even when the profile it
+        // referenced wasn't the one chosen for its kind above.
+        if !era.commit_msg_profile_id.trim().is_empty() {
+            if let Some(p) = profiles.iter().find(|p| p.id == era.commit_msg_profile_id) {
+                s.commit_msg_provider = Some(p.provider);
+                s.commit_msg_model_id = p.model_id.clone();
+            }
+        }
+        (s, ssh_renames)
+    }
+
+    /// Re-key SSH passwords from old profile ids to provider slugs (see
+    /// [`Self::from_profiles_era`]). Old entries are removed after copying — the store is
+    /// a single keychain blob, so this is one atomic rewrite.
+    fn migrate_ssh_credentials(renames: &[(String, LlmProviderKind)]) {
+        if renames.is_empty() {
+            return;
+        }
+        let mut creds = crate::compute::store::load_ssh_credentials();
+        let mut changed = false;
+        for (old_id, kind) in renames {
+            if let Some(pw) = creds.get(old_id).map(str::to_string) {
+                creds.set(kind.slug(), pw);
+                creds.clear(old_id);
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = crate::compute::store::save_ssh_credentials(&creds);
+        }
+    }
+
+    /// Migrate the oldest flat single-provider settings shape (pre-profiles).
     fn from_legacy(old: LegacyAppSettings) -> Self {
         let provider = old.provider;
-        let mut s = Self::default();
-        s.system_prompt = if old.system_prompt.trim().is_empty() {
-            crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string()
-        } else {
-            old.system_prompt
-        };
-        s.tools_enabled = old.tools_enabled.to_vec();
-        s.profiles = vec![
-            ProviderProfile {
-                id: "migrated-active".to_string(),
-                name: format!("{} migrated", provider.label()),
-                provider,
-                model_id: old.model_id,
-                base_url: old.base_url,
-                api_key: match provider {
-                    LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
-                    LlmProviderKind::OpenRouter => old.openrouter_api_key,
-                    LlmProviderKind::OpenCodeGo
-                    | LlmProviderKind::LmStudio
-                    | LlmProviderKind::Ollama => String::new(),
-                },
-                openrouter_http_referer: old.openrouter_http_referer,
-                openrouter_title: old.openrouter_title,
-                context_window: None,
-                location: ComputeLocation::Local,
+        let mut s = Self {
+            system_prompt: if old.system_prompt.trim().is_empty() {
+                crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string()
+            } else {
+                old.system_prompt
             },
-            ProviderProfile::new("openai-default", LlmProviderKind::OpenAi, "OpenAI default"),
-            ProviderProfile::new(
-                "openrouter-default",
-                LlmProviderKind::OpenRouter,
-                "OpenRouter default",
-            ),
-            ProviderProfile::new("codex-default", LlmProviderKind::GptCodex, "Codex default"),
-            ProviderProfile::new(
-                "opencode-go-default",
-                LlmProviderKind::OpenCodeGo,
-                "OpenCode Go default",
-            ),
-            ProviderProfile::new(
-                "lmstudio-default",
-                LlmProviderKind::LmStudio,
-                "LM Studio default",
-            ),
-            ProviderProfile::new("ollama-default", LlmProviderKind::Ollama, "Ollama default"),
-        ];
-        s.active_profile_id = "migrated-active".to_string();
+            tools_enabled: old.tools_enabled.to_vec(),
+            active_provider: provider,
+            ..Self::default()
+        };
+        let cfg = s.provider_mut(provider);
+        cfg.model_id = old.model_id;
+        cfg.base_url = old.base_url;
+        cfg.api_key = match provider {
+            LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
+            LlmProviderKind::OpenRouter => old.openrouter_api_key,
+            LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
+                String::new()
+            }
+        };
+        cfg.openrouter_http_referer = old.openrouter_http_referer;
+        cfg.openrouter_title = old.openrouter_title;
         s
     }
 
@@ -341,38 +423,25 @@ impl AppSettings {
             self.terminal_height = default_terminal_height();
         }
         self.terminal_height = self.terminal_height.clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
-        if self.profiles.is_empty() {
-            *self = Self::default();
-            return;
-        }
-        for profile in &mut self.profiles {
-            if profile.id.trim().is_empty() {
-                profile.id = format!(
-                    "{}-{}",
-                    profile.provider.label().to_lowercase().replace(' ', "-"),
-                    sanitize_profile_name(&profile.name)
-                );
+        // Every provider kind gets an entry (files written by older versions, or with
+        // kinds added since, may miss some), and the `#[serde(skip)]`ped `provider` field
+        // is re-stamped from the map key it was deserialized under.
+        for kind in LlmProviderKind::ALL {
+            let cfg = self
+                .providers
+                .entry(kind)
+                .or_insert_with(|| ProviderConfig::new(kind));
+            cfg.provider = kind;
+            if cfg.model_id.trim().is_empty() {
+                cfg.model_id = kind.default_model_id().to_string();
             }
-            if profile.name.trim().is_empty() {
-                profile.name = format!("{} profile", profile.provider.label());
-            }
-            if profile.model_id.trim().is_empty() {
-                profile.model_id = profile.provider.default_model_id().to_string();
-            }
-            if let Some(cw) = profile.context_window {
-                if cw > 0 {
-                    profile.context_window = Some(cw);
-                } else {
-                    // 0/null means "auto".
-                    profile.context_window = None;
-                }
+            if cfg.context_window == Some(0) {
+                // 0/null means "auto".
+                cfg.context_window = None;
             }
         }
         if self.context_window_default == 0 {
             self.context_window_default = default_context_window();
-        }
-        if self.active_profile().is_none() {
-            self.active_profile_id = self.profiles[0].id.clone();
         }
         // Workspaces: drop entries whose folder vanished, dedupe by path.
         let mut seen = std::collections::HashSet::new();
@@ -382,9 +451,9 @@ impl AppSettings {
     }
 
     pub fn save(&self) -> Result<(), String> {
-        for profile in &self.profiles {
-            let account = format!("api-key:{}", profile.id);
-            let _ = crate::secrets::store(&account, &profile.api_key);
+        for (kind, cfg) in &self.providers {
+            let account = format!("api-key:{}", kind.slug());
+            let _ = crate::secrets::store(&account, &cfg.api_key);
         }
         let path = Self::config_path();
         if let Some(dir) = path.parent() {
@@ -403,56 +472,49 @@ impl AppSettings {
         Ok(())
     }
 
-    pub fn active_profile(&self) -> Option<&ProviderProfile> {
-        self.profiles
-            .iter()
-            .find(|p| p.id == self.active_profile_id)
+    /// Config for the given provider kind. Infallible: [`AppSettings::normalize`] runs on
+    /// every load and guarantees an entry per kind.
+    pub fn provider(&self, kind: LlmProviderKind) -> &ProviderConfig {
+        self.providers
+            .get(&kind)
+            .expect("normalize() guarantees every provider kind has a config")
     }
 
-    /// Profile used by the "generate commit message" feature. Falls back to the active
-    /// profile when no explicit id is configured or the stored id no longer exists.
-    pub fn commit_msg_profile(&self) -> Option<&ProviderProfile> {
-        if !self.commit_msg_profile_id.trim().is_empty() {
-            if let Some(p) = self
-                .profiles
-                .iter()
-                .find(|p| p.id == self.commit_msg_profile_id)
-            {
-                return Some(p);
-            }
+    pub fn provider_mut(&mut self, kind: LlmProviderKind) -> &mut ProviderConfig {
+        self.providers
+            .entry(kind)
+            .or_insert_with(|| ProviderConfig::new(kind))
+    }
+
+    /// Config the composer currently talks to.
+    pub fn active_config(&self) -> &ProviderConfig {
+        self.provider(self.active_provider)
+    }
+
+    /// Config used by the "generate commit message" feature: the pinned provider (or the
+    /// active one), with the pinned model overriding the provider's selected model.
+    pub fn commit_msg_config(&self) -> ProviderConfig {
+        let kind = self.commit_msg_provider.unwrap_or(self.active_provider);
+        let mut cfg = self.provider(kind).clone();
+        let pinned_model = self.commit_msg_model_id.trim();
+        if !pinned_model.is_empty() {
+            cfg.model_id = pinned_model.to_string();
         }
-        self.active_profile()
-    }
-
-    pub fn set_active_profile(&mut self, id: impl AsRef<str>) {
-        let id = id.as_ref();
-        if self.profiles.iter().any(|p| p.id == id) {
-            self.active_profile_id = id.to_string();
-        }
-    }
-
-    /// First profile of the given provider kind, if one exists. Used to resolve which
-    /// profile becomes active when the composer's provider dropdown picks a kind rather
-    /// than a specific profile.
-    pub fn first_profile_for(&self, kind: LlmProviderKind) -> Option<&ProviderProfile> {
-        self.profiles.iter().find(|p| p.provider == kind)
+        cfg
     }
 
     /// Provider kinds the user has actually configured (has usable credentials for),
     /// in the same display order as [`LlmProviderKind::ALL`]. Local runtimes (Ollama, LM
     /// Studio) need no key so they always count as configured; hosted providers need a
-    /// profile API key or the matching env var (mirrors the fallback chain in
+    /// configured API key or the matching env var (mirrors the fallback chain in
     /// `agent::runner::configured_*_key`); GPT Codex additionally counts as configured via
     /// its "Sign in with ChatGPT" OAuth token.
     pub fn configured_provider_kinds(
         &self,
         oauth: &crate::oauth::OAuthStore,
     ) -> Vec<LlmProviderKind> {
-        let has_profile_key = |kind: LlmProviderKind| {
-            self.profiles
-                .iter()
-                .any(|p| p.provider == kind && !p.api_key.trim().is_empty())
-        };
+        let has_profile_key =
+            |kind: LlmProviderKind| !self.provider(kind).api_key.trim().is_empty();
         LlmProviderKind::ALL
             .into_iter()
             .filter(|&kind| match kind {
@@ -492,46 +554,6 @@ impl AppSettings {
             WebSearchBackend::Bing | WebSearchBackend::DuckDuckGo => String::new(),
         }
     }
-
-    pub fn add_profile(&mut self, provider: LlmProviderKind) -> String {
-        let base_name = format!("{} profile", provider.label());
-        let mut n = 1usize;
-        let name = loop {
-            let candidate = if n == 1 {
-                base_name.clone()
-            } else {
-                format!("{} {}", base_name, n)
-            };
-            if !self.profiles.iter().any(|p| p.name == candidate) {
-                break candidate;
-            }
-            n += 1;
-        };
-        let id = format!(
-            "{}-{}",
-            provider.label().to_lowercase().replace(' ', "-"),
-            sanitize_profile_name(&name)
-        );
-        self.profiles
-            .push(ProviderProfile::new(id.clone(), provider, name));
-        id
-    }
-
-    pub fn remove_profile(&mut self, id: &str) {
-        if self.profiles.len() <= 1 {
-            return;
-        }
-        let removed_active = self.active_profile_id == id;
-        let _ = crate::secrets::delete(&format!("api-key:{id}"));
-        self.profiles.retain(|p| p.id != id);
-        if self.profiles.is_empty() {
-            *self = Self::default();
-            return;
-        }
-        if removed_active {
-            self.active_profile_id = self.profiles[0].id.clone();
-        }
-    }
 }
 
 #[cfg(test)]
@@ -539,89 +561,217 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_has_profiles() {
+    fn default_has_all_provider_kinds() {
         let s = AppSettings::default();
-        assert!(!s.profiles.is_empty());
-        assert!(s.active_profile().is_some());
+        for kind in LlmProviderKind::ALL {
+            assert_eq!(s.provider(kind).provider, kind);
+        }
+        assert_eq!(s.active_config().provider, s.active_provider);
     }
 
     /// Provider API keys must never be written to `settings.json` — they live in the OS
     /// keychain (see `migrate_secrets_to_keychain`). This doesn't touch the real keychain,
-    /// just the serde attribute on `ProviderProfile::api_key`.
+    /// just the serde attribute on `ProviderConfig::api_key`.
     #[test]
     fn api_key_not_serialized_to_json() {
         let mut s = AppSettings::default();
-        s.profiles[0].api_key = "sk-super-secret-value".to_string();
+        s.provider_mut(LlmProviderKind::OpenAi).api_key = "sk-super-secret-value".to_string();
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("sk-super-secret-value"));
         assert!(!json.contains("api_key"));
     }
 
+    /// The new shape must round-trip: the `#[serde(skip)]`ped `provider` field comes back
+    /// via `normalize()` re-stamping it from the map key.
     #[test]
-    fn active_profile_matches_active_id() {
-        let s = AppSettings::default();
-        let p = s.active_profile().unwrap();
-        assert_eq!(p.id, s.active_profile_id);
+    fn new_shape_roundtrips() {
+        let mut s = AppSettings {
+            active_provider: LlmProviderKind::OpenRouter,
+            ..Default::default()
+        };
+        s.provider_mut(LlmProviderKind::OpenRouter).model_id = "anthropic/claude-sonnet-5".into();
+        s.provider_mut(LlmProviderKind::Ollama).base_url = "http://box:11434/v1".into();
+        let json = serde_json::to_string(&s).unwrap();
+        let mut back: AppSettings = serde_json::from_str(&json).unwrap();
+        back.normalize();
+        assert_eq!(back, s);
     }
 
     #[test]
-    fn set_active_profile_valid() {
-        let mut s = AppSettings::default();
-        let second_id = s.profiles[1].id.clone();
-        s.set_active_profile(&second_id);
-        assert_eq!(s.active_profile_id, second_id);
-    }
-
-    #[test]
-    fn set_active_profile_invalid_ignored() {
-        let mut s = AppSettings::default();
-        let old_id = s.active_profile_id.clone();
-        s.set_active_profile("nonexistent");
-        assert_eq!(s.active_profile_id, old_id);
-    }
-
-    #[test]
-    fn add_profile_returns_id() {
-        let mut s = AppSettings::default();
-        let initial_count = s.profiles.len();
-        let id = s.add_profile(LlmProviderKind::OpenAi);
-        assert!(!id.is_empty());
-        assert_eq!(s.profiles.len(), initial_count + 1);
-        assert!(s.profiles.iter().any(|p| p.id == id));
-    }
-
-    #[test]
-    fn add_profile_deduplicates_names() {
-        let mut s = AppSettings::default();
-        let id1 = s.add_profile(LlmProviderKind::OpenAi);
-        let id2 = s.add_profile(LlmProviderKind::OpenAi);
-        assert_ne!(id1, id2);
-        let p1 = s.profiles.iter().find(|p| p.id == id1).unwrap();
-        let p2 = s.profiles.iter().find(|p| p.id == id2).unwrap();
-        assert_ne!(p1.name, p2.name);
-    }
-
-    #[test]
-    fn remove_profile_last_one_resets_to_default() {
-        let mut s = AppSettings::default();
-        let ids: Vec<String> = s.profiles.iter().map(|p| p.id.clone()).collect();
-        // Remove all but one
-        for id in &ids[1..] {
-            s.remove_profile(id);
+    fn normalize_fills_missing_provider_kinds() {
+        // A new-shape file listing only one provider still normalizes to all kinds.
+        let json = r#"{
+            "active_provider": "ollama",
+            "providers": {"ollama": {"model_id": "qwen3:14b"}},
+            "system_prompt": "hi"
+        }"#;
+        let mut s: AppSettings = serde_json::from_str(json).unwrap();
+        s.normalize();
+        assert_eq!(s.provider(LlmProviderKind::Ollama).model_id, "qwen3:14b");
+        for kind in LlmProviderKind::ALL {
+            assert_eq!(s.provider(kind).provider, kind);
+            assert!(!s.provider(kind).model_id.is_empty());
         }
-        assert_eq!(s.profiles.len(), 1);
-        // Try removing the last one - should not remove
-        s.remove_profile(&ids[0]);
-        assert_eq!(s.profiles.len(), 1);
     }
 
     #[test]
-    fn remove_active_profile_switches_to_first() {
-        let mut s = AppSettings::default();
-        let active = s.active_profile_id.clone();
-        s.remove_profile(&active);
-        assert_ne!(s.active_profile_id, active);
-        assert!(s.active_profile().is_some());
+    fn commit_msg_config_defaults_to_active() {
+        let s = AppSettings {
+            active_provider: LlmProviderKind::Ollama,
+            ..Default::default()
+        };
+        let cfg = s.commit_msg_config();
+        assert_eq!(cfg.provider, LlmProviderKind::Ollama);
+        assert_eq!(cfg.model_id, s.active_config().model_id);
+    }
+
+    #[test]
+    fn commit_msg_config_pins_provider_and_model() {
+        let s = AppSettings {
+            commit_msg_provider: Some(LlmProviderKind::OpenRouter),
+            commit_msg_model_id: "openai/gpt-4o-mini".to_string(),
+            ..Default::default()
+        };
+        let cfg = s.commit_msg_config();
+        assert_eq!(cfg.provider, LlmProviderKind::OpenRouter);
+        assert_eq!(cfg.model_id, "openai/gpt-4o-mini");
+    }
+
+    /// Profiles-era migration: the active profile wins for its kind, even when another
+    /// profile of the same kind comes first in the list.
+    #[test]
+    fn migrates_profiles_era_active_profile_wins_for_its_kind() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+            "active_profile_id": "openrouter-work",
+            "profiles": [
+                {"id":"openai-default","name":"OpenAI default","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""},
+                {"id":"openrouter-default","name":"OpenRouter default","provider":"openrouter","model_id":"openai/gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""},
+                {"id":"openrouter-work","name":"Work","provider":"openrouter","model_id":"anthropic/claude-sonnet-5","base_url":"https://proxy.example.com/v1","api_key":"","openrouter_http_referer":"","openrouter_title":""}
+            ],
+            "system_prompt": "hi",
+            "tools_enabled": [true, true, true, true, true, true, true, true, true]
+        }"#,
+        )
+        .unwrap();
+        let (mut s, renames) = AppSettings::from_profiles_era(json, |_| String::new());
+        s.normalize();
+        assert!(renames.is_empty());
+        assert_eq!(s.active_provider, LlmProviderKind::OpenRouter);
+        let or = s.provider(LlmProviderKind::OpenRouter);
+        assert_eq!(or.model_id, "anthropic/claude-sonnet-5");
+        assert_eq!(or.base_url, "https://proxy.example.com/v1");
+        // Shared fields carried over.
+        assert_eq!(s.system_prompt, "hi");
+    }
+
+    /// A profile with a configured key beats an earlier empty placeholder of the same kind.
+    #[test]
+    fn migrates_profiles_era_prefers_profile_with_key() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+            "active_profile_id": "ollama-default",
+            "profiles": [
+                {"id":"ollama-default","name":"Ollama","provider":"ollama","model_id":"qwen3:14b","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""},
+                {"id":"openai-default","name":"OpenAI default","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""},
+                {"id":"openai-real","name":"Real","provider":"openai","model_id":"gpt-4.1","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}
+            ],
+            "system_prompt": "hi",
+            "tools_enabled": [true, true, true, true, true, true, true, true, true]
+        }"#,
+        )
+        .unwrap();
+        // Simulate the keychain holding a key only for "openai-real".
+        let (mut s, _) = AppSettings::from_profiles_era(json, |id| {
+            if id == "openai-real" {
+                "sk-real".to_string()
+            } else {
+                String::new()
+            }
+        });
+        s.normalize();
+        assert_eq!(s.active_provider, LlmProviderKind::Ollama);
+        let oa = s.provider(LlmProviderKind::OpenAi);
+        assert_eq!(oa.model_id, "gpt-4.1");
+        assert_eq!(oa.api_key, "sk-real");
+    }
+
+    /// `commit_msg_profile_id` intent survives migration as (provider, model) even when
+    /// the referenced profile is not the one chosen as that kind's config.
+    #[test]
+    fn migrates_profiles_era_commit_msg_intent() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+            "active_profile_id": "openrouter-main",
+            "profiles": [
+                {"id":"openrouter-main","name":"Main","provider":"openrouter","model_id":"anthropic/claude-sonnet-5","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""},
+                {"id":"openrouter-cheap","name":"Cheap","provider":"openrouter","model_id":"openai/gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}
+            ],
+            "commit_msg_profile_id": "openrouter-cheap",
+            "system_prompt": "hi",
+            "tools_enabled": [true, true, true, true, true, true, true, true, true]
+        }"#,
+        )
+        .unwrap();
+        let (mut s, _) = AppSettings::from_profiles_era(json, |_| String::new());
+        s.normalize();
+        // The kind's config came from the active profile...
+        assert_eq!(
+            s.provider(LlmProviderKind::OpenRouter).model_id,
+            "anthropic/claude-sonnet-5"
+        );
+        // ...but the commit-msg generator still targets the cheap model.
+        assert_eq!(s.commit_msg_provider, Some(LlmProviderKind::OpenRouter));
+        assert_eq!(s.commit_msg_model_id, "openai/gpt-4o-mini");
+        assert_eq!(s.commit_msg_config().model_id, "openai/gpt-4o-mini");
+    }
+
+    /// SSH-backed profiles report their old id for credential re-keying.
+    #[test]
+    fn migrates_profiles_era_reports_ssh_renames() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+            "active_profile_id": "ollama-box",
+            "profiles": [
+                {"id":"ollama-box","name":"Box","provider":"ollama","model_id":"qwen3:14b","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":"",
+                 "location":{"kind":"remote_ssh","host":"box.local","port":22,"user":"me","remote_runtime_port":11434}}
+            ],
+            "system_prompt": "hi",
+            "tools_enabled": [true, true, true, true, true, true, true, true, true]
+        }"#,
+        )
+        .unwrap();
+        let (mut s, renames) = AppSettings::from_profiles_era(json, |_| String::new());
+        s.normalize();
+        assert_eq!(
+            renames,
+            vec![("ollama-box".to_string(), LlmProviderKind::Ollama)]
+        );
+        assert!(s.provider(LlmProviderKind::Ollama).ssh_config().is_some());
+    }
+
+    /// The oldest flat single-provider shape still migrates into the new one.
+    #[test]
+    fn migrates_flat_legacy_shape() {
+        let old = LegacyAppSettings {
+            provider: LlmProviderKind::OpenRouter,
+            model_id: "openai/gpt-4o-mini".to_string(),
+            base_url: "https://openrouter.ai/api/v1".to_string(),
+            system_prompt: "legacy prompt".to_string(),
+            openai_api_key: String::new(),
+            openrouter_api_key: "sk-or-legacy".to_string(),
+            openrouter_http_referer: "https://example.com".to_string(),
+            openrouter_title: "oxi".to_string(),
+            tools_enabled: [true; 7],
+        };
+        let mut s = AppSettings::from_legacy(old);
+        s.normalize();
+        assert_eq!(s.active_provider, LlmProviderKind::OpenRouter);
+        let or = s.provider(LlmProviderKind::OpenRouter);
+        assert_eq!(or.model_id, "openai/gpt-4o-mini");
+        assert_eq!(or.api_key, "sk-or-legacy");
+        assert_eq!(or.openrouter_http_referer, "https://example.com");
+        assert_eq!(s.system_prompt, "legacy prompt");
     }
 
     #[test]
@@ -642,8 +792,8 @@ mod tests {
     #[test]
     fn normalize_pads_short_tools_enabled() {
         let json = r#"{
-            "active_profile_id": "openai-default",
-            "profiles": [{"id":"openai-default","name":"x","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}],
+            "active_provider": "openai",
+            "providers": {"openai": {"model_id":"gpt-4o-mini","base_url":""}},
             "system_prompt": "hi",
             "tools_enabled": [true, false, true, true, true, true, true]
         }"#;
@@ -697,8 +847,8 @@ mod tests {
         // Older settings.json: explicit `web_search_backend: "duckduckgo"` (the old default)
         // and a non-empty searxng_url. normalize() should migrate to SearXng.
         let json = r#"{
-            "active_profile_id": "openai-default",
-            "profiles": [{"id":"openai-default","name":"x","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}],
+            "active_provider": "openai",
+            "providers": {"openai": {"model_id":"gpt-4o-mini","base_url":""}},
             "system_prompt": "hi",
             "tools_enabled": [true, true, true, true, true, true, true, true, true],
             "web_search_backend": "duckduckgo",
@@ -715,8 +865,8 @@ mod tests {
         // Older settings.json: no `web_search_backend` field and empty searxng_url.
         // Deserializes to Bing (current default) and stays on Bing.
         let json = r#"{
-            "active_profile_id": "openai-default",
-            "profiles": [{"id":"openai-default","name":"x","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}],
+            "active_provider": "openai",
+            "providers": {"openai": {"model_id":"gpt-4o-mini","base_url":""}},
             "system_prompt": "hi",
             "tools_enabled": [true, true, true, true, true, true, true, true, true]
         }"#;

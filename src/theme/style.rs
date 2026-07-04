@@ -51,6 +51,10 @@ pub const ICON_PROVIDERS: &str = "\u{f0148}";
 pub const ICON_AGENT: &str = "\u{f2bb}";
 /// Appearance (settings nav) — nf-fa-adjust (half-filled circle, matches ◐).
 pub const ICON_APPEARANCE: &str = "\u{f042}";
+/// Prompts (settings nav) — nf-fa-pencil.
+pub const ICON_PROMPTS: &str = "\u{f040}";
+/// About (settings nav) — nf-fa-info_circle.
+pub const ICON_INFO: &str = "\u{f05a}";
 /// Close / dismiss (diff viewer, settings, image chip) — nf-fa-xmark.
 pub const ICON_CLOSE: &str = "\u{f00d}";
 /// Affirmative / done (commit button, tool enable check) — nf-fa-check.
