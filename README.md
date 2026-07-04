@@ -374,6 +374,21 @@ Behavior visible in the session store:
 - assistant blocks and attachments are preserved in session serialization
 - saved sessions initially load as headers-only rows and full messages are read lazily when opened
 
+## Install
+
+### Homebrew (macOS Apple Silicon, Linux x86_64)
+
+```bash
+brew tap maziluiosif/tap
+brew install oxi
+```
+
+Installs the precompiled binary from the latest GitHub release; the formula is updated automatically on every release. On macOS the `.app` bundle is kept inside the Homebrew prefix — the `oxi` command launches it from any directory, using that directory as the first workspace.
+
+### Manual download
+
+Precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to each [GitHub release](https://github.com/maziluiosif/oxi/releases).
+
 ## Build and run
 
 ### Requirements
