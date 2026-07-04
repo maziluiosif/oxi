@@ -1,6 +1,7 @@
 //! Persist SSH passwords for remote compute targets in the OS keychain (see
 //! `crate::secrets`), under the account `"ssh-credentials"`, keyed internally by
-//! [`crate::settings::ProviderProfile::id`]. Used to live as plaintext JSON at
+//! [`crate::settings::LlmProviderKind::slug`] (old files used profile ids; settings
+//! migration re-keys them). Used to live as plaintext JSON at
 //! `~/.config/oxi/ssh_credentials.json`; [`load_ssh_credentials`] migrates any leftover
 //! file from that era on first read.
 
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SshCredentialStore {
-    /// Provider profile id -> SSH password.
+    /// Provider slug -> SSH password (old entries may still be keyed by profile id).
     #[serde(default)]
     passwords: HashMap<String, String>,
 }
@@ -74,16 +75,16 @@ pub fn save_ssh_credentials(store: &SshCredentialStore) -> Result<(), String> {
 }
 
 impl SshCredentialStore {
-    pub fn get(&self, profile_id: &str) -> Option<&str> {
-        self.passwords.get(profile_id).map(String::as_str)
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.passwords.get(key).map(String::as_str)
     }
 
-    pub fn set(&mut self, profile_id: impl Into<String>, password: impl Into<String>) {
-        self.passwords.insert(profile_id.into(), password.into());
+    pub fn set(&mut self, key: impl Into<String>, password: impl Into<String>) {
+        self.passwords.insert(key.into(), password.into());
     }
 
-    pub fn clear(&mut self, profile_id: &str) {
-        self.passwords.remove(profile_id);
+    pub fn clear(&mut self, key: &str) {
+        self.passwords.remove(key);
     }
 }
 
