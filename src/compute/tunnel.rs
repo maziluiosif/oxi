@@ -1,6 +1,6 @@
 //! SSH port-forwarding tunnels for remote compute targets.
 //!
-//! A [`TunnelManager`] keeps at most one tunnel alive per provider profile: an SSH
+//! A [`TunnelManager`] keeps at most one tunnel alive per provider: an SSH
 //! connection to the configured host, plus a local TCP listener that forwards each
 //! accepted connection to `127.0.0.1:<remote_runtime_port>` on the far side via
 //! `direct-tcpip`. Callers ask for the *local* port to use as the effective base URL;
@@ -35,7 +35,7 @@ impl client::Handler for AcceptAnyServerKey {
 }
 
 struct TunnelRequest {
-    profile_id: String,
+    key: String,
     config: SshConfig,
     password: String,
     reply: oneshot::Sender<Result<u16, String>>,
@@ -72,7 +72,7 @@ impl TunnelManager {
                     let tunnels = tunnels.clone();
                     tokio::spawn(async move {
                         let result =
-                            ensure_one(&tunnels, &req.profile_id, &req.config, &req.password).await;
+                            ensure_one(&tunnels, &req.key, &req.config, &req.password).await;
                         let _ = req.reply.send(result);
                     });
                 }
@@ -81,19 +81,19 @@ impl TunnelManager {
         Self { tx }
     }
 
-    /// Ensure a tunnel is up for `profile_id`, (re)connecting if needed, and return the
+    /// Ensure a tunnel is up for `key` (a provider slug), (re)connecting if needed, and return the
     /// local `127.0.0.1` port that proxies to `127.0.0.1:<remote_runtime_port>` on the
     /// remote host. Cheap to call repeatedly: an already-healthy tunnel is reused.
     pub async fn ensure_tunnel(
         &self,
-        profile_id: &str,
+        key: &str,
         config: &SshConfig,
         password: &str,
     ) -> Result<u16, String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(TunnelRequest {
-                profile_id: profile_id.to_string(),
+                key: key.to_string(),
                 config: config.clone(),
                 password: password.to_string(),
                 reply: reply_tx,
@@ -107,13 +107,13 @@ impl TunnelManager {
 
 async fn ensure_one(
     tunnels: &Arc<AsyncMutex<HashMap<String, ActiveTunnel>>>,
-    profile_id: &str,
+    key: &str,
     config: &SshConfig,
     password: &str,
 ) -> Result<u16, String> {
     {
         let map = tunnels.lock().await;
-        if let Some(t) = map.get(profile_id) {
+        if let Some(t) = map.get(key) {
             if !t.accept_task.is_finished() {
                 return Ok(t.local_port);
             }
@@ -121,7 +121,7 @@ async fn ensure_one(
     }
     let tunnel = open_tunnel(config, password).await?;
     let port = tunnel.local_port;
-    tunnels.lock().await.insert(profile_id.to_string(), tunnel);
+    tunnels.lock().await.insert(key.to_string(), tunnel);
     Ok(port)
 }
 

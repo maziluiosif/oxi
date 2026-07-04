@@ -178,15 +178,10 @@ impl OxiApp {
                                     )
                                     .truncate(),
                                 );
-                                let profile = self
-                                    .conv
-                                    .settings
-                                    .active_profile()
-                                    .map(|p| p.subtitle())
-                                    .unwrap_or_else(|| "No active profile".to_string());
+                                let provider = self.conv.settings.active_config().subtitle();
                                 ui.add(
                                     Label::new(
-                                        RichText::new(format!("{workspace} · {profile}"))
+                                        RichText::new(format!("{workspace} · {provider}"))
                                             .size(FS_TINY)
                                             .color(c_text_muted()),
                                     )

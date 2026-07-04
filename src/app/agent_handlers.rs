@@ -94,11 +94,7 @@ impl OxiApp {
         loop {
             match rx.try_recv() {
                 Ok(msg) => {
-                    let entry = self
-                        .conv
-                        .fetched_models
-                        .entry(msg.profile_id.clone())
-                        .or_default();
+                    let entry = self.conv.fetched_models.entry(msg.provider).or_default();
                     entry.loading = false;
                     match msg.result {
                         Ok(models) => {

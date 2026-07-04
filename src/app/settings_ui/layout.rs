@@ -160,7 +160,9 @@ impl OxiApp {
         let items = [
             (SettingsTab::Providers, ICON_PROVIDERS, "Models & providers"),
             (SettingsTab::Agent, ICON_AGENT, "Agent"),
+            (SettingsTab::Prompts, ICON_PROMPTS, "Prompts"),
             (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
+            (SettingsTab::About, ICON_INFO, "About"),
         ];
         for (tab, icon, label) in items {
             let selected = self.conv.settings_tab == tab;
@@ -206,7 +208,9 @@ impl OxiApp {
         match self.conv.settings_tab {
             SettingsTab::Providers => self.render_settings_providers_panel(ui),
             SettingsTab::Agent => self.render_settings_agent_panel(ui),
+            SettingsTab::Prompts => self.render_settings_prompts_panel(ui),
             SettingsTab::Appearance => self.render_settings_appearance_panel(ui),
+            SettingsTab::About => self.render_settings_about_panel(ui),
         }
     }
 }

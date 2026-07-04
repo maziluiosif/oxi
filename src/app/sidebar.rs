@@ -62,15 +62,24 @@ impl OxiApp {
 
         ui.add_space(8.0);
         // Settings footer row: same rounded pill styling
-        if crate::ui::chrome::row_button_icon(
+        let settings_resp = crate::ui::chrome::row_button_icon(
             ui,
             ICON_SETTINGS,
             "Settings",
             egui::vec2(ui.available_width(), 30.0),
-        )
-        .on_hover_text("Open settings")
-        .clicked()
-        {
+        );
+        // Quiet accent dot on the row while a newer release is available.
+        let settings_resp = if self.update_available().is_some() {
+            let dot = egui::pos2(
+                settings_resp.rect.right() - 10.0,
+                settings_resp.rect.center().y,
+            );
+            ui.painter().circle_filled(dot, 3.0, c_accent());
+            settings_resp.on_hover_text("Open settings — update available")
+        } else {
+            settings_resp.on_hover_text("Open settings")
+        };
+        if settings_resp.clicked() {
             self.conv.settings_open = true;
         }
         ui.expand_to_include_rect(ui.max_rect());
