@@ -10,7 +10,7 @@ use eframe::egui;
 
 use crate::agent::{AgentEvent, ApprovalDecision};
 use crate::model::Session;
-use crate::settings::AppSettings;
+use crate::settings::{AppSettings, LlmProviderKind};
 
 /// A mutating tool call awaiting the user's approve/deny decision.
 #[derive(Clone)]
@@ -100,12 +100,12 @@ pub struct RunState {
     pub pending_load_session_idx: Option<usize>,
 }
 
-/// Cached model list for one provider profile.
+/// Cached model list for one provider.
 #[derive(Debug, Clone, Default)]
 pub struct FetchedModels {
     /// Model ids returned by the provider's `/v1/models` endpoint.
     pub models: Vec<String>,
-    /// True while a fetch is in flight for this profile.
+    /// True while a fetch is in flight for this provider.
     pub loading: bool,
     /// Last error message, if any.
     pub error: Option<String>,
@@ -114,12 +114,12 @@ pub struct FetchedModels {
 /// Result message from a background model-list fetch.
 #[derive(Debug)]
 pub struct ModelFetchMsg {
-    pub profile_id: String,
+    pub provider: LlmProviderKind,
     pub result: Result<Vec<String>, String>,
 }
 
 /// Status of an in-flight or completed SSH tunnel "Test connection" check, keyed by
-/// provider profile id.
+/// provider kind.
 #[derive(Debug, Clone, Default)]
 pub struct SshTestStatus {
     pub loading: bool,
@@ -130,7 +130,7 @@ pub struct SshTestStatus {
 /// Result message from a background SSH "Test connection" check.
 #[derive(Debug)]
 pub struct SshTestMsg {
-    pub profile_id: String,
+    pub provider: LlmProviderKind,
     pub result: Result<u16, String>,
 }
 
@@ -153,7 +153,7 @@ pub struct ConversationState {
     pub settings: AppSettings,
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
-    pub settings_provider_tab: crate::settings::LlmProviderKind,
+    pub settings_provider_tab: LlmProviderKind,
     pub oauth_busy: bool,
     pub oauth_last_message: Option<String>,
     /// Measured height of the composer TextEdit from the previous frame.
@@ -186,17 +186,17 @@ pub struct ConversationState {
     pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
     /// egui context used for the git worker so it can request repaints.
     pub git_ctx: eframe::egui::Context,
-    /// Background model-list fetch results keyed by profile id.
-    pub fetched_models: std::collections::HashMap<String, FetchedModels>,
+    /// Background model-list fetch results keyed by provider kind.
+    pub fetched_models: std::collections::HashMap<LlmProviderKind, FetchedModels>,
     /// Channel for model-list fetch results (drained each frame).
     pub model_rx: Option<std::sync::mpsc::Receiver<ModelFetchMsg>>,
     /// Draft (in-memory only) SSH passwords for Remote SSH compute targets, keyed by
-    /// profile id. Loaded lazily from `ssh_credentials.json` on first edit, written
-    /// through to disk on change; never stored in `settings.json`.
-    pub ssh_password_drafts: std::collections::HashMap<String, String>,
+    /// provider kind. Loaded lazily from the credential store on first edit, written
+    /// through on change; never stored in `settings.json`.
+    pub ssh_password_drafts: std::collections::HashMap<LlmProviderKind, String>,
     /// Background "Test connection" results for Remote SSH compute targets, keyed by
-    /// profile id.
-    pub ssh_test: std::collections::HashMap<String, SshTestStatus>,
+    /// provider kind.
+    pub ssh_test: std::collections::HashMap<LlmProviderKind, SshTestStatus>,
     /// Channel for SSH "Test connection" results (drained each frame).
     pub ssh_test_rx: Option<std::sync::mpsc::Receiver<SshTestMsg>>,
 }

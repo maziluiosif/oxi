@@ -5,8 +5,7 @@ use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
 use crate::settings::{LlmProviderKind, ALL_TOOL_NAMES};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_label, hairline, pill_tab, primary_button_icon, settings_caption,
-    settings_section_title,
+    card_frame, field_label, hairline, pill_tab, settings_caption, settings_section_title,
 };
 
 use super::super::OxiApp;
@@ -36,56 +35,29 @@ impl OxiApp {
         let provider = self.conv.settings_provider_tab;
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(format!("{} profiles", provider.label()))
+                RichText::new(provider.label())
                     .size(FS_BODY)
                     .color(c_text())
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if primary_button_icon(ui, ICON_PLUS, "Add profile")
-                    .on_hover_text("Create a new profile for this provider")
+                let is_active = self.conv.settings.active_provider == provider;
+                if is_active {
+                    super::layout::active_pill(ui, "Active");
+                } else if crate::ui::chrome::ghost_button(ui, "Make active", false)
+                    .on_hover_text("Use this provider for new chats")
                     .clicked()
                 {
-                    let id = self.conv.settings.add_profile(provider);
-                    self.conv.settings.set_active_profile(&id);
+                    self.conv.settings.active_provider = provider;
                 }
             });
         });
         ui.add_space(10.0);
 
-        let profile_indices: Vec<usize> = self
-            .conv
-            .settings
-            .profiles
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| p.provider == provider)
-            .map(|(i, _)| i)
-            .collect();
+        self.render_provider_config(ui, provider);
+        ui.add_space(10.0);
 
-        if profile_indices.is_empty() {
-            card_frame().show(ui, |ui| {
-                ui.label(
-                    RichText::new("No profiles for this provider yet.")
-                        .size(FS_SMALL)
-                        .color(c_text_muted()),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new("Click \"+ Add profile\" above to create one.")
-                        .size(FS_TINY)
-                        .color(c_text_faint()),
-                );
-            });
-            ui.add_space(12.0);
-        }
-
-        for idx in profile_indices {
-            self.render_profile_card(ui, idx);
-            ui.add_space(10.0);
-        }
-
-        // Provider OAuth (single section below cards, for clarity)
+        // Provider OAuth (single section below the config, for clarity)
         if provider == LlmProviderKind::GptCodex {
             ui.add_space(6.0);
             settings_caption(ui, "OAuth");
@@ -97,7 +69,7 @@ impl OxiApp {
         ui.add_space(6.0);
         ui.label(
             RichText::new(
-                "If a profile key is empty, the app falls back to environment variables. \
+                "If the API key is empty, the app falls back to environment variables. \
                  OAuth still takes precedence where available.",
             )
             .size(FS_TINY)
@@ -276,36 +248,39 @@ impl OxiApp {
             ui.label(
                 RichText::new(
                     "The Generate button in the git panel drafts a commit message from \
-                     the staged diff. Pick which provider profile it uses and its own system \
-                     prompt, kept separate from the agent prompt above.",
+                     the staged diff. Pick which provider and model it uses and its own \
+                     system prompt, kept separate from the agent prompt above.",
                 )
                 .size(FS_TINY)
                 .color(c_text_muted()),
             );
 
             ui.add_space(8.0);
-            settings_caption(ui, "Model profile");
+            settings_caption(ui, "Provider");
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                let current = self.conv.settings.commit_msg_profile_id.clone();
-                if pill_tab(ui, "Active profile", current.trim().is_empty())
-                    && !current.trim().is_empty()
-                {
-                    self.conv.settings.commit_msg_profile_id.clear();
+                let current = self.conv.settings.commit_msg_provider;
+                if pill_tab(ui, "Active provider", current.is_none()) && current.is_some() {
+                    self.conv.settings.commit_msg_provider = None;
+                    self.conv.settings.commit_msg_model_id.clear();
                 }
-                let profiles: Vec<(String, String)> = self
-                    .conv
-                    .settings
-                    .profiles
-                    .iter()
-                    .map(|p| (p.id.clone(), p.name.clone()))
-                    .collect();
-                for (id, name) in profiles {
-                    if pill_tab(ui, &name, id == current) && id != current {
-                        self.conv.settings.commit_msg_profile_id = id;
+                for kind in LlmProviderKind::ALL {
+                    if pill_tab(ui, kind.label(), current == Some(kind)) && current != Some(kind) {
+                        self.conv.settings.commit_msg_provider = Some(kind);
                     }
                 }
             });
+            if let Some(kind) = self.conv.settings.commit_msg_provider {
+                ui.add_space(6.0);
+                field_label(ui, "Model (empty = provider's selected model)");
+                let hint = self.conv.settings.provider(kind).model_id.clone();
+                ui.add(
+                    TextEdit::singleline(&mut self.conv.settings.commit_msg_model_id)
+                        .desired_width(320.0)
+                        .hint_text(hint)
+                        .margin(Margin::symmetric(8.0, 5.0)),
+                );
+            }
 
             ui.add_space(10.0);
             settings_caption(ui, "System prompt");

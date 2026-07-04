@@ -368,10 +368,6 @@ pub fn primary_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Bu
         .rounding(RADIUS_BUTTON)
         .min_size(egui::vec2(0.0, 26.0))
 }
-pub fn primary_button_icon(ui: &mut Ui, icon: &str, label: &str) -> Response {
-    ui.add(primary_button_icon_widget(icon, label))
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-}
 
 /// Neutral secondary button — used for Sign out, Delete, etc. (with `danger` color swap).
 pub fn ghost_button_widget(label: &str, danger: bool) -> egui::Button<'_> {
