@@ -22,6 +22,7 @@ mod state;
 mod streaming;
 mod task_runner;
 mod terminal_panel;
+mod update_check;
 
 pub use state::{
     ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState, SessionKey,
@@ -125,6 +126,10 @@ impl OxiApp {
                 ssh_password_drafts: std::collections::HashMap::new(),
                 ssh_test: std::collections::HashMap::new(),
                 ssh_test_rx: None,
+                update_check_started: false,
+                update_checking: false,
+                update_result: None,
+                update_rx: None,
             },
             terminal: None,
             tunnels: crate::compute::TunnelManager::spawn(),

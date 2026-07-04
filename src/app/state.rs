@@ -26,7 +26,9 @@ pub enum SettingsTab {
     #[default]
     Providers,
     Agent,
+    Prompts,
     Appearance,
+    About,
 }
 
 /// One project root and its chat tabs.
@@ -134,6 +136,10 @@ pub struct SshTestMsg {
     pub result: Result<u16, String>,
 }
 
+/// Result message from the background GitHub-release update check.
+#[derive(Debug)]
+pub struct UpdateMsg(pub Result<crate::update::ReleaseInfo, String>);
+
 pub struct ConversationState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -199,4 +205,13 @@ pub struct ConversationState {
     pub ssh_test: std::collections::HashMap<LlmProviderKind, SshTestStatus>,
     /// Channel for SSH "Test connection" results (drained each frame).
     pub ssh_test_rx: Option<std::sync::mpsc::Receiver<SshTestMsg>>,
+    /// True once the on-startup update check has been kicked off (it runs once per
+    /// app start; the About panel's button can force a re-run).
+    pub update_check_started: bool,
+    /// True while an update check is in flight.
+    pub update_checking: bool,
+    /// Outcome of the last update check. Errors are only surfaced in the About panel.
+    pub update_result: Option<Result<crate::update::ReleaseInfo, String>>,
+    /// Channel for the update-check result (drained each frame).
+    pub update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
 }
