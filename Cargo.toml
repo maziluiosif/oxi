@@ -2,8 +2,14 @@
 name = "oxi"
 version = "0.9.0"
 edition = "2021"
+# Floor set by the strictest dependencies (keyring 4, image 0.25 require 1.88).
+rust-version = "1.88"
 description = "Standalone coding agent chat UI (Rust + egui; OpenAI-compatible LLMs + local tools)"
 license = "MIT"
+repository = "https://github.com/maziluiosif/oxi"
+readme = "README.md"
+keywords = ["gui", "llm", "coding-agent", "egui", "chat"]
+categories = ["development-tools", "gui"]
 
 [dependencies]
 eframe = "0.29"
