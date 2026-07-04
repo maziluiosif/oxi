@@ -84,16 +84,12 @@ impl OxiApp {
     /// Kick off the LLM completion for the commit message once the diff is in hand.
     fn start_commit_gen(&mut self, diff: &str) {
         self.conv.commit_gen_pending = false;
-        let Some(profile) = self.conv.settings.commit_msg_profile().cloned() else {
-            self.conv.commit_gen_error =
-                Some("No provider profile configured for commit messages.".to_string());
-            return;
-        };
+        let config = self.conv.settings.commit_msg_config();
         let system_prompt = self.conv.settings.commit_msg_system_prompt.clone();
         let user_prompt =
             format!("Write a git commit message for the following diff.\n\n```diff\n{diff}\n```");
         let (rx, _handle) = crate::agent::spawn_completion(crate::agent::CompleteRequest {
-            profile,
+            config,
             system_prompt,
             user_prompt,
             max_chars: Some(1500),

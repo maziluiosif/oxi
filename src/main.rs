@@ -12,6 +12,7 @@ mod settings;
 mod terminal;
 mod theme;
 mod ui;
+mod update;
 
 use app::OxiApp;
 use eframe::egui::IconData;

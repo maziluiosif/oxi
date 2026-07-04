@@ -1,14 +1,14 @@
-//! Per-profile editing: model/base-URL/API-key fields, the Local/Remote(SSH) compute
-//! target (with SSH password storage and "Test connection"), Codex OAuth sign-in, and
-//! background model-list fetching.
+//! Per-provider config editing: model/base-URL/API-key fields, the Local/Remote(SSH)
+//! compute target (with SSH password storage and "Test connection"), Codex OAuth sign-in,
+//! and background model-list fetching.
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
 
 use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
-use crate::settings::{ComputeLocation, LlmProviderKind, ProviderProfile, SshConfig};
+use crate::settings::{ComputeLocation, LlmProviderKind, ProviderConfig, SshConfig};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_label, ghost_button, hairline, nested_card_frame, pill_tab, settings_caption,
+    card_frame, field_label, ghost_button, nested_card_frame, pill_tab, settings_caption,
 };
 
 use super::super::task_runner::spawn_async_task;
@@ -16,80 +16,30 @@ use super::super::{ModelFetchMsg, OxiApp, SshTestMsg};
 use super::layout::{active_pill, inactive_pill};
 
 impl OxiApp {
-    pub(super) fn render_profile_card(&mut self, ui: &mut Ui, idx: usize) {
-        let mut delete_clicked = false;
-        let mut make_active_clicked = false;
-        let active_id = self.conv.settings.active_profile_id.clone();
-        let prov = self.conv.settings.profiles[idx].provider;
-        let selected = active_id == self.conv.settings.profiles[idx].id;
-
+    pub(super) fn render_provider_config(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
         card_frame().show(ui, |ui| {
-            // Header: status dot, name editor, "Active" pill, delete
-            ui.horizontal(|ui| {
-                let dot_col = if selected { c_accent() } else { c_text_faint() };
-                ui.label(RichText::new("●").size(FS_BODY).color(dot_col));
-                ui.add_space(4.0);
-
-                ui.add(
-                    TextEdit::singleline(&mut self.conv.settings.profiles[idx].name)
-                        .desired_width(220.0)
-                        .hint_text("Profile name")
-                        .margin(Margin::symmetric(8.0, 4.0)),
-                );
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(prov.label())
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
-                );
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ghost_button(ui, "Delete", true)
-                        .on_hover_text("Remove this profile")
-                        .clicked()
-                    {
-                        delete_clicked = true;
-                    }
-                    ui.add_space(6.0);
-                    if selected {
-                        // "Active" indicator pill (non-interactive)
-                        active_pill(ui, "Active");
-                    } else if crate::ui::chrome::ghost_button(ui, "Make active", false)
-                        .on_hover_text("Use this profile for new chats")
-                        .clicked()
-                    {
-                        make_active_clicked = true;
-                    }
-                });
-            });
-
-            ui.add_space(4.0);
-            hairline(ui);
-            ui.add_space(4.0);
-
             // Model id ─ with dropdown of models fetched from the provider's /v1/models.
             field_label(ui, "Model id");
-            let pid = self.conv.settings.profiles[idx].id.clone();
             let have = self
                 .conv
                 .fetched_models
-                .get(&pid)
+                .get(&kind)
                 .is_some_and(|f| !f.models.is_empty());
             ui.horizontal(|ui| {
                 if have {
                     let fetched = self
                         .conv
                         .fetched_models
-                        .get(&pid)
+                        .get(&kind)
                         .map(|f| f.models.clone())
                         .unwrap_or_default();
-                    let current = self.conv.settings.profiles[idx].model_id.clone();
+                    let current = self.conv.settings.provider(kind).model_id.clone();
                     let label = if current.is_empty() {
                         "(custom)".to_string()
                     } else {
                         current.clone()
                     };
-                    egui::ComboBox::from_id_salt(("model_combo", idx))
+                    egui::ComboBox::from_id_salt(("model_combo", kind.slug()))
                         .selected_text(label)
                         .width(ui.available_width() - 30.0)
                         .show_ui(ui, |ui| {
@@ -98,13 +48,13 @@ impl OxiApp {
                             }
                             for m in &fetched {
                                 if ui.selectable_label(*m == current, m.clone()).clicked() {
-                                    self.conv.settings.profiles[idx].model_id = m.clone();
+                                    self.conv.settings.provider_mut(kind).model_id = m.clone();
                                 }
                             }
                         });
                 } else {
                     ui.add(
-                        TextEdit::singleline(&mut self.conv.settings.profiles[idx].model_id)
+                        TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).model_id)
                             .desired_width(ui.available_width() - 30.0)
                             .hint_text("e.g. gpt-4o-mini or kimi-k2.7-code")
                             .margin(Margin::symmetric(8.0, 5.0)),
@@ -114,11 +64,11 @@ impl OxiApp {
                     .on_hover_text("Load available models from provider")
                     .clicked()
                 {
-                    self.spawn_model_fetch(ui.ctx(), idx);
+                    self.spawn_model_fetch(ui.ctx(), kind);
                 }
             });
             // Status line for the model fetch.
-            if let Some(f) = self.conv.fetched_models.get(&pid) {
+            if let Some(f) = self.conv.fetched_models.get(&kind) {
                 if let Some(e) = &f.error {
                     ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
                 } else if f.loading {
@@ -137,8 +87,11 @@ impl OxiApp {
             }
             // Context window (auto from catalog; editable override).
             {
-                let cw = self.conv.settings.profiles[idx].context_window;
-                let resolved = self.conv.settings.profiles[idx]
+                let cw = self.conv.settings.provider(kind).context_window;
+                let resolved = self
+                    .conv
+                    .settings
+                    .provider(kind)
                     .effective_context_window(self.conv.settings.context_window_default);
                 field_label(ui, "Context window (tokens, 0 = auto)");
                 ui.horizontal(|ui| {
@@ -151,14 +104,14 @@ impl OxiApp {
                     );
                     if resp.changed() {
                         let parsed = value.trim().parse::<usize>().ok();
-                        self.conv.settings.profiles[idx].context_window =
+                        self.conv.settings.provider_mut(kind).context_window =
                             parsed.and_then(|n| if n > 0 { Some(n) } else { None });
                     }
                     if crate::ui::chrome::ghost_button(ui, "Auto", false)
                         .on_hover_text("Resolve context window from the model catalog")
                         .clicked()
                     {
-                        self.conv.settings.profiles[idx].context_window = None;
+                        self.conv.settings.provider_mut(kind).context_window = None;
                     }
                     ui.label(
                         RichText::new(format!("effective: {resolved}"))
@@ -171,19 +124,19 @@ impl OxiApp {
             // Base URL
             field_label(ui, "Base URL (optional)");
             ui.add(
-                TextEdit::singleline(&mut self.conv.settings.profiles[idx].base_url)
+                TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).base_url)
                     .desired_width(f32::INFINITY)
-                    .hint_text(prov.default_base_url())
+                    .hint_text(kind.default_base_url())
                     .margin(Margin::symmetric(8.0, 5.0)),
             );
 
             // API key
             field_label(ui, "API key / token");
             ui.add(
-                TextEdit::singleline(&mut self.conv.settings.profiles[idx].api_key)
+                TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).api_key)
                     .password(true)
                     .desired_width(f32::INFINITY)
-                    .hint_text(match prov {
+                    .hint_text(match kind {
                         LlmProviderKind::OpenAi => "OpenAI API key",
                         LlmProviderKind::OpenRouter => "OpenRouter API key",
                         LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
@@ -194,13 +147,17 @@ impl OxiApp {
                     .margin(Margin::symmetric(8.0, 5.0)),
             );
 
-            if prov == LlmProviderKind::OpenRouter {
+            if kind == LlmProviderKind::OpenRouter {
                 ui.add_space(8.0);
                 nested_card_frame().show(ui, |ui| {
                     settings_caption(ui, "Optional OpenRouter headers");
                     ui.add(
                         TextEdit::singleline(
-                            &mut self.conv.settings.profiles[idx].openrouter_http_referer,
+                            &mut self
+                                .conv
+                                .settings
+                                .provider_mut(kind)
+                                .openrouter_http_referer,
                         )
                         .desired_width(f32::INFINITY)
                         .hint_text("HTTP-Referer")
@@ -209,7 +166,7 @@ impl OxiApp {
                     ui.add_space(4.0);
                     ui.add(
                         TextEdit::singleline(
-                            &mut self.conv.settings.profiles[idx].openrouter_title,
+                            &mut self.conv.settings.provider_mut(kind).openrouter_title,
                         )
                         .desired_width(f32::INFINITY)
                         .hint_text("X-Title")
@@ -218,54 +175,38 @@ impl OxiApp {
                 });
             }
 
-            if prov == LlmProviderKind::LmStudio || prov == LlmProviderKind::Ollama {
-                self.render_compute_target_section(ui, idx);
+            if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
+                self.render_compute_target_section(ui, kind);
             }
         });
-
-        if make_active_clicked {
-            let id = self.conv.settings.profiles[idx].id.clone();
-            self.conv.settings.set_active_profile(&id);
-        }
-        if delete_clicked {
-            let id = self.conv.settings.profiles[idx].id.clone();
-            self.conv.settings.remove_profile(&id);
-            self.conv.ssh_password_drafts.remove(&id);
-            self.conv.ssh_test.remove(&id);
-            let mut creds = crate::compute::load_ssh_credentials();
-            creds.clear(&id);
-            let _ = crate::compute::save_ssh_credentials(&creds);
-        }
     }
 
-    /// "Local" vs "Remote (SSH)" compute target for a profile, shown only for self-hosted
-    /// runtimes (LM Studio / Ollama) where running on another host over SSH is meaningful.
-    fn render_compute_target_section(&mut self, ui: &mut Ui, idx: usize) {
+    /// "Local" vs "Remote (SSH)" compute target, shown only for self-hosted runtimes
+    /// (LM Studio / Ollama) where running on another host over SSH is meaningful.
+    fn render_compute_target_section(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
         ui.add_space(8.0);
         nested_card_frame().show(ui, |ui| {
             settings_caption(ui, "Compute target");
             let is_remote = matches!(
-                self.conv.settings.profiles[idx].location,
+                self.conv.settings.provider(kind).location,
                 ComputeLocation::RemoteSsh(_)
             );
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if pill_tab(ui, "Local", !is_remote) && is_remote {
-                    self.conv.settings.profiles[idx].location = ComputeLocation::Local;
+                    self.conv.settings.provider_mut(kind).location = ComputeLocation::Local;
                 }
                 if pill_tab(ui, "Remote (SSH)", is_remote) && !is_remote {
-                    let remote_runtime_port = self.conv.settings.profiles[idx]
-                        .provider
-                        .default_remote_runtime_port();
-                    self.conv.settings.profiles[idx].location =
+                    self.conv.settings.provider_mut(kind).location =
                         ComputeLocation::RemoteSsh(SshConfig {
-                            remote_runtime_port,
+                            remote_runtime_port: kind.default_remote_runtime_port(),
                             ..SshConfig::default()
                         });
                 }
             });
 
-            if let ComputeLocation::RemoteSsh(cfg) = &mut self.conv.settings.profiles[idx].location
+            if let ComputeLocation::RemoteSsh(cfg) =
+                &mut self.conv.settings.provider_mut(kind).location
             {
                 ui.add_space(8.0);
                 ui.label(
@@ -340,25 +281,26 @@ impl OxiApp {
         });
 
         if !matches!(
-            self.conv.settings.profiles[idx].location,
+            self.conv.settings.provider(kind).location,
             ComputeLocation::RemoteSsh(_)
         ) {
             return;
         }
-        let pid = self.conv.settings.profiles[idx].id.clone();
 
         // Lazily load the saved password (if any) into the in-memory draft on first touch.
-        if !self.conv.ssh_password_drafts.contains_key(&pid) {
-            let creds = crate::compute::load_ssh_credentials();
-            let pw = creds.get(&pid).unwrap_or_default().to_string();
-            self.conv.ssh_password_drafts.insert(pid.clone(), pw);
-        }
+        self.conv
+            .ssh_password_drafts
+            .entry(kind)
+            .or_insert_with(|| {
+                let creds = crate::compute::load_ssh_credentials();
+                creds.get(kind.slug()).unwrap_or_default().to_string()
+            });
 
         ui.add_space(8.0);
         nested_card_frame().show(ui, |ui| {
             field_label(ui, "SSH password");
             let changed = {
-                let pw = self.conv.ssh_password_drafts.get_mut(&pid).unwrap();
+                let pw = self.conv.ssh_password_drafts.get_mut(&kind).unwrap();
                 ui.add(
                     TextEdit::singleline(pw)
                         .password(true)
@@ -377,11 +319,11 @@ impl OxiApp {
                 let pw = self
                     .conv
                     .ssh_password_drafts
-                    .get(&pid)
+                    .get(&kind)
                     .cloned()
                     .unwrap_or_default();
                 let mut creds = crate::compute::load_ssh_credentials();
-                creds.set(pid.clone(), pw);
+                creds.set(kind.slug(), pw);
                 if let Err(e) = crate::compute::save_ssh_credentials(&creds) {
                     self.run_state_mut(self.active_session_key()).stream_error =
                         Some(format!("Save SSH password: {e}"));
@@ -391,10 +333,10 @@ impl OxiApp {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ghost_button(ui, "Test connection", false).clicked() {
-                    self.spawn_ssh_test(ui.ctx(), idx);
+                    self.spawn_ssh_test(ui.ctx(), kind);
                 }
                 ui.add_space(8.0);
-                if let Some(status) = self.conv.ssh_test.get(&pid) {
+                if let Some(status) = self.conv.ssh_test.get(&kind) {
                     if status.loading {
                         ui.label(
                             RichText::new("Connecting…")
@@ -420,25 +362,21 @@ impl OxiApp {
         });
     }
 
-    /// Kick off a background SSH "Test connection" check for the profile at `idx`'s
-    /// `RemoteSsh` config, if one isn't already in flight. Results arrive on
-    /// `conv.ssh_test_rx` and are drained each frame.
-    fn spawn_ssh_test(&mut self, ctx: &egui::Context, idx: usize) {
-        let Some(profile) = self.conv.settings.profiles.get(idx) else {
+    /// Kick off a background SSH "Test connection" check for `kind`'s `RemoteSsh` config,
+    /// if one isn't already in flight. Results arrive on `conv.ssh_test_rx` and are
+    /// drained each frame.
+    fn spawn_ssh_test(&mut self, ctx: &egui::Context, kind: LlmProviderKind) {
+        let Some(cfg) = self.conv.settings.provider(kind).ssh_config().cloned() else {
             return;
         };
-        let Some(cfg) = profile.ssh_config().cloned() else {
-            return;
-        };
-        let pid = profile.id.clone();
         let password = self
             .conv
             .ssh_password_drafts
-            .get(&pid)
+            .get(&kind)
             .cloned()
             .unwrap_or_default();
 
-        let entry = self.conv.ssh_test.entry(pid.clone()).or_default();
+        let entry = self.conv.ssh_test.entry(kind).or_default();
         if entry.loading {
             return;
         }
@@ -450,20 +388,19 @@ impl OxiApp {
         let ctx = ctx.clone();
         let tunnels = self.tunnels.clone();
         let err_tx = tx.clone();
-        let err_pid = pid.clone();
         let err_ctx = ctx.clone();
         spawn_async_task(
             move |err| {
                 let _ = err_tx.send(SshTestMsg {
-                    profile_id: err_pid,
+                    provider: kind,
                     result: Err(err),
                 });
                 err_ctx.request_repaint();
             },
             move |rt| {
-                let r = rt.block_on(tunnels.ensure_tunnel(&pid, &cfg, &password));
+                let r = rt.block_on(tunnels.ensure_tunnel(kind.slug(), &cfg, &password));
                 let _ = tx.send(SshTestMsg {
-                    profile_id: pid,
+                    provider: kind,
                     result: r,
                 });
                 ctx.request_repaint();
@@ -481,7 +418,7 @@ impl OxiApp {
         loop {
             match rx.try_recv() {
                 Ok(msg) => {
-                    let entry = self.conv.ssh_test.entry(msg.profile_id).or_default();
+                    let entry = self.conv.ssh_test.entry(msg.provider).or_default();
                     entry.loading = false;
                     entry.result = Some(msg.result);
                     repainted = true;
@@ -588,37 +525,25 @@ impl OxiApp {
     }
 
     // ── Model list fetch ─────────────────────────────────────────────────────
-    /// Ensure the active profile's model catalog has been fetched at least once
+    /// Ensure the active provider's model catalog has been fetched at least once
     /// (e.g. on startup) so the composer model dropdown offers the full list
     /// instead of falling back to just the current model id.
     pub(crate) fn ensure_active_models_fetched(&mut self, ctx: &egui::Context) {
-        let Some(active) = self.conv.settings.active_profile() else {
-            return;
-        };
-        let pid = active.id.clone();
+        let kind = self.conv.settings.active_provider;
         // Already fetched (or in flight)? Then nothing to do.
-        if let Some(f) = self.conv.fetched_models.get(&pid) {
+        if let Some(f) = self.conv.fetched_models.get(&kind) {
             if f.loading || !f.models.is_empty() {
                 return;
             }
         }
-        if let Some(idx) = self.conv.settings.profiles.iter().position(|p| p.id == pid) {
-            self.spawn_model_fetch(ctx, idx);
-        }
+        self.spawn_model_fetch(ctx, kind);
     }
 
-    /// Kick off a background `/v1/models` fetch for the profile at `idx`, if one isn't
-    /// already in flight. Results arrive on `conv.model_rx` and are drained each frame.
-    pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, idx: usize) {
-        let profile = match self.conv.settings.profiles.get(idx) {
-            Some(p) => p.clone(),
-            None => return,
-        };
-        let entry = self
-            .conv
-            .fetched_models
-            .entry(profile.id.clone())
-            .or_default();
+    /// Kick off a background `/v1/models` fetch for `kind`, if one isn't already in
+    /// flight. Results arrive on `conv.model_rx` and are drained each frame.
+    pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, kind: LlmProviderKind) {
+        let cfg = self.conv.settings.provider(kind).clone();
+        let entry = self.conv.fetched_models.entry(kind).or_default();
         if entry.loading {
             return;
         }
@@ -629,15 +554,13 @@ impl OxiApp {
         // Keep only the most recent receiver live (single global channel).
         self.conv.model_rx = Some(rx);
         let ctx = ctx.clone();
-        let profile_id = profile.id.clone();
         let err_tx = tx.clone();
-        let err_pid = profile_id.clone();
         let err_ctx = ctx.clone();
         let tunnels = self.tunnels.clone();
         spawn_async_task(
             move |err| {
                 let _ = err_tx.send(ModelFetchMsg {
-                    profile_id: err_pid,
+                    provider: kind,
                     result: Err(err),
                 });
                 err_ctx.request_repaint();
@@ -645,24 +568,24 @@ impl OxiApp {
             move |rt| {
                 let client = match reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
-                    .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
+                    .danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
                     .build()
                 {
                     Ok(c) => c,
                     Err(e) => {
                         let _ = tx.send(ModelFetchMsg {
-                            profile_id,
+                            provider: kind,
                             result: Err(e.to_string()),
                         });
                         ctx.request_repaint();
                         return;
                     }
                 };
-                let base = match rt.block_on(crate::compute::resolve_base_url(&profile, &tunnels)) {
+                let base = match rt.block_on(crate::compute::resolve_base_url(&cfg, &tunnels)) {
                     Ok(b) => b,
                     Err(e) => {
                         let _ = tx.send(ModelFetchMsg {
-                            profile_id,
+                            provider: kind,
                             result: Err(e),
                         });
                         ctx.request_repaint();
@@ -670,23 +593,23 @@ impl OxiApp {
                     }
                 };
                 // OpenCode Go expects /v1/models but its default base lacks /v1.
-                let base = if profile.provider == LlmProviderKind::OpenCodeGo
+                let base = if cfg.provider == LlmProviderKind::OpenCodeGo
                     && !base.trim_end_matches('/').ends_with("/v1")
                 {
                     format!("{}/v1", base.trim_end_matches('/'))
                 } else {
                     base
                 };
-                let extra = if profile.provider == LlmProviderKind::OpenRouter {
-                    crate::agent::runner::openrouter_extra_headers(&profile)
+                let extra = if cfg.provider == LlmProviderKind::OpenRouter {
+                    crate::agent::runner::openrouter_extra_headers(&cfg)
                 } else {
                     Vec::new()
                 };
-                let key = match resolve_fetch_key(&profile) {
+                let key = match resolve_fetch_key(&cfg) {
                     Ok(k) => k,
                     Err(e) => {
                         let _ = tx.send(ModelFetchMsg {
-                            profile_id,
+                            provider: kind,
                             result: Err(e),
                         });
                         ctx.request_repaint();
@@ -696,7 +619,7 @@ impl OxiApp {
                 let r = rt.block_on(crate::agent::fetch_models(&client, &base, &key, &extra));
                 let r = r.map(|ms| ms.into_iter().map(|m| m.id).collect::<Vec<_>>());
                 let _ = tx.send(ModelFetchMsg {
-                    profile_id,
+                    provider: kind,
                     result: r,
                 });
                 ctx.request_repaint();
@@ -706,12 +629,12 @@ impl OxiApp {
 }
 
 /// Resolve the bearer key to use for a model-list fetch (mirrors the runner's auth fallbacks).
-fn resolve_fetch_key(profile: &ProviderProfile) -> Result<String, String> {
-    let key = profile.api_key.trim();
+fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
+    let key = cfg.api_key.trim();
     if !key.is_empty() {
         return Ok(key.to_string());
     }
-    match profile.provider {
+    match cfg.provider {
         LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => {
             std::env::var("OPENAI_API_KEY").map_err(|_| "Set an API key to list models.".into())
         }

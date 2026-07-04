@@ -1,9 +1,11 @@
-//! Provider/profile domain types: which LLM backend a profile talks to, where its
-//! runtime lives (local vs. an SSH-tunneled remote), and the profile itself.
+//! Provider domain types: which LLM backend a config talks to, where its runtime lives
+//! (local vs. an SSH-tunneled remote), and the per-provider configuration itself.
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum LlmProviderKind {
     #[default]
@@ -31,6 +33,20 @@ impl LlmProviderKind {
         LlmProviderKind::GptCodex,
         LlmProviderKind::OpenCodeGo,
     ];
+
+    /// Canonical string id for this provider. Matches the serde `lowercase` variant names
+    /// exactly, so the `settings.json` map key, the keychain account (`api-key:{slug}`),
+    /// and the SSH-credential key are all the same string.
+    pub fn slug(&self) -> &'static str {
+        match self {
+            LlmProviderKind::OpenAi => "openai",
+            LlmProviderKind::OpenRouter => "openrouter",
+            LlmProviderKind::GptCodex => "gptcodex",
+            LlmProviderKind::OpenCodeGo => "opencodego",
+            LlmProviderKind::LmStudio => "lmstudio",
+            LlmProviderKind::Ollama => "ollama",
+        }
+    }
 
     pub fn default_base_url(&self) -> &'static str {
         match self {
@@ -70,8 +86,8 @@ impl LlmProviderKind {
     }
 
     /// Default port for a `RemoteSsh` compute target's runtime, i.e. the port the runtime
-    /// listens on locally on the remote host. Used to pre-fill [`SshConfig`] when a profile
-    /// is switched to Remote, so e.g. an LM Studio profile defaults to `1234` instead of
+    /// listens on locally on the remote host. Used to pre-fill [`SshConfig`] when a provider
+    /// config is switched to Remote, so e.g. LM Studio defaults to `1234` instead of
     /// Ollama's `11434`.
     pub fn default_remote_runtime_port(&self) -> u16 {
         match self {
@@ -90,7 +106,7 @@ impl LlmProviderKind {
     }
 }
 
-/// Where the model server for a profile actually runs.
+/// Where the model server for a provider actually runs.
 ///
 /// `Local` covers the common case (the runtime listens on this machine, or on a LAN host
 /// reachable directly via `base_url`). `RemoteSsh` tunnels the connection through SSH port
@@ -105,8 +121,8 @@ pub enum ComputeLocation {
 }
 
 /// SSH connection details for a remote compute target. The password itself is **not**
-/// stored here — it lives in `ssh_credentials.json` (see [`crate::compute::store`]), keyed
-/// by [`ProviderProfile::id`], so it never ends up in `settings.json`.
+/// stored here — it lives in the OS keychain (see [`crate::compute::store`]), keyed by
+/// [`LlmProviderKind::slug`], so it never ends up in `settings.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SshConfig {
     pub host: String,
@@ -132,49 +148,50 @@ impl Default for SshConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderProfile {
-    pub id: String,
-    pub name: String,
+/// Connection/model configuration for one provider. Exactly one exists per
+/// [`LlmProviderKind`], stored as the values of `AppSettings::providers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ProviderConfig {
+    /// Duplicated from the map key in `AppSettings::providers` so a config can be passed
+    /// around as one self-contained value. `#[serde(skip)]` keeps it out of the JSON —
+    /// the map key is the on-disk source of truth — and `AppSettings::normalize`
+    /// re-stamps it after every load.
+    #[serde(skip)]
     pub provider: LlmProviderKind,
+    #[serde(default)]
     pub model_id: String,
     /// Override base URL (empty = use default for provider).
+    #[serde(default)]
     pub base_url: String,
     /// Never written to `settings.json` — persisted in the OS keychain instead, keyed
-    /// by [`ProviderProfile::id`]. See [`super::AppSettings::migrate_secrets_to_keychain`]
-    /// for how an existing plaintext key gets moved out on first load with this version.
+    /// `api-key:{provider.slug()}`. See `AppSettings::migrate_secrets_to_keychain`.
     #[serde(default, skip_serializing)]
     pub api_key: String,
+    #[serde(default)]
     pub openrouter_http_referer: String,
+    #[serde(default)]
     pub openrouter_title: String,
-    /// Optional explicit context window in tokens for this model/profile.
+    /// Optional explicit context window in tokens for this provider's model.
     /// `None` (or `0`) = auto: look it up from the built-in model catalog, then fall
     /// back to a conservative default. Set to a number to override the history trim budget.
     #[serde(default)]
     pub context_window: Option<usize>,
-    /// Where the model server for this profile runs. Defaults to [`ComputeLocation::Local`]
+    /// Where the model server for this provider runs. Defaults to [`ComputeLocation::Local`]
     /// so existing/older settings files (no `location` field) behave exactly as before.
     #[serde(default)]
     pub location: ComputeLocation,
 }
 
-impl ProviderProfile {
-    pub fn new(id: impl Into<String>, provider: LlmProviderKind, name: impl Into<String>) -> Self {
+impl ProviderConfig {
+    pub fn new(provider: LlmProviderKind) -> Self {
         Self {
-            id: id.into(),
-            name: name.into(),
             provider,
             model_id: provider.default_model_id().to_string(),
-            base_url: String::new(),
-            api_key: String::new(),
-            openrouter_http_referer: String::new(),
-            openrouter_title: String::new(),
-            context_window: None,
-            location: ComputeLocation::Local,
+            ..Self::default()
         }
     }
 
-    /// `Some(&SshConfig)` when this profile's runtime is reached over an SSH tunnel.
+    /// `Some(&SshConfig)` when this provider's runtime is reached over an SSH tunnel.
     pub fn ssh_config(&self) -> Option<&SshConfig> {
         match &self.location {
             ComputeLocation::Local => None,
@@ -195,9 +212,9 @@ impl ProviderProfile {
         format!("{} · {}", self.provider.label(), self.model_id)
     }
 
-    /// Resolve the effective context window in tokens for this profile.
+    /// Resolve the effective context window in tokens for this provider.
     ///
-    /// Order: explicit profile override > built-in catalog > provider/model default.
+    /// Order: explicit override > built-in catalog > provider/model default.
     pub fn effective_context_window(&self, fallback_default: usize) -> usize {
         if let Some(cw) = self.context_window {
             if cw > 0 {
@@ -205,6 +222,45 @@ impl ProviderProfile {
             }
         }
         crate::agent::models::context_window_for_model(&self.model_id).unwrap_or(fallback_default)
+    }
+}
+
+/// Legacy per-profile shape from the profiles era (multiple named profiles per provider).
+/// Only used to migrate old `settings.json` files — see `AppSettings::load`. Must keep
+/// deserializing a plaintext `api_key` so pre-keychain files still migrate their secrets.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderProfile {
+    #[serde(default)]
+    pub id: String,
+    pub provider: LlmProviderKind,
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub openrouter_http_referer: String,
+    #[serde(default)]
+    pub openrouter_title: String,
+    #[serde(default)]
+    pub context_window: Option<usize>,
+    #[serde(default)]
+    pub location: ComputeLocation,
+}
+
+impl From<ProviderProfile> for ProviderConfig {
+    fn from(p: ProviderProfile) -> Self {
+        Self {
+            provider: p.provider,
+            model_id: p.model_id,
+            base_url: p.base_url,
+            api_key: p.api_key,
+            openrouter_http_referer: p.openrouter_http_referer,
+            openrouter_title: p.openrouter_title,
+            context_window: p.context_window,
+            location: p.location,
+        }
     }
 }
 
@@ -274,27 +330,13 @@ impl UiDensity {
     }
 }
 
-pub(crate) fn sanitize_profile_name(name: &str) -> String {
-    let s: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    s.trim_matches('-').to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A `settings.json` written by a pre-keychain version of oxi still has a plaintext
-    /// `api_key` in it; deserializing must still read that value so
-    /// `migrate_secrets_to_keychain` has something to migrate out on first load.
+    /// `api_key` in its profiles; deserializing the legacy shape must still read that
+    /// value so migration has something to move into the keychain on first load.
     #[test]
     fn legacy_plaintext_api_key_still_deserializes() {
         let json = r#"{"id":"t","name":"t","provider":"openai","model_id":"gpt-4o-mini","base_url":"","api_key":"sk-legacy","openrouter_http_referer":"","openrouter_title":""}"#;
@@ -303,32 +345,32 @@ mod tests {
     }
 
     #[test]
-    fn new_profile_defaults_to_local_compute() {
-        let p = ProviderProfile::new("test", LlmProviderKind::Ollama, "test");
-        assert_eq!(p.location, ComputeLocation::Local);
-        assert!(p.ssh_config().is_none());
+    fn new_config_defaults_to_local_compute() {
+        let c = ProviderConfig::new(LlmProviderKind::Ollama);
+        assert_eq!(c.location, ComputeLocation::Local);
+        assert!(c.ssh_config().is_none());
     }
 
     #[test]
     fn ssh_config_returns_some_for_remote() {
-        let mut p = ProviderProfile::new("test", LlmProviderKind::Ollama, "test");
-        p.location = ComputeLocation::RemoteSsh(SshConfig {
+        let mut c = ProviderConfig::new(LlmProviderKind::Ollama);
+        c.location = ComputeLocation::RemoteSsh(SshConfig {
             host: "test-host".to_string(),
             port: 22,
             user: "testuser".to_string(),
             remote_runtime_port: 11434,
         });
-        let cfg = p.ssh_config().expect("remote ssh config");
+        let cfg = c.ssh_config().expect("remote ssh config");
         assert_eq!(cfg.host, "test-host");
         assert_eq!(cfg.remote_runtime_port, 11434);
     }
 
     #[test]
-    fn compute_location_missing_field_deserializes_to_local() {
-        // Older settings.json files have no `location` field at all.
-        let json = r#"{"id":"t","name":"t","provider":"ollama","model_id":"x","base_url":"","api_key":"","openrouter_http_referer":"","openrouter_title":""}"#;
-        let p: ProviderProfile = serde_json::from_str(json).unwrap();
-        assert_eq!(p.location, ComputeLocation::Local);
+    fn provider_config_missing_location_deserializes_to_local() {
+        // Settings files written before compute targets existed have no `location` field.
+        let json = r#"{"model_id":"x","base_url":""}"#;
+        let c: ProviderConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.location, ComputeLocation::Local);
     }
 
     #[test]
@@ -346,15 +388,15 @@ mod tests {
 
     #[test]
     fn effective_base_url_uses_default_when_empty() {
-        let p = ProviderProfile::new("test", LlmProviderKind::OpenAi, "test");
-        assert_eq!(p.effective_base_url(), "https://api.openai.com/v1");
+        let c = ProviderConfig::new(LlmProviderKind::OpenAi);
+        assert_eq!(c.effective_base_url(), "https://api.openai.com/v1");
     }
 
     #[test]
     fn effective_base_url_uses_override() {
-        let mut p = ProviderProfile::new("test", LlmProviderKind::OpenAi, "test");
-        p.base_url = "http://localhost:8080/v1/".to_string();
-        assert_eq!(p.effective_base_url(), "http://localhost:8080/v1");
+        let mut c = ProviderConfig::new(LlmProviderKind::OpenAi);
+        c.base_url = "http://localhost:8080/v1/".to_string();
+        assert_eq!(c.effective_base_url(), "http://localhost:8080/v1");
     }
 
     #[test]
@@ -366,17 +408,20 @@ mod tests {
         }
     }
 
+    /// The slug must match the serde `lowercase` rename exactly — it's used as the
+    /// `settings.json` map key, so a mismatch would silently break round-tripping.
     #[test]
-    fn sanitize_profile_name_handles_special_chars() {
-        assert_eq!(sanitize_profile_name("My Profile!"), "my-profile");
-        assert_eq!(sanitize_profile_name("---test---"), "test");
-        assert_eq!(sanitize_profile_name("abc123"), "abc123");
+    fn slug_matches_serde_name() {
+        for kind in LlmProviderKind::ALL {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(json, format!("\"{}\"", kind.slug()));
+        }
     }
 
     #[test]
-    fn profile_subtitle_format() {
-        let p = ProviderProfile::new("test", LlmProviderKind::OpenAi, "test");
-        let sub = p.subtitle();
+    fn config_subtitle_format() {
+        let c = ProviderConfig::new(LlmProviderKind::OpenAi);
+        let sub = c.subtitle();
         assert!(sub.contains("OpenAI"));
         assert!(sub.contains("gpt-4o-mini"));
     }

@@ -23,7 +23,7 @@ use crate::agent::runner::{
     openrouter_extra_headers,
 };
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
-use crate::settings::{LlmProviderKind, ProviderProfile, WebSearchBackend};
+use crate::settings::{LlmProviderKind, ProviderConfig, WebSearchBackend};
 
 /// One streaming event from a completion run.
 #[derive(Debug)]
@@ -36,7 +36,7 @@ pub enum CompleteEvent {
 
 /// Request payload for a one-shot completion.
 pub struct CompleteRequest {
-    pub profile: ProviderProfile,
+    pub config: ProviderConfig,
     pub system_prompt: String,
     pub user_prompt: String,
     /// Optional max output characters before we stop early (used to keep commit
@@ -69,20 +69,20 @@ fn run(req: CompleteRequest, tx: Sender<CompleteEvent>) {
 
 async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<String, String> {
     let CompleteRequest {
-        profile,
+        config: cfg,
         system_prompt,
         user_prompt,
         max_chars,
     } = req;
 
-    let model = profile.model_id.clone();
+    let model = cfg.model_id.clone();
     // Bound connect + idle-between-chunks time rather than the whole request, so a
     // slow but progressing stream is not cut off.
     let client = match reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .read_timeout(std::time::Duration::from_secs(60))
         .tcp_keepalive(std::time::Duration::from_secs(60))
-        .danger_accept_invalid_certs(profile.provider.allows_self_signed_tls())
+        .danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
         .build()
     {
         Ok(c) => c,
@@ -111,10 +111,10 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         web_search_backend: WebSearchBackend::default(),
     };
 
-    let r = match profile.provider {
+    let r = match cfg.provider {
         LlmProviderKind::OpenAi => {
-            let key = configured_openai_key(&profile)?;
-            let base = profile.effective_base_url();
+            let key = configured_openai_key(&cfg)?;
+            let base = cfg.effective_base_url();
             run_chat_loop(
                 &mut LoopCtx {
                     client: &client,
@@ -135,8 +135,8 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             .await
         }
         LlmProviderKind::OpenRouter => {
-            let key = configured_openrouter_key(&profile)?;
-            let base = profile.effective_base_url();
+            let key = configured_openrouter_key(&cfg)?;
+            let base = cfg.effective_base_url();
             run_chat_loop(
                 &mut LoopCtx {
                     client: &client,
@@ -150,15 +150,15 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     max_rounds,
                 },
                 &key,
-                &openrouter_extra_headers(&profile),
+                &openrouter_extra_headers(&cfg),
                 &mut messages,
                 &tools,
             )
             .await
         }
         LlmProviderKind::LmStudio => {
-            let key = configured_lmstudio_key(&profile);
-            let base = profile.effective_base_url();
+            let key = configured_lmstudio_key(&cfg);
+            let base = cfg.effective_base_url();
             run_chat_loop(
                 &mut LoopCtx {
                     client: &client,
@@ -179,8 +179,8 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             .await
         }
         LlmProviderKind::Ollama => {
-            let key = configured_ollama_key(&profile);
-            let base = profile.effective_base_url();
+            let key = configured_ollama_key(&cfg);
+            let base = cfg.effective_base_url();
             run_chat_loop(
                 &mut LoopCtx {
                     client: &client,
@@ -204,10 +204,10 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             let mut oauth = load_oauth_store();
             if oauth.openai_codex.is_some() {
                 let creds = ensure_codex_access_token(&client, &mut oauth).await?;
-                let base = if profile.base_url.trim().is_empty() {
+                let base = if cfg.base_url.trim().is_empty() {
                     "https://chatgpt.com/backend-api".to_string()
                 } else {
-                    profile.effective_base_url()
+                    cfg.effective_base_url()
                 };
                 run_codex_responses_loop(
                     &mut LoopCtx {
@@ -228,8 +228,8 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 )
                 .await
             } else {
-                let key = configured_openai_key(&profile)?;
-                let base = profile.effective_base_url();
+                let key = configured_openai_key(&cfg)?;
+                let base = cfg.effective_base_url();
                 run_chat_loop(
                     &mut LoopCtx {
                         client: &client,
@@ -251,8 +251,8 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             }
         }
         LlmProviderKind::OpenCodeGo => {
-            let key = configured_opencode_go_key(&profile)?;
-            let base = profile.effective_base_url();
+            let key = configured_opencode_go_key(&cfg)?;
+            let base = cfg.effective_base_url();
             let model = model
                 .strip_prefix("opencode-go/")
                 .unwrap_or(&model)

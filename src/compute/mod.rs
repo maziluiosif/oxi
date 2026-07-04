@@ -7,12 +7,12 @@ mod tunnel;
 pub use store::{load_ssh_credentials, save_ssh_credentials};
 pub use tunnel::TunnelManager;
 
-use crate::settings::ProviderProfile;
+use crate::settings::ProviderConfig;
 
-/// Resolve the base URL to actually use for a profile's requests.
+/// Resolve the base URL to actually use for a provider's requests.
 ///
 /// For [`crate::settings::ComputeLocation::Local`] this is just
-/// [`ProviderProfile::effective_base_url`]. For `RemoteSsh`, this ensures an SSH tunnel is
+/// [`ProviderConfig::effective_base_url`]. For `RemoteSsh`, this ensures an SSH tunnel is
 /// up (connecting/reconnecting as needed) and returns a `127.0.0.1:<local port>` URL that
 /// forwards to the runtime's port on the remote host.
 ///
@@ -20,14 +20,15 @@ use crate::settings::ProviderProfile;
 /// their OpenAI-compatible API under `/v1`, so the tunneled URL always uses that suffix
 /// rather than trying to preserve a custom `base_url` path.
 pub async fn resolve_base_url(
-    profile: &ProviderProfile,
+    config: &ProviderConfig,
     tunnels: &TunnelManager,
 ) -> Result<String, String> {
-    let Some(cfg) = profile.ssh_config() else {
-        return Ok(profile.effective_base_url());
+    let Some(ssh) = config.ssh_config() else {
+        return Ok(config.effective_base_url());
     };
+    let key = config.provider.slug();
     let creds = load_ssh_credentials();
-    let password = creds.get(&profile.id).unwrap_or_default();
-    let local_port = tunnels.ensure_tunnel(&profile.id, cfg, password).await?;
+    let password = creds.get(key).unwrap_or_default();
+    let local_port = tunnels.ensure_tunnel(key, ssh, password).await?;
     Ok(format!("http://127.0.0.1:{local_port}/v1"))
 }
