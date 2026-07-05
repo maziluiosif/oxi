@@ -29,20 +29,10 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo audit
+        # Ignore policy (with rationale per advisory) lives in .cargo/audit.toml.
         run: |
           cargo install cargo-audit --locked
-          # RUSTSEC-2026-0194 / -0195 (quick-xml): pinned by eframe's Linux-only
-          # accessibility (accesskit/atspi) and wayland-scanner transitive deps via
-          # strict `^0.30`/`^0.39` requirements upstream hasn't relaxed yet — no
-          # semver-compatible fix is available, and these run at build/codegen time on
-          # Linux only, not on attacker-controlled input at runtime.
-          # RUSTSEC-2023-0071 (rsa, Marvin Attack): pulled in transitively by russh for
-          # SSH auth; upstream has published no fix for this timing side-channel.
-          # Re-check these on each dependency bump in case a fix lands.
-          cargo audit \
-            --ignore RUSTSEC-2026-0194 \
-            --ignore RUSTSEC-2026-0195 \
-            --ignore RUSTSEC-2023-0071
+          cargo audit
 
       - name: cargo test
         run: cargo test

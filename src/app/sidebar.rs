@@ -2,7 +2,7 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Color32, FontFamily, FontId, Frame, Layout, Margin, RichText, Rounding,
+    self, Align, Color32, CornerRadius, FontFamily, FontId, Frame, Layout, Margin, RichText,
     ScrollArea, Sense, Stroke, Ui,
 };
 
@@ -113,7 +113,7 @@ impl OxiApp {
             if row_hovered {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 ui.painter()
-                    .rect_filled(rect, Rounding::same(6.0), c_row_hover());
+                    .rect_filled(rect, CornerRadius::same(6), c_row_hover());
             }
             // Leading glyph: folder open/closed at rest, fold chevron on hover.
             let glyph = match (row_hovered, folded) {
@@ -133,7 +133,7 @@ impl OxiApp {
                 egui::pos2(rect.left() + 4.0 + GLYPH_W + 4.0, rect.top()),
                 egui::pos2(rect.right() - PLUS_W - 2.0, rect.bottom()),
             );
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(label_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect), |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add(
                         egui::Label::new(
@@ -189,7 +189,6 @@ impl OxiApp {
                     if ui.button("Delete workspace").clicked() {
                         self.delete_workspace(wi);
                         sidebar_changed = true;
-                        ui.close_menu();
                     }
                 });
             }
@@ -240,7 +239,7 @@ impl OxiApp {
                             } else {
                                 Color32::TRANSPARENT
                             };
-                            ui.painter().rect_filled(rect, Rounding::same(7.0), fill);
+                            ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
                             if response.clicked() {
                                 self.select_session_in_workspace(wi, si);
                             }
@@ -251,7 +250,6 @@ impl OxiApp {
                                 {
                                     self.delete_session(si);
                                     sidebar_changed = true;
-                                    ui.close_menu();
                                 }
                             });
                             // Hover-only delete button, mirroring the context-menu action.
@@ -277,7 +275,7 @@ impl OxiApp {
                                 // Backing fill keeps the icon legible over long titles.
                                 ui.painter().rect_filled(
                                     trash_rect,
-                                    Rounding::same(7.0),
+                                    CornerRadius::same(7),
                                     if selected {
                                         c_row_active()
                                     } else {
@@ -349,7 +347,7 @@ impl OxiApp {
         const SPINNER_GAP: f32 = 4.0;
 
         let inner = rect.shrink2(egui::vec2(3.0, ROW_VMARGIN));
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_min_width(inner.width());
             let lead_w = if running { 0.0 } else { 14.0 };
             let time_w = if running { 40.0 } else { 34.0 };
@@ -459,13 +457,13 @@ impl OxiApp {
                     egui::vec2(w, full_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        Frame::none()
+                        Frame::new()
                             .fill(c_bg_sidebar())
                             .inner_margin(Margin {
-                                left: 12.0,
-                                right: 10.0,
-                                top: 12.0,
-                                bottom: 12.0,
+                                left: 12,
+                                right: 10,
+                                top: 12,
+                                bottom: 12,
                             })
                             .show(ui, |ui| {
                                 ui.set_min_width(ui.max_rect().width());
@@ -492,16 +490,16 @@ impl OxiApp {
                 egui::vec2(chat_w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    Frame::none()
+                    Frame::new()
                         .fill(c_bg_main())
                         .inner_margin(Margin {
-                            left: CHAT_VIEW_MARGIN_LEFT,
-                            right: CHAT_VIEW_MARGIN_RIGHT,
-                            top: CHAT_FRAME_TOP,
-                            bottom: CHAT_FRAME_BOTTOM,
+                            left: CHAT_VIEW_MARGIN_LEFT as i8,
+                            right: CHAT_VIEW_MARGIN_RIGHT as i8,
+                            top: CHAT_FRAME_TOP as i8,
+                            bottom: CHAT_FRAME_BOTTOM as i8,
                         })
                         .show(ui, |ui| {
-                            let style = (*ui.ctx().style()).clone();
+                            let style = (*ui.style()).clone();
                             let column_center_w = crate::theme::chat_column_center_width(
                                 ui.available_width(),
                                 &style,
@@ -563,7 +561,7 @@ impl OxiApp {
                                     egui::pos2(chat_rect.left(), composer_top),
                                     egui::vec2(chat_rect.width(), composer_h),
                                 );
-                                ui.allocate_new_ui(
+                                ui.scope_builder(
                                     egui::UiBuilder::new().max_rect(composer_rect),
                                     |ui| {
                                         self.render_composer(ui, column_center_w);
@@ -583,13 +581,13 @@ impl OxiApp {
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.set_min_height(full_h);
-                        Frame::none()
+                        Frame::new()
                             .fill(c_bg_sidebar())
                             .inner_margin(Margin {
-                                left: 0.0,
-                                right: 0.0,
-                                top: 0.0,
-                                bottom: 0.0,
+                                left: 0,
+                                right: 0,
+                                top: 0,
+                                bottom: 0,
                             })
                             .show(ui, |ui| {
                                 self.render_git_panel(ui, full_h);
@@ -621,11 +619,11 @@ impl OxiApp {
             );
             self.conv.settings.git_width = self.conv.git_width;
         }
-        if sep.drag_stopped() {
-            if let Err(e) = self.conv.settings.save() {
-                self.run_state_mut(self.active_session_key()).stream_error =
-                    Some(format!("Save settings: {e}"));
-            }
+        if sep.drag_stopped()
+            && let Err(e) = self.conv.settings.save()
+        {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
         }
         let col = if sep.hovered() || sep.dragged() {
             c_accent()
@@ -654,11 +652,11 @@ impl OxiApp {
             self.conv.sidebar_width = (self.conv.sidebar_width + delta_x).clamp(min_w, max_w);
             self.conv.settings.sidebar_width = self.conv.sidebar_width;
         }
-        if sep.drag_stopped() {
-            if let Err(e) = self.conv.settings.save() {
-                self.run_state_mut(self.active_session_key()).stream_error =
-                    Some(format!("Save settings: {e}"));
-            }
+        if sep.drag_stopped()
+            && let Err(e) = self.conv.settings.save()
+        {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
         }
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);

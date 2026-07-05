@@ -57,10 +57,10 @@ fn migrate_legacy_file() -> Option<OAuthStore> {
     let path = legacy_oauth_path();
     let bytes = fs::read(&path).ok()?;
     let store: OAuthStore = serde_json::from_slice(&bytes).ok()?;
-    if store.openai_codex.is_some() {
-        if let Ok(json) = serde_json::to_string(&store) {
-            let _ = crate::secrets::store(KEYCHAIN_ACCOUNT, &json);
-        }
+    if store.openai_codex.is_some()
+        && let Ok(json) = serde_json::to_string(&store)
+    {
+        let _ = crate::secrets::store(KEYCHAIN_ACCOUNT, &json);
     }
     let _ = fs::remove_file(&path);
     Some(store)

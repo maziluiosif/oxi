@@ -5,13 +5,13 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use serde_json::{json, Value};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use serde_json::{Value, json};
 
 use super::events::AgentEvent;
 use super::loop_ctx::LoopCtx;
-use super::net::{backoff_delay, send_with_retry, sleep_cancellable, MAX_STREAM_RETRIES};
-use super::tools::{run_tool, ToolResult};
+use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
+use super::tools::{ToolResult, run_tool};
 
 #[derive(Default, Clone)]
 struct ToolUseAccum {
@@ -68,10 +68,10 @@ fn to_anthropic_messages(openai: &[Value], cache_control: Option<Value>) -> (Str
         if role == "assistant" {
             if let Some(tcs) = m.get("tool_calls").and_then(|x| x.as_array()) {
                 let mut blocks = Vec::new();
-                if let Some(tx) = m.get("content").and_then(|x| x.as_str()) {
-                    if !tx.is_empty() {
-                        blocks.push(json!({"type": "text", "text": tx}));
-                    }
+                if let Some(tx) = m.get("content").and_then(|x| x.as_str())
+                    && !tx.is_empty()
+                {
+                    blocks.push(json!({"type": "text", "text": tx}));
                 }
                 for tc in tcs {
                     let id = tc.get("id").and_then(|x| x.as_str()).unwrap_or("");
@@ -109,18 +109,14 @@ fn to_anthropic_messages(openai: &[Value], cache_control: Option<Value>) -> (Str
             "content": content
         }));
     }
-    if let Some(cache_control) = cache_control {
-        if let Some(last_msg) = msgs.last_mut() {
-            if last_msg.get("role").and_then(|x| x.as_str()) == Some("user") {
-                if let Some(content) = last_msg.get_mut("content").and_then(|x| x.as_array_mut()) {
-                    if let Some(last_block) = content.last_mut() {
-                        if let Some(obj) = last_block.as_object_mut() {
-                            obj.insert("cache_control".to_string(), cache_control);
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(cache_control) = cache_control
+        && let Some(last_msg) = msgs.last_mut()
+        && last_msg.get("role").and_then(|x| x.as_str()) == Some("user")
+        && let Some(content) = last_msg.get_mut("content").and_then(|x| x.as_array_mut())
+        && let Some(last_block) = content.last_mut()
+        && let Some(obj) = last_block.as_object_mut()
+    {
+        obj.insert("cache_control".to_string(), cache_control);
     }
     (system, msgs)
 }
@@ -142,17 +138,16 @@ fn openai_user_to_anthropic_content(content: Option<&Value>) -> Vec<Value> {
                             .get("image_url")
                             .and_then(|x| x.get("url"))
                             .and_then(|x| x.as_str())
+                            && let Some((media_type, data)) = parse_data_url(url)
                         {
-                            if let Some((media_type, data)) = parse_data_url(url) {
-                                out.push(json!({
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": media_type,
-                                        "data": data,
-                                    }
-                                }));
-                            }
+                            out.push(json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": data,
+                                }
+                            }));
                         }
                     }
                     _ => {}
@@ -535,28 +530,28 @@ fn parse_anthropic_event(
             }
         }
         "content_block_start" => {
-            if let Some(cb) = v.get("content_block") {
-                if cb.get("type").and_then(|x| x.as_str()) == Some("tool_use") {
-                    let idx = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0);
-                    let entry = tool_uses.entry(idx).or_default();
-                    entry.id = cb
-                        .get("id")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    entry.name = cb
-                        .get("name")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                }
+            if let Some(cb) = v.get("content_block")
+                && cb.get("type").and_then(|x| x.as_str()) == Some("tool_use")
+            {
+                let idx = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0);
+                let entry = tool_uses.entry(idx).or_default();
+                entry.id = cb
+                    .get("id")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                entry.name = cb
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
             }
         }
         "message_delta" => {
-            if let Some(sr) = v.get("delta").and_then(|d| d.get("stop_reason")) {
-                if let Some(s) = sr.as_str() {
-                    *stop_reason = Some(s.to_string());
-                }
+            if let Some(sr) = v.get("delta").and_then(|d| d.get("stop_reason"))
+                && let Some(s) = sr.as_str()
+            {
+                *stop_reason = Some(s.to_string());
             }
         }
         // In-band errors (e.g. `overloaded_error`): surface for the round-retry logic.

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use russh::client::{self, AuthResult};
 use russh::keys::PublicKey;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 use crate::settings::SshConfig;
 
@@ -113,10 +113,10 @@ async fn ensure_one(
 ) -> Result<u16, String> {
     {
         let map = tunnels.lock().await;
-        if let Some(t) = map.get(key) {
-            if !t.accept_task.is_finished() {
-                return Ok(t.local_port);
-            }
+        if let Some(t) = map.get(key)
+            && !t.accept_task.is_finished()
+        {
+            return Ok(t.local_port);
         }
     }
     let tunnel = open_tunnel(config, password).await?;

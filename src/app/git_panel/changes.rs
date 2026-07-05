@@ -3,7 +3,7 @@
 
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{
-    self, Align, Color32, FontId, Layout, RichText, Rounding, ScrollArea, Sense, Ui,
+    self, Align, Color32, CornerRadius, FontId, Layout, RichText, ScrollArea, Sense, Ui,
 };
 
 use crate::git::{GitEntry, GitOp};
@@ -143,7 +143,6 @@ impl OxiApp {
         );
         ui.add_space(2.0);
         let resp = egui::TextEdit::multiline(&mut self.conv.git_commit_message)
-            .frame(true)
             .hint_text(
                 RichText::new("Commit message…")
                     .size(FS_SMALL)
@@ -338,9 +337,9 @@ impl OxiApp {
             Color32::TRANSPARENT
         };
         ui.painter()
-            .rect_filled(rect, Rounding::same(crate::theme::RADIUS_ROW), fill);
+            .rect_filled(rect, CornerRadius::same(crate::theme::RADIUS_ROW), fill);
 
-        ui.allocate_new_ui(
+        ui.scope_builder(
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))),
             |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -595,7 +594,7 @@ fn colorize_diff(text: &str, wrap_width: f32) -> LayoutJob {
         };
         job.sections.push(egui::text::LayoutSection {
             leading_space: 0.0,
-            byte_range: start..end,
+            byte_range: egui::text::ByteIndex(start)..egui::text::ByteIndex(end),
             format: TextFormat {
                 font_id: FontId::monospace(FS_CODE),
                 color,

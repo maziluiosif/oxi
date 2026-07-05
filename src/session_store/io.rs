@@ -2,7 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::hydrate;
 use crate::model::{ChatMessage, Session};
@@ -32,10 +32,10 @@ pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
             saw_header = true;
             continue;
         }
-        if value.get("type").and_then(Value::as_str) == Some("message") {
-            if let Some(message) = value.get("message") {
-                messages.push(message.clone());
-            }
+        if value.get("type").and_then(Value::as_str) == Some("message")
+            && let Some(message) = value.get("message")
+        {
+            messages.push(message.clone());
         }
     }
 
@@ -177,12 +177,12 @@ fn extract_first_user_message(message: &Value) -> Option<String> {
 
     let parts = message.get("content").and_then(Value::as_array)?;
     for part in parts {
-        if part.get("type").and_then(Value::as_str) == Some("text") {
-            if let Some(text) = part.get("text").and_then(Value::as_str) {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if part.get("type").and_then(Value::as_str) == Some("text")
+            && let Some(text) = part.get("text").and_then(Value::as_str)
+        {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }

@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
 
-use crate::settings::{LlmProviderKind, ALL_TOOL_NAMES};
+use crate::settings::{ALL_TOOL_NAMES, LlmProviderKind};
 use crate::theme::*;
 use crate::ui::chrome::{
     card_frame, field_label, hairline, pill_tab, settings_caption, settings_section_title,
@@ -124,7 +124,7 @@ impl OxiApp {
                 TextEdit::singleline(&mut max_rounds)
                     .desired_width(180.0)
                     .hint_text("0")
-                    .margin(Margin::symmetric(8.0, 5.0)),
+                    .margin(Margin::symmetric(8, 5)),
             );
             if resp.changed() {
                 let trimmed = max_rounds.trim();
@@ -249,7 +249,7 @@ impl OxiApp {
                 TextEdit::multiline(&mut self.conv.settings.system_prompt)
                     .desired_width(f32::INFINITY)
                     .desired_rows(20)
-                    .margin(Margin::symmetric(8.0, 6.0))
+                    .margin(Margin::symmetric(8, 6))
                     .hint_text(crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT),
             );
         });
@@ -292,7 +292,7 @@ impl OxiApp {
                     TextEdit::singleline(&mut self.conv.settings.commit_msg_model_id)
                         .desired_width(320.0)
                         .hint_text(hint)
-                        .margin(Margin::symmetric(8.0, 5.0)),
+                        .margin(Margin::symmetric(8, 5)),
                 );
             }
 
@@ -303,7 +303,7 @@ impl OxiApp {
                 TextEdit::multiline(&mut self.conv.settings.commit_msg_system_prompt)
                     .desired_width(f32::INFINITY)
                     .desired_rows(8)
-                    .margin(Margin::symmetric(8.0, 6.0))
+                    .margin(Margin::symmetric(8, 6))
                     .hint_text(crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT),
             );
         });

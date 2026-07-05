@@ -6,12 +6,12 @@ use std::hash::{Hash, Hasher};
 
 use base64::Engine as _;
 use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{Align, FontId, Hyperlink, Image, RichText, Rounding, Stroke, Ui};
+use eframe::egui::{Align, CornerRadius, FontId, Hyperlink, Image, RichText, Stroke, Ui};
 use pulldown_cmark::{Event, Tag, TagEnd};
 
 use crate::theme::*;
 
-use super::{consume_until_end, set_job_wrap, ParserPeek, SZ_BODY, SZ_CODE_INLINE};
+use super::{ParserPeek, SZ_BODY, SZ_CODE_INLINE, consume_until_end, set_job_wrap};
 
 #[derive(Clone, Copy)]
 pub(super) enum InlineEnd {
@@ -116,7 +116,7 @@ pub(super) fn render_markdown_inline_image(
     };
     let mut img = img
         .max_width(max_w)
-        .rounding(Rounding::same(6.0))
+        .corner_radius(CornerRadius::same(6))
         .show_loading_spinner(true);
     if compact {
         img = img.max_height(120.0);
@@ -297,7 +297,7 @@ pub(super) fn selectable_job(ui: &mut Ui, job: LayoutJob) {
         return;
     }
 
-    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let (rect, response) =
         ui.allocate_exact_size(galley.size(), eframe::egui::Sense::click_and_drag());
     let galley_pos = rect.left_top();

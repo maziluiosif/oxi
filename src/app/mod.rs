@@ -357,12 +357,12 @@ impl OxiApp {
             session.session_file.clone()
         };
 
-        if let Some(session_file) = session_file {
-            if let Some(messages) = session_store::load_session_messages(&session_file) {
-                let session = self.session_mut(active);
-                session.messages = messages;
-                session.messages_loaded = true;
-            }
+        if let Some(session_file) = session_file
+            && let Some(messages) = session_store::load_session_messages(&session_file)
+        {
+            let session = self.session_mut(active);
+            session.messages = messages;
+            session.messages_loaded = true;
         }
     }
 
