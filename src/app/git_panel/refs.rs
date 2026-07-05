@@ -1,6 +1,6 @@
 //! Branches tab (list + create/checkout) and history tab (commit log + diff-on-click).
 
-use eframe::egui::{self, Align, Color32, Layout, RichText, Rounding, ScrollArea, Sense, Ui};
+use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Ui};
 
 use crate::git::GitOp;
 use crate::theme::*;
@@ -60,10 +60,10 @@ impl OxiApp {
                         };
                         ui.painter().rect_filled(
                             rect,
-                            Rounding::same(crate::theme::RADIUS_ROW),
+                            CornerRadius::same(crate::theme::RADIUS_ROW),
                             fill,
                         );
-                        ui.allocate_new_ui(
+                        ui.scope_builder(
                             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))),
                             |ui| {
                                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -134,8 +134,8 @@ impl OxiApp {
             Color32::TRANSPARENT
         };
         ui.painter()
-            .rect_filled(rect, Rounding::same(crate::theme::RADIUS_ROW), fill);
-        ui.allocate_new_ui(
+            .rect_filled(rect, CornerRadius::same(crate::theme::RADIUS_ROW), fill);
+        ui.scope_builder(
             egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 4.0))),
             |ui| {
                 ui.vertical(|ui| {

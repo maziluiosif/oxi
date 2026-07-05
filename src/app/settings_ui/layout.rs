@@ -2,7 +2,8 @@
 //! small pill/chip widgets shared across the other settings submodules.
 
 use eframe::egui::{
-    self, Align, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
+    self, Align, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, ScrollArea,
+    Stroke, Ui,
 };
 
 use crate::theme::*;
@@ -29,13 +30,13 @@ impl OxiApp {
                 egui::vec2(w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    Frame::none()
+                    Frame::new()
                         .fill(c_bg_sidebar())
                         .inner_margin(Margin {
-                            left: 12.0,
-                            right: 10.0,
-                            top: 12.0,
-                            bottom: 12.0,
+                            left: 12,
+                            right: 10,
+                            top: 12,
+                            bottom: 12,
                         })
                         .show(ui, |ui| {
                             ui.set_min_width(ui.max_rect().width());
@@ -58,7 +59,7 @@ impl OxiApp {
                 egui::vec2(ui.available_width(), full_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    Frame::none().fill(c_bg_main()).show(ui, |ui| {
+                    Frame::new().fill(c_bg_main()).show(ui, |ui| {
                         self.render_settings_header(ui);
                         ScrollArea::vertical()
                             .id_salt("settings_page_scroll")
@@ -67,14 +68,14 @@ impl OxiApp {
                                 egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
                             )
                             .show(ui, |ui| {
-                                Frame::none()
+                                Frame::new()
                                     .inner_margin(Margin {
-                                        left: 36.0,
+                                        left: 36,
                                         // The reserved 10px scroll gutter adds to this;
                                         // 26 + 10 keeps optical symmetry with the left.
-                                        right: 26.0,
-                                        top: 24.0,
-                                        bottom: 48.0,
+                                        right: 26,
+                                        top: 24,
+                                        bottom: 48,
                                     })
                                     .show(ui, |ui| {
                                         ui.set_max_width(SETTINGS_CONTENT_MAX);
@@ -97,13 +98,13 @@ impl OxiApp {
     }
 
     fn render_settings_header(&mut self, ui: &mut Ui) {
-        Frame::none()
+        Frame::new()
             .fill(c_bg_main())
             .inner_margin(Margin {
-                left: 36.0,
-                right: 24.0,
-                top: 16.0,
-                bottom: 14.0,
+                left: 36,
+                right: 24,
+                top: 16,
+                bottom: 14,
             })
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -217,7 +218,7 @@ impl OxiApp {
 
 /// Small "Active" / "Signed in" pill.
 pub(super) fn active_pill(ui: &mut Ui, text: &str) {
-    Frame::none()
+    Frame::new()
         .fill(Color32::from_rgba_unmultiplied(
             c_accent().r(),
             c_accent().g(),
@@ -228,19 +229,19 @@ pub(super) fn active_pill(ui: &mut Ui, text: &str) {
             1.0,
             Color32::from_rgba_unmultiplied(c_accent().r(), c_accent().g(), c_accent().b(), 90),
         ))
-        .rounding(999.0)
-        .inner_margin(Margin::symmetric(10.0, 3.0))
+        .corner_radius(999.0)
+        .inner_margin(Margin::symmetric(10, 3))
         .show(ui, |ui| {
             ui.label(RichText::new(text).size(FS_TINY).color(c_accent()).strong());
         });
 }
 
 pub(super) fn inactive_pill(ui: &mut Ui, text: &str) {
-    Frame::none()
+    Frame::new()
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(999.0)
-        .inner_margin(Margin::symmetric(10.0, 3.0))
+        .corner_radius(999.0)
+        .inner_margin(Margin::symmetric(10, 3))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(text)
@@ -281,10 +282,14 @@ pub(super) fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Respons
     } else {
         (c_bg_elevated_2(), c_border_subtle(), c_text_muted())
     };
-    let r = Rounding::same(999.0);
+    let r = CornerRadius::same(255);
     ui.painter().rect_filled(rect, r, fill);
-    ui.painter()
-        .rect_stroke(rect, r, Stroke::new(1.0, stroke_col));
+    ui.painter().rect_stroke(
+        rect,
+        r,
+        Stroke::new(1.0, stroke_col),
+        egui::StrokeKind::Middle,
+    );
     let icon_col = if enabled { c_accent() } else { c_text_faint() };
     let top = rect.center().y - label_galley.rect.height() * 0.5;
     let icon_x = rect.left() + pad.x;

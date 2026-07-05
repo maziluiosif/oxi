@@ -5,7 +5,7 @@
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{
-    self, Color32, FontId, Frame, Id, Label, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
+    self, Color32, CornerRadius, FontId, Frame, Id, Label, Margin, RichText, ScrollArea, Stroke, Ui,
 };
 
 use crate::model::{concat_thinking_blocks, AssistantBlock};
@@ -37,11 +37,11 @@ fn render_static_preview_job_panel(
     persist_id: Id,
     overflows: bool,
 ) {
-    let frame = Frame::none()
+    let frame = Frame::new()
         .fill(panel_fill)
         .stroke(Stroke::new(1.0, c_border()))
-        .rounding(Rounding::same(8.0))
-        .inner_margin(Margin::symmetric(8.0, 5.0))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::symmetric(8, 5))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let inner = ui.available_width().max(40.0);
@@ -142,11 +142,11 @@ pub(super) fn render_tool_pill(
     let can_expand = expandable && !running && (has_output || has_diff);
     let expanded = can_expand && is_expanded(ui, persist_id);
 
-    let frame = Frame::none()
+    let frame = Frame::new()
         .fill(pill_bg)
         .stroke(Stroke::new(1.0, pill_border))
-        .rounding(Rounding::same(7.0))
-        .inner_margin(Margin::symmetric(10.0, 5.0))
+        .corner_radius(CornerRadius::same(7))
+        .inner_margin(Margin::symmetric(10, 5))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -357,26 +357,26 @@ fn render_edit_tool_block(
     let is_open = true;
 
     // ── Outer frame wraps header + diff in one visual block ──────────────────
-    Frame::none()
+    Frame::new()
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::new(1.0, outer_border))
-        .rounding(Rounding::same(8.0))
+        .corner_radius(CornerRadius::same(8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
 
-            let header_resp = Frame::none()
+            let header_resp = Frame::new()
                 .fill(header_bg)
-                .rounding(if is_open && has_diff {
-                    eframe::egui::Rounding {
-                        nw: 8.0,
-                        ne: 8.0,
-                        sw: 0.0,
-                        se: 0.0,
+                .corner_radius(if is_open && has_diff {
+                    eframe::egui::CornerRadius {
+                        nw: 8,
+                        ne: 8,
+                        sw: 0,
+                        se: 0,
                     }
                 } else {
-                    Rounding::same(8.0)
+                    CornerRadius::same(8)
                 })
-                .inner_margin(Margin::symmetric(12.0, 8.0))
+                .inner_margin(Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
@@ -448,15 +448,15 @@ fn render_edit_tool_block(
 
             // ── Diff block ───────────────────────────────────────────────────
             if let Some(diff_text) = rendered_diff.as_deref().filter(|t| !t.trim().is_empty()) {
-                Frame::none()
+                Frame::new()
                     .fill(diff_bg)
-                    .rounding(eframe::egui::Rounding {
-                        nw: 0.0,
-                        ne: 0.0,
-                        sw: 8.0,
-                        se: 8.0,
+                    .corner_radius(eframe::egui::CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: 8,
+                        se: 8,
                     })
-                    .inner_margin(Margin::symmetric(10.0, 8.0))
+                    .inner_margin(Margin::symmetric(10, 8))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         let bubble_w = ui.available_width().max(40.0);
@@ -545,7 +545,7 @@ fn render_explored_tool_pill_run(
             .max_height(scroll_h)
             .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
             .stick_to_bottom(true)
-            .enable_scrolling(false)
+            .scroll_source(egui::containers::scroll_area::ScrollSource::NONE)
             .show(ui, render_pills);
     } else {
         render_pills(ui);

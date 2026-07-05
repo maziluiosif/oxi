@@ -151,11 +151,11 @@ pub(super) fn render_table(
         let table_w = ui.available_width().max(48.0);
         let cell_w = table_w / cols as f32;
 
-        eframe::egui::Frame::none()
+        eframe::egui::Frame::new()
             .fill(c_md_code_block_bg())
             .stroke(Stroke::new(1.0, outer))
-            .rounding(eframe::egui::Rounding::same(8.0))
-            .inner_margin(eframe::egui::Margin::same(0.0))
+            .corner_radius(eframe::egui::CornerRadius::same(8))
+            .inner_margin(eframe::egui::Margin::same(0))
             .show(ui, |ui| {
                 ui.set_width(table_w);
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -180,7 +180,9 @@ pub(super) fn render_table(
 
                     let row_h = cell_jobs
                         .iter()
-                        .map(|(_, job)| ui.fonts(|fonts| fonts.layout_job(job.clone())).size().y)
+                        .map(|(_, job)| {
+                            ui.fonts_mut(|fonts| fonts.layout_job(job.clone())).size().y
+                        })
                         .fold(0.0_f32, f32::max)
                         .max(22.0)
                         + CELL_PAD_Y * 2.0;
@@ -197,7 +199,12 @@ pub(super) fn render_table(
                             let fill = if is_header { header_bg } else { body_bg };
 
                             ui.painter().rect_filled(rect, 0.0, fill);
-                            ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, grid));
+                            ui.painter().rect_stroke(
+                                rect,
+                                0.0,
+                                Stroke::new(1.0, grid),
+                                egui::StrokeKind::Middle,
+                            );
 
                             let inner_rect = rect.shrink2(vec2(CELL_PAD_X, CELL_PAD_Y));
                             let mut child = ui.new_child(
