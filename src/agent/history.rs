@@ -12,7 +12,7 @@
 //! active profile's effective context window (`~4 chars/token × context tokens`).
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::model::{AssistantBlock, ChatMessage, MsgRole, UserAttachment};
 

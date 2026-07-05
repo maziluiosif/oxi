@@ -15,11 +15,7 @@ pub fn tool_text_from_content_array(v: &Value) -> Option<String> {
             out.push_str(t);
         }
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 pub fn tool_diff_from_result(v: &Value) -> Option<String> {
@@ -106,12 +102,11 @@ fn parse_user_message(m: &Value) -> (String, Vec<UserAttachment>) {
                         .and_then(|x| x.as_str())
                         .unwrap_or("image/png")
                         .to_string();
-                    if let Some(b64) = p.get("data").and_then(|x| x.as_str()) {
-                        if let Ok(bytes) =
+                    if let Some(b64) = p.get("data").and_then(|x| x.as_str())
+                        && let Ok(bytes) =
                             base64::engine::general_purpose::STANDARD.decode(b64.as_bytes())
-                        {
-                            attachments.push(UserAttachment::Image { mime, data: bytes });
-                        }
+                    {
+                        attachments.push(UserAttachment::Image { mime, data: bytes });
                     }
                 }
                 _ => {}
@@ -225,15 +220,15 @@ fn merge_tool_result(out: &mut Vec<ChatMessage>, m: &Value) {
                 output_truncated: ot,
                 ..
             } = b
+                && !id.is_empty()
+                && tool_call_id == id
             {
-                if !id.is_empty() && tool_call_id == id {
-                    *o = output.clone();
-                    *d = diff.clone();
-                    *ie = is_error;
-                    *fp = full_output_path.clone();
-                    *ot = output_truncated;
-                    return;
-                }
+                *o = output.clone();
+                *d = diff.clone();
+                *ie = is_error;
+                *fp = full_output_path.clone();
+                *ot = output_truncated;
+                return;
             }
         }
     }
@@ -323,8 +318,11 @@ mod tests {
         let msgs = messages_from_get_messages(&data);
         assert_eq!(msgs.len(), 1);
         match &msgs[0].blocks[..] {
-            [AssistantBlock::Thinking(t1), AssistantBlock::Answer(ans), AssistantBlock::Thinking(t2)] =>
-            {
+            [
+                AssistantBlock::Thinking(t1),
+                AssistantBlock::Answer(ans),
+                AssistantBlock::Thinking(t2),
+            ] => {
                 assert_eq!(t1, "a");
                 assert_eq!(ans, "b");
                 assert_eq!(t2, "c");
@@ -354,11 +352,13 @@ mod tests {
         let msgs = messages_from_get_messages(&data);
         assert_eq!(msgs.len(), 1);
         match &msgs[0].blocks[..] {
-            [AssistantBlock::Tool {
-                tool_call_id,
-                output,
-                ..
-            }] => {
+            [
+                AssistantBlock::Tool {
+                    tool_call_id,
+                    output,
+                    ..
+                },
+            ] => {
                 assert_eq!(tool_call_id, "call_1");
                 assert_eq!(output, "out\n");
             }

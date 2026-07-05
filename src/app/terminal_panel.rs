@@ -21,21 +21,21 @@ impl OxiApp {
     }
 
     /// Render the bottom terminal panel (call before the `CentralPanel`).
-    pub(crate) fn render_terminal_panel(&mut self, ctx: &egui::Context) {
+    pub(crate) fn render_terminal_panel(&mut self, ui: &mut egui::Ui) {
         let height = self
             .conv
             .terminal_height
             .clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
 
-        egui::TopBottomPanel::bottom("terminal_panel")
+        egui::Panel::bottom("terminal_panel")
             .resizable(false)
-            .exact_height(height)
+            .exact_size(height)
             .frame(
-                Frame::none()
+                Frame::new()
                     .fill(c_bg_sidebar())
                     .stroke(Stroke::new(1.0, c_border_subtle())),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 self.render_terminal_resize_handle(ui);
                 self.render_terminal_header(ui);
                 self.render_terminal_body(ui);

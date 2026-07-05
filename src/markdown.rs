@@ -12,13 +12,13 @@ mod inline;
 mod table;
 
 use eframe::egui::text::LayoutJob;
-use eframe::egui::{vec2, Align, FontFamily, Layout, RichText, Ui};
+use eframe::egui::{Align, FontFamily, Layout, RichText, Ui, vec2};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::theme::*;
 
 use blocks::{render_blockquote, render_fenced_block, render_heading, render_html_block};
-use inline::{append_inline_fallback, fmt_body, fmt_code, selectable_job, InlineDensity};
+use inline::{InlineDensity, append_inline_fallback, fmt_body, fmt_code, selectable_job};
 use table::render_table;
 
 /// Prose wrap at word boundaries (do not set [`TextWrapping::break_anywhere`] — it splits mid-word).

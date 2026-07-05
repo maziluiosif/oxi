@@ -20,10 +20,10 @@ use eframe::egui::{self, Ui};
 pub const CHAT_COLUMN_MAX: f32 = 720.0;
 
 /// Shared corner radii — every rounded surface should use one of these tokens.
-pub const RADIUS_ROW: f32 = 5.0;
-pub const RADIUS_BUTTON: f32 = 7.0;
-pub const RADIUS_CHIP: f32 = 8.0;
-pub const RADIUS_PANEL: f32 = 14.0;
+pub const RADIUS_ROW: u8 = 5;
+pub const RADIUS_BUTTON: u8 = 7;
+pub const RADIUS_CHIP: u8 = 8;
+pub const RADIUS_PANEL: u8 = 14;
 
 /// Draggable strip between sidebar and chat (must match `render_main_area`).
 pub const SIDEBAR_RESIZE_SEP_W: f32 = 5.0;

@@ -3,8 +3,8 @@
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{
-    self, vec2, Align, FontFamily, FontId, Frame, Id, Layout, Margin, RichText, Rounding, Stroke,
-    Ui,
+    self, Align, CornerRadius, FontFamily, FontId, Frame, Id, Layout, Margin, RichText, Stroke, Ui,
+    vec2,
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Tag, TagEnd};
 
@@ -13,20 +13,20 @@ use crate::ui::preview_expand::{
     clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
 };
 
-use super::inline::{fmt_body, fmt_code, selectable_job, InlineDensity, InlineEnd};
+use super::inline::{InlineDensity, InlineEnd, fmt_body, fmt_code, selectable_job};
 use super::{
-    allocate_full_width_block, consume_until_end, line_height_for_body_size, render_list,
-    set_job_wrap, ParserPeek, SZ_CODE, SZ_TINY,
+    ParserPeek, SZ_CODE, SZ_TINY, allocate_full_width_block, consume_until_end,
+    line_height_for_body_size, render_list, set_job_wrap,
 };
 
 /// Raw HTML / unknown blocks: show monospace so nothing is silently dropped.
 fn render_raw_block(ui: &mut Ui, wrap_w: f32, label: &str, body: &str) {
     allocate_full_width_block(ui, wrap_w, |ui| {
-        Frame::none()
+        Frame::new()
             .fill(c_md_code_block_bg())
             .stroke(Stroke::new(1.0, c_border()))
-            .rounding(Rounding::same(8.0))
-            .inner_margin(Margin::symmetric(10.0, 8.0))
+            .corner_radius(CornerRadius::same(8))
+            .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let inner = ui.available_width().max(40.0);
@@ -146,11 +146,11 @@ pub(super) fn render_paragraph(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>
 
 pub(super) fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
     allocate_full_width_block(ui, wrap_w, |ui| {
-        Frame::none()
+        Frame::new()
             .fill(c_md_code_block_bg())
-            .rounding(Rounding::same(8.0))
+            .corner_radius(CornerRadius::same(8))
             .stroke(Stroke::new(1.0, c_md_code_block_border()))
-            .inner_margin(Margin::same(0.0))
+            .inner_margin(Margin::same(0))
             .show(ui, |ui| {
                 let full_w = ui.available_width().max(48.0);
                 ui.set_width(full_w);
@@ -159,7 +159,7 @@ pub(super) fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_
                     let (bar_rect, _) =
                         ui.allocate_exact_size(vec2(3.0, 1.0), egui::Sense::hover());
                     ui.painter()
-                        .rect_filled(bar_rect, Rounding::same(2.0), c_md_quote_accent());
+                        .rect_filled(bar_rect, CornerRadius::same(2), c_md_quote_accent());
                     ui.add_space(10.0);
                     ui.vertical(|ui| {
                         ui.add_space(8.0);
@@ -230,23 +230,23 @@ pub(super) fn render_fenced_block(
     let persist_id = expand_persist_id(block_base_id);
     let lang = code_block_language(&kind);
     allocate_full_width_block(ui, wrap_w, |ui| {
-        let frame = Frame::none()
+        let frame = Frame::new()
             .fill(c_md_code_block_bg())
             .stroke(Stroke::new(1.0, c_md_code_block_border()))
-            .rounding(Rounding::same(9.0))
-            .inner_margin(Margin::same(0.0))
+            .corner_radius(CornerRadius::same(9))
+            .inner_margin(Margin::same(0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
 
-                Frame::none()
+                Frame::new()
                     .fill(c_md_code_block_header_bg())
-                    .rounding(egui::Rounding {
-                        nw: 9.0,
-                        ne: 9.0,
-                        sw: 0.0,
-                        se: 0.0,
+                    .corner_radius(egui::CornerRadius {
+                        nw: 9,
+                        ne: 9,
+                        sw: 0,
+                        se: 0,
                     })
-                    .inner_margin(Margin::symmetric(10.0, 5.0))
+                    .inner_margin(Margin::symmetric(10, 5))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
@@ -270,15 +270,15 @@ pub(super) fn render_fenced_block(
                         });
                     });
 
-                Frame::none()
+                Frame::new()
                     .fill(c_md_code_block_bg())
-                    .rounding(egui::Rounding {
-                        nw: 0.0,
-                        ne: 0.0,
-                        sw: 9.0,
-                        se: 9.0,
+                    .corner_radius(egui::CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: 9,
+                        se: 9,
                     })
-                    .inner_margin(Margin::symmetric(11.0, 9.0))
+                    .inner_margin(Margin::symmetric(11, 9))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         let inner = ui.available_width().max(40.0);

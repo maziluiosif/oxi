@@ -15,20 +15,21 @@ use std::hash::{Hash, Hasher};
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{
-    self, FontId, Frame, Id, Image, Label, Margin, RichText, Rounding, Stroke, TextureOptions, Ui,
+    self, CornerRadius, FontId, Frame, Id, Image, Label, Margin, RichText, Stroke, TextureOptions,
+    Ui,
 };
 
 use crate::markdown;
 use crate::model::{
+    AssistantBlock, AssistantBlockGroup, ChatMessage, MsgRole, UserAttachment,
     assistant_is_effectively_empty, build_assistant_block_groups, concat_thinking_blocks,
-    tool_breaks_explore_cluster, AssistantBlock, AssistantBlockGroup, ChatMessage, MsgRole,
-    UserAttachment,
+    tool_breaks_explore_cluster,
 };
 use crate::theme::*;
 use crate::ui::preview_expand::expand_persist_id;
 
 use thinking::{render_thinking_group_block, thinking_group_is_live};
-use tool_pill::{render_explored_cluster, render_single_tool_block, ExploredClusterCtx};
+use tool_pill::{ExploredClusterCtx, render_explored_cluster, render_single_tool_block};
 
 fn user_image_texture(
     ui: &Ui,
@@ -69,7 +70,7 @@ pub(super) fn selectable_layout_job(ui: &mut Ui, job: LayoutJob, allow_select: b
         return;
     }
 
-    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let (rect, response) =
         ui.allocate_exact_size(galley.size(), eframe::egui::Sense::click_and_drag());
     let galley_pos = rect.left_top();
@@ -84,11 +85,7 @@ pub(super) fn selectable_layout_job(ui: &mut Ui, job: LayoutJob, allow_select: b
 }
 
 pub(super) fn block_state_tag(streaming: bool) -> &'static str {
-    if streaming {
-        "live"
-    } else {
-        "done"
-    }
+    if streaming { "live" } else { "done" }
 }
 
 /// Write/edit-like tools render as full detail blocks, not explore-cluster rows.
@@ -122,11 +119,11 @@ pub fn render_message(
         let response = ui
             .vertical(|ui| {
                 ui.set_width(col_w);
-                Frame::none()
+                Frame::new()
                     .fill(c_user_bubble())
                     .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .rounding(Rounding::same(10.0))
-                    .inner_margin(Margin::symmetric(12.0, 9.0))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(12, 9))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         if !msg.text.is_empty() {
@@ -154,12 +151,10 @@ pub fn render_message(
         return response;
     }
 
-    let response = ui
-        .vertical(|ui| {
-            render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), agent_ack);
-        })
-        .response;
-    response
+    ui.vertical(|ui| {
+        render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), agent_ack);
+    })
+    .response
 }
 
 fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttachment]) {
@@ -177,18 +172,18 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                             sz *= max / m;
                         }
                         // Wrap in a subtle rounded frame
-                        Frame::none()
-                            .rounding(Rounding::same(8.0))
+                        Frame::new()
+                            .corner_radius(CornerRadius::same(8))
                             .stroke(Stroke::new(1.0, c_border()))
                             .show(ui, |ui| {
                                 ui.add(Image::new((tex.id(), sz)));
                             });
                     } else {
                         // Fallback badge when texture loading fails
-                        Frame::none()
+                        Frame::new()
                             .fill(c_bg_elevated_2())
-                            .rounding(Rounding::same(6.0))
-                            .inner_margin(Margin::symmetric(8.0, 4.0))
+                            .corner_radius(CornerRadius::same(6))
+                            .inner_margin(Margin::symmetric(8, 4))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 4.0;
@@ -300,10 +295,10 @@ fn render_activity_range(
             }
             AssistantBlockGroup::Answer(i) => {
                 let gi = start + i;
-                if let AssistantBlock::Answer(text) = &blocks[gi] {
-                    if !text.trim().is_empty() {
-                        markdown::render_markdown(ui, text);
-                    }
+                if let AssistantBlock::Answer(text) = &blocks[gi]
+                    && !text.trim().is_empty()
+                {
+                    markdown::render_markdown(ui, text);
                 }
             }
             AssistantBlockGroup::ExploringTools {
@@ -401,7 +396,7 @@ fn render_activity_summary(
     let chevron_col = if hovered { c_accent() } else { c_text_faint() };
 
     // Paint the chevron + label inside the reserved rect.
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
             ui.label(
@@ -495,10 +490,10 @@ pub fn render_assistant_blocks(
     }
 
     for block in &blocks[worked_end..] {
-        if let AssistantBlock::Answer(text) = block {
-            if !text.trim().is_empty() || streaming {
-                markdown::render_markdown(ui, text);
-            }
+        if let AssistantBlock::Answer(text) = block
+            && (!text.trim().is_empty() || streaming)
+        {
+            markdown::render_markdown(ui, text);
         }
     }
 }
