@@ -4,7 +4,7 @@
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
 
-use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
+use crate::oauth::{OAuthUiMsg, clear_codex, load_oauth_store, save_oauth_store};
 use crate::settings::{ComputeLocation, LlmProviderKind, ProviderConfig, SshConfig};
 use crate::theme::*;
 use crate::ui::chrome::{
@@ -241,11 +241,9 @@ impl OxiApp {
                                     .margin(Margin::symmetric(8, 5)),
                             )
                             .changed()
-                        {
-                            if let Ok(p) = port_str.trim().parse::<u16>() {
+                            && let Ok(p) = port_str.trim().parse::<u16>() {
                                 cfg.port = p;
                             }
-                        }
                     });
                 });
                 ui.add_space(6.0);
@@ -270,11 +268,9 @@ impl OxiApp {
                                     .margin(Margin::symmetric(8, 5)),
                             )
                             .changed()
-                        {
-                            if let Ok(p) = rport_str.trim().parse::<u16>() {
+                            && let Ok(p) = rport_str.trim().parse::<u16>() {
                                 cfg.remote_runtime_port = p;
                             }
-                        }
                     });
                 });
             }
@@ -531,10 +527,10 @@ impl OxiApp {
     pub(crate) fn ensure_active_models_fetched(&mut self, ctx: &egui::Context) {
         let kind = self.conv.settings.active_provider;
         // Already fetched (or in flight)? Then nothing to do.
-        if let Some(f) = self.conv.fetched_models.get(&kind) {
-            if f.loading || !f.models.is_empty() {
-                return;
-            }
+        if let Some(f) = self.conv.fetched_models.get(&kind)
+            && (f.loading || !f.models.is_empty())
+        {
+            return;
         }
         self.spawn_model_fetch(ctx, kind);
     }

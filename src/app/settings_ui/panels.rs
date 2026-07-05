@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
 
-use crate::settings::{LlmProviderKind, ALL_TOOL_NAMES};
+use crate::settings::{ALL_TOOL_NAMES, LlmProviderKind};
 use crate::theme::*;
 use crate::ui::chrome::{
     card_frame, field_label, hairline, pill_tab, settings_caption, settings_section_title,

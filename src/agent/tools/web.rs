@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::paths::err;
 use super::MAX_TOOL_OUTPUT_CHARS;
+use super::paths::err;
 
 const DEFAULT_SEARCH_COUNT: usize = 8;
 const MAX_SEARCH_COUNT: usize = 20;
@@ -382,12 +382,11 @@ fn resolve_ddg_href(href: &str) -> String {
     } else {
         href.to_string()
     };
-    if absolute.contains("duckduckgo.com/l/") {
-        if let Ok(parsed) = url::Url::parse(&absolute) {
-            if let Some((_, dest)) = parsed.query_pairs().find(|(k, _)| k == "uddg") {
-                return dest.into_owned();
-            }
-        }
+    if absolute.contains("duckduckgo.com/l/")
+        && let Ok(parsed) = url::Url::parse(&absolute)
+        && let Some((_, dest)) = parsed.query_pairs().find(|(k, _)| k == "uddg")
+    {
+        return dest.into_owned();
     }
     absolute
 }

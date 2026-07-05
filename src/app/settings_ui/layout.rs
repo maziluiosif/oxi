@@ -9,8 +9,8 @@ use eframe::egui::{
 use crate::theme::*;
 use crate::ui::chrome::{settings_caption, settings_nav_row};
 
-use super::super::state::SettingsTab;
 use super::super::OxiApp;
+use super::super::state::SettingsTab;
 
 const SETTINGS_CONTENT_MAX: f32 = 820.0;
 
@@ -89,11 +89,11 @@ impl OxiApp {
             );
         });
 
-        if self.conv.settings != settings_before {
-            if let Err(e) = self.conv.settings.save() {
-                self.run_state_mut(self.active_session_key()).stream_error =
-                    Some(format!("Save settings: {e}"));
-            }
+        if self.conv.settings != settings_before
+            && let Err(e) = self.conv.settings.save()
+        {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
         }
     }
 

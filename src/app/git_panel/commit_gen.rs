@@ -73,11 +73,11 @@ impl OxiApp {
             self.conv.git = state;
             ctx.request_repaint();
         }
-        if let Some(diff) = collected_diff {
-            if self.conv.commit_gen_pending {
-                self.start_commit_gen(&diff);
-                ctx.request_repaint();
-            }
+        if let Some(diff) = collected_diff
+            && self.conv.commit_gen_pending
+        {
+            self.start_commit_gen(&diff);
+            ctx.request_repaint();
         }
     }
 

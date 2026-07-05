@@ -9,7 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use url::form_urlencoded;
 
-use super::store::{merge_codex, save_oauth_store, CodexOAuthRecord, OAuthStore};
+use super::store::{CodexOAuthRecord, OAuthStore, merge_codex, save_oauth_store};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";

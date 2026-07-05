@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::model::{AssistantBlock, ChatMessage, MsgRole, UserAttachment};
 
@@ -26,12 +26,12 @@ pub fn chat_message_to_json_entries(message: &ChatMessage) -> Vec<Value> {
             // Persist the frozen work duration on the leading assistant entry so the
             // collapsed "Worked for Xs" summary survives a reload. Skipped while
             // still streaming (duration not yet known) and for zero/None values.
-            if let Some(entry) = entries.first_mut() {
-                if let Some(d) = message.worked_duration {
-                    if !message.streaming && d.as_secs_f64() > 0.0 {
-                        entry["workedSecs"] = json!(d.as_secs_f64());
-                    }
-                }
+            if let Some(entry) = entries.first_mut()
+                && let Some(d) = message.worked_duration
+                && !message.streaming
+                && d.as_secs_f64() > 0.0
+            {
+                entry["workedSecs"] = json!(d.as_secs_f64());
             }
             entries
         }
@@ -308,9 +308,11 @@ mod tests {
         assert!(result.get("details").is_some());
         assert_eq!(result["details"]["diff"], "+line\n-old");
         assert_eq!(result["details"]["fullOutputPath"], "/tmp/out.txt");
-        assert!(result["details"]["truncation"]["truncated"]
-            .as_bool()
-            .unwrap());
+        assert!(
+            result["details"]["truncation"]["truncated"]
+                .as_bool()
+                .unwrap()
+        );
     }
 
     #[test]

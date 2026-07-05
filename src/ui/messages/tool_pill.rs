@@ -8,7 +8,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, FontId, Frame, Id, Label, Margin, RichText, ScrollArea, Stroke, Ui,
 };
 
-use crate::model::{concat_thinking_blocks, AssistantBlock};
+use crate::model::{AssistantBlock, concat_thinking_blocks};
 use crate::theme::*;
 use crate::ui::preview_expand::{
     clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,

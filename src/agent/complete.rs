@@ -4,12 +4,12 @@
 //! definitions and a single round, so the model just returns plain text. Deltas are
 //! streamed back over the channel, followed by a terminal [`CompleteEvent::Done`].
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::agent::anthropic::run_anthropic_loop;
 use crate::agent::approval::ApprovalGate;
@@ -333,10 +333,10 @@ async fn collect_deltas(
             AgentEvent::TextDelta(d) => {
                 out.push_str(&d);
                 let _ = tx.send(CompleteEvent::Delta(d));
-                if let Some(cap) = max_chars {
-                    if out.chars().count() >= cap {
-                        break;
-                    }
+                if let Some(cap) = max_chars
+                    && out.chars().count() >= cap
+                {
+                    break;
                 }
             }
             AgentEvent::StreamError(e) => return Err(e),

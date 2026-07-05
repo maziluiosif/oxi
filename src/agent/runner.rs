@@ -1,9 +1,9 @@
 //! Spawn background agent run (tokio + mpsc).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crate::agent::anthropic::run_anthropic_loop;
@@ -14,7 +14,7 @@ use crate::agent::history::build_openai_messages;
 use crate::agent::loop_ctx::LoopCtx;
 use crate::agent::openai::run_chat_loop;
 use crate::agent::prompt::build_system_prompt;
-use crate::agent::tools::{tool_definitions_json, ToolEnv};
+use crate::agent::tools::{ToolEnv, tool_definitions_json};
 use crate::model::ChatMessage;
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{AppSettings, LlmProviderKind, ProviderConfig};

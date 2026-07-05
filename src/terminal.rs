@@ -12,7 +12,7 @@ use eframe::egui::{
     self, Color32, Event, EventFilter, FontId, Key, PointerButton, Pos2, Rect, Sense, Stroke,
     TextFormat, Ui,
 };
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use vt100::{MouseProtocolEncoding as MEnc, MouseProtocolMode as MMode};
 
 /// Mouse tracking carried between frames so we can report drags / motion.
@@ -529,11 +529,7 @@ fn vt_color(color: vt100::Color, _fg: bool) -> Option<Color32> {
 /// Translate special keys to terminal byte sequences (no Ctrl modifier).
 fn key_sequence(key: Key, app_cursor: bool) -> Option<&'static [u8]> {
     let arrows = |normal: &'static [u8], app: &'static [u8]| {
-        if app_cursor {
-            app
-        } else {
-            normal
-        }
+        if app_cursor { app } else { normal }
     };
     let seq: &[u8] = match key {
         Key::Enter => b"\r",

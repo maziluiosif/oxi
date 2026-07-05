@@ -54,10 +54,10 @@ fn migrate_legacy_file() -> Option<SshCredentialStore> {
     let path = legacy_credentials_path();
     let bytes = fs::read(&path).ok()?;
     let store: SshCredentialStore = serde_json::from_slice(&bytes).ok()?;
-    if !store.passwords.is_empty() {
-        if let Ok(json) = serde_json::to_string(&store) {
-            let _ = crate::secrets::store(KEYCHAIN_ACCOUNT, &json);
-        }
+    if !store.passwords.is_empty()
+        && let Ok(json) = serde_json::to_string(&store)
+    {
+        let _ = crate::secrets::store(KEYCHAIN_ACCOUNT, &json);
     }
     let _ = fs::remove_file(&path);
     Some(store)

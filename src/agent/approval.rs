@@ -4,9 +4,9 @@
 //! until the UI returns an [`ApprovalDecision`] over a back-channel. Read-only tools
 //! (`read` / `grep` / `find` / `ls`) never require approval.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -72,11 +72,11 @@ impl ApprovalGate {
                     return Ok(());
                 }
                 Ok(ApprovalDecision::Deny) => {
-                    return Err(format!("User denied running the `{name}` tool."))
+                    return Err(format!("User denied running the `{name}` tool."));
                 }
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err("Approval channel closed.".to_string())
+                    return Err("Approval channel closed.".to_string());
                 }
             }
         }
