@@ -3555,7 +3555,7 @@ dependencies = [
  "keyring",
  "portable-pty",
  "pulldown-cmark",
- "rand 0.8.5",
+ "rand 0.10.1",
  "regex",
  "reqwest",
  "rfd",
