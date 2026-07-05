@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-05
+
+### Changed
+- Migrate to Rust edition 2024 with MSRV 1.92
+- Update egui/eframe/egui_extras to 0.35 with UI API changes
+- Update reqwest to 0.13 with feature renames and cert verification changes
+- Update vt100 to 0.16 with scrollback buffer improvements
+- Update rand to 0.10
+- Update dirs, rfd, russh, portable-pty, pulldown-cmark, and sha2 to latest versions
+
+### Removed
+- Drop unused arboard dependency
+
+### Security
+- Clear RUSTSEC advisories for ttf-parser, quick-xml, paste, zbus, and rand dependencies
+
+
 ## [0.9.0] - 2026-07-04
 
 ### Added
@@ -218,7 +235,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/maziluiosif/oxi/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/maziluiosif/oxi/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/maziluiosif/oxi/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/maziluiosif/oxi/compare/v0.6.1...v0.7.0
