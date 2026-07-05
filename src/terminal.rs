@@ -160,7 +160,7 @@ impl TerminalSession {
             pixel_height: 0,
         });
         if let Ok(mut p) = self.parser.lock() {
-            p.set_size(rows, cols);
+            p.screen_mut().set_size(rows, cols);
         }
     }
 
@@ -186,14 +186,10 @@ impl TerminalSession {
 
         self.handle_mouse(ui, rect, cell_w, cell_h, resp.hovered());
         // Apply scrollback view (no-op when an app has grabbed the mouse / offset is 0).
-        // vt100 0.15's `visible_rows` mixes `offset` scrollback rows with `rows - offset`
-        // live rows, so an offset larger than the row count underflows and panics. Clamp
-        // to the visible row count before handing it over; `set_scrollback` then clamps
-        // again to the buffer length.
+        // `set_scrollback` clamps to the buffer length; read the offset back so further
+        // wheel deltas accumulate from the effective position.
         if let Ok(mut p) = self.parser.lock() {
-            let max_off = self.rows as usize;
-            self.scroll_offset = self.scroll_offset.min(max_off);
-            p.set_scrollback(self.scroll_offset);
+            p.screen_mut().set_scrollback(self.scroll_offset);
             self.scroll_offset = p.screen().scrollback();
         }
 
@@ -419,10 +415,8 @@ impl TerminalSession {
                     col += 1;
                     continue;
                 }
-                let mut s = cell.contents();
-                if s.is_empty() {
-                    s.push(' ');
-                }
+                let s = cell.contents();
+                let s = if s.is_empty() { " " } else { s };
                 let mut fg = vt_color(cell.fgcolor(), true);
                 let mut bg = vt_color(cell.bgcolor(), false);
                 if cell.inverse() {
@@ -440,7 +434,7 @@ impl TerminalSession {
                     },
                     ..Default::default()
                 };
-                job.append(&s, 0.0, fmt);
+                job.append(s, 0.0, fmt);
                 col += 1;
             }
             let galley = ui.fonts(|f| f.layout_job(job));
