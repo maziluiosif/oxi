@@ -32,7 +32,7 @@ walkdir = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 dirs = "6"
 sha2 = "0.11"
-rand = "0.8"
+rand = "0.10"
 webbrowser = "1"
 url = "2"
 portable-pty = "0.9"
