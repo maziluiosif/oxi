@@ -3,8 +3,8 @@
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{
-    self, vec2, Align, CornerRadius, FontFamily, FontId, Frame, Id, Layout, Margin, RichText,
-    Stroke, Ui,
+    self, Align, CornerRadius, FontFamily, FontId, Frame, Id, Layout, Margin, RichText, Stroke, Ui,
+    vec2,
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Tag, TagEnd};
 
@@ -13,10 +13,10 @@ use crate::ui::preview_expand::{
     clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
 };
 
-use super::inline::{fmt_body, fmt_code, selectable_job, InlineDensity, InlineEnd};
+use super::inline::{InlineDensity, InlineEnd, fmt_body, fmt_code, selectable_job};
 use super::{
-    allocate_full_width_block, consume_until_end, line_height_for_body_size, render_list,
-    set_job_wrap, ParserPeek, SZ_CODE, SZ_TINY,
+    ParserPeek, SZ_CODE, SZ_TINY, allocate_full_width_block, consume_until_end,
+    line_height_for_body_size, render_list, set_job_wrap,
 };
 
 /// Raw HTML / unknown blocks: show monospace so nothing is silently dropped.

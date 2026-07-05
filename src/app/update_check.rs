@@ -4,11 +4,11 @@
 
 use eframe::egui;
 
-use crate::update::{fetch_latest_release, is_newer, ReleaseInfo, APP_VERSION};
+use crate::update::{APP_VERSION, ReleaseInfo, fetch_latest_release, is_newer};
 
+use super::OxiApp;
 use super::state::UpdateMsg;
 use super::task_runner::spawn_async_task;
-use super::OxiApp;
 
 impl OxiApp {
     /// Run the update check once per app start (plus explicit re-runs from the About

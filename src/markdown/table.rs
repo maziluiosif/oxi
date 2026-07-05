@@ -2,13 +2,13 @@
 //! stream, then paint a bordered grid sized to the column count.
 
 use eframe::egui::text::LayoutJob;
-use eframe::egui::{vec2, Align, Layout, Stroke};
+use eframe::egui::{Align, Layout, Stroke, vec2};
 use pulldown_cmark::{Event, Tag, TagEnd};
 
 use crate::theme::*;
 
-use super::inline::{inline_text_format, selectable_job, InlineDensity};
-use super::{allocate_full_width_block, set_job_wrap, ParserPeek, SZ_BODY};
+use super::inline::{InlineDensity, inline_text_format, selectable_job};
+use super::{ParserPeek, SZ_BODY, allocate_full_width_block, set_job_wrap};
 
 struct TableCellData {
     text: String,

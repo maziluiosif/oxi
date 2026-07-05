@@ -114,8 +114,8 @@ pub fn alert_banner(ui: &mut Ui, text: &str, error: bool) {
 /// its own font family (icon family + proportional), sharing `color`/`size`. Returned as a layout
 /// job so it can be passed straight to [`egui::Button::new`] / [`egui::Label`].
 pub fn icon_label_job(icon: &str, label: &str, size: f32, color: Color32) -> egui::WidgetText {
-    use egui::text::{LayoutJob, TextFormat};
     use egui::WidgetText;
+    use egui::text::{LayoutJob, TextFormat};
     if icon.is_empty() {
         return WidgetText::from(RichText::new(label).size(size).color(color));
     }

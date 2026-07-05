@@ -4,13 +4,13 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use serde_json::{json, Value};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use serde_json::{Value, json};
 
 use super::events::AgentEvent;
 use super::loop_ctx::LoopCtx;
-use super::net::{backoff_delay, send_with_retry, sleep_cancellable, MAX_STREAM_RETRIES};
-use super::tools::{run_tool, ToolResult};
+use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
+use super::tools::{ToolResult, run_tool};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -172,15 +172,15 @@ fn chat_to_input(messages: &[Value]) -> Result<Vec<Value>, String> {
         }
         if role == "assistant" {
             if let Some(tcs) = m.get("tool_calls").and_then(|x| x.as_array()) {
-                if let Some(content) = m.get("content").and_then(|c| c.as_str()) {
-                    if !content.is_empty() {
-                        input.push(json!({
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [{"type": "output_text", "text": content, "annotations": []}],
-                            "status": "completed"
-                        }));
-                    }
+                if let Some(content) = m.get("content").and_then(|c| c.as_str())
+                    && !content.is_empty()
+                {
+                    input.push(json!({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": content, "annotations": []}],
+                        "status": "completed"
+                    }));
                 }
                 for tc in tcs {
                     let id = tc.get("id").and_then(|x| x.as_str()).unwrap_or("");
@@ -304,10 +304,10 @@ fn process_responses_event(
         "response.created" | "response.completed" | "response.incomplete" => {}
         // New reasoning item in the stream — allow a later `output_item.done` fallback for this item.
         "response.output_item.added" => {
-            if let Some(item) = v.get("item") {
-                if item.get("type").and_then(|x| x.as_str()) == Some("reasoning") {
-                    state.got_thinking_delta = false;
-                }
+            if let Some(item) = v.get("item")
+                && item.get("type").and_then(|x| x.as_str()) == Some("reasoning")
+            {
+                state.got_thinking_delta = false;
             }
         }
         "response.output_text.delta" => {
@@ -318,11 +318,11 @@ fn process_responses_event(
         }
         // ChatGPT Codex / Responses API (pi-mono `processResponsesStream`).
         "response.reasoning_summary_text.delta" => {
-            if let Some(d) = responses_stream_text_chunk(v) {
-                if !d.is_empty() {
-                    state.got_thinking_delta = true;
-                    let _ = tx.send(AgentEvent::ThinkingDelta(d.to_string()));
-                }
+            if let Some(d) = responses_stream_text_chunk(v)
+                && !d.is_empty()
+            {
+                state.got_thinking_delta = true;
+                let _ = tx.send(AgentEvent::ThinkingDelta(d.to_string()));
             }
         }
         // Alternate / older event names (direct deltas without summary-part handshake).
@@ -330,21 +330,21 @@ fn process_responses_event(
         | "response.reasoning_text.delta"
         | "response.reasoning_text_delta"
         | "response.reasoning_summary_text_delta" => {
-            if let Some(d) = responses_stream_text_chunk(v) {
-                if !d.is_empty() {
-                    state.got_thinking_delta = true;
-                    let _ = tx.send(AgentEvent::ThinkingDelta(d.to_string()));
-                }
+            if let Some(d) = responses_stream_text_chunk(v)
+                && !d.is_empty()
+            {
+                state.got_thinking_delta = true;
+                let _ = tx.send(AgentEvent::ThinkingDelta(d.to_string()));
             }
         }
         "response.output_item.done" => {
             if let Some(item) = v.get("item") {
                 match item.get("type").and_then(|x| x.as_str()) {
                     Some("reasoning") if !state.got_thinking_delta => {
-                        if let Some(text) = reasoning_item_summary_joined(item) {
-                            if !text.is_empty() {
-                                let _ = tx.send(AgentEvent::ThinkingDelta(text));
-                            }
+                        if let Some(text) = reasoning_item_summary_joined(item)
+                            && !text.is_empty()
+                        {
+                            let _ = tx.send(AgentEvent::ThinkingDelta(text));
                         }
                     }
                     Some("function_call") => {

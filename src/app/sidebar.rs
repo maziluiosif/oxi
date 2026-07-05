@@ -619,11 +619,11 @@ impl OxiApp {
             );
             self.conv.settings.git_width = self.conv.git_width;
         }
-        if sep.drag_stopped() {
-            if let Err(e) = self.conv.settings.save() {
-                self.run_state_mut(self.active_session_key()).stream_error =
-                    Some(format!("Save settings: {e}"));
-            }
+        if sep.drag_stopped()
+            && let Err(e) = self.conv.settings.save()
+        {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
         }
         let col = if sep.hovered() || sep.dragged() {
             c_accent()
@@ -652,11 +652,11 @@ impl OxiApp {
             self.conv.sidebar_width = (self.conv.sidebar_width + delta_x).clamp(min_w, max_w);
             self.conv.settings.sidebar_width = self.conv.sidebar_width;
         }
-        if sep.drag_stopped() {
-            if let Err(e) = self.conv.settings.save() {
-                self.run_state_mut(self.active_session_key()).stream_error =
-                    Some(format!("Save settings: {e}"));
-            }
+        if sep.drag_stopped()
+            && let Err(e) = self.conv.settings.save()
+        {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
         }
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);

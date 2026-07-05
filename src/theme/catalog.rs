@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use eframe::egui::{self, Color32};
 use serde::{Deserialize, Serialize};
 
-use super::palette::{rgb, set_active_palette, Palette};
+use super::palette::{Palette, rgb, set_active_palette};
 use super::style::setup_style;
 
 // ─── Theme registry ──────────────────────────────────────────────────────────

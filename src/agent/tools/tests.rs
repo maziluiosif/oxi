@@ -1,9 +1,9 @@
 use super::file_ops::{make_unified_diff, truncate_out};
 use super::shell_search::validate_bash_command;
 use super::{
-    paths::resolve_under_cwd, run_tool, tool_definitions_json, ToolEnv, MAX_TOOL_OUTPUT_CHARS,
+    MAX_TOOL_OUTPUT_CHARS, ToolEnv, paths::resolve_under_cwd, run_tool, tool_definitions_json,
 };
-use crate::settings::{WebSearchBackend, ALL_TOOL_NAMES};
+use crate::settings::{ALL_TOOL_NAMES, WebSearchBackend};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;

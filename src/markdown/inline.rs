@@ -11,7 +11,7 @@ use pulldown_cmark::{Event, Tag, TagEnd};
 
 use crate::theme::*;
 
-use super::{consume_until_end, set_job_wrap, ParserPeek, SZ_BODY, SZ_CODE_INLINE};
+use super::{ParserPeek, SZ_BODY, SZ_CODE_INLINE, consume_until_end, set_job_wrap};
 
 #[derive(Clone, Copy)]
 pub(super) enum InlineEnd {

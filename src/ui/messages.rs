@@ -21,15 +21,15 @@ use eframe::egui::{
 
 use crate::markdown;
 use crate::model::{
+    AssistantBlock, AssistantBlockGroup, ChatMessage, MsgRole, UserAttachment,
     assistant_is_effectively_empty, build_assistant_block_groups, concat_thinking_blocks,
-    tool_breaks_explore_cluster, AssistantBlock, AssistantBlockGroup, ChatMessage, MsgRole,
-    UserAttachment,
+    tool_breaks_explore_cluster,
 };
 use crate::theme::*;
 use crate::ui::preview_expand::expand_persist_id;
 
 use thinking::{render_thinking_group_block, thinking_group_is_live};
-use tool_pill::{render_explored_cluster, render_single_tool_block, ExploredClusterCtx};
+use tool_pill::{ExploredClusterCtx, render_explored_cluster, render_single_tool_block};
 
 fn user_image_texture(
     ui: &Ui,
@@ -85,11 +85,7 @@ pub(super) fn selectable_layout_job(ui: &mut Ui, job: LayoutJob, allow_select: b
 }
 
 pub(super) fn block_state_tag(streaming: bool) -> &'static str {
-    if streaming {
-        "live"
-    } else {
-        "done"
-    }
+    if streaming { "live" } else { "done" }
 }
 
 /// Write/edit-like tools render as full detail blocks, not explore-cluster rows.
@@ -155,12 +151,10 @@ pub fn render_message(
         return response;
     }
 
-    let response = ui
-        .vertical(|ui| {
-            render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), agent_ack);
-        })
-        .response;
-    response
+    ui.vertical(|ui| {
+        render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), agent_ack);
+    })
+    .response
 }
 
 fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttachment]) {
@@ -301,10 +295,10 @@ fn render_activity_range(
             }
             AssistantBlockGroup::Answer(i) => {
                 let gi = start + i;
-                if let AssistantBlock::Answer(text) = &blocks[gi] {
-                    if !text.trim().is_empty() {
-                        markdown::render_markdown(ui, text);
-                    }
+                if let AssistantBlock::Answer(text) = &blocks[gi]
+                    && !text.trim().is_empty()
+                {
+                    markdown::render_markdown(ui, text);
                 }
             }
             AssistantBlockGroup::ExploringTools {
@@ -496,10 +490,10 @@ pub fn render_assistant_blocks(
     }
 
     for block in &blocks[worked_end..] {
-        if let AssistantBlock::Answer(text) = block {
-            if !text.trim().is_empty() || streaming {
-                markdown::render_markdown(ui, text);
-            }
+        if let AssistantBlock::Answer(text) = block
+            && (!text.trim().is_empty() || streaming)
+        {
+            markdown::render_markdown(ui, text);
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use chrono::Utc;
 
-use crate::settings::{AppSettings, ALL_TOOL_NAMES};
+use crate::settings::{ALL_TOOL_NAMES, AppSettings};
 
 pub const DEFAULT_AGENT_SYSTEM_PROMPT: &str = "You are an expert coding assistant. You help users by reading files, running shell commands, searching the codebase, and editing or writing files.\n\nAvailable tools (use only these when enabled): {tools_list}\n\nGuidelines:\n- Prefer reading files before editing.\n- Keep shell commands safe and relevant to the project.\n- When editing, ensure old text matches exactly.\n- Do not guess about project-specific implementation details when tools are available.\n- Verify claims by reading the relevant source files before answering.\n- Prefer evidence from the codebase over assumptions.";
 

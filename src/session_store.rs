@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
-use crate::model::{make_session_title, Session};
+use crate::model::{Session, make_session_title};
 
 #[cfg(test)]
 pub use dedupe::chat_messages_equal;

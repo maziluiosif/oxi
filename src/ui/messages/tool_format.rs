@@ -164,28 +164,27 @@ pub(super) fn tool_summary_text(
 
     match name {
         "bash" => {
-            if let Some(raw) = args_summary {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
-                    if let Some(cmd) = v.get("command").and_then(|x| x.as_str()) {
-                        let p = command_preview(cmd, 42);
-                        if !p.is_empty() {
-                            parts.push(format!("`{p}`"));
-                        }
-                    }
+            if let Some(raw) = args_summary
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+                && let Some(cmd) = v.get("command").and_then(|x| x.as_str())
+            {
+                let p = command_preview(cmd, 42);
+                if !p.is_empty() {
+                    parts.push(format!("`{p}`"));
                 }
             }
         }
         "grep" => {
-            if let Some(raw) = args_summary {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
-                    if let Some(pattern) = v.get("pattern").and_then(|x| x.as_str()) {
-                        parts.push(format!("`{}`", command_preview(pattern, 32)));
-                    }
-                    if let Some(path) = v.get("path").and_then(|x| x.as_str()) {
-                        if !path.is_empty() {
-                            parts.push(format!("in {}", short_path(path, 2)));
-                        }
-                    }
+            if let Some(raw) = args_summary
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+            {
+                if let Some(pattern) = v.get("pattern").and_then(|x| x.as_str()) {
+                    parts.push(format!("`{}`", command_preview(pattern, 32)));
+                }
+                if let Some(path) = v.get("path").and_then(|x| x.as_str())
+                    && !path.is_empty()
+                {
+                    parts.push(format!("in {}", short_path(path, 2)));
                 }
             }
         }
@@ -195,24 +194,22 @@ pub(super) fn tool_summary_text(
             }
         }
         "web_search" => {
-            if let Some(raw) = args_summary {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
-                    if let Some(q) = v.get("query").and_then(|x| x.as_str()) {
-                        let p = command_preview(q, 40);
-                        if !p.is_empty() {
-                            parts.push(p);
-                        }
-                    }
+            if let Some(raw) = args_summary
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+                && let Some(q) = v.get("query").and_then(|x| x.as_str())
+            {
+                let p = command_preview(q, 40);
+                if !p.is_empty() {
+                    parts.push(p);
                 }
             }
         }
         "web_fetch" => {
-            if let Some(raw) = args_summary {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
-                    if let Some(u) = v.get("url").and_then(|x| x.as_str()) {
-                        parts.push(short_url(u, 44));
-                    }
-                }
+            if let Some(raw) = args_summary
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+                && let Some(u) = v.get("url").and_then(|x| x.as_str())
+            {
+                parts.push(short_url(u, 44));
             }
         }
         _ => {
@@ -299,20 +296,20 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
         }
     }
     // URL scurtat pentru web_fetch
-    if name == "web_fetch" {
-        if let Some(u) = v.get("url").and_then(|x| x.as_str()) {
-            return Some(short_url(u, 44));
-        }
+    if name == "web_fetch"
+        && let Some(u) = v.get("url").and_then(|x| x.as_str())
+    {
+        return Some(short_url(u, 44));
     }
     // fallback: prima string din obiect
-    if let serde_json::Value::Object(map) = &v {
-        if let Some(s) = map.values().find_map(|x| x.as_str()) {
-            let mut t: String = s.chars().take(48).collect();
-            if s.chars().count() > 48 {
-                t.push('…');
-            }
-            return Some(t);
+    if let serde_json::Value::Object(map) = &v
+        && let Some(s) = map.values().find_map(|x| x.as_str())
+    {
+        let mut t: String = s.chars().take(48).collect();
+        if s.chars().count() > 48 {
+            t.push('…');
         }
+        return Some(t);
     }
     None
 }
