@@ -6,9 +6,9 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::paths::{err, resolve_under_cwd, resolve_under_cwd_for_create};
-use super::ToolResult;
 use super::MAX_TOOL_OUTPUT_CHARS;
+use super::ToolResult;
+use super::paths::{err, resolve_under_cwd, resolve_under_cwd_for_create};
 
 const READ_MAX_LINES: usize = 2000;
 
@@ -189,7 +189,7 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
                 output: err("missing path"),
                 is_error: true,
                 diff: None,
-            }
+            };
         }
     };
     let content = match args.get("content").and_then(|x| x.as_str()) {
@@ -199,7 +199,7 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
                 output: err("missing content"),
                 is_error: true,
                 diff: None,
-            }
+            };
         }
     };
     let abs = match resolve_under_cwd_for_create(cwd, path) {
@@ -209,19 +209,19 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
                 output: e,
                 is_error: true,
                 diff: None,
-            }
+            };
         }
     };
     // Read existing file for diff (empty string if new file).
     let before = fs::read_to_string(&abs).unwrap_or_default();
-    if let Some(parent) = abs.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            return ToolResult {
-                output: e.to_string(),
-                is_error: true,
-                diff: None,
-            };
-        }
+    if let Some(parent) = abs.parent()
+        && let Err(e) = fs::create_dir_all(parent)
+    {
+        return ToolResult {
+            output: e.to_string(),
+            is_error: true,
+            diff: None,
+        };
     }
     if let Err(e) = fs::write(&abs, content.as_bytes()) {
         return ToolResult {
@@ -246,7 +246,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
                 output: err("missing path"),
                 is_error: true,
                 diff: None,
-            }
+            };
         }
     };
     let abs = match resolve_under_cwd(cwd, path) {
@@ -256,7 +256,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
                 output: e,
                 is_error: true,
                 diff: None,
-            }
+            };
         }
     };
     let before = match fs::read_to_string(&abs) {
@@ -266,7 +266,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
                 output: e.to_string(),
                 is_error: true,
                 diff: None,
-            }
+            };
         }
     };
     let mut content = before.clone();

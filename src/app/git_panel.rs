@@ -43,13 +43,13 @@ impl OxiApp {
         ui.set_min_width(ui.max_rect().width());
         ui.set_min_height(ui.max_rect().height());
 
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(c_bg_sidebar())
             .inner_margin(Margin {
-                left: 8.0,
-                right: 8.0,
-                top: 8.0,
-                bottom: 8.0,
+                left: 8,
+                right: 8,
+                top: 8,
+                bottom: 8,
             })
             .show(ui, |ui| {
                 ui.set_min_width(ui.max_rect().width());

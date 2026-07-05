@@ -15,7 +15,7 @@ pub mod runner;
 pub mod tools;
 
 pub use approval::ApprovalDecision;
-pub use complete::{spawn_completion, CompleteEvent, CompleteRequest};
+pub use complete::{CompleteEvent, CompleteRequest, spawn_completion};
 pub use events::AgentEvent;
 pub use models::fetch_models;
 pub use runner::spawn_agent_run;

@@ -4,7 +4,7 @@
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
 
-use crate::oauth::{clear_codex, load_oauth_store, save_oauth_store, OAuthUiMsg};
+use crate::oauth::{OAuthUiMsg, clear_codex, load_oauth_store, save_oauth_store};
 use crate::settings::{ComputeLocation, LlmProviderKind, ProviderConfig, SshConfig};
 use crate::theme::*;
 use crate::ui::chrome::{
@@ -57,7 +57,7 @@ impl OxiApp {
                         TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).model_id)
                             .desired_width(ui.available_width() - 30.0)
                             .hint_text("e.g. gpt-4o-mini or kimi-k2.7-code")
-                            .margin(Margin::symmetric(8.0, 5.0)),
+                            .margin(Margin::symmetric(8, 5)),
                     );
                 }
                 if crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
@@ -100,7 +100,7 @@ impl OxiApp {
                         TextEdit::singleline(&mut value)
                             .desired_width(160.0)
                             .hint_text(format!("auto ({resolved})"))
-                            .margin(Margin::symmetric(8.0, 5.0)),
+                            .margin(Margin::symmetric(8, 5)),
                     );
                     if resp.changed() {
                         let parsed = value.trim().parse::<usize>().ok();
@@ -127,7 +127,7 @@ impl OxiApp {
                 TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).base_url)
                     .desired_width(f32::INFINITY)
                     .hint_text(kind.default_base_url())
-                    .margin(Margin::symmetric(8.0, 5.0)),
+                    .margin(Margin::symmetric(8, 5)),
             );
 
             // API key
@@ -144,7 +144,7 @@ impl OxiApp {
                         LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
                         LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
                     })
-                    .margin(Margin::symmetric(8.0, 5.0)),
+                    .margin(Margin::symmetric(8, 5)),
             );
 
             if kind == LlmProviderKind::OpenRouter {
@@ -161,7 +161,7 @@ impl OxiApp {
                         )
                         .desired_width(f32::INFINITY)
                         .hint_text("HTTP-Referer")
-                        .margin(Margin::symmetric(8.0, 5.0)),
+                        .margin(Margin::symmetric(8, 5)),
                     );
                     ui.add_space(4.0);
                     ui.add(
@@ -170,7 +170,7 @@ impl OxiApp {
                         )
                         .desired_width(f32::INFINITY)
                         .hint_text("X-Title")
-                        .margin(Margin::symmetric(8.0, 5.0)),
+                        .margin(Margin::symmetric(8, 5)),
                     );
                 });
             }
@@ -227,7 +227,7 @@ impl OxiApp {
                             TextEdit::singleline(&mut cfg.host)
                                 .desired_width(200.0)
                                 .hint_text("192.168.1.10 or myhost.local")
-                                .margin(Margin::symmetric(8.0, 5.0)),
+                                .margin(Margin::symmetric(8, 5)),
                         );
                     });
                     ui.add_space(8.0);
@@ -238,14 +238,12 @@ impl OxiApp {
                             .add(
                                 TextEdit::singleline(&mut port_str)
                                     .desired_width(70.0)
-                                    .margin(Margin::symmetric(8.0, 5.0)),
+                                    .margin(Margin::symmetric(8, 5)),
                             )
                             .changed()
-                        {
-                            if let Ok(p) = port_str.trim().parse::<u16>() {
+                            && let Ok(p) = port_str.trim().parse::<u16>() {
                                 cfg.port = p;
                             }
-                        }
                     });
                 });
                 ui.add_space(6.0);
@@ -256,7 +254,7 @@ impl OxiApp {
                             TextEdit::singleline(&mut cfg.user)
                                 .desired_width(200.0)
                                 .hint_text("e.g. ioan")
-                                .margin(Margin::symmetric(8.0, 5.0)),
+                                .margin(Margin::symmetric(8, 5)),
                         );
                     });
                     ui.add_space(8.0);
@@ -267,14 +265,12 @@ impl OxiApp {
                             .add(
                                 TextEdit::singleline(&mut rport_str)
                                     .desired_width(70.0)
-                                    .margin(Margin::symmetric(8.0, 5.0)),
+                                    .margin(Margin::symmetric(8, 5)),
                             )
                             .changed()
-                        {
-                            if let Ok(p) = rport_str.trim().parse::<u16>() {
+                            && let Ok(p) = rport_str.trim().parse::<u16>() {
                                 cfg.remote_runtime_port = p;
                             }
-                        }
                     });
                 });
             }
@@ -306,7 +302,7 @@ impl OxiApp {
                         .password(true)
                         .desired_width(240.0)
                         .hint_text("SSH password")
-                        .margin(Margin::symmetric(8.0, 5.0)),
+                        .margin(Margin::symmetric(8, 5)),
                 )
                 .changed()
             };
@@ -531,10 +527,10 @@ impl OxiApp {
     pub(crate) fn ensure_active_models_fetched(&mut self, ctx: &egui::Context) {
         let kind = self.conv.settings.active_provider;
         // Already fetched (or in flight)? Then nothing to do.
-        if let Some(f) = self.conv.fetched_models.get(&kind) {
-            if f.loading || !f.models.is_empty() {
-                return;
-            }
+        if let Some(f) = self.conv.fetched_models.get(&kind)
+            && (f.loading || !f.models.is_empty())
+        {
+            return;
         }
         self.spawn_model_fetch(ctx, kind);
     }
@@ -568,7 +564,7 @@ impl OxiApp {
             move |rt| {
                 let client = match reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
-                    .danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
+                    .tls_danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
                     .build()
                 {
                     Ok(c) => c,

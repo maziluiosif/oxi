@@ -1,0 +1,17 @@
+# cargo-audit policy. Every ignore below is a finding with no upstream fix;
+# re-check each one whenever dependencies are updated.
+
+[advisories]
+ignore = [
+    # rsa: Marvin Attack timing sidechannel. Pulled in via russh, which pins
+    # rsa =0.10.0-rc.x; no fixed rsa release exists. Exposure here is a
+    # client-side SSH tunnel to a user-configured trusted host only.
+    # Revisit when russh moves off the rsa release candidates.
+    "RUSTSEC-2023-0071",
+    # quick-xml 0.39 (fix requires >=0.41): DoS via crafted XML. Pulled in via
+    # wayland-scanner, a build-time proc-macro (Linux-only) that parses only
+    # the trusted Wayland protocol XML shipped in the crate; never sees
+    # untrusted input. Revisit when wayland-scanner bumps quick-xml.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

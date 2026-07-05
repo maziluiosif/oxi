@@ -1,11 +1,11 @@
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crate::agent::spawn_agent_run;
 use crate::model::{
-    make_session_title, set_tool_output_on_blocks, AssistantBlock, ChatMessage, MsgRole,
-    UserAttachment,
+    AssistantBlock, ChatMessage, MsgRole, UserAttachment, make_session_title,
+    set_tool_output_on_blocks,
 };
 
 use super::{OxiApp, SessionKey};
@@ -69,11 +69,11 @@ impl OxiApp {
         if let Err(e) = self.send_prompt_payload(key) {
             self.run_state_mut(key).stream_error = Some(e.clone());
             let sess = self.session_mut_by_key(key);
-            if let Some(last) = sess.messages.last_mut() {
-                if last.role == MsgRole::Assistant {
-                    last.finish_streaming();
-                    last.blocks = vec![AssistantBlock::Answer(format!("[Send error] {e}"))];
-                }
+            if let Some(last) = sess.messages.last_mut()
+                && last.role == MsgRole::Assistant
+            {
+                last.finish_streaming();
+                last.blocks = vec![AssistantBlock::Answer(format!("[Send error] {e}"))];
             }
             let run = self.run_state_mut(key);
             run.end_waiting_response();
@@ -121,10 +121,10 @@ impl OxiApp {
         let Some(m) = self.last_assistant_mut(key) else {
             return;
         };
-        if let Some(AssistantBlock::Answer(s)) = m.blocks.last() {
-            if s.is_empty() {
-                return;
-            }
+        if let Some(AssistantBlock::Answer(s)) = m.blocks.last()
+            && s.is_empty()
+        {
+            return;
         }
         m.blocks.push(AssistantBlock::Answer(String::new()));
     }
@@ -216,10 +216,10 @@ impl OxiApp {
         } else if let Some(AssistantBlock::Tool {
             name: n, output, ..
         }) = m.blocks.last()
+            && n == name
+            && output.is_empty()
         {
-            if n == name && output.is_empty() {
-                return;
-            }
+            return;
         }
         let args_summary = args.map(|a| {
             let s = a.to_string();
@@ -270,13 +270,12 @@ impl OxiApp {
                 full_output_path: fp,
                 ..
             } = b
+                && (tid.is_empty() || id == tid)
             {
-                if tid.is_empty() || id == tid {
-                    *d = diff;
-                    *ie = is_error;
-                    *fp = full_output_path;
-                    return;
-                }
+                *d = diff;
+                *ie = is_error;
+                *fp = full_output_path;
+                return;
             }
         }
     }

@@ -5,13 +5,13 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use serde_json::{json, Value};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use serde_json::{Value, json};
 
 use super::events::AgentEvent;
 use super::loop_ctx::LoopCtx;
-use super::net::{backoff_delay, send_with_retry, sleep_cancellable, MAX_STREAM_RETRIES};
-use super::tools::{run_tool, ToolResult};
+use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
+use super::tools::{ToolResult, run_tool};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -340,10 +340,9 @@ fn process_sse_line(
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("finish_reason"))
         .and_then(|x| x.as_str())
+        && !fr.is_empty()
     {
-        if !fr.is_empty() {
-            *finish_reason = Some(fr.to_string());
-        }
+        *finish_reason = Some(fr.to_string());
     }
     let delta = v
         .get("choices")
@@ -354,16 +353,16 @@ fn process_sse_line(
             for t in tc {
                 let idx = t.get("index").and_then(|x| x.as_u64()).unwrap_or(0);
                 let entry = tool_map.entry(idx).or_default();
-                if let Some(id) = t.get("id").and_then(|x| x.as_str()) {
-                    if !id.is_empty() {
-                        entry.id = id.to_string();
-                    }
+                if let Some(id) = t.get("id").and_then(|x| x.as_str())
+                    && !id.is_empty()
+                {
+                    entry.id = id.to_string();
                 }
                 if let Some(f) = t.get("function") {
-                    if let Some(n) = f.get("name").and_then(|x| x.as_str()) {
-                        if !n.is_empty() {
-                            entry.name = n.to_string();
-                        }
+                    if let Some(n) = f.get("name").and_then(|x| x.as_str())
+                        && !n.is_empty()
+                    {
+                        entry.name = n.to_string();
                     }
                     if let Some(a) = f.get("arguments").and_then(|x| x.as_str()) {
                         entry.arguments.push_str(a);
@@ -380,10 +379,9 @@ fn process_sse_line(
             .get("reasoning_content")
             .or_else(|| d.get("reasoning"))
             .and_then(|x| x.as_str())
+            && !reasoning.is_empty()
         {
-            if !reasoning.is_empty() {
-                let _ = tx.send(AgentEvent::ThinkingDelta(reasoning.to_string()));
-            }
+            let _ = tx.send(AgentEvent::ThinkingDelta(reasoning.to_string()));
         }
     }
 }
@@ -400,11 +398,11 @@ mod integration_tests {
     use crate::agent::approval::{ApprovalDecision, ApprovalGate};
     use crate::agent::loop_ctx::LoopCtx;
     use crate::agent::tools::ToolEnv;
-    use crate::settings::{WebSearchBackend, ALL_TOOL_NAMES};
+    use crate::settings::{ALL_TOOL_NAMES, WebSearchBackend};
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::mpsc;
-    use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use wiremock::matchers::{method, path as path_matcher};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -531,9 +529,11 @@ mod integration_tests {
         // The event stream reflects the full round trip: an approval request for the
         // mutating tool, the regular tool lifecycle, then the final answer.
         let events: Vec<AgentEvent> = rx.try_iter().collect();
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, AgentEvent::ApprovalRequest { name, .. } if name == "write")));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ApprovalRequest { name, .. } if name == "write"))
+        );
         assert!(events.iter().any(|e| matches!(
             e,
             AgentEvent::ToolEnd {

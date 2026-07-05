@@ -1,9 +1,9 @@
 [package]
 name = "oxi"
 version = "0.9.0"
-edition = "2021"
-# Floor set by the strictest dependencies (keyring 4, image 0.25 require 1.88).
-rust-version = "1.88"
+edition = "2024"
+# Floor set by the strictest dependency (egui 0.35 requires 1.92).
+rust-version = "1.92"
 description = "Standalone coding agent chat UI (Rust + egui; OpenAI-compatible LLMs + local tools)"
 license = "MIT"
 repository = "https://github.com/maziluiosif/oxi"
@@ -12,32 +12,31 @@ keywords = ["gui", "llm", "coding-agent", "egui", "chat"]
 categories = ["development-tools", "gui"]
 
 [dependencies]
-eframe = "0.29"
-egui = "0.29"
-egui_extras = { version = "0.29", features = ["all_loaders"] }
+eframe = "0.35"
+egui = "0.35"
+egui_extras = { version = "0.35", features = ["all_loaders"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-pulldown-cmark = "0.12"
+pulldown-cmark = "0.13"
 base64 = "0.22"
-rfd = "0.15"
-arboard = "3"
+rfd = "0.17"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
-russh = "0.61"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+russh = "0.62"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "query", "form"] }
 futures-util = "0.3"
 bytes = "1"
 regex = "1"
 glob = "0.3"
 walkdir = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-dirs = "5"
-sha2 = "0.10"
-rand = "0.8"
+dirs = "6"
+sha2 = "0.11"
+rand = "0.10"
 webbrowser = "1"
 url = "2"
-portable-pty = "0.8"
-vt100 = "0.15"
+portable-pty = "0.9"
+vt100 = "0.16"
 keyring = { version = "4.1.2", features = ["apple-native-keyring-store"] }
 
 [dev-dependencies]

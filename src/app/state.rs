@@ -1,9 +1,9 @@
 //! Grouped application state.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
 use std::time::Instant;
 
 use eframe::egui;

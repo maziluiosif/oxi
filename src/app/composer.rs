@@ -2,8 +2,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use eframe::egui::{
-    self, Button, Color32, ComboBox, Frame, Id, Image, Margin, Order, RichText, Rounding, Stroke,
-    TextEdit, TextureHandle, Ui,
+    self, Button, Color32, ComboBox, CornerRadius, Frame, Id, Image, Margin, Order, RichText,
+    Stroke, TextEdit, TextureHandle, Ui,
 };
 
 use crate::theme::*;
@@ -53,16 +53,16 @@ fn quiet_combo_style(ui: &mut Ui) {
     widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
     widgets.inactive.bg_fill = Color32::TRANSPARENT;
     widgets.inactive.bg_stroke = Stroke::NONE;
-    widgets.inactive.rounding = Rounding::same(999.0);
+    widgets.inactive.corner_radius = CornerRadius::same(255);
     widgets.hovered.weak_bg_fill = c_row_hover();
     widgets.hovered.bg_stroke = Stroke::new(1.0, c_border_subtle());
-    widgets.hovered.rounding = Rounding::same(999.0);
+    widgets.hovered.corner_radius = CornerRadius::same(255);
     widgets.active.weak_bg_fill = c_row_hover();
     widgets.active.bg_stroke = Stroke::NONE;
-    widgets.active.rounding = Rounding::same(999.0);
+    widgets.active.corner_radius = CornerRadius::same(255);
     widgets.open.weak_bg_fill = c_row_hover();
     widgets.open.bg_stroke = Stroke::NONE;
-    widgets.open.rounding = Rounding::same(999.0);
+    widgets.open.corner_radius = CornerRadius::same(255);
 }
 
 /// Nerd Font chevron for the quiet combos — the default painted triangle is nearly
@@ -72,7 +72,6 @@ fn quiet_combo_icon(
     rect: egui::Rect,
     visuals: &egui::style::WidgetVisuals,
     _is_open: bool,
-    _above_or_below: egui::AboveOrBelow,
 ) {
     ui.painter().text(
         rect.center(),
@@ -106,11 +105,11 @@ impl OxiApp {
             ui.vertical(|ui| {
                 let composer_w = CHAT_COLUMN_MAX.min(column_center_w);
                 ui.set_width(composer_w);
-                Frame::none()
+                Frame::new()
                     .fill(c_bg_elevated())
                     .stroke(Stroke::new(1.0, card_border))
-                    .rounding(crate::theme::RADIUS_PANEL)
-                    .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN))
+                    .corner_radius(crate::theme::RADIUS_PANEL)
+                    .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN as i8))
                     .show(ui, |ui| {
                         // === Attachment thumbnails (above the text, like Cursor) ===
                         if !self.conv.pending_images.is_empty() {
@@ -130,7 +129,7 @@ impl OxiApp {
                             )
                             .desired_width(f32::INFINITY)
                             .desired_rows(1)
-                            .frame(false)
+                            .frame(egui::Frame::NONE)
                             .show(ui);
 
                         let galley_h = te_output.galley.rect.height();
@@ -181,7 +180,7 @@ impl OxiApp {
                 hover_fill: c_row_hover(),
                 stroke: c_border_subtle(),
                 hover_stroke: c_border(),
-                rounding: Rounding::same(ATTACH_DIAM * 0.5),
+                rounding: CornerRadius::same((ATTACH_DIAM * 0.5) as u8),
                 glyph: c_text_muted(),
             },
         )
@@ -228,7 +227,7 @@ impl OxiApp {
                         .min_size(egui::vec2(SEND_DIAM, SEND_DIAM))
                         .fill(fill)
                         .stroke(Stroke::NONE)
-                        .rounding(SEND_DIAM * 0.5),
+                        .corner_radius(SEND_DIAM * 0.5),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(hover)
@@ -342,11 +341,11 @@ impl OxiApp {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
             for (i, (mime, data)) in self.conv.pending_images.iter().enumerate() {
                 let tex = composer_thumb_texture(ui, data);
-                let frame = Frame::none()
+                let frame = Frame::new()
                     .fill(c_bg_input())
                     .stroke(Stroke::new(1.0, c_border()))
-                    .rounding(Rounding::same(crate::theme::RADIUS_CHIP))
-                    .inner_margin(Margin::same(0.0))
+                    .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP))
+                    .inner_margin(Margin::same(0))
                     .show(ui, |ui| {
                         if let Some(tex) = tex {
                             let mut sz = tex.size_vec2();
@@ -358,7 +357,7 @@ impl OxiApp {
                             }
                             ui.add(
                                 Image::new((tex.id(), sz))
-                                    .rounding(Rounding::same(crate::theme::RADIUS_CHIP)),
+                                    .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP)),
                             );
                         } else {
                             let short = mime.strip_prefix("image/").unwrap_or(mime.as_str());
@@ -390,7 +389,7 @@ impl OxiApp {
                                 hover_fill: c_bg_main(),
                                 stroke: c_border(),
                                 hover_stroke: c_border(),
-                                rounding: Rounding::same(7.5),
+                                rounding: CornerRadius::same(8),
                                 glyph: c_text(),
                             },
                         )

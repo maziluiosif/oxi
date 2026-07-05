@@ -123,8 +123,7 @@ fn default_commit_msg_system_prompt() -> String {
 }
 
 /// Default system prompt for the "generate commit message" feature.
-pub const DEFAULT_COMMIT_MSG_SYSTEM_PROMPT: &str =
-    "You generate concise, well-formed git commit messages from a staged/unstaged diff. \
+pub const DEFAULT_COMMIT_MSG_SYSTEM_PROMPT: &str = "You generate concise, well-formed git commit messages from a staged/unstaged diff. \
      Rules:\n\
      - Output ONLY the commit message, no preamble, no code fences, no explanations.\n\
      - Start with a single imperative subject line up to ~50 characters, lowercase where natural.\n\
@@ -334,11 +333,11 @@ impl AppSettings {
 
         // Preserve the commit-message generator's intent even when the profile it
         // referenced wasn't the one chosen for its kind above.
-        if !era.commit_msg_profile_id.trim().is_empty() {
-            if let Some(p) = profiles.iter().find(|p| p.id == era.commit_msg_profile_id) {
-                s.commit_msg_provider = Some(p.provider);
-                s.commit_msg_model_id = p.model_id.clone();
-            }
+        if !era.commit_msg_profile_id.trim().is_empty()
+            && let Some(p) = profiles.iter().find(|p| p.id == era.commit_msg_profile_id)
+        {
+            s.commit_msg_provider = Some(p.provider);
+            s.commit_msg_model_id = p.model_id.clone();
         }
         (s, ssh_renames)
     }
@@ -547,10 +546,7 @@ impl AppSettings {
     /// configuration error rather than falling back to another provider.
     pub fn effective_web_search_url(&self) -> String {
         match self.web_search_backend {
-            WebSearchBackend::SearXng => {
-                let u = self.searxng_url.trim().trim_end_matches('/').to_string();
-                u
-            }
+            WebSearchBackend::SearXng => self.searxng_url.trim().trim_end_matches('/').to_string(),
             WebSearchBackend::Bing | WebSearchBackend::DuckDuckGo => String::new(),
         }
     }

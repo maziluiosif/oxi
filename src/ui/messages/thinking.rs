@@ -68,7 +68,7 @@ fn thinking_wrapped_job(text: String, wrap_width: f32) -> LayoutJob {
     LayoutJob {
         sections: vec![LayoutSection {
             leading_space: 0.0,
-            byte_range: 0..text.len(),
+            byte_range: egui::text::ByteIndex(0)..egui::text::ByteIndex(text.len()),
             format: TextFormat {
                 font_id: eframe::egui::FontId::proportional(FS_SMALL),
                 color: c_text_muted(),
@@ -95,7 +95,7 @@ fn thinking_visual_row_count(ui: &Ui, text: &str, wrap_width: f32) -> usize {
     if text.is_empty() {
         return 0;
     }
-    ui.fonts(|fonts| {
+    ui.fonts_mut(|fonts| {
         fonts
             .layout_job(thinking_wrapped_job(text.to_string(), wrap_width))
             .rows
@@ -114,12 +114,12 @@ fn render_thinking_text_panel(
     text: &str,
     tail: bool,
 ) {
-    let frame = Frame::none()
+    let frame = Frame::new()
         .inner_margin(Margin {
-            left: 12.0,
-            right: 4.0,
-            top: 2.0,
-            bottom: 2.0,
+            left: 12,
+            right: 4,
+            top: 2,
+            bottom: 2,
         })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -154,7 +154,7 @@ fn render_thinking_text_panel(
                     egui::vec2(ui.available_width(), box_h),
                     egui::Sense::hover(),
                 );
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ScrollArea::vertical()
                         .id_salt((persist_id, "thinking_live_tail"))
                         .auto_shrink([false, false])
@@ -166,7 +166,7 @@ fn render_thinking_text_panel(
                         .min_scrolled_height(line_h)
                         .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
                         .stick_to_bottom(true)
-                        .enable_scrolling(false)
+                        .scroll_source(egui::containers::scroll_area::ScrollSource::NONE)
                         .show(ui, |ui| {
                             selectable_layout_job(
                                 ui,
