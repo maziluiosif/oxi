@@ -82,7 +82,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         .connect_timeout(std::time::Duration::from_secs(30))
         .read_timeout(std::time::Duration::from_secs(60))
         .tcp_keepalive(std::time::Duration::from_secs(60))
-        .danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
+        .tls_danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
         .build()
     {
         Ok(c) => c,

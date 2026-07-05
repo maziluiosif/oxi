@@ -62,7 +62,7 @@ fn http_get(
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .user_agent(user_agent)
-            .danger_accept_invalid_certs(accept_invalid_certs)
+            .tls_danger_accept_invalid_certs(accept_invalid_certs)
             .build()
             .map_err(|e| format!("client: {e}"))?;
         let mut req = client.get(url).query(query);
