@@ -3,12 +3,47 @@
 //! that used to live as plaintext JSON on disk: provider API keys, OAuth tokens, and
 //! SSH passwords. See `oauth::store`, `compute::store`, and `settings::ProviderProfile`
 //! for the call sites.
+//!
+//! This talks to `keyring-core` directly instead of going through the `keyring` crate's
+//! `v1` compatibility shim. That shim lazily installs the platform-native store on first
+//! `Entry::new`, gated by `AtomicBool::compare_exchange(false, true, ..) == Ok(true)` — but
+//! a successful compare-exchange returns `Ok(false)` (the *previous* value), so that
+//! condition is never true and the store never gets installed (as of keyring 4.1.3; every
+//! `Entry::new` then fails with `NoDefaultStore`, which reads as "the keychain isn't
+//! saving anything"). Installing the store ourselves at first use sidesteps the bug.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, Once};
+
+use keyring_core::Entry;
 
 /// Keychain "service" name under which all oxi credentials are grouped.
 const SERVICE: &str = "oxi";
+
+static INIT_STORE: Once = Once::new();
+
+/// Install the platform-native credential store as the `keyring-core` default, once per
+/// process. Best-effort: if it fails (headless CI, no Secret Service session, etc.) every
+/// subsequent `Entry::new` will surface `NoDefaultStore`, which callers already treat as a
+/// best-effort failure.
+fn ensure_default_store() {
+    INIT_STORE.call_once(|| {
+        #[cfg(target_os = "macos")]
+        let store = apple_native_keyring_store::keychain::Store::new();
+        #[cfg(target_os = "windows")]
+        let store = windows_native_keyring_store::Store::new();
+        #[cfg(all(
+            unix,
+            not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+        ))]
+        let store = zbus_secret_service_keyring_store::Store::new();
+
+        match store {
+            Ok(store) => keyring_core::set_default_store(store),
+            Err(e) => eprintln!("failed to initialize OS credential store: {e}"),
+        }
+    });
+}
 
 /// account -> last value this process wrote, so re-saving unrelated settings fields
 /// (which re-touches every profile) doesn't re-hit the OS keychain for secrets that
@@ -31,10 +66,11 @@ pub fn store(account: &str, value: &str) -> Result<(), String> {
             return Ok(());
         }
     }
+    ensure_default_store();
     let result = if value.is_empty() {
         delete(account)
     } else {
-        keyring::Entry::new(SERVICE, account)
+        Entry::new(SERVICE, account)
             .and_then(|e| e.set_password(value))
             .map_err(|e| e.to_string())
     };
@@ -50,16 +86,18 @@ pub fn store(account: &str, value: &str) -> Result<(), String> {
 /// Load the value stored under `account`, or `""` if there is none (never set, deleted,
 /// or the platform credential store isn't available).
 pub fn load(account: &str) -> String {
-    keyring::Entry::new(SERVICE, account)
+    ensure_default_store();
+    Entry::new(SERVICE, account)
         .and_then(|e| e.get_password())
         .unwrap_or_default()
 }
 
 /// Remove the entry for `account`. Missing entries are not an error.
 pub fn delete(account: &str) -> Result<(), String> {
-    let result = match keyring::Entry::new(SERVICE, account) {
+    ensure_default_store();
+    let result = match Entry::new(SERVICE, account) {
         Ok(entry) => match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
             Err(e) => Err(e.to_string()),
         },
         Err(e) => Err(e.to_string()),
