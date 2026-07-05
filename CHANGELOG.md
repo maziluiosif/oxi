@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-07-05
+
+### Fixed
+- Fix credential persistence on macOS and Windows by working around keyring v1 default-store initialization bug that caused saved secrets to vanish on restart
+- Fix Linux CI compilation by enabling crypto-rust feature on secret-service dependency
+
+
 ## [0.9.1] - 2026-07-05
 
 ### Changed
@@ -235,7 +242,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/maziluiosif/oxi/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/maziluiosif/oxi/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/maziluiosif/oxi/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/maziluiosif/oxi/compare/v0.7.0...v0.8.0
