@@ -216,10 +216,10 @@ impl ProviderConfig {
     ///
     /// Order: explicit override > built-in catalog > provider/model default.
     pub fn effective_context_window(&self, fallback_default: usize) -> usize {
-        if let Some(cw) = self.context_window {
-            if cw > 0 {
-                return cw;
-            }
+        if let Some(cw) = self.context_window
+            && cw > 0
+        {
+            return cw;
         }
         crate::agent::models::context_window_for_model(&self.model_id).unwrap_or(fallback_default)
     }

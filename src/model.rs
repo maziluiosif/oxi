@@ -215,22 +215,21 @@ pub fn set_tool_output_on_blocks(
     text: &str,
     truncated: bool,
 ) {
-    if let Some(id) = tool_call_id {
-        if !id.is_empty() {
-            for b in blocks.iter_mut() {
-                if let AssistantBlock::Tool {
-                    tool_call_id: tid,
-                    output,
-                    output_truncated,
-                    ..
-                } = b
-                {
-                    if tid == id {
-                        *output = text.to_string();
-                        *output_truncated = truncated;
-                        return;
-                    }
-                }
+    if let Some(id) = tool_call_id
+        && !id.is_empty()
+    {
+        for b in blocks.iter_mut() {
+            if let AssistantBlock::Tool {
+                tool_call_id: tid,
+                output,
+                output_truncated,
+                ..
+            } = b
+                && tid == id
+            {
+                *output = text.to_string();
+                *output_truncated = truncated;
+                return;
             }
         }
     }

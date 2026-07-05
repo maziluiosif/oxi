@@ -64,10 +64,10 @@ pub fn delete(account: &str) -> Result<(), String> {
         },
         Err(e) => Err(e.to_string()),
     };
-    if result.is_ok() {
-        if let Some(cache) = WRITE_CACHE.lock().unwrap().as_mut() {
-            cache.remove(account);
-        }
+    if result.is_ok()
+        && let Some(cache) = WRITE_CACHE.lock().unwrap().as_mut()
+    {
+        cache.remove(account);
     }
     result
 }

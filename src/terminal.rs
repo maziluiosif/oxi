@@ -12,7 +12,7 @@ use eframe::egui::{
     self, Color32, Event, EventFilter, FontId, Key, PointerButton, Pos2, Rect, Sense, Stroke,
     TextFormat, Ui,
 };
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use vt100::{MouseProtocolEncoding as MEnc, MouseProtocolMode as MMode};
 
 /// Mouse tracking carried between frames so we can report drags / motion.
@@ -160,14 +160,14 @@ impl TerminalSession {
             pixel_height: 0,
         });
         if let Ok(mut p) = self.parser.lock() {
-            p.set_size(rows, cols);
+            p.screen_mut().set_size(rows, cols);
         }
     }
 
     /// Render the terminal into `rect` and forward keyboard input when focused.
     pub fn ui(&mut self, ui: &mut Ui, rect: Rect) {
         let font = FontId::monospace(TERM_FONT_SIZE);
-        let (cell_w, cell_h) = ui.fonts(|f| {
+        let (cell_w, cell_h) = ui.fonts_mut(|f| {
             (
                 f.glyph_width(&font, 'M').max(1.0),
                 f.row_height(&font).max(1.0),
@@ -186,14 +186,10 @@ impl TerminalSession {
 
         self.handle_mouse(ui, rect, cell_w, cell_h, resp.hovered());
         // Apply scrollback view (no-op when an app has grabbed the mouse / offset is 0).
-        // vt100 0.15's `visible_rows` mixes `offset` scrollback rows with `rows - offset`
-        // live rows, so an offset larger than the row count underflows and panics. Clamp
-        // to the visible row count before handing it over; `set_scrollback` then clamps
-        // again to the buffer length.
+        // `set_scrollback` clamps to the buffer length; read the offset back so further
+        // wheel deltas accumulate from the effective position.
         if let Ok(mut p) = self.parser.lock() {
-            let max_off = self.rows as usize;
-            self.scroll_offset = self.scroll_offset.min(max_off);
-            p.set_scrollback(self.scroll_offset);
+            p.screen_mut().set_scrollback(self.scroll_offset);
             self.scroll_offset = p.screen().scrollback();
         }
 
@@ -281,7 +277,7 @@ impl TerminalSession {
 
         // Wheel.
         if hovered {
-            let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll_y.abs() > 0.5 {
                 let up = scroll_y > 0.0;
                 if mode == MMode::None {
@@ -419,10 +415,8 @@ impl TerminalSession {
                     col += 1;
                     continue;
                 }
-                let mut s = cell.contents();
-                if s.is_empty() {
-                    s.push(' ');
-                }
+                let s = cell.contents();
+                let s = if s.is_empty() { " " } else { s };
                 let mut fg = vt_color(cell.fgcolor(), true);
                 let mut bg = vt_color(cell.bgcolor(), false);
                 if cell.inverse() {
@@ -440,10 +434,10 @@ impl TerminalSession {
                     },
                     ..Default::default()
                 };
-                job.append(&s, 0.0, fmt);
+                job.append(s, 0.0, fmt);
                 col += 1;
             }
-            let galley = ui.fonts(|f| f.layout_job(job));
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
             painter.galley(egui::pos2(rect.left(), y), galley, theme::c_text());
         }
 
@@ -456,7 +450,12 @@ impl TerminalSession {
             if focused {
                 painter.rect_filled(cursor_rect, 0.0, theme::c_accent().linear_multiply(0.55));
             } else {
-                painter.rect_stroke(cursor_rect, 0.0, Stroke::new(1.0, theme::c_accent()));
+                painter.rect_stroke(
+                    cursor_rect,
+                    0.0,
+                    Stroke::new(1.0, theme::c_accent()),
+                    egui::StrokeKind::Middle,
+                );
             }
         }
     }
@@ -530,11 +529,7 @@ fn vt_color(color: vt100::Color, _fg: bool) -> Option<Color32> {
 /// Translate special keys to terminal byte sequences (no Ctrl modifier).
 fn key_sequence(key: Key, app_cursor: bool) -> Option<&'static [u8]> {
     let arrows = |normal: &'static [u8], app: &'static [u8]| {
-        if app_cursor {
-            app
-        } else {
-            normal
-        }
+        if app_cursor { app } else { normal }
     };
     let seq: &[u8] = match key {
         Key::Enter => b"\r",

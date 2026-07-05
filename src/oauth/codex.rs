@@ -1,7 +1,7 @@
 //! OpenAI Codex (ChatGPT) OAuth — PKCE + `http://localhost:1455/auth/callback` (see `packages/ai/src/utils/oauth/openai-codex.ts`).
 
 use base64::Engine;
-use rand::RngCore;
+use rand::TryRng;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -9,7 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use url::form_urlencoded;
 
-use super::store::{merge_codex, save_oauth_store, CodexOAuthRecord, OAuthStore};
+use super::store::{CodexOAuthRecord, OAuthStore, merge_codex, save_oauth_store};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
@@ -24,13 +24,17 @@ fn base64url(bytes: &[u8]) -> String {
 
 fn random_state() -> String {
     let mut b = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut b);
+    rand::rng()
+        .try_fill_bytes(&mut b)
+        .expect("OS RNG unavailable");
     b.iter().map(|x| format!("{:02x}", x)).collect()
 }
 
 fn generate_pkce() -> (String, String) {
     let mut v = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut v);
+    rand::rng()
+        .try_fill_bytes(&mut v)
+        .expect("OS RNG unavailable");
     let verifier = base64url(&v);
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());

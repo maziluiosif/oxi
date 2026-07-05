@@ -1,9 +1,9 @@
 //! Shared parameters for the provider-specific `run_*_loop` functions (openai/anthropic/codex).
 
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 
 use super::approval::ApprovalGate;
 use super::events::AgentEvent;

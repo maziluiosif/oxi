@@ -8,8 +8,8 @@
 //! - stream-level: a connection dropped mid-SSE, retried by the caller
 //!   re-sending the current round (bounded by [`MAX_STREAM_RETRIES`]).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Attempts per HTTP request (first try + retries) in [`send_with_retry`].

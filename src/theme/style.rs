@@ -124,22 +124,23 @@ fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "noto_sans".to_string(),
-        FontData::from_static(NOTO_SANS_REGULAR),
+        std::sync::Arc::new(FontData::from_static(NOTO_SANS_REGULAR)),
     );
     fonts.font_data.insert(
         "ubuntu_mono".to_string(),
-        FontData::from_static(UBUNTU_MONO_REGULAR),
+        std::sync::Arc::new(FontData::from_static(UBUNTU_MONO_REGULAR)),
     );
     fonts.font_data.insert(
         "apple_symbols".to_string(),
-        FontData::from_static(APPLE_SYMBOLS),
+        std::sync::Arc::new(FontData::from_static(APPLE_SYMBOLS)),
     );
-    fonts
-        .font_data
-        .insert("noto_emoji".to_string(), FontData::from_static(NOTO_EMOJI));
+    fonts.font_data.insert(
+        "noto_emoji".to_string(),
+        std::sync::Arc::new(FontData::from_static(NOTO_EMOJI)),
+    );
     fonts.font_data.insert(
         "symbols_nerd_font_mono".to_string(),
-        FontData::from_static(SYMBOLS_NERD_FONT_MONO),
+        std::sync::Arc::new(FontData::from_static(SYMBOLS_NERD_FONT_MONO)),
     );
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
@@ -180,13 +181,13 @@ pub fn setup_style(ctx: &egui::Context) {
     visuals.extreme_bg_color = p.bg_input;
     visuals.faint_bg_color = p.faint_bg;
     visuals.override_text_color = Some(p.text);
-    visuals.window_rounding = egui::Rounding::same(10.0);
-    visuals.menu_rounding = egui::Rounding::same(8.0);
-    visuals.widgets.noninteractive.rounding = egui::Rounding::same(6.0);
-    visuals.widgets.inactive.rounding = egui::Rounding::same(6.0);
-    visuals.widgets.hovered.rounding = egui::Rounding::same(6.0);
-    visuals.widgets.active.rounding = egui::Rounding::same(6.0);
-    visuals.widgets.open.rounding = egui::Rounding::same(6.0);
+    visuals.window_corner_radius = egui::CornerRadius::same(10);
+    visuals.menu_corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.open.corner_radius = egui::CornerRadius::same(6);
     // Side panel separator, indentation guides — match app chrome.
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border_subtle);
     visuals.widgets.noninteractive.bg_fill = p.bg_elevated;
@@ -207,7 +208,7 @@ pub fn setup_style(ctx: &egui::Context) {
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, p.border);
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, p.widget_active_border);
 
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.style_of(ctx.theme())).clone();
     style.visuals = visuals;
     // Route egui's default text styles through the shared scale so widgets without an explicit
     // size (composer input, combo boxes, default buttons) stay uniform with the rest of the UI.
@@ -239,8 +240,8 @@ pub fn setup_style(ctx: &egui::Context) {
     style.spacing.button_padding = egui::vec2(8.0, 4.0);
     style.spacing.indent = 12.0;
     style.spacing.interact_size.y = 24.0;
-    style.spacing.menu_margin = egui::Margin::same(6.0);
-    style.spacing.window_margin = egui::Margin::same(10.0);
+    style.spacing.menu_margin = egui::Margin::same(6);
+    style.spacing.window_margin = egui::Margin::same(10);
     style.spacing.combo_width = 220.0;
     // Floating bar with a *reserved* gutter: `floating_allocated_width` keeps a constant
     // 10px strip so the handle never overlays content and hovering never reflows layout
@@ -250,5 +251,5 @@ pub fn setup_style(ctx: &egui::Context) {
     style.spacing.scroll.floating_allocated_width = 10.0;
     style.spacing.scroll.handle_min_length = 24.0;
     style.spacing.scroll.floating = true;
-    ctx.set_style(style);
+    ctx.all_styles_mut(|s| *s = style.clone());
 }

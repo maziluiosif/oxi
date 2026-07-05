@@ -162,3 +162,90 @@ jobs:
             ${{ matrix.name }}.tar.gz
             ${{ matrix.name }}.zip
           fail_on_unmatched_files: false
+
+  homebrew:
+    needs: [changelog, build]
+    if: needs.changelog.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew tap formula
+        env:
+          # Private half of a write-enabled deploy key on maziluiosif/homebrew-tap.
+          TAP_SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
+        run: |
+          ver="${{ needs.changelog.outputs.version }}"
+          base="https://github.com/${{ github.repository }}/releases/download/v${ver}"
+
+          curl -fsSLo macos.tar.gz "$base/oxi-macos-arm64.tar.gz"
+          curl -fsSLo linux.tar.gz "$base/oxi-linux-x86_64.tar.gz"
+          sha_mac=$(sha256sum macos.tar.gz | cut -d' ' -f1)
+          sha_linux=$(sha256sum linux.tar.gz | cut -d' ' -f1)
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TAP_SSH_KEY" > ~/.ssh/tap_deploy_key
+          chmod 600 ~/.ssh/tap_deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_deploy_key"
+
+          git clone git@github.com:maziluiosif/homebrew-tap.git tap
+          cat > tap/Formula/oxi.rb <<EOF
+          # This formula is regenerated automatically by the release workflow in
+          # maziluiosif/oxi (.github/workflows/release.yml, "homebrew" job).
+          # Manual edits will be overwritten on the next release.
+          class Oxi < Formula
+            desc "Standalone coding agent chat UI (Rust + egui)"
+            homepage "https://github.com/maziluiosif/oxi"
+            version "${ver}"
+            license "MIT"
+
+            on_macos do
+              depends_on arch: :arm64
+              url "${base}/oxi-macos-arm64.tar.gz"
+              sha256 "${sha_mac}"
+            end
+
+            on_linux do
+              depends_on arch: :x86_64
+              url "${base}/oxi-linux-x86_64.tar.gz"
+              sha256 "${sha_linux}"
+            end
+
+            def install
+              if OS.mac?
+                # The tarball holds a single top-level oxi.app; Homebrew strips a sole
+                # top-level directory while staging, leaving Contents/ at buildpath.
+                appdir = prefix/"oxi.app"
+                if (buildpath/"oxi.app").exist?
+                  prefix.install "oxi.app"
+                else
+                  appdir.install buildpath.children
+                end
+                bin.write_exec_script appdir/"Contents/MacOS/oxi"
+              else
+                bin.install "oxi"
+              end
+            end
+
+            def caveats
+              return unless OS.mac?
+
+              <<~EOS
+                Run \`oxi\` from a project directory to open it as the first workspace.
+
+                To make the app visible in Launchpad / Spotlight, link the bundle:
+                  ln -sf "#{opt_prefix}/oxi.app" /Applications/oxi.app
+              EOS
+            end
+
+            test do
+              assert_predicate bin/"oxi", :exist?
+            end
+          end
+          EOF
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/oxi.rb
+          git commit -m "oxi ${ver}" || { echo "Formula unchanged, nothing to push."; exit 0; }
+          git push origin HEAD

@@ -635,17 +635,17 @@ fn snapshot_keep(root: &str, diff_pref: Option<(String, bool)>, error: Option<St
     let diff_clone = diff_pref.clone();
     let mut s = snapshot(root, diff_pref, error);
     // ensure selected diff survives even if the file disappeared from staged/unstaged
-    if s.diff.is_none() {
-        if let Some((p, staged)) = diff_clone {
-            let text = if staged {
-                show_diff(root, &p, true)
-            } else {
-                show_diff(root, &p, false)
-            };
-            s.diff = Some((p.clone(), text));
-            s.current_diff_path = Some(p);
-            s.current_diff_staged = Some(staged);
-        }
+    if s.diff.is_none()
+        && let Some((p, staged)) = diff_clone
+    {
+        let text = if staged {
+            show_diff(root, &p, true)
+        } else {
+            show_diff(root, &p, false)
+        };
+        s.diff = Some((p.clone(), text));
+        s.current_diff_path = Some(p);
+        s.current_diff_staged = Some(staged);
     }
     s
 }

@@ -154,14 +154,14 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value) -> Result<String, String> {
     };
     let timeout = Some(Duration::from_secs_f64(timeout_s));
     let status = loop {
-        if let Some(t) = timeout {
-            if start.elapsed() > t {
-                let _ = child.kill();
-                return Ok(truncate_out(format!(
-                    "[timeout after {}s]\n",
-                    t.as_secs_f64()
-                )));
-            }
+        if let Some(t) = timeout
+            && start.elapsed() > t
+        {
+            let _ = child.kill();
+            return Ok(truncate_out(format!(
+                "[timeout after {}s]\n",
+                t.as_secs_f64()
+            )));
         }
         match child.try_wait() {
             Ok(Some(s)) => break s,
