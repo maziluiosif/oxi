@@ -37,7 +37,16 @@ webbrowser = "1"
 url = "2"
 portable-pty = "0.9"
 vt100 = "0.16"
-keyring = { version = "4.1.2", features = ["apple-native-keyring-store"] }
+keyring-core = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 
 [dev-dependencies]
 wiremock = "0.6"
