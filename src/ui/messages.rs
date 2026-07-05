@@ -15,7 +15,8 @@ use std::hash::{Hash, Hasher};
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{
-    self, FontId, Frame, Id, Image, Label, Margin, RichText, Rounding, Stroke, TextureOptions, Ui,
+    self, CornerRadius, FontId, Frame, Id, Image, Label, Margin, RichText, Stroke, TextureOptions,
+    Ui,
 };
 
 use crate::markdown;
@@ -69,7 +70,7 @@ pub(super) fn selectable_layout_job(ui: &mut Ui, job: LayoutJob, allow_select: b
         return;
     }
 
-    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let (rect, response) =
         ui.allocate_exact_size(galley.size(), eframe::egui::Sense::click_and_drag());
     let galley_pos = rect.left_top();
@@ -122,11 +123,11 @@ pub fn render_message(
         let response = ui
             .vertical(|ui| {
                 ui.set_width(col_w);
-                Frame::none()
+                Frame::new()
                     .fill(c_user_bubble())
                     .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .rounding(Rounding::same(10.0))
-                    .inner_margin(Margin::symmetric(12.0, 9.0))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(12, 9))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         if !msg.text.is_empty() {
@@ -177,18 +178,18 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                             sz *= max / m;
                         }
                         // Wrap in a subtle rounded frame
-                        Frame::none()
-                            .rounding(Rounding::same(8.0))
+                        Frame::new()
+                            .corner_radius(CornerRadius::same(8))
                             .stroke(Stroke::new(1.0, c_border()))
                             .show(ui, |ui| {
                                 ui.add(Image::new((tex.id(), sz)));
                             });
                     } else {
                         // Fallback badge when texture loading fails
-                        Frame::none()
+                        Frame::new()
                             .fill(c_bg_elevated_2())
-                            .rounding(Rounding::same(6.0))
-                            .inner_margin(Margin::symmetric(8.0, 4.0))
+                            .corner_radius(CornerRadius::same(6))
+                            .inner_margin(Margin::symmetric(8, 4))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 4.0;
@@ -401,7 +402,7 @@ fn render_activity_summary(
     let chevron_col = if hovered { c_accent() } else { c_text_faint() };
 
     // Paint the chevron + label inside the reserved rect.
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
             ui.label(

@@ -1,23 +1,23 @@
 //! Shared chrome widgets (sidebar fields, empty states, pill tabs, cards, …).
 
 use eframe::egui::{
-    self, Align, Color32, FontId, Frame, Label, Layout, Margin, Response, RichText, Rounding,
+    self, Align, Color32, CornerRadius, FontId, Frame, Label, Layout, Margin, Response, RichText,
     Sense, Stroke, TextEdit, Ui,
 };
 
 use crate::theme::*;
 
 pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
-    Frame::none()
+    Frame::new()
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(RADIUS_BUTTON)
-        .inner_margin(Margin::symmetric(8.0, 4.0))
+        .corner_radius(RADIUS_BUTTON)
+        .inner_margin(Margin::symmetric(8, 4))
         .show(ui, |ui| {
             ui.add(
                 TextEdit::singleline(text)
-                    .frame(false)
-                    .margin(Margin::symmetric(1.0, 0.0))
+                    .frame(egui::Frame::NONE)
+                    .margin(Margin::symmetric(1, 0))
                     .font(FontId::proportional(FS_TINY))
                     .desired_width(ui.available_width())
                     .hint_text(hint),
@@ -49,20 +49,20 @@ pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) 
 
 /// A card frame used to group related settings. Matches the elevated background + subtle border.
 pub fn card_frame() -> Frame {
-    Frame::none()
+    Frame::new()
         .fill(c_bg_elevated())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(10.0)
-        .inner_margin(Margin::symmetric(14.0, 12.0))
+        .corner_radius(10.0)
+        .inner_margin(Margin::symmetric(14, 12))
 }
 
 /// Slightly elevated card variant — used for nested sub-cards inside a panel.
 pub fn nested_card_frame() -> Frame {
-    Frame::none()
+    Frame::new()
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(RADIUS_CHIP)
-        .inner_margin(Margin::symmetric(10.0, 8.0))
+        .corner_radius(RADIUS_CHIP)
+        .inner_margin(Margin::symmetric(10, 8))
 }
 
 /// Single-line label → value field row used on settings panels.
@@ -99,11 +99,11 @@ pub fn alert_banner(ui: &mut Ui, text: &str, error: bool) {
             crate::theme::c_warning_fg(),
         )
     };
-    Frame::none()
+    Frame::new()
         .fill(bg)
         .stroke(stroke)
-        .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::symmetric(8.0, 6.0))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(RichText::new(text).size(FS_TINY).color(fg).monospace());
@@ -134,7 +134,7 @@ pub fn icon_label_job(icon: &str, label: &str, size: f32, color: Color32) -> egu
     job.append(icon, 0.0, icon_fmt);
     job.append(" ", 0.0, label_fmt.clone());
     job.append(label, 0.0, label_fmt);
-    WidgetText::LayoutJob(job)
+    WidgetText::LayoutJob(std::sync::Arc::new(job))
 }
 
 /// Render `icon` with the dedicated icon font family (no trailing label) at the given size/color.
@@ -153,7 +153,7 @@ pub struct IconButtonLook {
     pub hover_fill: Color32,
     pub stroke: Color32,
     pub hover_stroke: Color32,
-    pub rounding: Rounding,
+    pub rounding: CornerRadius,
     pub glyph: Color32,
 }
 
@@ -180,8 +180,12 @@ pub fn icon_button_core(
         ui.painter().rect_filled(rect, look.rounding, fill);
     }
     if stroke != Color32::TRANSPARENT {
-        ui.painter()
-            .rect_stroke(rect, look.rounding, Stroke::new(1.0, stroke));
+        ui.painter().rect_stroke(
+            rect,
+            look.rounding,
+            Stroke::new(1.0, stroke),
+            egui::StrokeKind::Middle,
+        );
     }
     ui.painter().text(
         rect.center(),
@@ -221,7 +225,7 @@ pub fn icon_button_framed(ui: &mut Ui, icon: &str, size: egui::Vec2, active: boo
             hover_fill: c_row_hover(),
             stroke: c_border_subtle(),
             hover_stroke: c_border(),
-            rounding: Rounding::same(RADIUS_CHIP),
+            rounding: CornerRadius::same(RADIUS_CHIP),
             glyph: c_text_muted(),
         },
     )
@@ -241,7 +245,7 @@ pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> 
             hover_fill: c_row_hover(),
             stroke: Color32::TRANSPARENT,
             hover_stroke: Color32::TRANSPARENT,
-            rounding: Rounding::same(RADIUS_CHIP),
+            rounding: CornerRadius::same(RADIUS_CHIP),
             glyph: c_sidebar_section(),
         },
     )
@@ -257,7 +261,7 @@ pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color
     let hovered = resp.hovered();
     if hovered {
         ui.painter()
-            .rect_filled(rect, Rounding::same(4.0), c_row_active());
+            .rect_filled(rect, CornerRadius::same(4), c_row_active());
     }
     ui.painter().text(
         rect.center(),
@@ -275,11 +279,11 @@ pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color
 /// Small pill-style status badge: `running` / `done` / `failed`. Uses the shared semantic badge
 /// palette from [`crate::theme`] so every badge across the app shares one set of colors.
 pub fn status_badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32, stroke: Color32) {
-    Frame::none()
+    Frame::new()
         .fill(bg)
         .stroke(Stroke::new(1.0, stroke))
-        .rounding(Rounding::same(999.0))
-        .inner_margin(Margin::symmetric(7.0, 2.0))
+        .corner_radius(CornerRadius::same(255))
+        .inner_margin(Margin::symmetric(7, 2))
         .show(ui, |ui| {
             ui.label(RichText::new(text).size(FS_TINY).color(fg));
         });
@@ -331,9 +335,10 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
             c_text_muted(),
         )
     };
-    let r = Rounding::same(999.0);
+    let r = CornerRadius::same(255);
     ui.painter().rect_filled(rect, r, fill);
-    ui.painter().rect_stroke(rect, r, stroke);
+    ui.painter()
+        .rect_stroke(rect, r, stroke, egui::StrokeKind::Middle);
     let text_pos = egui::pos2(
         rect.left() + pad.x,
         rect.center().y - galley.rect.height() * 0.5,
@@ -351,7 +356,7 @@ pub fn primary_button_widget(label: &str) -> egui::Button<'_> {
     egui::Button::new(rich)
         .fill(c_accent())
         .stroke(Stroke::NONE)
-        .rounding(RADIUS_BUTTON)
+        .corner_radius(RADIUS_BUTTON)
         .min_size(egui::vec2(0.0, 26.0))
 }
 pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
@@ -365,7 +370,7 @@ pub fn primary_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Bu
     egui::Button::new(text)
         .fill(c_accent())
         .stroke(Stroke::NONE)
-        .rounding(RADIUS_BUTTON)
+        .corner_radius(RADIUS_BUTTON)
         .min_size(egui::vec2(0.0, 26.0))
 }
 
@@ -379,7 +384,7 @@ pub fn ghost_button_widget(label: &str, danger: bool) -> egui::Button<'_> {
     egui::Button::new(RichText::new(label).size(FS_SMALL).color(color))
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .rounding(RADIUS_BUTTON)
+        .corner_radius(RADIUS_BUTTON)
         .min_size(egui::vec2(0.0, 26.0))
 }
 pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
@@ -440,8 +445,12 @@ fn icon_text_button_core(
         ui.painter().rect_filled(rect, look.rounding, fill);
     }
     if stroke != Color32::TRANSPARENT {
-        ui.painter()
-            .rect_stroke(rect, look.rounding, Stroke::new(1.0, stroke));
+        ui.painter().rect_stroke(
+            rect,
+            look.rounding,
+            Stroke::new(1.0, stroke),
+            egui::StrokeKind::Middle,
+        );
     }
     let (glyph_ink, label_ink) = if !enabled {
         (c_text_faint(), c_text_faint())
@@ -503,7 +512,7 @@ pub fn ghost_button_icon_enabled(
             hover_fill: c_row_hover(),
             stroke: c_border_subtle(),
             hover_stroke: c_border(),
-            rounding: Rounding::same(RADIUS_BUTTON),
+            rounding: CornerRadius::same(RADIUS_BUTTON),
             glyph: glyph_ink,
         },
         label_ink,
@@ -527,7 +536,7 @@ pub fn mini_button_icon(ui: &mut Ui, icon: &str, label: &str) -> Response {
             hover_fill: c_row_hover(),
             stroke: c_border_subtle(),
             hover_stroke: c_border(),
-            rounding: Rounding::same(6.0),
+            rounding: CornerRadius::same(6),
             glyph: c_text_muted(),
         },
         c_text_muted(),
@@ -558,7 +567,7 @@ pub fn flat_button_icon(
             hover_fill: c_row_hover(),
             stroke: Color32::TRANSPARENT,
             hover_stroke: Color32::TRANSPARENT,
-            rounding: Rounding::same(RADIUS_BUTTON),
+            rounding: CornerRadius::same(RADIUS_BUTTON),
             glyph: color,
         },
         color,
@@ -582,7 +591,7 @@ pub fn row_button_icon(ui: &mut Ui, icon: &str, label: &str, min_size: egui::Vec
             hover_fill: c_row_hover(),
             stroke: c_border_subtle(),
             hover_stroke: c_border(),
-            rounding: Rounding::same(RADIUS_CHIP),
+            rounding: CornerRadius::same(RADIUS_CHIP),
             glyph: c_text_muted(),
         },
         c_text(),
@@ -604,16 +613,17 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
     } else {
         Color32::TRANSPARENT
     };
-    ui.painter().rect_filled(rect, Rounding::same(7.0), fill);
+    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
     if selected {
         ui.painter().rect_stroke(
             rect,
-            Rounding::same(7.0),
+            CornerRadius::same(7),
             Stroke::new(1.0, c_border_subtle()),
+            egui::StrokeKind::Middle,
         );
     }
     let text_color = if selected { c_text() } else { c_text_muted() };
-    ui.allocate_new_ui(
+    ui.scope_builder(
         egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(10.0, 4.0))),
         |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {

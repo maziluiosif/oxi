@@ -57,7 +57,7 @@ impl OxiApp {
                         TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).model_id)
                             .desired_width(ui.available_width() - 30.0)
                             .hint_text("e.g. gpt-4o-mini or kimi-k2.7-code")
-                            .margin(Margin::symmetric(8.0, 5.0)),
+                            .margin(Margin::symmetric(8, 5)),
                     );
                 }
                 if crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
@@ -100,7 +100,7 @@ impl OxiApp {
                         TextEdit::singleline(&mut value)
                             .desired_width(160.0)
                             .hint_text(format!("auto ({resolved})"))
-                            .margin(Margin::symmetric(8.0, 5.0)),
+                            .margin(Margin::symmetric(8, 5)),
                     );
                     if resp.changed() {
                         let parsed = value.trim().parse::<usize>().ok();
@@ -127,7 +127,7 @@ impl OxiApp {
                 TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).base_url)
                     .desired_width(f32::INFINITY)
                     .hint_text(kind.default_base_url())
-                    .margin(Margin::symmetric(8.0, 5.0)),
+                    .margin(Margin::symmetric(8, 5)),
             );
 
             // API key
@@ -144,7 +144,7 @@ impl OxiApp {
                         LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
                         LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
                     })
-                    .margin(Margin::symmetric(8.0, 5.0)),
+                    .margin(Margin::symmetric(8, 5)),
             );
 
             if kind == LlmProviderKind::OpenRouter {
@@ -161,7 +161,7 @@ impl OxiApp {
                         )
                         .desired_width(f32::INFINITY)
                         .hint_text("HTTP-Referer")
-                        .margin(Margin::symmetric(8.0, 5.0)),
+                        .margin(Margin::symmetric(8, 5)),
                     );
                     ui.add_space(4.0);
                     ui.add(
@@ -170,7 +170,7 @@ impl OxiApp {
                         )
                         .desired_width(f32::INFINITY)
                         .hint_text("X-Title")
-                        .margin(Margin::symmetric(8.0, 5.0)),
+                        .margin(Margin::symmetric(8, 5)),
                     );
                 });
             }
@@ -227,7 +227,7 @@ impl OxiApp {
                             TextEdit::singleline(&mut cfg.host)
                                 .desired_width(200.0)
                                 .hint_text("192.168.1.10 or myhost.local")
-                                .margin(Margin::symmetric(8.0, 5.0)),
+                                .margin(Margin::symmetric(8, 5)),
                         );
                     });
                     ui.add_space(8.0);
@@ -238,7 +238,7 @@ impl OxiApp {
                             .add(
                                 TextEdit::singleline(&mut port_str)
                                     .desired_width(70.0)
-                                    .margin(Margin::symmetric(8.0, 5.0)),
+                                    .margin(Margin::symmetric(8, 5)),
                             )
                             .changed()
                         {
@@ -256,7 +256,7 @@ impl OxiApp {
                             TextEdit::singleline(&mut cfg.user)
                                 .desired_width(200.0)
                                 .hint_text("e.g. ioan")
-                                .margin(Margin::symmetric(8.0, 5.0)),
+                                .margin(Margin::symmetric(8, 5)),
                         );
                     });
                     ui.add_space(8.0);
@@ -267,7 +267,7 @@ impl OxiApp {
                             .add(
                                 TextEdit::singleline(&mut rport_str)
                                     .desired_width(70.0)
-                                    .margin(Margin::symmetric(8.0, 5.0)),
+                                    .margin(Margin::symmetric(8, 5)),
                             )
                             .changed()
                         {
@@ -306,7 +306,7 @@ impl OxiApp {
                         .password(true)
                         .desired_width(240.0)
                         .hint_text("SSH password")
-                        .margin(Margin::symmetric(8.0, 5.0)),
+                        .margin(Margin::symmetric(8, 5)),
                 )
                 .changed()
             };

@@ -167,7 +167,7 @@ impl TerminalSession {
     /// Render the terminal into `rect` and forward keyboard input when focused.
     pub fn ui(&mut self, ui: &mut Ui, rect: Rect) {
         let font = FontId::monospace(TERM_FONT_SIZE);
-        let (cell_w, cell_h) = ui.fonts(|f| {
+        let (cell_w, cell_h) = ui.fonts_mut(|f| {
             (
                 f.glyph_width(&font, 'M').max(1.0),
                 f.row_height(&font).max(1.0),
@@ -277,7 +277,7 @@ impl TerminalSession {
 
         // Wheel.
         if hovered {
-            let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
+            let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll_y.abs() > 0.5 {
                 let up = scroll_y > 0.0;
                 if mode == MMode::None {
@@ -437,7 +437,7 @@ impl TerminalSession {
                 job.append(s, 0.0, fmt);
                 col += 1;
             }
-            let galley = ui.fonts(|f| f.layout_job(job));
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
             painter.galley(egui::pos2(rect.left(), y), galley, theme::c_text());
         }
 
@@ -450,7 +450,12 @@ impl TerminalSession {
             if focused {
                 painter.rect_filled(cursor_rect, 0.0, theme::c_accent().linear_multiply(0.55));
             } else {
-                painter.rect_stroke(cursor_rect, 0.0, Stroke::new(1.0, theme::c_accent()));
+                painter.rect_stroke(
+                    cursor_rect,
+                    0.0,
+                    Stroke::new(1.0, theme::c_accent()),
+                    egui::StrokeKind::Middle,
+                );
             }
         }
     }

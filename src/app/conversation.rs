@@ -2,7 +2,8 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, FontId, Frame, Label, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
+    self, Align, Button, CornerRadius, FontId, Frame, Label, Margin, RichText, ScrollArea, Stroke,
+    Ui,
 };
 
 use crate::agent::ApprovalDecision;
@@ -35,11 +36,11 @@ impl OxiApp {
     /// Rendered at the bottom of the transcript (above the floating composer) so it stays in
     /// view while the run is paused — `stick_to_bottom` keeps the tail visible during a run.
     fn render_approval_card(&mut self, ui: &mut Ui, pa: PendingApproval) {
-        Frame::none()
+        Frame::new()
             .fill(crate::theme::c_info_bg())
             .stroke(Stroke::new(1.0, c_accent()))
-            .rounding(Rounding::same(6.0))
-            .inner_margin(Margin::symmetric(10.0, 8.0))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.label(
@@ -107,7 +108,7 @@ impl OxiApp {
                                     ))
                                     .fill(c_accent())
                                     .stroke(Stroke::NONE)
-                                    .rounding(8.0),
+                                    .corner_radius(8.0),
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .on_hover_text("Start a new chat in this workspace")
@@ -239,9 +240,10 @@ impl OxiApp {
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, H), egui::Sense::hover());
         ui.painter().rect(
             rect,
-            Rounding::same(999.0),
+            CornerRadius::same(255),
             c_bg_input(),
             Stroke::new(1.0, c_border_subtle()),
+            egui::StrokeKind::Middle,
         );
         let text_pos = egui::pos2(
             rect.left() + PAD_X,
@@ -309,11 +311,11 @@ impl OxiApp {
                 "Run the tests and fix the first failing issue",
             ];
             for prompt in prompts {
-                let response = Frame::none()
+                let response = Frame::new()
                     .fill(c_bg_input())
                     .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .rounding(Rounding::same(9.0))
-                    .inner_margin(Margin::symmetric(12.0, 8.0))
+                    .corner_radius(CornerRadius::same(9))
+                    .inner_margin(Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
@@ -333,8 +335,9 @@ impl OxiApp {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     ui.painter().rect_stroke(
                         response.rect,
-                        Rounding::same(9.0),
+                        CornerRadius::same(9),
                         Stroke::new(1.0, crate::theme::c_pill_selected_border()),
+                        egui::StrokeKind::Middle,
                     );
                 }
                 if response.clicked() {
@@ -364,8 +367,10 @@ impl OxiApp {
         // viewport away from their selection.
         let user_has_selection = {
             let ctx = ui.ctx();
-            let has_selection =
-                egui::text_selection::LabelSelectionState::load(ctx).has_selection();
+            let has_selection = ctx
+                .plugin::<egui::text_selection::LabelSelectionState>()
+                .lock()
+                .has_selection();
             let primary_down = ctx.input(|i| i.pointer.primary_down());
             let dragged_far =
                 ctx.input(
@@ -394,7 +399,10 @@ impl OxiApp {
             // Keep full height when the transcript is short so the composer stays bottom-anchored.
             .auto_shrink([false, false])
             .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
-            .drag_to_scroll(false)
+            .scroll_source(egui::containers::scroll_area::ScrollSource {
+                drag: egui::containers::scroll_area::DragScroll::Never,
+                ..Default::default()
+            })
             .stick_to_bottom(stick_bottom)
             .show(ui, |ui| {
                 let viewport_w = ui.max_rect().width();
@@ -525,7 +533,10 @@ pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> (egui::Vec2, bool)
     let ctx = ui.ctx();
     let widget_dragging = ctx.dragged_id().is_some();
     let label_selection_dragging = ctx.input(|i| i.pointer.primary_down())
-        && egui::text_selection::LabelSelectionState::load(ctx).has_selection();
+        && ctx
+            .plugin::<egui::text_selection::LabelSelectionState>()
+            .lock()
+            .has_selection();
 
     if !widget_dragging && !label_selection_dragging {
         return (egui::Vec2::ZERO, false);

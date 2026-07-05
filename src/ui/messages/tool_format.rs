@@ -51,7 +51,7 @@ pub(super) fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
         };
         job.sections.push(LayoutSection {
             leading_space: 0.0,
-            byte_range: start..end,
+            byte_range: egui::text::ByteIndex(start)..egui::text::ByteIndex(end),
             format: TextFormat {
                 font_id: FontId::monospace(FS_TINY),
                 color,
