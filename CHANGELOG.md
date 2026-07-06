@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-06
+
+### Added
+- Context compaction: /compact command summarizes older conversation turns into a single collapsible summary message to manage long conversations
+- /new command to start a fresh chat from the composer
+- Auto-compaction runs pre-send when context reaches 85% of the window, with deferred message auto-sending
+- Per-session context estimation calibrated from real provider token usage counts
+- SSH host key pinning (trust-on-first-use) for remote compute targets to prevent MITM attacks
+- Test connection panel surfaces SSH key mismatches with fingerprints and "Accept new key" button
+- Edit tool `replaceAll` option to replace all occurrences of a pattern instead of requiring exact single matches
+- Configurable bash timeout cap via `bash_timeout_cap_secs` setting (default 300s, range 5-3600s) in Settings → Agent
+
+### Changed
+- Optimized file diff rendering to avoid large LCS allocations
+- File reads now streamed instead of loading entire files into memory
+- Last turn usage remains visible while idle
+- Sessions and settings now saved via synced temp files for atomic writes
+- Wire-history cache invalidated after transcript mutations during compaction
+
+### Fixed
+- Preserve state and write files atomically
+
+
 ## [0.10.0] - 2026-07-06
 
 ### Added
@@ -255,7 +278,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/maziluiosif/oxi/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/maziluiosif/oxi/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/maziluiosif/oxi/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/maziluiosif/oxi/compare/v0.9.0...v0.9.1
