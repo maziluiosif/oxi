@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::settings::ALL_TOOL_NAMES;
 
-pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
+pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Vec<Value> {
     let mut out = Vec::new();
     for (i, name) in ALL_TOOL_NAMES.iter().enumerate() {
         if !enabled.get(i).copied().unwrap_or(false) {
@@ -46,7 +46,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": "edit",
-                    "description": "Replace text in a file. Each oldText must match exactly once in the file — never include the line-number gutter from read output.",
+                    "description": "Replace text in a file. Each oldText must match exactly once unless replaceAll is true — never include the line-number gutter from read output.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -57,7 +57,8 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                                     "type": "object",
                                     "properties": {
                                         "oldText": { "type": "string" },
-                                        "newText": { "type": "string" }
+                                        "newText": { "type": "string" },
+                                        "replaceAll": { "type": "boolean", "description": "Replace every occurrence of oldText (default false: must match exactly once)" }
                                     },
                                     "required": ["oldText", "newText"]
                                 }
@@ -76,7 +77,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                         "type": "object",
                         "properties": {
                             "command": { "type": "string" },
-                            "timeout": { "type": "number", "description": "Timeout in seconds (optional)" }
+                            "timeout": { "type": "number", "description": format!("Timeout in seconds (optional, default 15, max {bash_timeout_cap_secs})") }
                         },
                         "required": ["command"]
                     }

@@ -536,6 +536,7 @@ mod integration_tests {
             enabled: vec![true; ALL_TOOL_NAMES.len()],
             web_search_url: String::new(),
             web_search_backend: WebSearchBackend::default(),
+            bash_timeout_cap_secs: 300,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -615,6 +616,7 @@ mod integration_tests {
             enabled: vec![true; ALL_TOOL_NAMES.len()],
             web_search_url: String::new(),
             web_search_backend: WebSearchBackend::default(),
+            bash_timeout_cap_secs: 300,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
