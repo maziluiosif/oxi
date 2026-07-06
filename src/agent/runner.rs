@@ -152,7 +152,7 @@ pub fn spawn_agent_run(
             let context_budget =
                 crate::agent::history::context_char_budget_from_tokens(context_tokens);
             let max_rounds = settings.max_tool_rounds;
-            let tools = tool_definitions_json(&settings.tools_enabled);
+            let tools = tool_definitions_json(&settings.tools_enabled, settings.bash_timeout_cap_secs);
             let mut messages = if let Some(mut wire) = prior_wire {
                 if let Some(last_user) = chat_for_history.last()
                     && last_user.role == crate::model::MsgRole::User
@@ -171,6 +171,7 @@ pub fn spawn_agent_run(
                 enabled: settings.tools_enabled.clone(),
                 web_search_url: settings.effective_web_search_url(),
                 web_search_backend: settings.web_search_backend,
+                bash_timeout_cap_secs: settings.bash_timeout_cap_secs,
             };
             let model = cfg.model_id.clone();
             let effort_override = (!cfg.effort.trim().is_empty()).then_some(cfg.effort.trim());
