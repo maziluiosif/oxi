@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-06
+
+### Added
+- Reasoning effort configuration with provider-specific overrides for GPT, Codex, and Claude
+- Codex model discovery support
+- Context usage indicator
+- History reuse for cache-friendly follow-up turns
+
+### Changed
+- Improved context trimming and tool output limits
+- Enhanced read output line number handling
+
+
 ## [0.9.2] - 2026-07-05
 
 ### Fixed
@@ -242,7 +255,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/maziluiosif/oxi/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/maziluiosif/oxi/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/maziluiosif/oxi/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/maziluiosif/oxi/compare/v0.8.0...v0.9.0

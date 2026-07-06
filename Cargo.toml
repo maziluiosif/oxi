@@ -1,6 +1,6 @@
 [package]
 name = "oxi"
-version = "0.9.2"
+version = "0.10.0"
 edition = "2024"
 # Floor set by the strictest dependency (egui 0.35 requires 1.92).
 rust-version = "1.92"
