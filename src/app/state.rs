@@ -135,15 +135,16 @@ pub struct ModelFetchMsg {
 #[derive(Debug, Clone, Default)]
 pub struct SshTestStatus {
     pub loading: bool,
-    /// `Ok(local_port)` on success, `Err(message)` on failure. `None` before any test runs.
-    pub result: Option<Result<u16, String>>,
+    /// `Ok(local_port)` on success, `Err(_)` on failure (a `HostKeyMismatch` lets the panel
+    /// offer to accept the new key). `None` before any test runs.
+    pub result: Option<Result<u16, crate::compute::TunnelError>>,
 }
 
 /// Result message from a background SSH "Test connection" check.
 #[derive(Debug)]
 pub struct SshTestMsg {
     pub provider: LlmProviderKind,
-    pub result: Result<u16, String>,
+    pub result: Result<u16, crate::compute::TunnelError>,
 }
 
 /// Result message from the background GitHub-release update check.

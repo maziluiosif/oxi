@@ -374,12 +374,23 @@ impl OxiApp {
             }
 
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            // Clone the status out first so rendering it doesn't hold an immutable borrow of
+            // `self.conv` while the buttons need `&mut self`.
+            let status = self.conv.ssh_test.get(&kind).cloned();
+            let pinned = self
+                .conv
+                .settings
+                .provider(kind)
+                .ssh_config()
+                .and_then(|c| c.pinned_host_key.clone());
+            let mut rerun_test = false;
+            let mut accept_key: Option<String> = None;
+            ui.horizontal_wrapped(|ui| {
                 if ghost_button(ui, "Test connection", false).clicked() {
-                    self.spawn_ssh_test(ui.ctx(), kind);
+                    rerun_test = true;
                 }
                 ui.add_space(8.0);
-                if let Some(status) = self.conv.ssh_test.get(&kind) {
+                if let Some(status) = &status {
                     if status.loading {
                         ui.label(
                             RichText::new("Connecting…")
@@ -395,13 +406,54 @@ impl OxiApp {
                                         .color(c_accent()),
                                 );
                             }
+                            Err(crate::compute::TunnelError::HostKeyMismatch {
+                                pinned,
+                                observed,
+                            }) => {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Host key changed! Pinned {pinned}, server now presents \
+                                         {observed}. Accept only if you know the host was rebuilt.",
+                                    ))
+                                    .size(FS_TINY)
+                                    .color(c_danger()),
+                                );
+                                if ghost_button(ui, "Accept new key", false).clicked() {
+                                    accept_key = Some(observed.clone());
+                                }
+                            }
                             Err(e) => {
-                                ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
+                                ui.label(
+                                    RichText::new(e.to_string()).size(FS_TINY).color(c_danger()),
+                                );
                             }
                         }
                     }
                 }
             });
+            if let Some(fp) = &pinned {
+                let short = fp.get(..23).unwrap_or(fp.as_str());
+                ui.label(
+                    RichText::new(format!("Host key pinned: {short}…"))
+                        .size(FS_TINY)
+                        .color(c_text_faint()),
+                );
+            }
+            if let Some(fp) = accept_key {
+                if let ComputeLocation::RemoteSsh(cfg) =
+                    &mut self.conv.settings.provider_mut(kind).location
+                {
+                    cfg.pinned_host_key = Some(fp);
+                }
+                if let Err(e) = self.conv.settings.save() {
+                    self.run_state_mut(self.active_session_key()).stream_error =
+                        Some(format!("Save settings: {e}"));
+                }
+                rerun_test = true;
+            }
+            if rerun_test {
+                self.spawn_ssh_test(ui.ctx(), kind);
+            }
         });
     }
 
@@ -436,12 +488,14 @@ impl OxiApp {
             move |err| {
                 let _ = err_tx.send(SshTestMsg {
                     provider: kind,
-                    result: Err(err),
+                    result: Err(crate::compute::TunnelError::Other(err)),
                 });
                 err_ctx.request_repaint();
             },
             move |rt| {
-                let r = rt.block_on(tunnels.ensure_tunnel(kind.slug(), &cfg, &password));
+                let r = rt
+                    .block_on(tunnels.ensure_tunnel(kind.slug(), &cfg, &password))
+                    .map(|ok| ok.local_port);
                 let _ = tx.send(SshTestMsg {
                     provider: kind,
                     result: r,
@@ -449,6 +503,35 @@ impl OxiApp {
                 ctx.request_repaint();
             },
         );
+    }
+
+    /// Pin host keys observed on successful SSH connects (trust-on-first-use). Drains the
+    /// tunnel manager's observed-fingerprint map each frame; for any provider whose
+    /// `SshConfig` has no pinned key yet, records the observed fingerprint and saves
+    /// settings. Already-pinned providers are left untouched — a mismatch never reaches a
+    /// successful connect, so an attacker key can't silently overwrite an existing pin.
+    pub(crate) fn pin_observed_host_keys(&mut self) {
+        let observed = self.tunnels.take_observed_host_keys();
+        if observed.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        for (slug, fp) in observed {
+            let Some(kind) = LlmProviderKind::ALL.into_iter().find(|k| k.slug() == slug) else {
+                continue;
+            };
+            if let ComputeLocation::RemoteSsh(cfg) =
+                &mut self.conv.settings.provider_mut(kind).location
+                && cfg.pinned_host_key.is_none()
+            {
+                cfg.pinned_host_key = Some(fp);
+                changed = true;
+            }
+        }
+        if changed && let Err(e) = self.conv.settings.save() {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
+        }
     }
 
     /// Drain background SSH "Test connection" results into `conv.ssh_test`. Mirrors

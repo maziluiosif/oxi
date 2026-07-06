@@ -131,6 +131,12 @@ pub struct SshConfig {
     pub user: String,
     /// Port the model runtime (Ollama/LM Studio) listens on on the remote host.
     pub remote_runtime_port: u16,
+    /// SHA-256 host key fingerprint ("SHA256:<base64>") pinned on the first successful
+    /// connection (trust-on-first-use). `None` = not yet pinned; the next successful
+    /// connect records it. A later connection presenting a different key is refused until
+    /// the user accepts the new key. Not a secret, so it lives here in `settings.json`.
+    #[serde(default)]
+    pub pinned_host_key: Option<String>,
 }
 
 fn default_ssh_port() -> u16 {
@@ -144,6 +150,7 @@ impl Default for SshConfig {
             port: default_ssh_port(),
             user: String::new(),
             remote_runtime_port: 11434,
+            pinned_host_key: None,
         }
     }
 }
@@ -365,6 +372,7 @@ mod tests {
             port: 22,
             user: "testuser".to_string(),
             remote_runtime_port: 11434,
+            pinned_host_key: None,
         });
         let cfg = c.ssh_config().expect("remote ssh config");
         assert_eq!(cfg.host, "test-host");
@@ -386,10 +394,22 @@ mod tests {
             port: 2222,
             user: "testuser".to_string(),
             remote_runtime_port: 1234,
+            pinned_host_key: Some("SHA256:abc123".to_string()),
         });
         let json = serde_json::to_string(&loc).unwrap();
         let back: ComputeLocation = serde_json::from_str(&json).unwrap();
         assert_eq!(loc, back);
+    }
+
+    #[test]
+    fn ssh_config_missing_pinned_host_key_deserializes_to_none() {
+        // Settings files written before host-key pinning existed have no field.
+        let json = r#"{"kind":"remote_ssh","host":"h","port":22,"user":"u","remote_runtime_port":11434}"#;
+        let loc: ComputeLocation = serde_json::from_str(json).unwrap();
+        match loc {
+            ComputeLocation::RemoteSsh(cfg) => assert_eq!(cfg.pinned_host_key, None),
+            _ => panic!("expected remote ssh"),
+        }
     }
 
     #[test]
