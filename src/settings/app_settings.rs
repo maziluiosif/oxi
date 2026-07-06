@@ -253,16 +253,27 @@ impl AppSettings {
     /// now `skip_serializing`, so freshly-parsed JSON either has no `api_key` at all
     /// (already migrated), or still has a leftover plaintext value from before this
     /// version. For each provider: a non-empty value just parsed from the file (or carried
-    /// over by migration) is pushed into the keychain so it becomes the source of truth.
-    /// Otherwise, pull whatever is already in the keychain into memory for this session.
+    /// over by migration) is pushed into the unified secrets blob so it becomes the source
+    /// of truth. Otherwise, pull whatever is already there into memory for this session.
+    /// Reads/writes the keychain's unified item at most once per launch (via
+    /// `load_unified`'s cache), rather than once per provider.
     fn migrate_secrets_to_keychain(&mut self) {
+        let mut unified = crate::secrets::load_unified();
+        let mut changed = false;
         for (kind, cfg) in &mut self.providers {
-            let account = format!("api-key:{}", kind.slug());
             if !cfg.api_key.is_empty() {
-                let _ = crate::secrets::store(&account, &cfg.api_key);
-            } else {
-                cfg.api_key = crate::secrets::load(&account);
+                if unified.provider_api_keys.get(kind.slug()) != Some(&cfg.api_key) {
+                    unified
+                        .provider_api_keys
+                        .insert(kind.slug().to_string(), cfg.api_key.clone());
+                    changed = true;
+                }
+            } else if let Some(key) = unified.provider_api_keys.get(kind.slug()) {
+                cfg.api_key = key.clone();
             }
+        }
+        if changed {
+            let _ = crate::secrets::save_unified(&unified);
         }
     }
 
@@ -438,6 +449,12 @@ impl AppSettings {
                 // 0/null means "auto".
                 cfg.context_window = None;
             }
+            if !matches!(
+                cfg.effort.trim(),
+                "" | "low" | "medium" | "high" | "xhigh" | "max"
+            ) {
+                cfg.effort.clear();
+            }
         }
         if self.context_window_default == 0 {
             self.context_window_default = default_context_window();
@@ -450,9 +467,23 @@ impl AppSettings {
     }
 
     pub fn save(&self) -> Result<(), String> {
+        let mut unified = crate::secrets::load_unified();
+        let mut changed = false;
         for (kind, cfg) in &self.providers {
-            let account = format!("api-key:{}", kind.slug());
-            let _ = crate::secrets::store(&account, &cfg.api_key);
+            let slug = kind.slug();
+            if cfg.api_key.is_empty() {
+                if unified.provider_api_keys.remove(slug).is_some() {
+                    changed = true;
+                }
+            } else if unified.provider_api_keys.get(slug) != Some(&cfg.api_key) {
+                unified
+                    .provider_api_keys
+                    .insert(slug.to_string(), cfg.api_key.clone());
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = crate::secrets::save_unified(&unified);
         }
         let path = Self::config_path();
         if let Some(dir) = path.parent() {

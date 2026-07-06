@@ -1,4 +1,4 @@
-use super::file_ops::{make_unified_diff, truncate_out};
+use super::file_ops::{floor_char_boundary, make_unified_diff, truncate_out};
 use super::shell_search::validate_bash_command;
 use super::{
     MAX_TOOL_OUTPUT_CHARS, ToolEnv, paths::resolve_under_cwd, run_tool, tool_definitions_json,
@@ -191,9 +191,10 @@ fn tool_read_basic() {
     fs::write(cwd.join("test.txt"), "line1\nline2\nline3").unwrap();
     let res = run_tool(&cwd, "read", &json!({"path": "test.txt"}), &all_enabled());
     assert!(!res.is_error);
-    assert!(res.output.contains("line1"));
-    assert!(res.output.contains("line2"));
-    assert!(res.output.contains("line3"));
+    assert!(res.output.contains("Lines 1-3"));
+    assert!(res.output.contains("     1\tline1"));
+    assert!(res.output.contains("     2\tline2"));
+    assert!(res.output.contains("     3\tline3"));
 }
 
 #[test]
@@ -211,9 +212,10 @@ fn tool_read_with_offset_and_limit() {
         &all_enabled(),
     );
     assert!(!res.is_error);
-    assert!(res.output.contains("line5"));
-    assert!(res.output.contains("line7"));
-    assert!(!res.output.contains("line8"));
+    assert!(res.output.contains("Lines 5-7"));
+    assert!(res.output.contains("     5\tline5"));
+    assert!(res.output.contains("     7\tline7"));
+    assert!(!res.output.contains("     8\tline8"));
 }
 
 #[test]
@@ -644,4 +646,25 @@ fn truncate_out_long_capped() {
     let truncated = truncate_out(s);
     assert!(truncated.len() < MAX_TOOL_OUTPUT_CHARS + 200);
     assert!(truncated.contains("[output truncated"));
+}
+
+#[test]
+fn floor_char_boundary_moves_back_from_multibyte_boundary() {
+    let s = format!("{}😀", "x".repeat(MAX_TOOL_OUTPUT_CHARS - 1));
+    assert_eq!(
+        floor_char_boundary(&s, MAX_TOOL_OUTPUT_CHARS),
+        MAX_TOOL_OUTPUT_CHARS - 1
+    );
+}
+
+#[test]
+fn truncate_out_multibyte_does_not_panic() {
+    let s = format!(
+        "{}😀{}",
+        "x".repeat(MAX_TOOL_OUTPUT_CHARS - 1),
+        "y".repeat(100)
+    );
+    let truncated = truncate_out(s);
+    assert!(truncated.contains("[output truncated"));
+    assert!(truncated.starts_with(&"x".repeat(MAX_TOOL_OUTPUT_CHARS - 1)));
 }

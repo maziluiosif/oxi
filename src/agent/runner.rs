@@ -1,5 +1,7 @@
 //! Spawn background agent run (tokio + mpsc).
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +12,9 @@ use crate::agent::anthropic::run_anthropic_loop;
 use crate::agent::approval::{ApprovalDecision, ApprovalGate};
 use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
-use crate::agent::history::build_openai_messages;
+use crate::agent::history::{
+    build_openai_messages, trim_wire_history_to_budget, user_content_to_openai,
+};
 use crate::agent::loop_ctx::LoopCtx;
 use crate::agent::openai::run_chat_loop;
 use crate::agent::prompt::build_system_prompt;
@@ -18,6 +22,22 @@ use crate::agent::tools::{ToolEnv, tool_definitions_json};
 use crate::model::ChatMessage;
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{AppSettings, LlmProviderKind, ProviderConfig};
+
+pub fn wire_fingerprint_for(
+    settings: &AppSettings,
+    system: &str,
+    tools: &[serde_json::Value],
+) -> u64 {
+    let cfg = settings.active_config();
+    let mut h = DefaultHasher::new();
+    cfg.provider.hash(&mut h);
+    cfg.model_id.hash(&mut h);
+    system.hash(&mut h);
+    serde_json::to_string(tools)
+        .unwrap_or_default()
+        .hash(&mut h);
+    h.finish()
+}
 
 fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
     let _ = tx.send(AgentEvent::StreamError(msg.into()));
@@ -114,6 +134,7 @@ pub fn spawn_agent_run(
     tx: Sender<AgentEvent>,
     approval_rx: Receiver<ApprovalDecision>,
     cancel: Arc<AtomicBool>,
+    prior_wire: Option<Vec<serde_json::Value>>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
@@ -131,14 +152,28 @@ pub fn spawn_agent_run(
             let context_budget =
                 crate::agent::history::context_char_budget_from_tokens(context_tokens);
             let max_rounds = settings.max_tool_rounds;
-            let mut messages = build_openai_messages(&system, &chat_for_history, context_budget);
             let tools = tool_definitions_json(&settings.tools_enabled);
+            let mut messages = if let Some(mut wire) = prior_wire {
+                if let Some(last_user) = chat_for_history.last()
+                    && last_user.role == crate::model::MsgRole::User
+                {
+                    wire.push(serde_json::json!({
+                        "role": "user",
+                        "content": user_content_to_openai(&last_user.text, &last_user.attachments),
+                    }));
+                }
+                trim_wire_history_to_budget(&mut wire, context_budget);
+                wire
+            } else {
+                build_openai_messages(&system, &chat_for_history, context_budget)
+            };
             let tool_env = ToolEnv {
                 enabled: settings.tools_enabled.clone(),
                 web_search_url: settings.effective_web_search_url(),
                 web_search_backend: settings.web_search_backend,
             };
             let model = cfg.model_id.clone();
+            let effort_override = (!cfg.effort.trim().is_empty()).then_some(cfg.effort.trim());
             // No total request timeout: it would also cover the streamed body and kill
             // long turns mid-stream. Instead bound connect time and idle time between
             // chunks, and keep the TCP connection alive through NATs/proxies.
@@ -184,6 +219,7 @@ pub fn spawn_agent_run(
                                 cancel: &cancel,
                                 gate: &mut gate,
                                 max_rounds,
+                                effort_override,
                             },
                             &creds.0,
                             &creds.1,
@@ -211,6 +247,7 @@ pub fn spawn_agent_run(
                                 cancel: &cancel,
                                 gate: &mut gate,
                                 max_rounds,
+                                effort_override,
                             },
                             &key,
                             &[],
@@ -240,6 +277,7 @@ pub fn spawn_agent_run(
                             cancel: &cancel,
                             gate: &mut gate,
                             max_rounds,
+                            effort_override,
                         },
                         &key,
                         &[],
@@ -268,6 +306,7 @@ pub fn spawn_agent_run(
                             cancel: &cancel,
                             gate: &mut gate,
                             max_rounds,
+                            effort_override,
                         },
                         &key,
                         &openrouter_extra_headers(&cfg),
@@ -296,6 +335,7 @@ pub fn spawn_agent_run(
                             cancel: &cancel,
                             gate: &mut gate,
                             max_rounds,
+                            effort_override,
                         },
                         &key,
                         &[],
@@ -324,6 +364,7 @@ pub fn spawn_agent_run(
                             cancel: &cancel,
                             gate: &mut gate,
                             max_rounds,
+                            effort_override,
                         },
                         &key,
                         &[],
@@ -361,6 +402,7 @@ pub fn spawn_agent_run(
                                 cancel: &cancel,
                                 gate: &mut gate,
                                 max_rounds,
+                                effort_override,
                             },
                             &key,
                             &[],
@@ -388,6 +430,7 @@ pub fn spawn_agent_run(
                                 cancel: &cancel,
                                 gate: &mut gate,
                                 max_rounds,
+                                effort_override,
                             },
                             &key,
                             &[],
@@ -402,6 +445,9 @@ pub fn spawn_agent_run(
                 if !cancel.load(Ordering::SeqCst) {
                     let _ = tx.send(AgentEvent::StreamError(e));
                 }
+                let _ = tx.send(AgentEvent::AgentEnd);
+            } else if !cancel.load(Ordering::SeqCst) {
+                let _ = tx.send(AgentEvent::WireHistory(messages));
                 let _ = tx.send(AgentEvent::AgentEnd);
             }
         });

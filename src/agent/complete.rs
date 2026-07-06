@@ -42,6 +42,7 @@ pub struct CompleteRequest {
     /// Optional max output characters before we stop early (used to keep commit
     /// messages short). `None` = no cap.
     pub max_chars: Option<usize>,
+    pub effort_override: Option<String>,
 }
 
 /// Spawn a background completion. The returned [`Receiver`] yields deltas and a final
@@ -73,6 +74,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         system_prompt,
         user_prompt,
         max_chars,
+        effort_override,
     } = req;
 
     let model = cfg.model_id.clone();
@@ -126,6 +128,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     cancel: &cancel,
                     gate: &mut gate,
                     max_rounds,
+                    effort_override: effort_override.as_deref(),
                 },
                 &key,
                 &[],
@@ -148,6 +151,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     cancel: &cancel,
                     gate: &mut gate,
                     max_rounds,
+                    effort_override: effort_override.as_deref(),
                 },
                 &key,
                 &openrouter_extra_headers(&cfg),
@@ -170,6 +174,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     cancel: &cancel,
                     gate: &mut gate,
                     max_rounds,
+                    effort_override: effort_override.as_deref(),
                 },
                 &key,
                 &[],
@@ -192,6 +197,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     cancel: &cancel,
                     gate: &mut gate,
                     max_rounds,
+                    effort_override: effort_override.as_deref(),
                 },
                 &key,
                 &[],
@@ -220,6 +226,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                         cancel: &cancel,
                         gate: &mut gate,
                         max_rounds,
+                        effort_override: effort_override.as_deref(),
                     },
                     &creds.0,
                     &creds.1,
@@ -241,6 +248,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                         cancel: &cancel,
                         gate: &mut gate,
                         max_rounds,
+                        effort_override: effort_override.as_deref(),
                     },
                     &key,
                     &[],
@@ -270,6 +278,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                         cancel: &cancel,
                         gate: &mut gate,
                         max_rounds,
+                        effort_override: effort_override.as_deref(),
                     },
                     &key,
                     &[],
@@ -294,6 +303,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                         cancel: &cancel,
                         gate: &mut gate,
                         max_rounds,
+                        effort_override: effort_override.as_deref(),
                     },
                     &key,
                     &[],
