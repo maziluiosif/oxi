@@ -5,7 +5,7 @@ pub mod store;
 mod tunnel;
 
 pub use store::{load_ssh_credentials, save_ssh_credentials};
-pub use tunnel::TunnelManager;
+pub use tunnel::{TunnelError, TunnelManager};
 
 use crate::settings::ProviderConfig;
 
@@ -29,6 +29,9 @@ pub async fn resolve_base_url(
     let key = config.provider.slug();
     let creds = load_ssh_credentials();
     let password = creds.get(key).unwrap_or_default();
-    let local_port = tunnels.ensure_tunnel(key, ssh, password).await?;
-    Ok(format!("http://127.0.0.1:{local_port}/v1"))
+    let ok = tunnels
+        .ensure_tunnel(key, ssh, password)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("http://127.0.0.1:{}/v1", ok.local_port))
 }

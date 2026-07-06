@@ -111,6 +111,8 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         enabled: Vec::new(),
         web_search_url: String::new(),
         web_search_backend: WebSearchBackend::default(),
+        // Inert: completion runs have no tools enabled.
+        bash_timeout_cap_secs: 300,
     };
 
     let r = match cfg.provider {
