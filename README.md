@@ -3,7 +3,7 @@
 [![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**oxi** is a fast, lightweight desktop coding-agent chat app built in Rust with **egui/eframe**. It runs as a **single native binary**, keeps your workspaces and sessions local, and makes local models from **LM Studio** or **Ollama** easy to configure — including models running on another machine over **SSH**.
+**oxi** is a fast, lightweight desktop coding-agent chat app built in Rust with **egui/eframe** — **a local-first coding agent you fully control**. It runs as a **single native binary**, keeps your workspaces and sessions local, and makes local models from **LM Studio** or **Ollama** easy to configure — including models running on another machine over **SSH**. The **system prompt is yours to edit**, so oxi can stay a focused coding agent or become whatever assistant you point it at.
 
 ![oxi chat UI](assets/screenshots/chat.png)
 
@@ -57,6 +57,7 @@ target/release/oxi
 
 - **Efficient native desktop app** — Rust + egui, no Electron/webview runtime, shipped as a single binary.
 - **Low memory footprint** — designed for day-to-day coding-agent workflows without a heavy app shell.
+- **You fully control it** — the system prompt is an editable template, so oxi can stay a focused coding agent or be repurposed into any assistant you need.
 - **Local-first workflow** — settings, workspaces, sessions, OAuth tokens, SSH passwords, and tool execution are handled locally.
 - **Local model friendly** — first-class profiles for LM Studio and Ollama, with model discovery from the UI.
 - **Remote local models over SSH** — run LM Studio/Ollama on a stronger LAN machine and let oxi create the tunnel.
