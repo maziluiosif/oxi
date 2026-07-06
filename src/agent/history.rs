@@ -12,8 +12,11 @@
 //! active profile's effective context window (`~4 chars/token × context tokens`).
 
 use base64::Engine;
+use std::ops::Range;
+
 use serde_json::{Value, json};
 
+use crate::agent::tools::floor_char_boundary;
 use crate::model::{AssistantBlock, ChatMessage, MsgRole, UserAttachment};
 
 /// Approximate character budget for the default 100k-token fallback (~100k tokens × 4 chars/token).
@@ -85,7 +88,7 @@ fn message_to_openai(m: &ChatMessage) -> Option<Value> {
     }
 }
 
-fn user_content_to_openai(text: &str, attachments: &[UserAttachment]) -> Value {
+pub(crate) fn user_content_to_openai(text: &str, attachments: &[UserAttachment]) -> Value {
     if attachments.is_empty() {
         return Value::String(text.to_string());
     }
@@ -146,7 +149,8 @@ fn flatten_assistant(m: &ChatMessage) -> String {
                 // Truncate tool output in history to avoid blowing up context with large reads.
                 const HISTORY_TOOL_OUTPUT_CAP: usize = 8_000;
                 if output.len() > HISTORY_TOOL_OUTPUT_CAP {
-                    s.push_str(&output[..HISTORY_TOOL_OUTPUT_CAP]);
+                    let cut = floor_char_boundary(output, HISTORY_TOOL_OUTPUT_CAP);
+                    s.push_str(&output[..cut]);
                     s.push_str("\n… [truncated in history]");
                 } else {
                     s.push_str(output);
@@ -163,38 +167,77 @@ fn value_char_len(v: &Value) -> usize {
     v.to_string().len()
 }
 
-/// Drop oldest turns until the total character count (system + turns) fits the budget,
-/// while always keeping at least `MIN_KEEP_TURNS` pairs from the end.
-fn trim_to_budget(turns: &mut Vec<Value>, system_len: usize, budget: usize) {
-    // Serialize each turn exactly once and cache its length; the previous version
-    // re-serialized every value during the drop loop (up to 2× the work on large histories).
-    let lens: Vec<usize> = turns.iter().map(value_char_len).collect();
+const TRIM_TARGET_PCT: usize = 60;
+
+fn trim_target(budget: usize) -> usize {
+    budget.saturating_mul(TRIM_TARGET_PCT) / 100
+}
+
+/// Return ranges of complete conversational turns. A turn starts at a normal user
+/// message and includes following assistant/tool messages up to the next normal user.
+/// This keeps `tool` messages attached to their `assistant.tool_calls` owner.
+pub(crate) fn turn_boundaries(messages: &[Value]) -> Vec<Range<usize>> {
+    let mut starts = Vec::new();
+    for (i, m) in messages.iter().enumerate() {
+        if m.get("role").and_then(|x| x.as_str()) == Some("user") {
+            starts.push(i);
+        }
+    }
+    starts
+        .iter()
+        .enumerate()
+        .map(|(idx, start)| {
+            let end = starts.get(idx + 1).copied().unwrap_or(messages.len());
+            *start..end
+        })
+        .collect()
+}
+
+fn trim_message_groups_to_budget(messages: &mut Vec<Value>, system_len: usize, budget: usize) {
+    let lens: Vec<usize> = messages.iter().map(value_char_len).collect();
     let total: usize = system_len + lens.iter().sum::<usize>();
     if total <= budget {
         return;
     }
 
-    // Identify the minimum tail we must keep: last MIN_KEEP_TURNS pairs = 2×MIN_KEEP_TURNS messages.
-    let min_keep_msgs = (MIN_KEEP_TURNS * 2).min(turns.len());
-    let keep_from = turns.len().saturating_sub(min_keep_msgs);
+    let target = trim_target(budget);
+    let groups = turn_boundaries(messages);
+    let min_keep_groups = MIN_KEEP_TURNS.min(groups.len());
+    let droppable_groups = groups.len().saturating_sub(min_keep_groups);
 
-    // Drop from the front until we're under budget or we've reached the protected tail.
-    let mut drop_until = 0usize;
     let mut running = total;
-    for (i, len) in lens.iter().enumerate() {
-        if i >= keep_from {
+    let mut drop_until = 0usize;
+    for range in groups.iter().take(droppable_groups) {
+        if running <= target {
             break;
         }
-        if running <= budget {
-            break;
-        }
-        running = running.saturating_sub(*len);
-        drop_until = i + 1;
+        let group_len: usize = lens[range.clone()].iter().sum();
+        running = running.saturating_sub(group_len);
+        drop_until = range.end;
     }
 
     if drop_until > 0 {
-        turns.drain(0..drop_until);
+        messages.drain(0..drop_until);
     }
+}
+
+/// Drop oldest complete turns until total character count fits the hysteresis
+/// target, while always keeping at least `MIN_KEEP_TURNS` recent turns.
+fn trim_to_budget(turns: &mut Vec<Value>, system_len: usize, budget: usize) {
+    trim_message_groups_to_budget(turns, system_len, budget);
+}
+
+/// Trim a full wire-format OpenAI message list in-place. The leading system
+/// message is preserved; remaining messages are dropped only on whole-turn
+/// boundaries so tool messages are never orphaned.
+pub(crate) fn trim_wire_history_to_budget(messages: &mut Vec<Value>, budget: usize) {
+    if messages.is_empty() {
+        return;
+    }
+    let system_len = messages.first().map(value_char_len).unwrap_or_default();
+    let mut rest: Vec<Value> = messages.drain(1..).collect();
+    trim_message_groups_to_budget(&mut rest, system_len, budget);
+    messages.extend(rest);
 }
 
 #[cfg(test)]
@@ -267,5 +310,39 @@ mod tests {
         // Even if we can't fit everything, the last MIN_KEEP_TURNS pairs stay.
         // With only 2 pairs and MIN_KEEP_TURNS=6, all turns are kept.
         assert!(msgs.len() >= 3); // at minimum: system + 1 user + 1 assistant
+    }
+
+    #[test]
+    fn trim_hysteresis_targets_sixty_percent_when_possible() {
+        let budget = 10_000;
+        let chat: Vec<ChatMessage> = (0..10)
+            .flat_map(|i| {
+                [
+                    user_msg(&format!("u{i} {}", "x".repeat(500))),
+                    assistant_msg(&format!("a{i} {}", "y".repeat(500))),
+                ]
+            })
+            .collect();
+        let msgs = build_openai_messages("system", &chat, budget);
+        let total: usize = msgs.iter().map(|v| v.to_string().len()).sum();
+        assert!(total <= trim_target(budget) + 2048, "total={total}");
+        assert!(msgs.len() >= 1 + MIN_KEEP_TURNS * 2);
+    }
+
+    #[test]
+    fn wire_trim_does_not_orphan_tool_messages() {
+        let mut wire = vec![json!({"role":"system","content":"system"})];
+        for i in 0..8 {
+            wire.push(json!({"role":"user","content":format!("u{i} {}", "x".repeat(1200))}));
+            wire.push(json!({"role":"assistant","content":"","tool_calls":[{"id":format!("call{i}"),"type":"function","function":{"name":"read","arguments":"{}"}}]}));
+            wire.push(json!({"role":"tool","tool_call_id":format!("call{i}"),"content":format!("tool{i}")}));
+        }
+        trim_wire_history_to_budget(&mut wire, 10_000);
+        assert_eq!(wire[0]["role"], "system");
+        for i in 1..wire.len() {
+            if wire[i]["role"] == "tool" {
+                assert_eq!(wire[i - 1]["role"], "assistant");
+            }
+        }
     }
 }

@@ -10,6 +10,14 @@
 //! When a model isn't found here we fall back to `AppSettings::context_window_default`.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Codex backend model discovery is gated by the Codex CLI client version.
+///
+/// Do not use Oxi's own crate version here: Oxi is currently `0.x`, while the
+/// ChatGPT Codex backend compares this query parameter with Codex CLI versions
+/// such as `0.142.5` and can filter out the entire catalog for an older client.
+const CODEX_MODELS_CLIENT_VERSION: &str = "0.142.5";
 
 /// One entry in the OpenAI-style `/v1/models` list response.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -29,6 +37,39 @@ struct ListModelsResponse {
     data: Vec<ModelEntry>,
 }
 
+/// Codex ChatGPT backend `/models` response shape.
+///
+/// Unlike OpenAI-compatible `/v1/models`, Codex returns `{ "models": [...] }`
+/// entries keyed by `slug` instead of `id`, plus richer metadata such as
+/// `context_window`. We currently normalize those entries into [`ModelEntry`]
+/// so the rest of the UI can share the same model dropdown plumbing.
+#[derive(Debug, Clone, Deserialize)]
+struct CodexModelsResponse {
+    #[serde(default)]
+    models: Vec<CodexModelEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexModelEntry {
+    slug: String,
+    #[serde(default)]
+    context_window: Option<i64>,
+    #[serde(default)]
+    max_context_window: Option<i64>,
+}
+
+impl From<CodexModelEntry> for ModelEntry {
+    fn from(m: CodexModelEntry) -> Self {
+        let context_window = m.context_window.or(m.max_context_window);
+        Self {
+            id: m.slug,
+            object: Some("model".to_string()),
+            created: None,
+            owned_by: context_window.map(|cw| format!("context_window={cw}")),
+        }
+    }
+}
+
 /// Fetch the list of models for an OpenAI-compatible provider.
 ///
 /// `base_url` should be the provider root (e.g. `https://opencode.ai/zen/go`); the
@@ -40,11 +81,18 @@ pub async fn fetch_models(
     api_key: &str,
     extra_headers: &[(String, String)],
 ) -> Result<Vec<ModelEntry>, String> {
-    let url = if base_url.trim_end_matches('/').ends_with("/v1") {
-        format!("{}/models", base_url.trim_end_matches('/'))
+    let base = base_url.trim_end_matches('/');
+    let mut url = if base.ends_with("/v1") || base.ends_with("/codex") {
+        format!("{base}/models")
     } else {
-        format!("{}/v1/models", base_url.trim_end_matches('/'))
+        format!("{base}/v1/models")
     };
+    if base.ends_with("/codex") {
+        url.push_str("?client_version=");
+        url.push_str(std::env::var("OXI_CODEX_CLIENT_VERSION")
+            .as_deref()
+            .unwrap_or(CODEX_MODELS_CLIENT_VERSION));
+    }
 
     let mut req = client.get(&url);
     if !api_key.trim().is_empty() {
@@ -68,9 +116,19 @@ pub async fn fetch_models(
         let snippet: String = text.chars().take(300).collect();
         return Err(format!("models HTTP {status}: {snippet}"));
     }
-    let parsed: ListModelsResponse =
-        serde_json::from_str(&text).map_err(|e| format!("models parse failed: {e}"))?;
-    let mut models = parsed.data;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("models parse failed: invalid JSON: {e}"))?;
+    let mut models = if value.get("models").and_then(Value::as_array).is_some() {
+        let parsed: CodexModelsResponse = serde_json::from_value(value)
+            .map_err(|e| format!("models parse failed (Codex format): {e}"))?;
+        parsed.models.into_iter().map(ModelEntry::from).collect()
+    } else if value.get("data").and_then(Value::as_array).is_some() {
+        let parsed: ListModelsResponse = serde_json::from_value(value)
+            .map_err(|e| format!("models parse failed (OpenAI format): {e}"))?;
+        parsed.data
+    } else {
+        return Err("models parse failed: response has neither array `models` nor array `data`".to_string());
+    };
     models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
 }
@@ -165,7 +223,10 @@ static CONTEXT_CATALOG: &[(&str, usize)] = &[
 
     // ── OpenAI GPT family ─────────────────────────────────────────────────────
     ("gpt-5.5-pro", 400_000),
-    ("gpt-5.5", 400_000),
+    // ChatGPT Codex reports ~258K usable context for gpt-5.5
+    // (272K raw with a 95% effective window), so keep the local fallback aligned
+    // with the context shown by Codex instead of the broader GPT-5 family default.
+    ("gpt-5.5", 258_000),
     ("gpt-5.4-pro", 400_000),
     ("gpt-5.4-mini", 400_000),
     ("gpt-5.4-nano", 400_000),

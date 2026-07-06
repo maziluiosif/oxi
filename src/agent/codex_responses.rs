@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::{ToolResult, run_tool};
+use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult, run_tool};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -424,6 +424,7 @@ pub async fn run_codex_responses_loop(
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
     let gate = &mut *ctx.gate;
+    let effort_override = ctx.effort_override;
     let url = resolve_codex_post_url(base_url);
     let rtools = responses_tools(tools);
     let mut round = 0u32;
@@ -439,6 +440,9 @@ pub async fn run_codex_responses_loop(
         }
         let (instructions, rest) = split_system(messages);
         let input = chat_to_input(&rest)?;
+        let reasoning_effort = effort_override
+            .filter(|e| crate::agent::openai::is_valid_reasoning_effort(e))
+            .unwrap_or("medium");
         let body = json!({
             "model": model,
             "stream": true,
@@ -449,7 +453,7 @@ pub async fn run_codex_responses_loop(
             "tool_choice": "auto",
             "parallel_tool_calls": true,
             "text": { "verbosity": "medium" },
-            "reasoning": { "effort": "medium", "summary": "auto" },
+            "reasoning": { "effort": reasoning_effort, "summary": "auto" },
             "include": ["reasoning.encrypted_content"]
         });
         let _ = tx.send(AgentEvent::AgentStart);
@@ -633,7 +637,7 @@ pub async fn run_codex_responses_loop(
                         let _ = tx.send(AgentEvent::ToolOutput {
                             tool_call_id: tc.id.clone(),
                             text: text.clone(),
-                            truncated: text.len() >= 120_000,
+                            truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                         });
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
@@ -667,7 +671,7 @@ pub async fn run_codex_responses_loop(
                     let _ = tx.send(AgentEvent::ToolOutput {
                         tool_call_id: tc.id.clone(),
                         text: text.clone(),
-                        truncated: text.len() >= 120_000,
+                        truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                     });
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
@@ -689,7 +693,7 @@ pub async fn run_codex_responses_loop(
             "role": "assistant",
             "content": assistant_text,
         }));
-        let _ = tx.send(AgentEvent::AgentEnd);
+        let _ = tx.send(AgentEvent::ProviderDone);
         break;
     }
     Ok(())

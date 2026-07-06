@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use crate::agent::runner::wire_fingerprint_for;
 use crate::agent::spawn_agent_run;
 use crate::model::{
     AssistantBlock, ChatMessage, MsgRole, UserAttachment, make_session_title,
@@ -290,6 +291,19 @@ impl OxiApp {
             s.messages[..s.messages.len() - 1].to_vec()
         };
         let settings = self.conv.settings.clone();
+        let system =
+            crate::agent::prompt::build_system_prompt(&settings, cwd.to_string_lossy().as_ref());
+        let tools = crate::agent::tools::tool_definitions_json(&settings.tools_enabled);
+        let wire_fingerprint = wire_fingerprint_for(&settings, &system, &tools);
+        let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
+            .session_file
+            .clone();
+        let prior_wire = self.run_state(key).and_then(|run| {
+            (run.wire_session_file == session_file && run.wire_fingerprint == wire_fingerprint)
+                .then(|| run.wire_history.clone())
+                .flatten()
+        });
+        let used_prior_wire = prior_wire.is_some();
         let (tx, rx) = std::sync::mpsc::channel();
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -301,12 +315,19 @@ impl OxiApp {
             tx,
             approval_rx,
             cancel.clone(),
+            prior_wire,
         );
+        let existing_wire = self.run_state(key).and_then(|run| run.wire_history.clone());
         let run = self.run_state_mut(key);
         run.agent_rx = Some(rx);
         run.approval_tx = Some(approval_tx);
         run.pending_approval = None;
         run.cancel_agent = Some(cancel);
+        run.wire_fingerprint = wire_fingerprint;
+        run.wire_session_file = session_file;
+        if !used_prior_wire && existing_wire.is_some() {
+            run.wire_history = None;
+        }
         Ok(())
     }
 
@@ -325,7 +346,11 @@ impl OxiApp {
         {
             self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
         }
+        let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
+            .session_file
+            .clone();
         let run = self.run_state_mut(key);
+        run.wire_session_file = session_file;
         run.end_waiting_response();
         run.agent_ack = false;
         run.cancel_agent = None;
