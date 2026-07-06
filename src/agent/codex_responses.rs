@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 
-use super::events::AgentEvent;
+use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
 use super::tools::{ToolResult, run_tool};
@@ -41,6 +41,7 @@ fn drain_codex_sse_blocks(
     pending_tools: &mut Vec<ToolCallAccum>,
     sse_state: &mut CodexStreamState,
     stream_error: &mut Option<String>,
+    usage: &mut TokenUsage,
     tx: &Sender<AgentEvent>,
 ) {
     while let Some((idx, sep_len)) = sse_record_end(buffer) {
@@ -66,6 +67,7 @@ fn drain_codex_sse_blocks(
             pending_tools,
             sse_state,
             stream_error,
+            usage,
             tx,
         );
     }
@@ -296,12 +298,18 @@ fn process_responses_event(
     pending_tools: &mut Vec<ToolCallAccum>,
     state: &mut CodexStreamState,
     stream_error: &mut Option<String>,
+    usage: &mut TokenUsage,
     tx: &Sender<AgentEvent>,
 ) {
     let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
 
     match typ {
-        "response.created" | "response.completed" | "response.incomplete" => {}
+        "response.completed" => {
+            if let Some(u) = v.pointer("/response/usage") {
+                read_responses_usage(u, usage);
+            }
+        }
+        "response.created" | "response.incomplete" => {}
         // New reasoning item in the stream — allow a later `output_item.done` fallback for this item.
         "response.output_item.added" => {
             if let Some(item) = v.get("item")
@@ -384,6 +392,22 @@ fn process_responses_event(
     }
 }
 
+fn read_responses_usage(v: &Value, usage: &mut TokenUsage) {
+    if let Some(n) = v.get("input_tokens").and_then(|x| x.as_u64()) {
+        usage.input_tokens = n;
+    }
+    if let Some(n) = v.get("output_tokens").and_then(|x| x.as_u64()) {
+        usage.output_tokens = n;
+    }
+    if let Some(n) = v
+        .pointer("/input_tokens_details/cached_tokens")
+        .and_then(|x| x.as_u64())
+    {
+        usage.cache_read_input_tokens = n;
+        usage.input_tokens = usage.input_tokens.saturating_sub(n);
+    }
+}
+
 pub async fn run_codex_responses_loop(
     ctx: &mut LoopCtx<'_>,
     access_token: &str,
@@ -461,6 +485,7 @@ pub async fn run_codex_responses_loop(
         let mut pending_tools: Vec<ToolCallAccum> = Vec::new();
         let mut sse_state = CodexStreamState::default();
         let mut stream_error: Option<String> = None;
+        let mut round_usage = TokenUsage::default();
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
@@ -480,6 +505,7 @@ pub async fn run_codex_responses_loop(
                 &mut pending_tools,
                 &mut sse_state,
                 &mut stream_error,
+                &mut round_usage,
                 tx,
             );
         }
@@ -492,6 +518,7 @@ pub async fn run_codex_responses_loop(
                 &mut pending_tools,
                 &mut sse_state,
                 &mut stream_error,
+                &mut round_usage,
                 tx,
             );
         }
@@ -518,6 +545,9 @@ pub async fn run_codex_responses_loop(
             continue;
         }
         stream_retries = 0;
+        if !round_usage.is_zero() {
+            let _ = tx.send(AgentEvent::Usage(round_usage));
+        }
         let _ = tx.send(AgentEvent::AssistantMessageDone);
 
         let tool_calls = pending_tools;

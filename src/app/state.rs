@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use eframe::egui;
 
-use crate::agent::{AgentEvent, ApprovalDecision};
+use crate::agent::{AgentEvent, ApprovalDecision, TokenUsage};
 use crate::model::Session;
 use crate::settings::{AppSettings, LlmProviderKind};
 
@@ -57,6 +57,8 @@ pub struct SessionRunState {
     pub stream_started_at: Option<Instant>,
     pub agent_ack: bool,
     pub stream_error: Option<String>,
+    pub turn_usage: TokenUsage,
+    pub session_usage: TokenUsage,
 }
 
 impl SessionRunState {
@@ -78,6 +80,7 @@ impl SessionRunState {
     pub fn begin_waiting_response(&mut self) {
         self.waiting_response = true;
         self.stream_started_at = Some(Instant::now());
+        self.turn_usage = TokenUsage::default();
     }
 
     pub fn end_waiting_response(&mut self) {
