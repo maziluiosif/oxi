@@ -218,8 +218,13 @@ impl OxiApp {
                 .and_then(|s| s.stream_started_at)
                 .map(|t| format!(" · {}", format_stream_elapsed(t.elapsed())))
                 .unwrap_or_default();
-            if let Some(usage) = self.active_run_state().map(|s| s.turn_usage)
-                && !usage.is_zero()
+            if let Some(usage) = self.active_run_state().map(|s| {
+                if s.turn_usage.is_zero() {
+                    s.last_turn_usage
+                } else {
+                    s.turn_usage
+                }
+            }) && !usage.is_zero()
             {
                 detail.push_str(&format!(" · {}", format_token_usage(usage)));
             }
@@ -229,10 +234,23 @@ impl OxiApp {
                 "Agent is working".to_string(),
             )
         } else {
+            let mut detail = String::new();
+            if let Some(usage) = self.active_run_state().map(|s| s.last_turn_usage)
+                && !usage.is_zero()
+            {
+                detail.push_str(&format!(" · {}", format_token_usage(usage)));
+            }
             (
-                "Ready".to_string(),
+                format!("Ready{detail}"),
                 crate::theme::c_success(),
-                "Ready to send".to_string(),
+                if detail.is_empty() {
+                    "Ready to send".to_string()
+                } else {
+                    format!(
+                        "Ready to send · last run: {}",
+                        detail.trim_start_matches(" · ")
+                    )
+                },
             )
         };
 

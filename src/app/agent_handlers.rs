@@ -78,7 +78,15 @@ impl OxiApp {
         }
 
         self.flow.sessions.retain(|_, state| {
-            state.agent_rx.is_some() || state.waiting_response || state.stream_error.is_some()
+            state.agent_rx.is_some()
+                || state.waiting_response
+                || state.stream_error.is_some()
+                // Keep completed run metadata around: the header "Ready" chip shows the last
+                // turn's usage/cache stats, and `wire_history` is reused on the next turn.
+                || !state.turn_usage.is_zero()
+                || !state.last_turn_usage.is_zero()
+                || !state.session_usage.is_zero()
+                || state.wire_history.is_some()
         });
 
         if repainted {

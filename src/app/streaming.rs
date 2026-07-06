@@ -399,10 +399,17 @@ impl OxiApp {
         {
             self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
         }
+        let completed_turn_usage = self
+            .run_state(key)
+            .map(|run| run.turn_usage)
+            .filter(|usage| !usage.is_zero());
         let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
             .session_file
             .clone();
         let run = self.run_state_mut(key);
+        if let Some(usage) = completed_turn_usage {
+            run.last_turn_usage = usage;
+        }
         run.wire_session_file = session_file;
         run.end_waiting_response();
         run.agent_ack = false;

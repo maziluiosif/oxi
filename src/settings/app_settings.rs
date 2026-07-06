@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -503,15 +504,21 @@ impl AppSettings {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(&path, json).map_err(|e| e.to_string())?;
+        let tmp_path = path.with_extension("json.tmp");
+        {
+            let mut file = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+            file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+            file.sync_all().map_err(|e| e.to_string())?;
+        }
         // Restrict to the owner as defense in depth for the rest of this file (base
         // URLs, model ids, etc.); the actual secrets (API keys) live in the OS keychain,
         // not here.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+            let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
         }
+        fs::rename(&tmp_path, &path).map_err(|e| e.to_string())?;
         Ok(())
     }
 
