@@ -298,7 +298,11 @@ impl OxiApp {
             format_context_tokens(max_tokens as u64),
             pct * 100.0
         );
-        resp.on_hover_text(hover);
+        // Show the context tooltip immediately; egui's default hover tooltip delay feels
+        // sluggish for this tiny status indicator in the composer.
+        if resp.hovered() {
+            resp.show_tooltip_text(hover);
+        }
     }
 
     fn estimated_active_context_chars(&self) -> usize {

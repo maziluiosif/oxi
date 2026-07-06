@@ -60,6 +60,9 @@ pub struct SessionRunState {
     pub agent_ack: bool,
     pub stream_error: Option<String>,
     pub turn_usage: TokenUsage,
+    /// Usage from the most recently completed turn. Kept while idle and as a fallback while a
+    /// new turn is running before the provider reports current-turn usage.
+    pub last_turn_usage: TokenUsage,
     pub session_usage: TokenUsage,
     /// In-memory canonical provider wire history reused across turns to preserve
     /// byte-for-byte cacheable prefixes. Not persisted; provider caches are short-lived.
