@@ -367,6 +367,77 @@ fn tool_edit_no_edits_array() {
     assert!(res.output.contains("no edits"));
 }
 
+#[test]
+fn tool_edit_replace_all_replaces_every_occurrence() {
+    let cwd = temp_workspace("edit-replace-all");
+    fs::write(cwd.join("dup.txt"), "foo foo foo").unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "dup.txt",
+            "edits": [{"oldText": "foo", "newText": "bar", "replaceAll": true}]
+        }),
+        &all_enabled(),
+    );
+    assert!(!res.is_error);
+    assert!(res.output.contains("3 replacements"));
+    assert!(res.diff.is_some());
+    let content = fs::read_to_string(cwd.join("dup.txt")).unwrap();
+    assert_eq!(content, "bar bar bar");
+}
+
+#[test]
+fn tool_edit_replace_all_not_found_errors() {
+    let cwd = temp_workspace("edit-replace-all-nf");
+    fs::write(cwd.join("file.txt"), "content").unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "file.txt",
+            "edits": [{"oldText": "missing", "newText": "x", "replaceAll": true}]
+        }),
+        &all_enabled(),
+    );
+    assert!(res.is_error);
+    assert!(res.output.contains("not found"));
+}
+
+#[test]
+fn tool_edit_empty_old_text_errors() {
+    let cwd = temp_workspace("edit-empty-old");
+    fs::write(cwd.join("file.txt"), "content").unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "file.txt",
+            "edits": [{"oldText": "", "newText": "x"}]
+        }),
+        &all_enabled(),
+    );
+    assert!(res.is_error);
+    assert!(res.output.contains("must not be empty"));
+}
+
+#[test]
+fn tool_edit_ambiguous_error_mentions_replace_all() {
+    let cwd = temp_workspace("edit-ambiguous-hint");
+    fs::write(cwd.join("dup.txt"), "hello hello").unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "dup.txt",
+            "edits": [{"oldText": "hello", "newText": "world"}]
+        }),
+        &all_enabled(),
+    );
+    assert!(res.is_error);
+    assert!(res.output.contains("replaceAll"));
+}
+
 // ─── tool_bash ──────────────────────────────────────────────────────
 
 #[test]
