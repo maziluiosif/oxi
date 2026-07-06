@@ -46,6 +46,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             input_text: String::new(),
             pending_images: Vec::new(),
             modified: session.modified,
+            chars_per_token: None,
         })
         .collect()
 }
@@ -95,6 +96,7 @@ mod tests {
         let user = ChatMessage {
             role: MsgRole::User,
             text: "hello".into(),
+            is_summary: false,
             attachments: vec![UserAttachment::Image {
                 mime: "image/png".into(),
                 data: vec![1, 2, 3],
@@ -107,6 +109,7 @@ mod tests {
         let assistant = ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![
                 AssistantBlock::Thinking("plan".into()),
@@ -139,6 +142,7 @@ mod tests {
             ChatMessage {
                 role: MsgRole::User,
                 text: "hello".into(),
+                is_summary: false,
                 attachments: vec![],
                 blocks: vec![],
                 streaming: false,
@@ -148,6 +152,7 @@ mod tests {
             ChatMessage {
                 role: MsgRole::Assistant,
                 text: String::new(),
+                is_summary: false,
                 attachments: vec![],
                 blocks: vec![AssistantBlock::Answer("first".into())],
                 streaming: false,
@@ -157,6 +162,7 @@ mod tests {
             ChatMessage {
                 role: MsgRole::User,
                 text: "hello".into(),
+                is_summary: false,
                 attachments: vec![],
                 blocks: vec![],
                 streaming: false,
@@ -166,6 +172,7 @@ mod tests {
             ChatMessage {
                 role: MsgRole::Assistant,
                 text: String::new(),
+                is_summary: false,
                 attachments: vec![],
                 blocks: vec![AssistantBlock::Answer("second".into())],
                 streaming: false,
@@ -196,6 +203,7 @@ mod tests {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            chars_per_token: None,
             modified: SystemTime::now(),
         };
 
@@ -217,6 +225,7 @@ mod tests {
                 ChatMessage {
                     role: MsgRole::User,
                     text: "look".into(),
+                    is_summary: false,
                     attachments: vec![UserAttachment::Image {
                         mime: "image/png".into(),
                         data: vec![1, 2, 3, 4],
@@ -229,6 +238,7 @@ mod tests {
                 ChatMessage {
                     role: MsgRole::Assistant,
                     text: String::new(),
+                    is_summary: false,
                     attachments: vec![],
                     blocks: vec![
                         AssistantBlock::Thinking("thinking".into()),
@@ -253,6 +263,7 @@ mod tests {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            chars_per_token: None,
             modified: SystemTime::now(),
         };
 
@@ -275,6 +286,7 @@ mod tests {
                 ChatMessage {
                     role: MsgRole::User,
                     text: "hello".into(),
+                    is_summary: false,
                     attachments: vec![],
                     blocks: vec![],
                     streaming: false,
@@ -284,6 +296,7 @@ mod tests {
                 ChatMessage {
                     role: MsgRole::Assistant,
                     text: String::new(),
+                    is_summary: false,
                     attachments: vec![],
                     blocks: vec![AssistantBlock::Answer("hi there".into())],
                     streaming: false,
@@ -295,6 +308,7 @@ mod tests {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            chars_per_token: None,
             modified: SystemTime::now(),
         };
 

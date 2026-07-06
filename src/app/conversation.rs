@@ -200,7 +200,13 @@ impl OxiApp {
     }
 
     fn render_header_status_chip(&self, ui: &mut Ui) {
-        let (label, dot, hover) = if let Some(err) = self.active_stream_error() {
+        let (label, dot, hover) = if self.compaction_active_for(self.active_session_key()) {
+            (
+                "Compacting…".to_string(),
+                c_accent(),
+                "Summarizing older turns to free up context".to_string(),
+            )
+        } else if let Some(err) = self.active_stream_error() {
             (
                 "Error".to_string(),
                 crate::theme::c_danger(),

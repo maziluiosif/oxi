@@ -10,7 +10,7 @@ use crate::agent::context_char_budget_from_tokens;
 use crate::model::{AssistantBlock, ChatMessage, MsgRole};
 use crate::theme::*;
 
-use super::OxiApp;
+use super::{OxiApp, SessionKey};
 
 /// Diameter of the round send button.
 const SEND_DIAM: f32 = 30.0;
@@ -265,8 +265,10 @@ impl OxiApp {
     fn render_context_indicator(&self, ui: &mut Ui) {
         let cfg = self.conv.settings.active_config();
         let max_tokens = cfg.effective_context_window(self.conv.settings.context_window_default);
+        let key = self.active_session_key();
         let used_chars = self.estimated_active_context_chars();
-        let used_tokens = ((used_chars as f64) / 4.0).ceil().max(0.0) as usize;
+        let cpt = self.calibrated_chars_per_token(key) as f64;
+        let used_tokens = ((used_chars as f64) / cpt).ceil().max(0.0) as usize;
         let pct = if max_tokens == 0 {
             0.0
         } else {
@@ -300,11 +302,7 @@ impl OxiApp {
     }
 
     fn estimated_active_context_chars(&self) -> usize {
-        let system_chars = crate::agent::prompt::build_system_prompt(
-            &self.conv.settings,
-            self.active_workspace().root_path.as_str(),
-        )
-        .len();
+        let key = self.active_session_key();
         let current_input = self.conv.input.len()
             + self
                 .conv
@@ -312,27 +310,50 @@ impl OxiApp {
                 .iter()
                 .map(|(_, data)| data.len() * 4 / 3)
                 .sum::<usize>();
-        let messages_chars = self
-            .active_session()
-            .messages
-            .iter()
-            .map(estimate_message_chars)
-            .sum::<usize>();
-        let tools_chars =
-            crate::agent::tools::tool_definitions_json(
-                &self.conv.settings.tools_enabled,
-                self.conv.settings.bash_timeout_cap_secs,
-            )
-                .iter()
-                .map(|v| v.to_string().len())
-                .sum::<usize>();
         let budget_chars = context_char_budget_from_tokens(
             self.conv
                 .settings
                 .active_config()
                 .effective_context_window(self.conv.settings.context_window_default),
+            self.calibrated_chars_per_token(key),
         );
-        (system_chars + current_input + messages_chars + tools_chars).min(budget_chars)
+        (self.estimated_session_context_chars(key) + current_input).min(budget_chars)
+    }
+
+    /// The calibrated chars-per-token ratio for a session (measured from the last provider
+    /// `Usage` event), or the conservative default before any turn has reported usage.
+    pub(crate) fn calibrated_chars_per_token(&self, key: SessionKey) -> f32 {
+        self.session_by_key(key)
+            .chars_per_token
+            .unwrap_or(crate::agent::DEFAULT_CHARS_PER_TOKEN)
+    }
+
+    /// Estimated size (chars) of what a run for `key` sends: system prompt + tool definitions
+    /// + all persisted messages. Excludes unsent composer input.
+    pub(crate) fn estimated_session_context_chars(&self, key: SessionKey) -> usize {
+        let root = self.conv.workspaces[key.workspace_idx].root_path.as_str();
+        let system_chars =
+            crate::agent::prompt::build_system_prompt(&self.conv.settings, root).len();
+        let messages_chars = self
+            .session_by_key(key)
+            .messages
+            .iter()
+            .map(estimate_message_chars)
+            .sum::<usize>();
+        let tools_chars = crate::agent::tools::tool_definitions_json(
+            &self.conv.settings.tools_enabled,
+            self.conv.settings.bash_timeout_cap_secs,
+        )
+        .iter()
+        .map(|v| v.to_string().len())
+        .sum::<usize>();
+        system_chars + messages_chars + tools_chars
+    }
+
+    /// Estimated tokens currently in a session's context, using the calibrated ratio.
+    pub(crate) fn estimated_session_context_tokens(&self, key: SessionKey) -> usize {
+        let cpt = self.calibrated_chars_per_token(key).max(0.1);
+        ((self.estimated_session_context_chars(key) as f32) / cpt).ceil() as usize
     }
 
     /// Two borderless dropdowns styled as quiet text with a chevron: provider (only

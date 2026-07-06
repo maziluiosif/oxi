@@ -135,6 +135,7 @@ pub fn spawn_agent_run(
     approval_rx: Receiver<ApprovalDecision>,
     cancel: Arc<AtomicBool>,
     prior_wire: Option<Vec<serde_json::Value>>,
+    chars_per_token: f32,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
@@ -149,10 +150,13 @@ pub fn spawn_agent_run(
             let cfg = settings.active_config().clone();
             let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
             let context_tokens = cfg.effective_context_window(settings.context_window_default);
-            let context_budget =
-                crate::agent::history::context_char_budget_from_tokens(context_tokens);
+            let context_budget = crate::agent::history::context_char_budget_from_tokens(
+                context_tokens,
+                chars_per_token,
+            );
             let max_rounds = settings.max_tool_rounds;
-            let tools = tool_definitions_json(&settings.tools_enabled, settings.bash_timeout_cap_secs);
+            let tools =
+                tool_definitions_json(&settings.tools_enabled, settings.bash_timeout_cap_secs);
             let mut messages = if let Some(mut wire) = prior_wire {
                 if let Some(last_user) = chat_for_history.last()
                     && last_user.role == crate::model::MsgRole::User

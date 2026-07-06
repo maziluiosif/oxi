@@ -9,6 +9,7 @@ use crate::session_store;
 use crate::settings::AppSettings;
 
 mod agent_handlers;
+mod compaction;
 mod composer;
 mod connection;
 mod conversation;
@@ -130,6 +131,7 @@ impl OxiApp {
                 update_checking: false,
                 update_result: None,
                 update_rx: None,
+                compaction: None,
             },
             terminal: None,
             tunnels: crate::compute::TunnelManager::spawn(),
@@ -250,6 +252,10 @@ impl OxiApp {
         &mut self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
     }
 
+    pub(crate) fn session_by_key(&self, key: SessionKey) -> &Session {
+        &self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
+    }
+
     /// Save the current composer input/images to the active session, load from the target.
     fn swap_session_input(&mut self, new_workspace: usize, new_session: usize) {
         let old_wi = self.conv.active_workspace;
@@ -316,6 +322,7 @@ impl OxiApp {
             input_text: String::new(),
             pending_images: Vec::new(),
             modified: std::time::SystemTime::now(),
+            chars_per_token: None,
         }
     }
 

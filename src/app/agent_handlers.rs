@@ -228,9 +228,21 @@ impl OxiApp {
             }
             AgentEvent::AssistantMessageDone => {}
             AgentEvent::Usage(usage) => {
-                let run = self.run_state_mut(key);
-                run.turn_usage.add(&usage);
-                run.session_usage.add(&usage);
+                {
+                    let run = self.run_state_mut(key);
+                    run.turn_usage.add(&usage);
+                    run.session_usage.add(&usage);
+                }
+                // Calibrate chars-per-token from the real prompt size the provider reported.
+                // The estimate is taken against the current in-UI transcript, which can run a
+                // little ahead of what this round's prompt contained (in-flight tool output),
+                // so the ratio is clamped and simply overwritten each round (latest wins).
+                let prompt_tokens = usage.total_input();
+                if prompt_tokens > 500 {
+                    let est = self.estimated_session_context_chars(key);
+                    let cpt = crate::agent::calibrate_chars_per_token(est, prompt_tokens);
+                    self.session_mut_by_key(key).chars_per_token = Some(cpt);
+                }
             }
             AgentEvent::WireHistory(history) => {
                 self.run_state_mut(key).wire_history = Some(history);

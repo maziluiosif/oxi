@@ -291,7 +291,10 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
         for e in arr {
             let old = e.get("oldText").and_then(|x| x.as_str());
             let new = e.get("newText").and_then(|x| x.as_str());
-            let replace_all = e.get("replaceAll").and_then(|x| x.as_bool()).unwrap_or(false);
+            let replace_all = e
+                .get("replaceAll")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
             if let (Some(o), Some(n)) = (old, new) {
                 edits.push((o.to_string(), n.to_string(), replace_all));
             }
@@ -300,7 +303,10 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
     if edits.is_empty() {
         let old = args.get("oldText").and_then(|x| x.as_str());
         let new = args.get("newText").and_then(|x| x.as_str());
-        let replace_all = args.get("replaceAll").and_then(|x| x.as_bool()).unwrap_or(false);
+        let replace_all = args
+            .get("replaceAll")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
         if let (Some(o), Some(n)) = (old, new) {
             edits.push((o.to_string(), n.to_string(), replace_all));
         }

@@ -509,7 +509,12 @@ fn tool_bash_timeout_cap_clamps_requested_timeout() {
     env.bash_timeout_cap_secs = 1;
     let start = std::time::Instant::now();
     // Requests 30s but the cap is 1s, so it must be killed at ~1s.
-    let res = run_tool(&cwd, "bash", &json!({"command": "sleep 30", "timeout": 30}), &env);
+    let res = run_tool(
+        &cwd,
+        "bash",
+        &json!({"command": "sleep 30", "timeout": 30}),
+        &env,
+    );
     assert!(!res.is_error);
     assert!(res.output.contains("timeout"));
     assert!(start.elapsed() < std::time::Duration::from_secs(3));

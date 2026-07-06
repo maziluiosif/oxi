@@ -102,6 +102,13 @@ impl OxiApp {
             self.flow.pending_load_session_idx = Some(new_idx);
         }
 
+        // Keep an in-flight compaction pointed at the same session after the re-key.
+        if let Some(c) = self.conv.compaction.as_mut()
+            && c.key.workspace_idx == active_workspace
+        {
+            c.key.session_idx += 1;
+        }
+
         self.conv.scroll_to_bottom_once = true;
         if let Some(state) = self.flow.sessions.get_mut(&self.active_session_key()) {
             state.stream_error = None;

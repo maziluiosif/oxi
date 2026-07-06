@@ -155,12 +155,10 @@ impl TunnelManager {
                 password: password.to_string(),
                 reply: reply_tx,
             })
-            .map_err(|_| {
-                TunnelError::Other("SSH tunnel manager is not running".to_string())
-            })?;
-        reply_rx.await.map_err(|_| {
-            TunnelError::Other("SSH tunnel manager dropped the request".to_string())
-        })?
+            .map_err(|_| TunnelError::Other("SSH tunnel manager is not running".to_string()))?;
+        reply_rx
+            .await
+            .map_err(|_| TunnelError::Other("SSH tunnel manager dropped the request".to_string()))?
     }
 
     /// Drain the fingerprints observed on successful connects since the last call
@@ -229,10 +227,16 @@ async fn open_tunnel(config: &SshConfig, password: &str) -> Result<ActiveTunnel,
                     observed: observed_fp,
                 });
             }
-            return Err(TunnelError::Other(format!("SSH connect to {addr} failed: {e}")));
+            return Err(TunnelError::Other(format!(
+                "SSH connect to {addr} failed: {e}"
+            )));
         }
     };
-    let host_key_fingerprint = observed.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
+    let host_key_fingerprint = observed
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .unwrap_or_default();
     let auth = session
         .authenticate_password(&config.user, password)
         .await
