@@ -3,10 +3,85 @@
 [![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+**oxi** is a fast, lightweight desktop coding-agent chat app built in Rust with **egui/eframe**. It runs as a **single native binary**, keeps your workspaces and sessions local, and makes local models from **LM Studio** or **Ollama** easy to configure — including models running on another machine over **SSH**.
+
 ![oxi chat UI](assets/screenshots/chat.png)
 
-`oxi` is a local desktop coding-agent chat app built in Rust with **egui/eframe**.
-It runs as a **single native binary** and combines:
+## Install
+
+### Homebrew (macOS Apple Silicon, Linux x86_64)
+
+```bash
+brew tap maziluiosif/tap
+brew install oxi
+```
+
+The Homebrew formula installs the precompiled binary from the latest GitHub release and is updated automatically on every release. On macOS the `.app` bundle is kept inside the Homebrew prefix; the `oxi` command launches it from any directory, using that directory as the first workspace.
+
+### Manual download
+
+Precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to each [GitHub release](https://github.com/maziluiosif/oxi/releases).
+
+#### macOS Gatekeeper / quarantine note
+
+If you download the macOS binary or `.app` manually, macOS may block it because it came from the internet. Remove the quarantine attribute after extracting it:
+
+```bash
+# For an app bundle:
+xattr -dr com.apple.quarantine /path/to/oxi.app
+
+# Or for a standalone binary:
+xattr -d com.apple.quarantine /path/to/oxi
+```
+
+Then launch it normally.
+
+### Build and run from source
+
+Requirements:
+
+- Rust toolchain
+- desktop environment supported by `eframe`
+
+```bash
+cargo run --release
+```
+
+Binary output:
+
+```bash
+target/release/oxi
+```
+
+## Why oxi
+
+- **Efficient native desktop app** — Rust + egui, no Electron/webview runtime, shipped as a single binary.
+- **Low memory footprint** — designed for day-to-day coding-agent workflows without a heavy app shell.
+- **Local-first workflow** — settings, workspaces, sessions, OAuth tokens, SSH passwords, and tool execution are handled locally.
+- **Local model friendly** — first-class profiles for LM Studio and Ollama, with model discovery from the UI.
+- **Remote local models over SSH** — run LM Studio/Ollama on a stronger LAN machine and let oxi create the tunnel.
+- **Workspace-aware coding tools** — read, write, edit, grep, find, list files, run shell commands, and fetch/search web content.
+- **Multiple providers** — OpenAI, OpenRouter, GPT Codex, OpenCode Go, LM Studio, and Ollama.
+
+![oxi RAM usage](assets/screenshots/resource_ussage.png)
+
+## Screenshots
+
+| Chat | Workspace / sessions |
+|---|---|
+| ![oxi screenshot 1](assets/screenshots/scr1.png) | ![oxi screenshot 2](assets/screenshots/scr2.png) |
+
+| Coding flow | Provider settings |
+|---|---|
+| ![oxi screenshot 3](assets/screenshots/scr3.png) | ![oxi provider settings](assets/screenshots/set1.png) |
+
+| Local model setup | Tools/settings |
+|---|---|
+| ![oxi local model settings](assets/screenshots/set2.png) | ![oxi settings](assets/screenshots/set3.png) |
+
+## Overview
+
+`oxi` is meant for local coding workflows rather than generic chat. It combines:
 
 - a desktop chat UI
 - streaming LLM responses
@@ -14,37 +89,14 @@ It runs as a **single native binary** and combines:
 - local session persistence per workspace
 - configurable provider profiles
 - optional OAuth for Codex
-
-The repository builds the native `oxi` desktop app.
-
-## Overview
-
-`oxi` is meant for local coding workflows rather than generic chat.
-From the current codebase, it supports:
-
-- multiple **workspaces** in the sidebar
-- multiple **chat sessions** per workspace
-- a local agent loop that can call built-in tools:
-  - `read`
-  - `write`
-  - `edit`
-  - `bash`
-  - `grep`
-  - `find`
-  - `ls`
-  - `web_search`
-  - `web_fetch`
-- streaming assistant output with structured UI blocks
-- configurable provider **profiles** with per-profile model and auth settings
-- local persistence for settings, OAuth tokens, and chat sessions
 - image attachments in chat messages
+- local and remote compute targets for LM Studio/Ollama profiles
 
 ## Main capabilities
 
 ### Workspace-oriented chats
 
-On startup, the app uses the current working directory as the first workspace.
-You can add more workspace folders from the UI.
+On startup, the app uses the current working directory as the first workspace. You can add more workspace folders from the UI.
 
 Each workspace has:
 
@@ -56,8 +108,7 @@ Tool calls are executed with the selected workspace as the current directory.
 
 ### Multiple sessions per workspace
 
-Sessions are shown in the sidebar and loaded from disk when available.
-Current behavior visible in code:
+Sessions are shown in the sidebar and loaded from disk when available. Current behavior visible in code:
 
 - if no saved sessions exist, the app creates an in-memory `New chat`
 - saved sessions are sorted by modification time
@@ -94,21 +145,15 @@ Behavior confirmed in `src/agent/tools/`:
 - `web_search` queries the SearXNG JSON API (configure the URL in Settings → Tools; its JSON format must be enabled)
 - `web_fetch` only accepts `http://` / `https://` URLs and strips HTML to plain text
 - `web_search` and `web_fetch` run as read-only tools (no approval prompt)
-- `bash`, `write`, and `edit` require explicit user approval before each call (or
-  "approve rest of this run") when the approval gate is enabled in Settings
+- `bash`, `write`, and `edit` require explicit user approval before each call, or “approve rest of this run”, when the approval gate is enabled in Settings
 - tool output is truncated when too large
 - `bash` defaults to a 15s timeout and is capped at 30s
-- `bash` blocks a small deny-list of risky command substrings (privilege escalation,
-  destructive filesystem/disk operations, reverse shells, etc.) as a best-effort
-  deterrent — it does not understand shell quoting, variable expansion, or encoding, so
-  it is not a sandbox and should not be relied on alone; the approval prompt showing the
-  raw command before it runs is the real safety boundary
+- `bash` blocks a small deny-list of risky command substrings as a best-effort deterrent. It is not a sandbox; the approval prompt showing the raw command before it runs is the real safety boundary.
 - `write` and `edit` generate unified diffs for the UI
 
 ### Streaming coding UI
 
-Assistant output is rendered as structured blocks rather than plain text only.
-From the code and UI modules, the app supports:
+Assistant output is rendered as structured blocks rather than plain text only. The app supports:
 
 - thinking blocks
 - grouped tool activity for exploration-style runs
@@ -120,8 +165,7 @@ From the code and UI modules, the app supports:
 
 ### Provider profiles
 
-Settings support multiple profiles across multiple providers.
-Each profile stores:
+Settings support multiple profiles across multiple providers. Each profile stores:
 
 - profile id
 - display name
@@ -138,28 +182,50 @@ The active profile can be switched from:
 
 Settings are auto-saved when changed.
 
-## Architecture
+## Local models: LM Studio and Ollama
 
-High-level layout:
+oxi is intentionally easy to pair with local models. Create an LM Studio or Ollama provider profile, point the base URL at your runtime, and use **Load available models** in the UI to select the model that is actually loaded/pulled.
 
-- `src/main.rs` — native `eframe` entry point and window setup
-- `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior
-- `src/agent/` — local agent runner, prompt building, message history conversion, tool execution, provider loops
-- `src/oauth/` — OAuth flows and token persistence
-- `src/compute/` — SSH tunnels for Remote compute targets and their credential storage
-- `src/session_store/` — session loading/saving and storage path handling
-- `src/ui/` — transcript and chrome rendering helpers
-- `src/settings.rs` — persistent settings and provider profile model
+### LM Studio
 
-Important runtime behavior from the current implementation:
+Defaults:
 
-- the app starts with the current working directory as the initial workspace
-- agent runs happen in a background thread with a Tokio runtime
-- settings are loaded on startup from the app config directory
-- tools are executed locally against the selected workspace root
-- the system prompt is expanded at runtime with enabled tools, current date, and working directory
-- conversation history is converted to OpenAI-style message JSON before provider requests are sent
-- long history is trimmed by an approximate character budget before sending
+- base URL: `http://localhost:1234/v1` (point this at whichever host runs LM Studio)
+- default model: `local-model` (use the profile's **Load available models** button)
+
+Authentication:
+
+- LM Studio's local server ignores the bearer token, so an API key is optional. Use the profile value or `LMSTUDIO_API_KEY` if set; otherwise an empty key is sent.
+- Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
+
+### Ollama
+
+Defaults:
+
+- base URL: `http://localhost:11434/v1` (Ollama's OpenAI-compatible API)
+- default model: `qwen2.5-coder:7b` (use the profile's **Load available models** button)
+
+Authentication:
+
+- Ollama has no auth by default, so an API key is optional. Use the profile value or `OLLAMA_API_KEY` if set; otherwise an empty key is sent.
+- Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
+
+## Remote compute over SSH
+
+![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png)
+
+LM Studio and Ollama profiles support a **compute target**, configurable per profile in Settings → Providers:
+
+- **Local** (default) — connect directly to `effective_base_url()`.
+- **Remote (SSH)** — run the model on another host, for example a stronger machine on your LAN, reached over SSH. oxi opens an SSH tunnel and forwards a local port to the remote runtime port, so the rest of the app talks to it like a local server.
+
+Behavior visible in code (`src/compute/`):
+
+- the SSH client is implemented with `russh` (password authentication; no external `ssh` binary required)
+- one tunnel is kept alive per profile, reused across agent runs and model-list fetches; it reconnects lazily on first use
+- host key verification is intentionally permissive (trust-on-every-connect) — this is a convenience tunnel to a host you typed in yourself, not a general-purpose SSH client
+- the Settings UI exposes host / SSH port / user / remote runtime port fields plus a password field and a **Test connection** button
+- SSH passwords are stored in the OS keychain, keyed by profile id — not in `settings.json`
 
 ## Providers
 
@@ -179,7 +245,7 @@ Defaults from `src/settings.rs`:
 - base URL: `https://api.openai.com/v1`
 - default model: `gpt-4o-mini`
 
-Authentication fallback order in code:
+Authentication fallback order:
 
 - profile API key
 - `OPENAI_API_KEY`
@@ -214,7 +280,6 @@ Two runtime modes exist:
    - uses ChatGPT/Codex OAuth
    - uses the Responses-style backend at `https://chatgpt.com/backend-api` unless the profile overrides the base URL
    - sends requests to the Codex responses endpoint under that base URL
-
 2. **API key fallback mode**
    - uses OpenAI-compatible chat completions
    - authenticates with profile API key or `OPENAI_API_KEY`
@@ -235,61 +300,6 @@ Backend selection is model-dependent:
 
 - `minimax-*` / `qwen*` → Anthropic Messages API path
 - everything else → chat-completions-style path
-
-### LM Studio
-
-Defaults:
-
-- base URL: `http://localhost:1234/v1` (point this at whichever host runs LM Studio)
-- default model: `local-model` (use the profile's "Load available models" button to pick
-  whatever is actually loaded)
-
-Authentication:
-
-- LM Studio's local server ignores the bearer token, so an API key is optional. Use the
-  profile value or `LMSTUDIO_API_KEY` if set; otherwise an empty key is sent.
-- Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
-
-### Ollama
-
-Defaults:
-
-- base URL: `http://localhost:11434/v1` (Ollama's OpenAI-compatible API)
-- default model: `qwen2.5-coder:7b` (use the profile's "Load available models" button to
-  pick whatever is actually pulled)
-
-Authentication:
-
-- Ollama has no auth by default, so an API key is optional. Use the profile value or
-  `OLLAMA_API_KEY` if set; otherwise an empty key is sent.
-- Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
-
-## Compute targets (Local / Remote SSH)
-
-![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png)
-
-LM Studio and Ollama profiles support a **compute target**, configurable per profile in
-Settings → Providers:
-
-- **Local** (default) — connect directly to `effective_base_url()` as before.
-- **Remote (SSH)** — run the model on another host (e.g. a machine on your LAN) reached over SSH,
-  with the runtime bound to `127.0.0.1` on that host. oxi opens an SSH tunnel and forwards
-  a local port to the remote runtime port, so the rest of the app talks to it exactly like
-  a local server.
-
-Behavior visible in code (`src/compute/`):
-
-- the SSH client is implemented with `russh` (password authentication; no external `ssh`
-  binary required)
-- one tunnel is kept alive per profile, reused across agent runs and model-list fetches;
-  it (re)connects lazily on first use
-- host key verification is intentionally permissive (trust-on-every-connect) — this is a
-  convenience tunnel to a host you typed in yourself, not a general-purpose SSH client
-- the Settings UI exposes host / SSH port / user / remote runtime port fields plus a
-  password field and a **Test connection** button
-- SSH passwords are stored in the OS keychain, keyed by profile id — **not** in
-  `settings.json` — so they aren't dragged along whenever settings are read, logged, or
-  exported (same trust model as OAuth tokens, below)
 
 ## OAuth flows
 
@@ -338,11 +348,7 @@ Settings are stored at:
 - `~/.config/oxi/settings.json` on systems where `dirs::config_dir()` resolves there
 - or the platform-equivalent config directory
 
-Provider API keys, OAuth tokens, and SSH passwords for Remote compute targets are **not**
-in that file — they're stored in the OS credential store (see `src/secrets.rs` and
-[Current limitations and safety notes](#current-limitations-and-safety-notes)). If
-`oauth.json` or `ssh_credentials.json` exist from an older version, they're migrated into
-the keychain and deleted the next time oxi reads them.
+Provider API keys, OAuth tokens, and SSH passwords for Remote compute targets are **not** in that file — they're stored in the OS credential store (see `src/secrets.rs` and [Current limitations and safety notes](#current-limitations-and-safety-notes)). If `oauth.json` or `ssh_credentials.json` exist from an older version, they're migrated into the keychain and deleted the next time oxi reads them.
 
 The settings model currently contains:
 
@@ -373,40 +379,6 @@ Behavior visible in the session store:
 - duplicate trailing history can be deduplicated before save/load flows
 - assistant blocks and attachments are preserved in session serialization
 - saved sessions initially load as headers-only rows and full messages are read lazily when opened
-
-## Install
-
-### Homebrew (macOS Apple Silicon, Linux x86_64)
-
-```bash
-brew tap maziluiosif/tap
-brew install oxi
-```
-
-Installs the precompiled binary from the latest GitHub release; the formula is updated automatically on every release. On macOS the `.app` bundle is kept inside the Homebrew prefix — the `oxi` command launches it from any directory, using that directory as the first workspace.
-
-### Manual download
-
-Precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to each [GitHub release](https://github.com/maziluiosif/oxi/releases).
-
-## Build and run
-
-### Requirements
-
-- Rust toolchain
-- desktop environment supported by `eframe`
-
-### Run
-
-```bash
-cargo run --release
-```
-
-Binary output:
-
-```bash
-target/release/oxi
-```
 
 ## Environment variables
 
@@ -441,23 +413,38 @@ Default prompt guidance includes:
 - do not guess when the codebase can be inspected
 - verify claims from source files before answering
 
+## Architecture
+
+High-level layout:
+
+- `src/main.rs` — native `eframe` entry point and window setup
+- `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior
+- `src/agent/` — local agent runner, prompt building, message history conversion, tool execution, provider loops
+- `src/oauth/` — OAuth flows and token persistence
+- `src/compute/` — SSH tunnels for Remote compute targets and their credential storage
+- `src/session_store/` — session loading/saving and storage path handling
+- `src/ui/` — transcript and chrome rendering helpers
+- `src/settings.rs` — persistent settings and provider profile model
+
+Important runtime behavior from the current implementation:
+
+- the app starts with the current working directory as the initial workspace
+- agent runs happen in a background thread with a Tokio runtime
+- settings are loaded on startup from the app config directory
+- tools are executed locally against the selected workspace root
+- the system prompt is expanded at runtime with enabled tools, current date, and working directory
+- conversation history is converted to OpenAI-style message JSON before provider requests are sent
+- long history is trimmed by an approximate character budget before sending
+
 ## Current limitations and safety notes
 
 Based on the current source code:
 
 - `bash` safety checks are basic and not a real sandbox
 - tool execution can modify files inside the selected workspace
-- provider API keys, OAuth tokens, and SSH passwords for Remote compute targets are stored
-  in the OS credential store (Keychain Services on macOS, Credential Manager on Windows,
-  Secret Service over D-Bus on Linux) rather than as plaintext JSON — see `src/secrets.rs`.
-  Settings previously written by an older version (plaintext `api_key` in `settings.json`,
-  `oauth.json`, `ssh_credentials.json`) are migrated into the keychain and the plaintext
-  removed on next load/save. This still doesn't protect against another process running as
-  the same OS user with permission to query the credential store on your behalf
-- `settings.json` itself is written with `0600` permissions on Unix as defense in depth for
-  its non-secret contents (base URLs, model ids); no such restriction is applied on Windows
-- Remote SSH tunnels trust the remote host key on every connection (no pinning/known_hosts
-  verification) — only point this at hosts you control
+- provider API keys, OAuth tokens, and SSH passwords for Remote compute targets are stored in the OS credential store (Keychain Services on macOS, Credential Manager on Windows, Secret Service over D-Bus on Linux) rather than as plaintext JSON — see `src/secrets.rs`. Settings previously written by an older version are migrated into the keychain and the plaintext removed on next load/save.
+- `settings.json` itself is written with `0600` permissions on Unix as defense in depth for its non-secret contents; no such restriction is applied on Windows
+- Remote SSH tunnels trust the remote host key on every connection (no pinning/known_hosts verification) — only point this at hosts you control
 - workspace path protections apply to file-based tools, but you should still use the app on trusted repositories
 - long conversations are trimmed heuristically by character budget, not exact tokenizer counts
 - image support in provider requests depends on backend/model compatibility
@@ -476,9 +463,3 @@ Based on the current source code:
 - `src/app/sessions.rs` — workspaces, attachments, and session deletion behavior
 - `src/session_store.rs` — session persistence entry points
 - `src/compute/tunnel.rs` — SSH tunnel manager (`russh`) for Remote compute targets
-- `src/compute/store.rs` — SSH credential storage (OS keychain)
-- `src/secrets.rs` — OS keychain wrapper shared by settings, OAuth, and SSH credentials
-
-## License
-
-MIT
