@@ -17,7 +17,8 @@ use super::paths::{err, resolve_under_cwd};
 const GREP_MAX_MATCHES: usize = 100;
 const FIND_MAX: usize = 1000;
 const LS_MAX: usize = 500;
-const BASH_MAX_SECONDS: f64 = 30.0;
+/// Default timeout applied when the `bash` call omits its own `timeout` argument.
+const BASH_DEFAULT_TIMEOUT_SECS: f64 = 15.0;
 
 fn should_skip_search_entry(entry: &DirEntry) -> bool {
     let name = entry.file_name().to_string_lossy();
@@ -122,17 +123,18 @@ pub(crate) fn validate_bash_command(cmd: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn tool_bash(cwd: &Path, args: &Value) -> Result<String, String> {
+pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<String, String> {
     let cmd = args
         .get("command")
         .and_then(|x| x.as_str())
         .ok_or_else(|| err("missing command"))?;
     validate_bash_command(cmd)?;
+    let cap = (max_secs as f64).max(0.1);
     let timeout_s = args
         .get("timeout")
         .and_then(|x| x.as_f64().or_else(|| x.as_u64().map(|u| u as f64)))
-        .unwrap_or(15.0)
-        .clamp(0.1, BASH_MAX_SECONDS);
+        .unwrap_or(BASH_DEFAULT_TIMEOUT_SECS.min(cap))
+        .clamp(0.1, cap);
     let start = Instant::now();
     let mut child = if cfg!(unix) {
         Command::new("/bin/sh")

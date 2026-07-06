@@ -41,6 +41,7 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                 out.push(ChatMessage {
                     role: MsgRole::User,
                     text,
+                    is_summary: m.get("summary").and_then(|x| x.as_bool()).unwrap_or(false),
                     attachments,
                     blocks: vec![],
                     streaming: false,
@@ -64,6 +65,7 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                 out.push(ChatMessage {
                     role: MsgRole::Assistant,
                     text: String::new(),
+                    is_summary: false,
                     attachments: vec![],
                     blocks,
                     streaming: false,
@@ -236,6 +238,7 @@ fn merge_tool_result(out: &mut Vec<ChatMessage>, m: &Value) {
     out.push(ChatMessage {
         role: MsgRole::Assistant,
         text: String::new(),
+        is_summary: false,
         attachments: vec![],
         blocks: vec![AssistantBlock::Tool {
             tool_call_id: id.to_string(),

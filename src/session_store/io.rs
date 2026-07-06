@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
@@ -58,16 +58,8 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let is_new_file = !session_path.exists();
-    let mut file = if is_new_file {
-        File::create(&session_path).map_err(|e| e.to_string())?
-    } else {
-        OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(&session_path)
-            .map_err(|e| e.to_string())?
-    };
+    let tmp_path = session_path.with_extension("jsonl.tmp");
+    let mut file = File::create(&tmp_path).map_err(|e| e.to_string())?;
 
     let session_id = session_file_stem_or_generated(&session_path);
     writeln!(
@@ -107,6 +99,15 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
             )
             .map_err(|e| e.to_string())?;
         }
+    }
+
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
+    fs::rename(&tmp_path, &session_path).map_err(|e| e.to_string())?;
+    if let Some(parent) = session_path.parent()
+        && let Ok(dir) = File::open(parent)
+    {
+        let _ = dir.sync_all();
     }
 
     session.session_file = Some(session_path.to_string_lossy().to_string());

@@ -60,6 +60,9 @@ pub struct SessionRunState {
     pub agent_ack: bool,
     pub stream_error: Option<String>,
     pub turn_usage: TokenUsage,
+    /// Usage from the most recently completed turn. Kept while idle and as a fallback while a
+    /// new turn is running before the provider reports current-turn usage.
+    pub last_turn_usage: TokenUsage,
     pub session_usage: TokenUsage,
     /// In-memory canonical provider wire history reused across turns to preserve
     /// byte-for-byte cacheable prefixes. Not persisted; provider caches are short-lived.
@@ -135,15 +138,16 @@ pub struct ModelFetchMsg {
 #[derive(Debug, Clone, Default)]
 pub struct SshTestStatus {
     pub loading: bool,
-    /// `Ok(local_port)` on success, `Err(message)` on failure. `None` before any test runs.
-    pub result: Option<Result<u16, String>>,
+    /// `Ok(local_port)` on success, `Err(_)` on failure (a `HostKeyMismatch` lets the panel
+    /// offer to accept the new key). `None` before any test runs.
+    pub result: Option<Result<u16, crate::compute::TunnelError>>,
 }
 
 /// Result message from a background SSH "Test connection" check.
 #[derive(Debug)]
 pub struct SshTestMsg {
     pub provider: LlmProviderKind,
-    pub result: Result<u16, String>,
+    pub result: Result<u16, crate::compute::TunnelError>,
 }
 
 /// Result message from the background GitHub-release update check.
@@ -227,4 +231,7 @@ pub struct ConversationState {
     pub update_result: Option<Result<crate::update::ReleaseInfo, String>>,
     /// Channel for the update-check result (drained each frame).
     pub update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+    /// In-flight context compaction (manual `/compact` or automatic pre-send), if any.
+    /// At most one runs app-wide; drained each frame. See [`super::compaction`].
+    pub compaction: Option<super::compaction::ActiveCompaction>,
 }
