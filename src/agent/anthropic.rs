@@ -8,10 +8,17 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
-use super::events::AgentEvent;
+use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
 use super::tools::{ToolResult, run_tool};
+
+/// Overwrite `dst` with the u64 field `key` from a `usage` JSON object, if present.
+fn read_usage_field(usage: &Value, key: &str, dst: &mut u64) {
+    if let Some(n) = usage.get(key).and_then(|x| x.as_u64()) {
+        *dst = n;
+    }
+}
 
 #[derive(Default, Clone)]
 struct ToolUseAccum {
@@ -263,6 +270,7 @@ pub async fn run_anthropic_loop(
         let mut tool_uses: HashMap<u64, ToolUseAccum> = HashMap::new();
         let mut stop_reason: Option<String> = None;
         let mut stream_error: Option<String> = None;
+        let mut round_usage = TokenUsage::default();
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
@@ -285,6 +293,7 @@ pub async fn run_anthropic_loop(
                     &mut tool_uses,
                     &mut stop_reason,
                     &mut stream_error,
+                    &mut round_usage,
                     tx,
                 );
             }
@@ -298,6 +307,7 @@ pub async fn run_anthropic_loop(
                         &mut tool_uses,
                         &mut stop_reason,
                         &mut stream_error,
+                        &mut round_usage,
                         tx,
                     );
                 }
@@ -326,6 +336,9 @@ pub async fn run_anthropic_loop(
             continue;
         }
         stream_retries = 0;
+        if !round_usage.is_zero() {
+            let _ = tx.send(AgentEvent::Usage(round_usage));
+        }
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut tus: Vec<(u64, ToolUseAccum)> = tool_uses.into_iter().collect();
         tus.sort_by_key(|(i, _)| *i);
@@ -485,6 +498,7 @@ fn parse_anthropic_event(
     tool_uses: &mut HashMap<u64, ToolUseAccum>,
     stop_reason: &mut Option<String>,
     stream_error: &mut Option<String>,
+    usage: &mut TokenUsage,
     tx: &Sender<AgentEvent>,
 ) {
     let mut event_type = "";
@@ -547,11 +561,30 @@ fn parse_anthropic_event(
                     .to_string();
             }
         }
+        "message_start" => {
+            if let Some(u) = v.pointer("/message/usage") {
+                read_usage_field(u, "input_tokens", &mut usage.input_tokens);
+                read_usage_field(
+                    u,
+                    "cache_read_input_tokens",
+                    &mut usage.cache_read_input_tokens,
+                );
+                read_usage_field(
+                    u,
+                    "cache_creation_input_tokens",
+                    &mut usage.cache_creation_input_tokens,
+                );
+            }
+        }
         "message_delta" => {
             if let Some(sr) = v.get("delta").and_then(|d| d.get("stop_reason"))
                 && let Some(s) = sr.as_str()
             {
                 *stop_reason = Some(s.to_string());
+            }
+            // `output_tokens` on message_delta is cumulative; the last value wins.
+            if let Some(u) = v.get("usage") {
+                read_usage_field(u, "output_tokens", &mut usage.output_tokens);
             }
         }
         // In-band errors (e.g. `overloaded_error`): surface for the round-retry logic.

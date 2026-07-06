@@ -218,6 +218,11 @@ impl OxiApp {
                 self.reset_streaming_tail(key);
             }
             AgentEvent::AssistantMessageDone => {}
+            AgentEvent::Usage(usage) => {
+                let run = self.run_state_mut(key);
+                run.turn_usage.add(&usage);
+                run.session_usage.add(&usage);
+            }
             AgentEvent::AgentEnd => {
                 self.finish_assistant_stream(key);
             }

@@ -8,7 +8,7 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
-use super::events::AgentEvent;
+use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
 use super::tools::{ToolResult, run_tool};
@@ -55,6 +55,9 @@ pub async fn run_chat_loop(
             "tools": tools,
             "tool_choice": "auto",
             "stream": true,
+            // Ask for a final usage chunk. Servers that don't support it either
+            // ignore the field or omit usage; parsing tolerates both.
+            "stream_options": { "include_usage": true },
             "parallel_tool_calls": true,
         });
         let mut headers = HeaderMap::new();
@@ -75,6 +78,7 @@ pub async fn run_chat_loop(
         let mut tool_map: HashMap<u64, ToolCallAccum> = HashMap::new();
         let mut finish_reason: Option<String> = None;
         let mut stream_error: Option<String> = None;
+        let mut round_usage = TokenUsage::default();
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
@@ -98,6 +102,7 @@ pub async fn run_chat_loop(
                     &mut tool_map,
                     &mut finish_reason,
                     &mut stream_error,
+                    &mut round_usage,
                     tx,
                 );
             }
@@ -110,6 +115,7 @@ pub async fn run_chat_loop(
                     &mut tool_map,
                     &mut finish_reason,
                     &mut stream_error,
+                    &mut round_usage,
                     tx,
                 );
             }
@@ -137,6 +143,9 @@ pub async fn run_chat_loop(
             continue;
         }
         stream_retries = 0;
+        if !round_usage.is_zero() {
+            let _ = tx.send(AgentEvent::Usage(round_usage));
+        }
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut pairs: Vec<(u64, ToolCallAccum)> = tool_map.into_iter().collect();
         pairs.sort_by_key(|(i, _)| *i);
@@ -303,6 +312,7 @@ fn process_sse_line(
     tool_map: &mut HashMap<u64, ToolCallAccum>,
     finish_reason: &mut Option<String>,
     stream_error: &mut Option<String>,
+    usage: &mut TokenUsage,
     tx: &Sender<AgentEvent>,
 ) {
     let line = line.trim();
@@ -334,6 +344,9 @@ fn process_sse_line(
             .unwrap_or("API error");
         *stream_error = Some(msg.to_string());
         return;
+    }
+    if let Some(u) = v.get("usage") {
+        read_openai_usage(u, usage);
     }
     if let Some(fr) = v
         .get("choices")
@@ -383,6 +396,22 @@ fn process_sse_line(
         {
             let _ = tx.send(AgentEvent::ThinkingDelta(reasoning.to_string()));
         }
+    }
+}
+
+fn read_openai_usage(v: &Value, usage: &mut TokenUsage) {
+    if let Some(n) = v.get("prompt_tokens").and_then(|x| x.as_u64()) {
+        usage.input_tokens = n;
+    }
+    if let Some(n) = v.get("completion_tokens").and_then(|x| x.as_u64()) {
+        usage.output_tokens = n;
+    }
+    if let Some(n) = v
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .and_then(|x| x.as_u64())
+    {
+        usage.cache_read_input_tokens = n;
+        usage.input_tokens = usage.input_tokens.saturating_sub(n);
     }
 }
 

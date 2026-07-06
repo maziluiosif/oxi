@@ -6,7 +6,7 @@ use eframe::egui::{
     Ui,
 };
 
-use crate::agent::ApprovalDecision;
+use crate::agent::{ApprovalDecision, TokenUsage};
 use crate::model::MsgRole;
 use crate::theme::*;
 use crate::ui::messages::{render_assistant_message_run, render_message};
@@ -207,13 +207,18 @@ impl OxiApp {
                 err.to_string(),
             )
         } else if self.active_waiting_response() {
-            let elapsed = self
+            let mut detail = self
                 .active_run_state()
                 .and_then(|s| s.stream_started_at)
                 .map(|t| format!(" · {}", format_stream_elapsed(t.elapsed())))
                 .unwrap_or_default();
+            if let Some(usage) = self.active_run_state().map(|s| s.turn_usage)
+                && !usage.is_zero()
+            {
+                detail.push_str(&format!(" · {}", format_token_usage(usage)));
+            }
             (
-                format!("Running{elapsed}"),
+                format!("Running{detail}"),
                 c_accent(),
                 "Agent is working".to_string(),
             )
@@ -515,6 +520,31 @@ impl OxiApp {
         if self.conv.scroll_to_bottom_once {
             self.conv.scroll_to_bottom_once = false;
         }
+    }
+}
+
+fn format_token_usage(usage: TokenUsage) -> String {
+    let input = usage.total_input();
+    let output = usage.output_tokens;
+    let cached = usage.cache_hit_pct();
+    if input == 0 {
+        return format!("{} out", format_token_count(output));
+    }
+    format!(
+        "{} in ({}% cached) · {} out",
+        format_token_count(input),
+        cached,
+        format_token_count(output)
+    )
+}
+
+fn format_token_count(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}m", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
     }
 }
 
