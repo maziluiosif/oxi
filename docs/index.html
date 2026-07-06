@@ -138,6 +138,7 @@
     .card .ico { font-size: 1.5rem; margin-bottom: 14px; display: inline-block; }
     .card h3 { margin: 0 0 8px; font-size: 1.12rem; letter-spacing: -0.01em; }
     .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+    .card p code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 0.85em; color: var(--rust-2); }
 
     /* Screenshot gallery */
     .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
@@ -190,10 +191,11 @@
   <div class="hero">
     <div class="wrap">
       <span class="badge">🦀 Built in <b>Rust + egui</b> · single native binary</span>
-      <h1>A fast, local-first<br><span class="grad">coding-agent chat</span> on your desktop</h1>
+      <h1>A local-first coding agent<br><span class="grad">you fully control</span></h1>
       <p class="subtitle">
-        oxi keeps your workspaces, sessions, and keys on your machine — and makes local models from
-        LM Studio or Ollama easy to run, even on another machine over SSH.
+        oxi keeps your workspaces, sessions, and keys on your machine, runs local models from
+        LM Studio or Ollama — even over SSH — and hands you the system prompt so it can be
+        a focused coding agent or whatever you point it at.
       </p>
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases">⬇ Download latest release</a>
@@ -246,6 +248,34 @@
           <span class="ico">🗂️</span>
           <h3>Sessions per workspace</h3>
           <p>Each workspace has its own chats, active session, and tool execution rooted in that folder.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTROL -->
+  <section id="control" style="background: var(--bg-soft);">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">You fully control it</div>
+        <h2>Your machine. Your models. Your prompt.</h2>
+        <p>oxi ships with a sensible coding-agent prompt — but it's just an editable template. Rewrite it and the agent becomes whatever you need.</p>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <span class="ico">✍️</span>
+          <h3>Editable system prompt</h3>
+          <p>One editable template with a <code>{tools_list}</code> placeholder. Keep the coding defaults, or replace them entirely.</p>
+        </div>
+        <div class="card">
+          <span class="ico">🎭</span>
+          <h3>Coding agent, or anything</h3>
+          <p>Point it at a repo as a coding assistant, or repurpose it into a reviewer, researcher, or writing partner.</p>
+        </div>
+        <div class="card">
+          <span class="ico">🚫</span>
+          <h3>No vendor lock-in</h3>
+          <p>Nothing hard-coded by a cloud provider. Your data, keys, and instructions never leave your machine.</p>
         </div>
       </div>
     </div>
