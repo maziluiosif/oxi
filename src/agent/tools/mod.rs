@@ -15,7 +15,7 @@ pub struct ToolResult {
     pub diff: Option<String>,
 }
 
-pub(crate) const MAX_TOOL_OUTPUT_CHARS: usize = 120_000;
+pub(crate) const MAX_TOOL_OUTPUT_CHARS: usize = 40_000;
 
 mod definitions;
 mod file_ops;
@@ -27,6 +27,7 @@ mod web;
 mod tests;
 
 pub use definitions::tool_definitions_json;
+pub(crate) use file_ops::floor_char_boundary;
 
 /// Runtime configuration passed to [`run_tool`]: which tools are enabled (one flag per entry in
 /// [`ALL_TOOL_NAMES`]) plus any tool-specific settings such as the SearXNG endpoint.

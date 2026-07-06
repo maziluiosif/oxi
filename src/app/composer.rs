@@ -2,10 +2,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use eframe::egui::{
-    self, Button, Color32, ComboBox, CornerRadius, Frame, Id, Image, Margin, Order, RichText,
-    Stroke, TextEdit, TextureHandle, Ui,
+    self, Button, Color32, ComboBox, CornerRadius, Frame, Id, Image, Margin, Order, Pos2, RichText,
+    Sense, Stroke, TextEdit, TextureHandle, Ui,
 };
 
+use crate::agent::context_char_budget_from_tokens;
+use crate::model::{AssistantBlock, ChatMessage, MsgRole};
 use crate::theme::*;
 
 use super::OxiApp;
@@ -240,6 +242,9 @@ impl OxiApp {
                 }
             }
 
+            self.render_context_indicator(ui);
+            ui.add_space(8.0);
+
             // Quiet keyboard hint, faded in only while the input has focus.
             let hint_t = ui.ctx().animate_bool_with_time(
                 Id::new("composer_hint_anim"),
@@ -255,6 +260,76 @@ impl OxiApp {
                 );
             }
         });
+    }
+
+    fn render_context_indicator(&self, ui: &mut Ui) {
+        let cfg = self.conv.settings.active_config();
+        let max_tokens = cfg.effective_context_window(self.conv.settings.context_window_default);
+        let used_chars = self.estimated_active_context_chars();
+        let used_tokens = ((used_chars as f64) / 4.0).ceil().max(0.0) as usize;
+        let pct = if max_tokens == 0 {
+            0.0
+        } else {
+            used_tokens as f32 / max_tokens as f32
+        }
+        .clamp(0.0, 1.0);
+
+        let size = egui::vec2(26.0, 26.0);
+        let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+        let center = rect.center();
+        let radius = 8.0;
+        ui.painter()
+            .circle_stroke(center, radius, Stroke::new(3.0, c_border_subtle()));
+        paint_arc(
+            ui,
+            center,
+            radius,
+            -std::f32::consts::FRAC_PI_2,
+            std::f32::consts::TAU * pct,
+            Stroke::new(3.0, context_indicator_color(pct)),
+        );
+        ui.painter().circle_filled(center, 3.0, c_bg_elevated_2());
+
+        let hover = format!(
+            "Context {} / {} ({:.0}%)",
+            format_context_tokens(used_tokens as u64),
+            format_context_tokens(max_tokens as u64),
+            pct * 100.0
+        );
+        resp.on_hover_text(hover);
+    }
+
+    fn estimated_active_context_chars(&self) -> usize {
+        let system_chars = crate::agent::prompt::build_system_prompt(
+            &self.conv.settings,
+            self.active_workspace().root_path.as_str(),
+        )
+        .len();
+        let current_input = self.conv.input.len()
+            + self
+                .conv
+                .pending_images
+                .iter()
+                .map(|(_, data)| data.len() * 4 / 3)
+                .sum::<usize>();
+        let messages_chars = self
+            .active_session()
+            .messages
+            .iter()
+            .map(estimate_message_chars)
+            .sum::<usize>();
+        let tools_chars =
+            crate::agent::tools::tool_definitions_json(&self.conv.settings.tools_enabled)
+                .iter()
+                .map(|v| v.to_string().len())
+                .sum::<usize>();
+        let budget_chars = context_char_budget_from_tokens(
+            self.conv
+                .settings
+                .active_config()
+                .effective_context_window(self.conv.settings.context_window_default),
+        );
+        (system_chars + current_input + messages_chars + tools_chars).min(budget_chars)
     }
 
     /// Two borderless dropdowns styled as quiet text with a chevron: provider (only
@@ -404,5 +479,74 @@ impl OxiApp {
         if let Some(i) = remove_idx {
             self.remove_pending_image_at(i);
         }
+    }
+}
+
+fn paint_arc(ui: &Ui, center: Pos2, radius: f32, start: f32, sweep: f32, stroke: Stroke) {
+    if sweep <= 0.0 {
+        return;
+    }
+    let segments = ((sweep.abs() / std::f32::consts::TAU) * 48.0)
+        .ceil()
+        .max(6.0) as usize;
+    let mut points = Vec::with_capacity(segments + 1);
+    for i in 0..=segments {
+        let t = start + sweep * (i as f32 / segments as f32);
+        points.push(Pos2::new(
+            center.x + radius * t.cos(),
+            center.y + radius * t.sin(),
+        ));
+    }
+    ui.painter().add(egui::Shape::line(points, stroke));
+}
+
+fn context_indicator_color(pct: f32) -> Color32 {
+    if pct >= 0.9 {
+        c_danger()
+    } else if pct >= 0.75 {
+        c_warning_fg()
+    } else {
+        c_accent()
+    }
+}
+
+fn format_context_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}m", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+fn estimate_message_chars(m: &ChatMessage) -> usize {
+    match m.role {
+        MsgRole::User => {
+            m.text.len()
+                + m.attachments
+                    .iter()
+                    .map(|a| match a {
+                        crate::model::UserAttachment::Image { data, .. } => data.len() * 4 / 3,
+                    })
+                    .sum::<usize>()
+        }
+        MsgRole::Assistant => m
+            .blocks
+            .iter()
+            .map(|b| match b {
+                AssistantBlock::Thinking(t) | AssistantBlock::Answer(t) => t.len(),
+                AssistantBlock::Tool {
+                    name,
+                    output,
+                    args_summary,
+                    ..
+                } => {
+                    name.len()
+                        + output.len().min(8_000)
+                        + args_summary.as_deref().unwrap_or("").len()
+                }
+            })
+            .sum(),
     }
 }

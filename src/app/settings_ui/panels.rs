@@ -294,6 +294,11 @@ impl OxiApp {
                         .hint_text(hint)
                         .margin(Margin::symmetric(8, 5)),
                 );
+                ui.label(
+                    RichText::new("Tip: choose a cheap/fast model for commit messages (for example claude-haiku-4-5 or a small local coder model).")
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                );
             }
 
             ui.add_space(10.0);

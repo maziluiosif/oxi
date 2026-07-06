@@ -110,6 +110,76 @@ pub fn delete(account: &str) -> Result<(), String> {
     result
 }
 
+/// Single keychain item that holds every secret oxi manages — provider API keys, the
+/// Codex OAuth record, and SSH passwords. Before this existed, each of those lived under
+/// its own account (`api-key:<slug>` x6, `oauth-codex`, `ssh-credentials`), and macOS
+/// shows one authorization prompt per distinct item the first time a process touches it,
+/// so a single launch could rack up several separate prompts. Collapsing them into one
+/// JSON blob under one account means at most one prompt, ever, per signed build.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct UnifiedSecrets {
+    #[serde(default)]
+    pub provider_api_keys: HashMap<String, String>,
+    #[serde(default)]
+    pub oauth: crate::oauth::OAuthStore,
+    #[serde(default)]
+    pub ssh: crate::compute::store::SshCredentialStore,
+}
+
+const UNIFIED_ACCOUNT: &str = "oxi-secrets";
+
+static UNIFIED_CACHE: Mutex<Option<UnifiedSecrets>> = Mutex::new(None);
+
+/// Load the unified secrets blob, migrating from the old per-item accounts on first read
+/// if the unified item doesn't exist yet. Cached for the rest of the process.
+pub fn load_unified() -> UnifiedSecrets {
+    if let Some(s) = UNIFIED_CACHE.lock().unwrap().as_ref() {
+        return s.clone();
+    }
+    let stored = load(UNIFIED_ACCOUNT);
+    let unified = if !stored.is_empty() {
+        serde_json::from_str(&stored).unwrap_or_default()
+    } else {
+        migrate_legacy_accounts()
+    };
+    *UNIFIED_CACHE.lock().unwrap() = Some(unified.clone());
+    unified
+}
+
+pub fn save_unified(unified: &UnifiedSecrets) -> Result<(), String> {
+    let json = serde_json::to_string(unified).map_err(|e| e.to_string())?;
+    let result = store(UNIFIED_ACCOUNT, &json);
+    *UNIFIED_CACHE.lock().unwrap() = Some(unified.clone());
+    result
+}
+
+/// One-time migration: pulls whatever exists under the old per-item accounts into a
+/// fresh [`UnifiedSecrets`] and persists it under [`UNIFIED_ACCOUNT`], so every later
+/// launch reads only that one item. The old accounts are deliberately left in place
+/// (orphaned but recoverable) rather than deleted, matching this codebase's existing
+/// migration convention (see `AppSettings::from_profiles_era`).
+fn migrate_legacy_accounts() -> UnifiedSecrets {
+    let mut unified = UnifiedSecrets::default();
+    let oauth_json = load("oauth-codex");
+    if !oauth_json.is_empty() {
+        unified.oauth = serde_json::from_str(&oauth_json).unwrap_or_default();
+    }
+    let ssh_json = load("ssh-credentials");
+    if !ssh_json.is_empty() {
+        unified.ssh = serde_json::from_str(&ssh_json).unwrap_or_default();
+    }
+    for kind in crate::settings::LlmProviderKind::ALL {
+        let key = load(&format!("api-key:{}", kind.slug()));
+        if !key.is_empty() {
+            unified
+                .provider_api_keys
+                .insert(kind.slug().to_string(), key);
+        }
+    }
+    let _ = save_unified(&unified);
+    unified
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

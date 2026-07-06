@@ -15,7 +15,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": "read",
-                    "description": "Read a text file from the workspace. Optionally limit by line range.",
+                    "description": "Read a text file from the workspace. Output is line-numbered. For large files, first locate the region with grep, then read with offset/limit instead of the whole file.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -46,7 +46,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": "edit",
-                    "description": "Replace text in a file. Each oldText must match exactly once in the file.",
+                    "description": "Replace text in a file. Each oldText must match exactly once in the file — never include the line-number gutter from read output.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -71,7 +71,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": "bash",
-                    "description": "Run a shell command in the workspace directory.",
+                    "description": "Run a shell command in the workspace directory. For reading/searching/listing prefer the dedicated read/grep/find/ls tools; use bash for builds, tests, git, side effects. Output beyond 40k chars is truncated — pipe through head/tail.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -86,7 +86,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": "grep",
-                    "description": "Search for a regex pattern in files under the workspace.",
+                    "description": "Search for a regex pattern in files under the workspace. Prefer this over bash grep/rg — results come back as path:line: text you can pass to read's offset.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -102,7 +102,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": "find",
-                    "description": "Find files matching a glob pattern.",
+                    "description": "Find files matching a glob pattern. Prefer over bash find.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -118,7 +118,7 @@ pub fn tool_definitions_json(enabled: &[bool]) -> Vec<Value> {
                 "type": "function",
                 "function": {
                     "name": "ls",
-                    "description": "List directory entries.",
+                    "description": "List directory entries. Prefer over bash ls.",
                     "parameters": {
                         "type": "object",
                         "properties": {
