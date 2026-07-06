@@ -8,10 +8,23 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
-use super::events::AgentEvent;
+use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::{ToolResult, run_tool};
+use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult, run_tool};
+
+pub(crate) fn openai_supports_reasoning_effort(model: &str) -> bool {
+    let m = model
+        .trim()
+        .strip_prefix("openai/")
+        .unwrap_or(model.trim())
+        .to_ascii_lowercase();
+    m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
+}
+
+pub(crate) fn is_valid_reasoning_effort(effort: &str) -> bool {
+    matches!(effort.trim(), "low" | "medium" | "high")
+}
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -49,14 +62,22 @@ pub async fn run_chat_loop(
             return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
         let _ = tx.send(AgentEvent::AgentStart);
-        let body = json!({
+        let mut body = json!({
             "model": model,
             "messages": messages,
             "tools": tools,
             "tool_choice": "auto",
             "stream": true,
+            // Ask for a final usage chunk. Servers that don't support it either
+            // ignore the field or omit usage; parsing tolerates both.
+            "stream_options": { "include_usage": true },
             "parallel_tool_calls": true,
         });
+        if openai_supports_reasoning_effort(model)
+            && let Some(effort) = ctx.effort_override.filter(|e| is_valid_reasoning_effort(e))
+        {
+            body["reasoning_effort"] = json!(effort);
+        }
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -75,6 +96,7 @@ pub async fn run_chat_loop(
         let mut tool_map: HashMap<u64, ToolCallAccum> = HashMap::new();
         let mut finish_reason: Option<String> = None;
         let mut stream_error: Option<String> = None;
+        let mut round_usage = TokenUsage::default();
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
@@ -98,6 +120,7 @@ pub async fn run_chat_loop(
                     &mut tool_map,
                     &mut finish_reason,
                     &mut stream_error,
+                    &mut round_usage,
                     tx,
                 );
             }
@@ -110,6 +133,7 @@ pub async fn run_chat_loop(
                     &mut tool_map,
                     &mut finish_reason,
                     &mut stream_error,
+                    &mut round_usage,
                     tx,
                 );
             }
@@ -137,6 +161,9 @@ pub async fn run_chat_loop(
             continue;
         }
         stream_retries = 0;
+        if !round_usage.is_zero() {
+            let _ = tx.send(AgentEvent::Usage(round_usage));
+        }
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut pairs: Vec<(u64, ToolCallAccum)> = tool_map.into_iter().collect();
         pairs.sort_by_key(|(i, _)| *i);
@@ -234,7 +261,7 @@ pub async fn run_chat_loop(
                         let _ = tx.send(AgentEvent::ToolOutput {
                             tool_call_id: tc.id.clone(),
                             text: text.clone(),
-                            truncated: text.len() >= 120_000,
+                            truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                         });
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
@@ -269,7 +296,7 @@ pub async fn run_chat_loop(
                     let _ = tx.send(AgentEvent::ToolOutput {
                         tool_call_id: tc.id.clone(),
                         text: text.clone(),
-                        truncated: text.len() >= 120_000,
+                        truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                     });
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
@@ -291,7 +318,7 @@ pub async fn run_chat_loop(
             "role": "assistant",
             "content": assistant_text,
         }));
-        let _ = tx.send(AgentEvent::AgentEnd);
+        let _ = tx.send(AgentEvent::ProviderDone);
         break;
     }
     Ok(())
@@ -303,6 +330,7 @@ fn process_sse_line(
     tool_map: &mut HashMap<u64, ToolCallAccum>,
     finish_reason: &mut Option<String>,
     stream_error: &mut Option<String>,
+    usage: &mut TokenUsage,
     tx: &Sender<AgentEvent>,
 ) {
     let line = line.trim();
@@ -334,6 +362,9 @@ fn process_sse_line(
             .unwrap_or("API error");
         *stream_error = Some(msg.to_string());
         return;
+    }
+    if let Some(u) = v.get("usage") {
+        read_openai_usage(u, usage);
     }
     if let Some(fr) = v
         .get("choices")
@@ -383,6 +414,22 @@ fn process_sse_line(
         {
             let _ = tx.send(AgentEvent::ThinkingDelta(reasoning.to_string()));
         }
+    }
+}
+
+fn read_openai_usage(v: &Value, usage: &mut TokenUsage) {
+    if let Some(n) = v.get("prompt_tokens").and_then(|x| x.as_u64()) {
+        usage.input_tokens = n;
+    }
+    if let Some(n) = v.get("completion_tokens").and_then(|x| x.as_u64()) {
+        usage.output_tokens = n;
+    }
+    if let Some(n) = v
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .and_then(|x| x.as_u64())
+    {
+        usage.cache_read_input_tokens = n;
+        usage.input_tokens = usage.input_tokens.saturating_sub(n);
     }
 }
 
@@ -511,6 +558,7 @@ mod integration_tests {
             cancel: &cancel,
             gate: &mut gate,
             max_rounds: 10,
+            effort_override: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");
@@ -541,7 +589,7 @@ mod integration_tests {
                 ..
             }
         )));
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::AgentEnd)));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ProviderDone)));
     }
 
     #[tokio::test]
@@ -586,6 +634,7 @@ mod integration_tests {
             cancel: &cancel,
             gate: &mut gate,
             max_rounds: 10,
+            effort_override: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");

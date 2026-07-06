@@ -122,7 +122,7 @@ impl OxiApp {
                 git_rx: None,
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),
-                model_rx: None,
+                model_rxs: Vec::new(),
                 ssh_password_drafts: std::collections::HashMap::new(),
                 ssh_test: std::collections::HashMap::new(),
                 ssh_test_rx: None,

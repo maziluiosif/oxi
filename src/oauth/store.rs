@@ -1,10 +1,11 @@
-//! Persist OAuth tokens in the OS keychain (see `crate::secrets`), under the account
-//! `"oauth-codex"`. Used to live as plaintext JSON at `~/.config/oxi/oauth.json`;
-//! [`load_oauth_store`] migrates any leftover file from that era on first read.
+//! Persist OAuth tokens in the OS keychain, as part of the unified secrets blob (see
+//! `crate::secrets::UnifiedSecrets`). Used to live as plaintext JSON at
+//! `~/.config/oxi/oauth.json`, then under its own keychain item (`"oauth-codex"`);
+//! [`load_oauth_store`] migrates any leftover file from the plaintext era on first read
+//! (the keychain-item era is migrated by `crate::secrets::load_unified`).
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -21,13 +22,6 @@ pub struct OAuthStore {
     pub openai_codex: Option<CodexOAuthRecord>,
 }
 
-const KEYCHAIN_ACCOUNT: &str = "oauth-codex";
-
-/// In-process cache so frequent UI-thread reads (e.g. the composer's model selector,
-/// rendered every frame) don't each round-trip to the OS keychain. Kept in sync by
-/// [`save_oauth_store`].
-static CACHE: Mutex<Option<OAuthStore>> = Mutex::new(None);
-
 /// Legacy location from before OAuth tokens moved into the OS keychain.
 fn legacy_oauth_path() -> PathBuf {
     dirs::config_dir()
@@ -37,44 +31,30 @@ fn legacy_oauth_path() -> PathBuf {
 }
 
 pub fn load_oauth_store() -> OAuthStore {
-    if let Some(s) = CACHE.lock().unwrap().as_ref() {
-        return s.clone();
+    let unified = crate::secrets::load_unified();
+    if unified.oauth.openai_codex.is_some() {
+        return unified.oauth;
     }
-    let stored = crate::secrets::load(KEYCHAIN_ACCOUNT);
-    let store = if !stored.is_empty() {
-        serde_json::from_str(&stored).unwrap_or_default()
-    } else {
-        migrate_legacy_file().unwrap_or_default()
-    };
-    *CACHE.lock().unwrap() = Some(store.clone());
-    store
+    migrate_legacy_file().unwrap_or(unified.oauth)
 }
 
 /// One-time migration: if a pre-keychain `oauth.json` exists, push its contents into the
-/// keychain and delete the file. Runs at most once per process (guarded by the cache
-/// check in [`load_oauth_store`]).
+/// unified secrets blob and delete the file.
 fn migrate_legacy_file() -> Option<OAuthStore> {
     let path = legacy_oauth_path();
     let bytes = fs::read(&path).ok()?;
     let store: OAuthStore = serde_json::from_slice(&bytes).ok()?;
-    if store.openai_codex.is_some()
-        && let Ok(json) = serde_json::to_string(&store)
-    {
-        let _ = crate::secrets::store(KEYCHAIN_ACCOUNT, &json);
+    if store.openai_codex.is_some() {
+        let _ = save_oauth_store(&store);
     }
     let _ = fs::remove_file(&path);
     Some(store)
 }
 
 pub fn save_oauth_store(store: &OAuthStore) -> Result<(), String> {
-    let result = if store.openai_codex.is_none() {
-        crate::secrets::delete(KEYCHAIN_ACCOUNT)
-    } else {
-        let json = serde_json::to_string(store).map_err(|e| e.to_string())?;
-        crate::secrets::store(KEYCHAIN_ACCOUNT, &json)
-    };
-    *CACHE.lock().unwrap() = Some(store.clone());
-    result
+    let mut unified = crate::secrets::load_unified();
+    unified.oauth = store.clone();
+    crate::secrets::save_unified(&unified)
 }
 
 pub fn merge_codex(store: &mut OAuthStore, rec: CodexOAuthRecord) {

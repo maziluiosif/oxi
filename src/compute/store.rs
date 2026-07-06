@@ -1,14 +1,15 @@
-//! Persist SSH passwords for remote compute targets in the OS keychain (see
-//! `crate::secrets`), under the account `"ssh-credentials"`, keyed internally by
+//! Persist SSH passwords for remote compute targets in the OS keychain, as part of the
+//! unified secrets blob (see `crate::secrets::UnifiedSecrets`), keyed internally by
 //! [`crate::settings::LlmProviderKind::slug`] (old files used profile ids; settings
 //! migration re-keys them). Used to live as plaintext JSON at
-//! `~/.config/oxi/ssh_credentials.json`; [`load_ssh_credentials`] migrates any leftover
-//! file from that era on first read.
+//! `~/.config/oxi/ssh_credentials.json`, then under its own keychain item
+//! (`"ssh-credentials"`); [`load_ssh_credentials`] migrates any leftover file from the
+//! plaintext era on first read (the keychain-item era is migrated by
+//! `crate::secrets::load_unified`).
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -19,12 +20,6 @@ pub struct SshCredentialStore {
     passwords: HashMap<String, String>,
 }
 
-const KEYCHAIN_ACCOUNT: &str = "ssh-credentials";
-
-/// In-process cache so repeated lazy-loads in the settings UI don't each round-trip to
-/// the OS keychain. Kept in sync by [`save_ssh_credentials`].
-static CACHE: Mutex<Option<SshCredentialStore>> = Mutex::new(None);
-
 /// Legacy location from before SSH passwords moved into the OS keychain.
 fn legacy_credentials_path() -> PathBuf {
     dirs::config_dir()
@@ -34,44 +29,30 @@ fn legacy_credentials_path() -> PathBuf {
 }
 
 pub fn load_ssh_credentials() -> SshCredentialStore {
-    if let Some(s) = CACHE.lock().unwrap().as_ref() {
-        return s.clone();
+    let unified = crate::secrets::load_unified();
+    if !unified.ssh.passwords.is_empty() {
+        return unified.ssh;
     }
-    let stored = crate::secrets::load(KEYCHAIN_ACCOUNT);
-    let store = if !stored.is_empty() {
-        serde_json::from_str(&stored).unwrap_or_default()
-    } else {
-        migrate_legacy_file().unwrap_or_default()
-    };
-    *CACHE.lock().unwrap() = Some(store.clone());
-    store
+    migrate_legacy_file().unwrap_or(unified.ssh)
 }
 
 /// One-time migration: if a pre-keychain `ssh_credentials.json` exists, push its contents
-/// into the keychain and delete the file. Runs at most once per process (guarded by the
-/// cache check in [`load_ssh_credentials`]).
+/// into the unified secrets blob and delete the file.
 fn migrate_legacy_file() -> Option<SshCredentialStore> {
     let path = legacy_credentials_path();
     let bytes = fs::read(&path).ok()?;
     let store: SshCredentialStore = serde_json::from_slice(&bytes).ok()?;
-    if !store.passwords.is_empty()
-        && let Ok(json) = serde_json::to_string(&store)
-    {
-        let _ = crate::secrets::store(KEYCHAIN_ACCOUNT, &json);
+    if !store.passwords.is_empty() {
+        let _ = save_ssh_credentials(&store);
     }
     let _ = fs::remove_file(&path);
     Some(store)
 }
 
 pub fn save_ssh_credentials(store: &SshCredentialStore) -> Result<(), String> {
-    let result = if store.passwords.is_empty() {
-        crate::secrets::delete(KEYCHAIN_ACCOUNT)
-    } else {
-        let json = serde_json::to_string(store).map_err(|e| e.to_string())?;
-        crate::secrets::store(KEYCHAIN_ACCOUNT, &json)
-    };
-    *CACHE.lock().unwrap() = Some(store.clone());
-    result
+    let mut unified = crate::secrets::load_unified();
+    unified.ssh = store.clone();
+    crate::secrets::save_unified(&unified)
 }
 
 impl SshCredentialStore {
