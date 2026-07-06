@@ -17,10 +17,17 @@ pub fn session_file_stem_or_generated(path: &Path) -> String {
 
 pub fn chat_message_to_json_entries(message: &ChatMessage) -> Vec<Value> {
     match message.role {
-        MsgRole::User => vec![json!({
-            "role": "user",
-            "content": user_content_to_json(&message.text, &message.attachments),
-        })],
+        MsgRole::User => {
+            let mut v = json!({
+                "role": "user",
+                "content": user_content_to_json(&message.text, &message.attachments),
+            });
+            // Only tag summary messages so pre-existing session files stay byte-identical.
+            if message.is_summary {
+                v["summary"] = json!(true);
+            }
+            vec![v]
+        }
         MsgRole::Assistant => {
             let mut entries = assistant_message_to_json_entries(&message.blocks);
             // Persist the frozen work duration on the leading assistant entry so the
@@ -201,6 +208,7 @@ mod tests {
         let msg = ChatMessage {
             role: MsgRole::User,
             text: "hello".into(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![],
             streaming: false,
@@ -211,6 +219,31 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["role"], "user");
         assert_eq!(entries[0]["content"], "hello");
+        // Plain user messages carry no summary tag (keeps old files byte-identical).
+        assert!(entries[0].get("summary").is_none());
+    }
+
+    #[test]
+    fn summary_message_serializes_summary_flag() {
+        let msg = ChatMessage {
+            role: MsgRole::User,
+            text: "## Goal\nbuild X".into(),
+            is_summary: true,
+            attachments: vec![],
+            blocks: vec![],
+            streaming: false,
+            started_at: None,
+            worked_duration: None,
+        };
+        let entries = chat_message_to_json_entries(&msg);
+        assert_eq!(entries[0]["role"], "user");
+        assert_eq!(entries[0]["summary"], true);
+        // And it round-trips back to an is_summary user message.
+        let back = crate::hydrate::messages_from_get_messages(&serde_json::json!({
+            "messages": [entries[0].clone()]
+        }));
+        assert_eq!(back.len(), 1);
+        assert!(back[0].is_summary);
     }
 
     #[test]
@@ -218,6 +251,7 @@ mod tests {
         let msg = ChatMessage {
             role: MsgRole::User,
             text: "look".into(),
+            is_summary: false,
             attachments: vec![UserAttachment::Image {
                 mime: "image/png".into(),
                 data: vec![1, 2, 3],
@@ -240,6 +274,7 @@ mod tests {
         let msg = ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![
                 AssistantBlock::Thinking("reason".into()),
@@ -261,6 +296,7 @@ mod tests {
         let msg = ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![AssistantBlock::Tool {
                 tool_call_id: "call_1".into(),
@@ -288,6 +324,7 @@ mod tests {
         let msg = ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![AssistantBlock::Tool {
                 tool_call_id: "call_2".into(),
@@ -320,6 +357,7 @@ mod tests {
         let msg = ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![
                 AssistantBlock::Thinking("".into()),

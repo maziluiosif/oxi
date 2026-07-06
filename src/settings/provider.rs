@@ -404,7 +404,8 @@ mod tests {
     #[test]
     fn ssh_config_missing_pinned_host_key_deserializes_to_none() {
         // Settings files written before host-key pinning existed have no field.
-        let json = r#"{"kind":"remote_ssh","host":"h","port":22,"user":"u","remote_runtime_port":11434}"#;
+        let json =
+            r#"{"kind":"remote_ssh","host":"h","port":22,"user":"u","remote_runtime_port":11434}"#;
         let loc: ComputeLocation = serde_json::from_str(json).unwrap();
         match loc {
             ComputeLocation::RemoteSsh(cfg) => assert_eq!(cfg.pinned_host_key, None),

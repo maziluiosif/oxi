@@ -228,4 +228,7 @@ pub struct ConversationState {
     pub update_result: Option<Result<crate::update::ReleaseInfo, String>>,
     /// Channel for the update-check result (drained each frame).
     pub update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+    /// In-flight context compaction (manual `/compact` or automatic pre-send), if any.
+    /// At most one runs app-wide; drained each frame. See [`super::compaction`].
+    pub compaction: Option<super::compaction::ActiveCompaction>,
 }

@@ -102,6 +102,7 @@ mod tests {
         ChatMessage {
             role: MsgRole::User,
             text: text.into(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![],
             streaming: false,
@@ -114,6 +115,7 @@ mod tests {
         ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![AssistantBlock::Answer(answer.into())],
             streaming: false,
@@ -203,6 +205,7 @@ mod tests {
         let a = ChatMessage {
             role: MsgRole::User,
             text: "img".into(),
+            is_summary: false,
             attachments: vec![UserAttachment::Image {
                 mime: "image/png".into(),
                 data: vec![1, 2, 3],
@@ -215,6 +218,7 @@ mod tests {
         let b = ChatMessage {
             role: MsgRole::User,
             text: "img".into(),
+            is_summary: false,
             attachments: vec![UserAttachment::Image {
                 mime: "image/png".into(),
                 data: vec![1, 2, 3],
@@ -232,6 +236,7 @@ mod tests {
         let a = ChatMessage {
             role: MsgRole::User,
             text: "img".into(),
+            is_summary: false,
             attachments: vec![UserAttachment::Image {
                 mime: "image/png".into(),
                 data: vec![1, 2, 3],
@@ -244,6 +249,7 @@ mod tests {
         let b = ChatMessage {
             role: MsgRole::User,
             text: "img".into(),
+            is_summary: false,
             attachments: vec![UserAttachment::Image {
                 mime: "image/jpeg".into(),
                 data: vec![4, 5, 6],

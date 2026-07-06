@@ -25,22 +25,39 @@ const CONTEXT_CHAR_BUDGET: usize = 400_000;
 /// Always keep this many most-recent user+assistant turn pairs regardless of budget.
 const MIN_KEEP_TURNS: usize = 6;
 
-/// Conservative characters-per-token estimate used when converting a token context
-/// window into a character trim budget.
-const CHARS_PER_TOKEN: usize = 4;
+/// Conservative default characters-per-token estimate, used before a session has measured a
+/// real ratio from a provider `Usage` event. Also the clamp midpoint.
+pub const DEFAULT_CHARS_PER_TOKEN: f32 = 4.0;
 
-/// Compute the character trim budget from a context window measured in tokens.
-/// Uses ~4 chars/token and reserves 20% headroom for tool definitions, system prompt and the
-/// newest turn the model is about to generate. Never drops below ~8k chars so the protected tail
-/// always has room.
-pub fn context_char_budget_from_tokens(context_tokens: usize) -> usize {
+/// Clamp bounds for the per-session calibrated chars-per-token ratio.
+pub const MIN_CHARS_PER_TOKEN: f32 = 2.0;
+pub const MAX_CHARS_PER_TOKEN: f32 = 6.0;
+
+/// Derive a calibrated chars-per-token ratio from an estimated prompt size (chars) and the
+/// provider-reported prompt token count, clamped to `[MIN, MAX]`.
+pub fn calibrate_chars_per_token(estimated_chars: usize, prompt_tokens: u64) -> f32 {
+    if prompt_tokens == 0 {
+        return DEFAULT_CHARS_PER_TOKEN;
+    }
+    (estimated_chars as f32 / prompt_tokens as f32).clamp(MIN_CHARS_PER_TOKEN, MAX_CHARS_PER_TOKEN)
+}
+
+/// Compute the character trim budget from a context window measured in tokens, using the
+/// (possibly calibrated) `chars_per_token` ratio. Reserves 20% headroom for tool definitions,
+/// system prompt and the newest turn the model is about to generate. Never drops below ~8k
+/// chars so the protected tail always has room.
+pub fn context_char_budget_from_tokens(context_tokens: usize, chars_per_token: f32) -> usize {
     if context_tokens == 0 {
         return CONTEXT_CHAR_BUDGET;
     }
-    let reserve_pct = 80usize; // use 80% of the window for history
-    let tokens = context_tokens.saturating_mul(reserve_pct) / 100;
-    let chars = tokens.saturating_mul(CHARS_PER_TOKEN);
-    chars.max(8_192)
+    let cpt = if chars_per_token.is_finite() && chars_per_token > 0.0 {
+        chars_per_token
+    } else {
+        DEFAULT_CHARS_PER_TOKEN
+    };
+    let reserve_pct = 0.80; // use 80% of the window for history
+    let chars = context_tokens as f32 * reserve_pct * cpt;
+    (chars as usize).max(8_192)
 }
 
 pub fn build_openai_messages(
@@ -69,6 +86,13 @@ fn message_to_openai(m: &ChatMessage) -> Option<Value> {
         MsgRole::User => {
             if m.text.trim().is_empty() && m.attachments.is_empty() {
                 return None;
+            }
+            if m.is_summary {
+                // Present the summary as context rather than a literal user request.
+                return Some(json!({
+                    "role": "user",
+                    "content": format!("[Summary of the earlier conversation]\n\n{}", m.text)
+                }));
             }
             Some(json!({
                 "role": "user",
@@ -119,7 +143,7 @@ pub(crate) fn user_content_to_openai(text: &str, attachments: &[UserAttachment])
     Value::Array(blocks)
 }
 
-fn flatten_assistant(m: &ChatMessage) -> String {
+pub(crate) fn flatten_assistant(m: &ChatMessage) -> String {
     let mut s = String::new();
     for b in &m.blocks {
         match b {
@@ -249,6 +273,7 @@ mod tests {
         ChatMessage {
             role: MsgRole::User,
             text: text.to_string(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![],
             streaming: false,
@@ -261,12 +286,57 @@ mod tests {
         ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![AssistantBlock::Answer(answer.to_string())],
             streaming: false,
             started_at: None,
             worked_duration: None,
         }
+    }
+
+    #[test]
+    fn summary_message_gets_preamble_on_the_wire() {
+        let mut summary = user_msg("Goal: build X. Pending: finish Y.");
+        summary.is_summary = true;
+        let msgs = build_openai_messages("sys", &[summary, user_msg("continue")], 1_000_000);
+        let first_user = msgs
+            .iter()
+            .find(|m| m["role"] == "user")
+            .expect("a user message");
+        let content = first_user["content"].as_str().unwrap();
+        assert!(content.starts_with("[Summary of the earlier conversation]"));
+        assert!(content.contains("Goal: build X"));
+    }
+
+    #[test]
+    fn budget_matches_old_behavior_at_default_ratio() {
+        // 100k tokens × 80% × 4 chars = 320_000.
+        assert_eq!(
+            context_char_budget_from_tokens(100_000, DEFAULT_CHARS_PER_TOKEN),
+            320_000
+        );
+    }
+
+    #[test]
+    fn budget_scales_with_calibrated_ratio() {
+        let low = context_char_budget_from_tokens(100_000, 2.5);
+        let high = context_char_budget_from_tokens(100_000, DEFAULT_CHARS_PER_TOKEN);
+        assert!(low < high);
+        assert_eq!(low, 200_000); // 100k × 0.8 × 2.5
+    }
+
+    #[test]
+    fn calibrate_clamps_ratio() {
+        // Very dense text (few chars/token) clamps up to the floor.
+        assert_eq!(calibrate_chars_per_token(1_000, 1_000), MIN_CHARS_PER_TOKEN);
+        // Very sparse text clamps down to the ceiling.
+        assert_eq!(
+            calibrate_chars_per_token(1_000_000, 1_000),
+            MAX_CHARS_PER_TOKEN
+        );
+        // Zero tokens falls back to the default.
+        assert_eq!(calibrate_chars_per_token(1_000, 0), DEFAULT_CHARS_PER_TOKEN);
     }
 
     #[test]

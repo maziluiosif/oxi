@@ -14,9 +14,31 @@ use crate::session_store;
 
 impl OxiApp {
     pub(crate) fn send_message(&mut self) {
+        self.send_message_opts(false);
+    }
+
+    /// `skip_autocompact` is set when an auto-compaction has just finished and is replaying
+    /// the deferred message — it must not re-trigger the threshold check (loop guard).
+    pub(crate) fn send_message_opts(&mut self, skip_autocompact: bool) {
         let text = self.conv.input.trim().to_string();
         let has_images = !self.conv.pending_images.is_empty();
         if text.is_empty() && !has_images {
+            return;
+        }
+
+        // Slash commands: only an exact, argument-free `/new` or `/compact` with no images.
+        if !has_images && let Some(cmd) = super::compaction::parse_slash_command(&text) {
+            self.push_input_history(&text);
+            self.conv.input_history_index = None;
+            self.conv.input_history_draft.clear();
+            self.conv.input.clear();
+            match cmd {
+                super::compaction::SlashCommand::New => self.new_chat(),
+                super::compaction::SlashCommand::Compact => {
+                    let key = self.active_session_key();
+                    self.start_compaction(key, None);
+                }
+            }
             return;
         }
 
@@ -26,6 +48,30 @@ impl OxiApp {
             .is_some_and(|state| state.waiting_response)
         {
             return;
+        }
+        // Don't send into a session whose history is mid-compaction.
+        if self.compaction_active_for(key) {
+            return;
+        }
+
+        // Auto-compaction: if the context is near full, summarize first and defer this send.
+        if !skip_autocompact && self.conv.compaction.is_none() {
+            let max_tokens = self
+                .conv
+                .settings
+                .active_config()
+                .effective_context_window(self.conv.settings.context_window_default);
+            let est_tokens = self.estimated_session_context_tokens(key);
+            if max_tokens > 0
+                && est_tokens as f32
+                    >= super::compaction::AUTO_COMPACT_THRESHOLD * max_tokens as f32
+                && self.compactable_turns(key) > super::compaction::COMPACT_KEEP_RECENT_TURNS
+            {
+                let images = std::mem::take(&mut self.conv.pending_images);
+                self.conv.input.clear();
+                self.start_compaction(key, Some(super::compaction::QueuedSend { text, images }));
+                return;
+            }
         }
 
         if self.active_session().messages.is_empty() && self.active_session().session_file.is_none()
@@ -93,6 +139,7 @@ impl OxiApp {
         sess.messages.push(ChatMessage {
             role: MsgRole::User,
             text: text.to_string(),
+            is_summary: false,
             attachments: attachments.to_vec(),
             blocks: vec![],
             streaming: false,
@@ -102,6 +149,7 @@ impl OxiApp {
         sess.messages.push(ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),
+            is_summary: false,
             attachments: vec![],
             blocks: vec![],
             streaming: true,
@@ -307,6 +355,7 @@ impl OxiApp {
                 .flatten()
         });
         let used_prior_wire = prior_wire.is_some();
+        let chars_per_token = self.calibrated_chars_per_token(key);
         let (tx, rx) = std::sync::mpsc::channel();
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -319,6 +368,7 @@ impl OxiApp {
             approval_rx,
             cancel.clone(),
             prior_wire,
+            chars_per_token,
         );
         let existing_wire = self.run_state(key).and_then(|run| run.wire_history.clone());
         let run = self.run_state_mut(key);
