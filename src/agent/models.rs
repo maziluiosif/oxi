@@ -89,9 +89,11 @@ pub async fn fetch_models(
     };
     if base.ends_with("/codex") {
         url.push_str("?client_version=");
-        url.push_str(std::env::var("OXI_CODEX_CLIENT_VERSION")
-            .as_deref()
-            .unwrap_or(CODEX_MODELS_CLIENT_VERSION));
+        url.push_str(
+            std::env::var("OXI_CODEX_CLIENT_VERSION")
+                .as_deref()
+                .unwrap_or(CODEX_MODELS_CLIENT_VERSION),
+        );
     }
 
     let mut req = client.get(&url);
@@ -127,7 +129,9 @@ pub async fn fetch_models(
             .map_err(|e| format!("models parse failed (OpenAI format): {e}"))?;
         parsed.data
     } else {
-        return Err("models parse failed: response has neither array `models` nor array `data`".to_string());
+        return Err(
+            "models parse failed: response has neither array `models` nor array `data`".to_string(),
+        );
     };
     models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
