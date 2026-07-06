@@ -19,4 +19,5 @@ pub struct LoopCtx<'a> {
     pub cancel: &'a Arc<AtomicBool>,
     pub gate: &'a mut ApprovalGate,
     pub max_rounds: u32,
+    pub effort_override: Option<&'a str>,
 }

@@ -7,10 +7,10 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 
-use super::events::AgentEvent;
+use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::{ToolResult, run_tool};
+use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult, run_tool};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -41,6 +41,7 @@ fn drain_codex_sse_blocks(
     pending_tools: &mut Vec<ToolCallAccum>,
     sse_state: &mut CodexStreamState,
     stream_error: &mut Option<String>,
+    usage: &mut TokenUsage,
     tx: &Sender<AgentEvent>,
 ) {
     while let Some((idx, sep_len)) = sse_record_end(buffer) {
@@ -66,6 +67,7 @@ fn drain_codex_sse_blocks(
             pending_tools,
             sse_state,
             stream_error,
+            usage,
             tx,
         );
     }
@@ -296,12 +298,18 @@ fn process_responses_event(
     pending_tools: &mut Vec<ToolCallAccum>,
     state: &mut CodexStreamState,
     stream_error: &mut Option<String>,
+    usage: &mut TokenUsage,
     tx: &Sender<AgentEvent>,
 ) {
     let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
 
     match typ {
-        "response.created" | "response.completed" | "response.incomplete" => {}
+        "response.completed" => {
+            if let Some(u) = v.pointer("/response/usage") {
+                read_responses_usage(u, usage);
+            }
+        }
+        "response.created" | "response.incomplete" => {}
         // New reasoning item in the stream — allow a later `output_item.done` fallback for this item.
         "response.output_item.added" => {
             if let Some(item) = v.get("item")
@@ -384,6 +392,22 @@ fn process_responses_event(
     }
 }
 
+fn read_responses_usage(v: &Value, usage: &mut TokenUsage) {
+    if let Some(n) = v.get("input_tokens").and_then(|x| x.as_u64()) {
+        usage.input_tokens = n;
+    }
+    if let Some(n) = v.get("output_tokens").and_then(|x| x.as_u64()) {
+        usage.output_tokens = n;
+    }
+    if let Some(n) = v
+        .pointer("/input_tokens_details/cached_tokens")
+        .and_then(|x| x.as_u64())
+    {
+        usage.cache_read_input_tokens = n;
+        usage.input_tokens = usage.input_tokens.saturating_sub(n);
+    }
+}
+
 pub async fn run_codex_responses_loop(
     ctx: &mut LoopCtx<'_>,
     access_token: &str,
@@ -400,6 +424,7 @@ pub async fn run_codex_responses_loop(
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
     let gate = &mut *ctx.gate;
+    let effort_override = ctx.effort_override;
     let url = resolve_codex_post_url(base_url);
     let rtools = responses_tools(tools);
     let mut round = 0u32;
@@ -415,6 +440,9 @@ pub async fn run_codex_responses_loop(
         }
         let (instructions, rest) = split_system(messages);
         let input = chat_to_input(&rest)?;
+        let reasoning_effort = effort_override
+            .filter(|e| crate::agent::openai::is_valid_reasoning_effort(e))
+            .unwrap_or("medium");
         let body = json!({
             "model": model,
             "stream": true,
@@ -425,7 +453,7 @@ pub async fn run_codex_responses_loop(
             "tool_choice": "auto",
             "parallel_tool_calls": true,
             "text": { "verbosity": "medium" },
-            "reasoning": { "effort": "medium", "summary": "auto" },
+            "reasoning": { "effort": reasoning_effort, "summary": "auto" },
             "include": ["reasoning.encrypted_content"]
         });
         let _ = tx.send(AgentEvent::AgentStart);
@@ -461,6 +489,7 @@ pub async fn run_codex_responses_loop(
         let mut pending_tools: Vec<ToolCallAccum> = Vec::new();
         let mut sse_state = CodexStreamState::default();
         let mut stream_error: Option<String> = None;
+        let mut round_usage = TokenUsage::default();
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
@@ -480,6 +509,7 @@ pub async fn run_codex_responses_loop(
                 &mut pending_tools,
                 &mut sse_state,
                 &mut stream_error,
+                &mut round_usage,
                 tx,
             );
         }
@@ -492,6 +522,7 @@ pub async fn run_codex_responses_loop(
                 &mut pending_tools,
                 &mut sse_state,
                 &mut stream_error,
+                &mut round_usage,
                 tx,
             );
         }
@@ -518,6 +549,9 @@ pub async fn run_codex_responses_loop(
             continue;
         }
         stream_retries = 0;
+        if !round_usage.is_zero() {
+            let _ = tx.send(AgentEvent::Usage(round_usage));
+        }
         let _ = tx.send(AgentEvent::AssistantMessageDone);
 
         let tool_calls = pending_tools;
@@ -603,7 +637,7 @@ pub async fn run_codex_responses_loop(
                         let _ = tx.send(AgentEvent::ToolOutput {
                             tool_call_id: tc.id.clone(),
                             text: text.clone(),
-                            truncated: text.len() >= 120_000,
+                            truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                         });
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
@@ -637,7 +671,7 @@ pub async fn run_codex_responses_loop(
                     let _ = tx.send(AgentEvent::ToolOutput {
                         tool_call_id: tc.id.clone(),
                         text: text.clone(),
-                        truncated: text.len() >= 120_000,
+                        truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                     });
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
@@ -659,7 +693,7 @@ pub async fn run_codex_responses_loop(
             "role": "assistant",
             "content": assistant_text,
         }));
-        let _ = tx.send(AgentEvent::AgentEnd);
+        let _ = tx.send(AgentEvent::ProviderDone);
         break;
     }
     Ok(())

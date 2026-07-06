@@ -176,6 +176,9 @@ pub struct ProviderConfig {
     /// back to a conservative default. Set to a number to override the history trim budget.
     #[serde(default)]
     pub context_window: Option<usize>,
+    /// Claude 4.6+ adaptive thinking effort. Empty = provider default (high).
+    #[serde(default)]
+    pub effort: String,
     /// Where the model server for this provider runs. Defaults to [`ComputeLocation::Local`]
     /// so existing/older settings files (no `location` field) behave exactly as before.
     #[serde(default)]
@@ -246,6 +249,8 @@ pub struct ProviderProfile {
     #[serde(default)]
     pub context_window: Option<usize>,
     #[serde(default)]
+    pub effort: String,
+    #[serde(default)]
     pub location: ComputeLocation,
 }
 
@@ -259,6 +264,7 @@ impl From<ProviderProfile> for ProviderConfig {
             openrouter_http_referer: p.openrouter_http_referer,
             openrouter_title: p.openrouter_title,
             context_window: p.context_window,
+            effort: p.effort,
             location: p.location,
         }
     }
