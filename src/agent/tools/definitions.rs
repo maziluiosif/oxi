@@ -46,7 +46,7 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                 "type": "function",
                 "function": {
                     "name": "edit",
-                    "description": "Replace text in a file. Each oldText must match exactly once in the file — never include the line-number gutter from read output.",
+                    "description": "Replace text in a file. Each oldText must match exactly once unless replaceAll is true — never include the line-number gutter from read output.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -57,7 +57,8 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                                     "type": "object",
                                     "properties": {
                                         "oldText": { "type": "string" },
-                                        "newText": { "type": "string" }
+                                        "newText": { "type": "string" },
+                                        "replaceAll": { "type": "boolean", "description": "Replace every occurrence of oldText (default false: must match exactly once)" }
                                     },
                                     "required": ["oldText", "newText"]
                                 }

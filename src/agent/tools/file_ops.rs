@@ -285,21 +285,24 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
         }
     };
     let mut content = before.clone();
-    let mut edits = Vec::new();
+    // Each entry: (oldText, newText, replace_all).
+    let mut edits: Vec<(String, String, bool)> = Vec::new();
     if let Some(arr) = args.get("edits").and_then(|x| x.as_array()) {
         for e in arr {
             let old = e.get("oldText").and_then(|x| x.as_str());
             let new = e.get("newText").and_then(|x| x.as_str());
+            let replace_all = e.get("replaceAll").and_then(|x| x.as_bool()).unwrap_or(false);
             if let (Some(o), Some(n)) = (old, new) {
-                edits.push((o.to_string(), n.to_string()));
+                edits.push((o.to_string(), n.to_string(), replace_all));
             }
         }
     }
     if edits.is_empty() {
         let old = args.get("oldText").and_then(|x| x.as_str());
         let new = args.get("newText").and_then(|x| x.as_str());
+        let replace_all = args.get("replaceAll").and_then(|x| x.as_bool()).unwrap_or(false);
         if let (Some(o), Some(n)) = (old, new) {
-            edits.push((o.to_string(), n.to_string()));
+            edits.push((o.to_string(), n.to_string(), replace_all));
         }
     }
     if edits.is_empty() {
@@ -309,21 +312,44 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
             diff: None,
         };
     }
-    for (old, _) in &edits {
+    // An empty oldText matches between every char; `str::replace("")` would interleave the
+    // replacement everywhere. Reject it outright.
+    if edits.iter().any(|(old, _, _)| old.is_empty()) {
+        return ToolResult {
+            output: err("oldText must not be empty"),
+            is_error: true,
+            diff: None,
+        };
+    }
+    for (old, _, replace_all) in &edits {
         let count = content.matches(old.as_str()).count();
-        if count != 1 {
+        if *replace_all {
+            if count == 0 {
+                return ToolResult {
+                    output: err("oldText not found in file"),
+                    is_error: true,
+                    diff: None,
+                };
+            }
+        } else if count != 1 {
             return ToolResult {
                 output: err(format!(
-                    "oldText must match exactly once in file, found {count} occurrences"
+                    "oldText must match exactly once in file, found {count} occurrences \
+                     (pass replaceAll: true to replace every occurrence)"
                 )),
                 is_error: true,
                 diff: None,
             };
         }
     }
-    for (old, new) in edits {
-        if let Some(idx) = content.find(old.as_str()) {
+    let mut total_replacements = 0usize;
+    for (old, new, replace_all) in edits {
+        if replace_all {
+            total_replacements += content.matches(old.as_str()).count();
+            content = content.replace(old.as_str(), &new);
+        } else if let Some(idx) = content.find(old.as_str()) {
             content.replace_range(idx..idx + old.len(), &new);
+            total_replacements += 1;
         }
     }
     if let Err(e) = fs::write(&abs, &content) {
@@ -335,7 +361,12 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
     }
     let diff = make_unified_diff(path, &before, &content);
     ToolResult {
-        output: format!("Edited {}", abs.display()),
+        output: format!(
+            "Edited {} ({} replacement{})",
+            abs.display(),
+            total_replacements,
+            if total_replacements == 1 { "" } else { "s" }
+        ),
         is_error: false,
         diff: if diff.is_empty() { None } else { Some(diff) },
     }
