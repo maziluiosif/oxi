@@ -38,6 +38,9 @@ pub struct ToolEnv {
     /// Which zero-config search backend to prefer when `web_search_url` is empty (i.e. not
     /// routing through a user-configured SearXNG instance).
     pub web_search_backend: WebSearchBackend,
+    /// Upper bound (seconds) for a single `bash` call; the tool's own `timeout` argument is
+    /// clamped to this.
+    pub bash_timeout_cap_secs: u32,
 }
 
 pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResult {
@@ -62,7 +65,7 @@ pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResu
         _ => {
             let result = match name {
                 "read" => file_ops::tool_read(cwd, args),
-                "bash" => shell_search::tool_bash(cwd, args),
+                "bash" => shell_search::tool_bash(cwd, args, env.bash_timeout_cap_secs),
                 "grep" => shell_search::tool_grep(cwd, args),
                 "find" => shell_search::tool_find(cwd, args),
                 "ls" => shell_search::tool_ls(cwd, args),

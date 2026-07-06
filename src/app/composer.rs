@@ -319,7 +319,10 @@ impl OxiApp {
             .map(estimate_message_chars)
             .sum::<usize>();
         let tools_chars =
-            crate::agent::tools::tool_definitions_json(&self.conv.settings.tools_enabled)
+            crate::agent::tools::tool_definitions_json(
+                &self.conv.settings.tools_enabled,
+                self.conv.settings.bash_timeout_cap_secs,
+            )
                 .iter()
                 .map(|v| v.to_string().len())
                 .sum::<usize>();

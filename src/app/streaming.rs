@@ -293,7 +293,10 @@ impl OxiApp {
         let settings = self.conv.settings.clone();
         let system =
             crate::agent::prompt::build_system_prompt(&settings, cwd.to_string_lossy().as_ref());
-        let tools = crate::agent::tools::tool_definitions_json(&settings.tools_enabled);
+        let tools = crate::agent::tools::tool_definitions_json(
+            &settings.tools_enabled,
+            settings.bash_timeout_cap_secs,
+        );
         let wire_fingerprint = wire_fingerprint_for(&settings, &system, &tools);
         let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
             .session_file

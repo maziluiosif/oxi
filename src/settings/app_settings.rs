@@ -77,6 +77,10 @@ pub struct AppSettings {
     /// Maximum number of agent tool rounds per run. `0` means unlimited. Default unlimited.
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: u32,
+    /// Upper bound (seconds) for a single `bash` tool call. The model's own `timeout`
+    /// argument is clamped to this. Default 300.
+    #[serde(default = "default_bash_timeout_cap_secs")]
+    pub bash_timeout_cap_secs: u32,
     /// Fallback context window in tokens used when no per-profile override and no catalog
     /// match is found. Defaults to 128k (safe across all current providers).
     #[serde(default = "default_context_window")]
@@ -112,6 +116,10 @@ fn default_require_approval() -> bool {
 
 fn default_max_tool_rounds() -> u32 {
     0
+}
+
+fn default_bash_timeout_cap_secs() -> u32 {
+    300
 }
 
 fn default_context_window() -> usize {
@@ -197,6 +205,7 @@ impl Default for AppSettings {
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
             max_tool_rounds: default_max_tool_rounds(),
+            bash_timeout_cap_secs: default_bash_timeout_cap_secs(),
             context_window_default: default_context_window(),
             commit_msg_provider: None,
             commit_msg_model_id: String::new(),
@@ -459,6 +468,10 @@ impl AppSettings {
         if self.context_window_default == 0 {
             self.context_window_default = default_context_window();
         }
+        if self.bash_timeout_cap_secs == 0 {
+            self.bash_timeout_cap_secs = default_bash_timeout_cap_secs();
+        }
+        self.bash_timeout_cap_secs = self.bash_timeout_cap_secs.clamp(5, 3600);
         // Workspaces: drop entries whose folder vanished, dedupe by path.
         let mut seen = std::collections::HashSet::new();
         self.workspaces.retain(|w| {
@@ -814,6 +827,35 @@ mod tests {
         assert!(ALL_TOOL_NAMES.contains(&"bash"));
         assert!(ALL_TOOL_NAMES.contains(&"web_search"));
         assert!(ALL_TOOL_NAMES.contains(&"web_fetch"));
+    }
+
+    #[test]
+    fn bash_timeout_cap_defaults_to_300() {
+        let s = AppSettings::default();
+        assert_eq!(s.bash_timeout_cap_secs, 300);
+    }
+
+    #[test]
+    fn normalize_fixes_and_clamps_bash_timeout_cap() {
+        let base = r#"{
+            "active_provider": "openai",
+            "providers": {"openai": {"model_id":"gpt-4o-mini","base_url":""}},
+            "system_prompt": "hi""#;
+        // 0 → default
+        let mut s: AppSettings =
+            serde_json::from_str(&format!("{base}, \"bash_timeout_cap_secs\": 0 }}")).unwrap();
+        s.normalize();
+        assert_eq!(s.bash_timeout_cap_secs, 300);
+        // below floor → 5
+        let mut s: AppSettings =
+            serde_json::from_str(&format!("{base}, \"bash_timeout_cap_secs\": 4 }}")).unwrap();
+        s.normalize();
+        assert_eq!(s.bash_timeout_cap_secs, 5);
+        // above ceiling → 3600
+        let mut s: AppSettings =
+            serde_json::from_str(&format!("{base}, \"bash_timeout_cap_secs\": 999999 }}")).unwrap();
+        s.normalize();
+        assert_eq!(s.bash_timeout_cap_secs, 3600);
     }
 
     #[test]

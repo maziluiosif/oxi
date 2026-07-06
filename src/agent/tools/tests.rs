@@ -24,6 +24,7 @@ fn all_enabled() -> ToolEnv {
         enabled: vec![true; ALL_TOOL_NAMES.len()],
         web_search_url: "https://search.invalid".to_string(),
         web_search_backend: WebSearchBackend::default(),
+        bash_timeout_cap_secs: 300,
     }
 }
 
@@ -431,6 +432,32 @@ fn tool_bash_timeout() {
 }
 
 #[test]
+fn tool_bash_timeout_cap_clamps_requested_timeout() {
+    let cwd = temp_workspace("bash-cap-clamp");
+    let mut env = all_enabled();
+    env.bash_timeout_cap_secs = 1;
+    let start = std::time::Instant::now();
+    // Requests 30s but the cap is 1s, so it must be killed at ~1s.
+    let res = run_tool(&cwd, "bash", &json!({"command": "sleep 30", "timeout": 30}), &env);
+    assert!(!res.is_error);
+    assert!(res.output.contains("timeout"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(3));
+}
+
+#[test]
+fn tool_bash_default_timeout_respects_low_cap() {
+    let cwd = temp_workspace("bash-cap-default");
+    let mut env = all_enabled();
+    env.bash_timeout_cap_secs = 1;
+    let start = std::time::Instant::now();
+    // No explicit timeout: default 15s would exceed the 1s cap, so it clamps to 1s.
+    let res = run_tool(&cwd, "bash", &json!({"command": "sleep 30"}), &env);
+    assert!(!res.is_error);
+    assert!(res.output.contains("timeout"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(3));
+}
+
+#[test]
 fn tool_bash_missing_command() {
     let cwd = temp_workspace("bash-no-cmd");
     let res = run_tool(&cwd, "bash", &json!({}), &all_enabled());
@@ -587,7 +614,7 @@ fn run_tool_disabled_tool() {
 
 #[test]
 fn tool_definitions_all_enabled() {
-    let defs = tool_definitions_json(&all_enabled().enabled);
+    let defs = tool_definitions_json(&all_enabled().enabled, 300);
     assert_eq!(defs.len(), ALL_TOOL_NAMES.len());
     let names: Vec<&str> = defs
         .iter()
@@ -604,7 +631,7 @@ fn tool_definitions_all_enabled() {
 fn tool_definitions_some_disabled() {
     let mut enabled = vec![false; ALL_TOOL_NAMES.len()];
     enabled[0] = true; // only "read"
-    let defs = tool_definitions_json(&enabled);
+    let defs = tool_definitions_json(&enabled, 300);
     assert_eq!(defs.len(), 1);
 }
 
