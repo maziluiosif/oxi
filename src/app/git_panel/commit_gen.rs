@@ -93,6 +93,7 @@ impl OxiApp {
             system_prompt,
             user_prompt,
             max_chars: Some(1500),
+            effort_override: Some("low".to_string()),
         });
         self.conv.git_commit_message.clear();
         self.conv.commit_gen_error = None;

@@ -449,6 +449,12 @@ impl AppSettings {
                 // 0/null means "auto".
                 cfg.context_window = None;
             }
+            if !matches!(
+                cfg.effort.trim(),
+                "" | "low" | "medium" | "high" | "xhigh" | "max"
+            ) {
+                cfg.effort.clear();
+            }
         }
         if self.context_window_default == 0 {
             self.context_window_default = default_context_window();

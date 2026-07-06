@@ -11,7 +11,20 @@ use serde_json::{Value, json};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::{ToolResult, run_tool};
+use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult, run_tool};
+
+pub(crate) fn openai_supports_reasoning_effort(model: &str) -> bool {
+    let m = model
+        .trim()
+        .strip_prefix("openai/")
+        .unwrap_or(model.trim())
+        .to_ascii_lowercase();
+    m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
+}
+
+pub(crate) fn is_valid_reasoning_effort(effort: &str) -> bool {
+    matches!(effort.trim(), "low" | "medium" | "high")
+}
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -49,7 +62,7 @@ pub async fn run_chat_loop(
             return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
         let _ = tx.send(AgentEvent::AgentStart);
-        let body = json!({
+        let mut body = json!({
             "model": model,
             "messages": messages,
             "tools": tools,
@@ -60,6 +73,11 @@ pub async fn run_chat_loop(
             "stream_options": { "include_usage": true },
             "parallel_tool_calls": true,
         });
+        if openai_supports_reasoning_effort(model)
+            && let Some(effort) = ctx.effort_override.filter(|e| is_valid_reasoning_effort(e))
+        {
+            body["reasoning_effort"] = json!(effort);
+        }
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -243,7 +261,7 @@ pub async fn run_chat_loop(
                         let _ = tx.send(AgentEvent::ToolOutput {
                             tool_call_id: tc.id.clone(),
                             text: text.clone(),
-                            truncated: text.len() >= 120_000,
+                            truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                         });
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
@@ -278,7 +296,7 @@ pub async fn run_chat_loop(
                     let _ = tx.send(AgentEvent::ToolOutput {
                         tool_call_id: tc.id.clone(),
                         text: text.clone(),
-                        truncated: text.len() >= 120_000,
+                        truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                     });
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
@@ -300,7 +318,7 @@ pub async fn run_chat_loop(
             "role": "assistant",
             "content": assistant_text,
         }));
-        let _ = tx.send(AgentEvent::AgentEnd);
+        let _ = tx.send(AgentEvent::ProviderDone);
         break;
     }
     Ok(())
@@ -540,6 +558,7 @@ mod integration_tests {
             cancel: &cancel,
             gate: &mut gate,
             max_rounds: 10,
+            effort_override: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");
@@ -570,7 +589,7 @@ mod integration_tests {
                 ..
             }
         )));
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::AgentEnd)));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ProviderDone)));
     }
 
     #[tokio::test]
@@ -615,6 +634,7 @@ mod integration_tests {
             cancel: &cancel,
             gate: &mut gate,
             max_rounds: 10,
+            effort_override: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");

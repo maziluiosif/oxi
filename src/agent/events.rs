@@ -83,6 +83,11 @@ pub enum AgentEvent {
     AssistantMessageDone,
     /// Token usage for one provider round; the UI accumulates per turn/session.
     Usage(TokenUsage),
+    /// Canonical provider wire-format history to reuse on the next turn for cache hits.
+    WireHistory(Vec<Value>),
+    /// Provider loop finished successfully; runner will emit `WireHistory` and then
+    /// `AgentEnd` so the UI cannot drop the canonical history by clearing the receiver first.
+    ProviderDone,
     /// Entire turn finished (no more tool calls).
     AgentEnd,
 }

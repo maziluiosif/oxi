@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Instant;
 
+use serde_json::Value;
+
 use eframe::egui;
 
 use crate::agent::{AgentEvent, ApprovalDecision, TokenUsage};
@@ -59,6 +61,11 @@ pub struct SessionRunState {
     pub stream_error: Option<String>,
     pub turn_usage: TokenUsage,
     pub session_usage: TokenUsage,
+    /// In-memory canonical provider wire history reused across turns to preserve
+    /// byte-for-byte cacheable prefixes. Not persisted; provider caches are short-lived.
+    pub wire_history: Option<Vec<Value>>,
+    pub wire_fingerprint: u64,
+    pub wire_session_file: Option<String>,
 }
 
 impl SessionRunState {
@@ -197,8 +204,11 @@ pub struct ConversationState {
     pub git_ctx: eframe::egui::Context,
     /// Background model-list fetch results keyed by provider kind.
     pub fetched_models: std::collections::HashMap<LlmProviderKind, FetchedModels>,
-    /// Channel for model-list fetch results (drained each frame).
-    pub model_rx: Option<std::sync::mpsc::Receiver<ModelFetchMsg>>,
+    /// Channels for in-flight model-list fetch results (drained each frame).
+    /// Multiple fetches can overlap when switching provider/settings tabs; keeping all
+    /// receivers prevents an older provider from getting stuck in `loading` after its
+    /// receiver is overwritten.
+    pub model_rxs: Vec<std::sync::mpsc::Receiver<ModelFetchMsg>>,
     /// Draft (in-memory only) SSH passwords for Remote SSH compute targets, keyed by
     /// provider kind. Loaded lazily from the credential store on first edit, written
     /// through on change; never stored in `settings.json`.

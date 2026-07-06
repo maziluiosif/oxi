@@ -4,7 +4,9 @@
 
 use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
 
-use crate::oauth::{OAuthUiMsg, clear_codex, load_oauth_store, save_oauth_store};
+use crate::oauth::{
+    OAuthUiMsg, clear_codex, ensure_codex_access_token, load_oauth_store, save_oauth_store,
+};
 use crate::settings::{ComputeLocation, LlmProviderKind, ProviderConfig, SshConfig};
 use crate::theme::*;
 use crate::ui::chrome::{
@@ -119,6 +121,51 @@ impl OxiApp {
                             .color(c_text_muted()),
                     );
                 });
+            }
+
+            if matches!(
+                kind,
+                LlmProviderKind::OpenAi | LlmProviderKind::GptCodex | LlmProviderKind::OpenCodeGo
+            ) {
+                let is_gpt = matches!(kind, LlmProviderKind::OpenAi | LlmProviderKind::GptCodex);
+                field_label(ui, if is_gpt { "Thinking / reasoning level" } else { "Claude effort (4.6+ adaptive thinking)" });
+                let current = self.conv.settings.provider(kind).effort.clone();
+                let values: &[(&str, &str)] = if is_gpt {
+                    &[("", "default"), ("low", "low"), ("medium", "medium"), ("high", "high")]
+                } else {
+                    &[
+                        ("", "default (high)"),
+                        ("low", "low"),
+                        ("medium", "medium"),
+                        ("high", "high"),
+                        ("xhigh", "xhigh"),
+                        ("max", "max"),
+                    ]
+                };
+                let selected = values
+                    .iter()
+                    .find(|(value, _)| *value == current)
+                    .map(|(_, label)| *label)
+                    .unwrap_or("default");
+                egui::ComboBox::from_id_salt(("effort_combo", kind.slug()))
+                    .selected_text(selected)
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for (value, label) in values {
+                            if ui.selectable_label(current == *value, *label).clicked() {
+                                self.conv.settings.provider_mut(kind).effort = value.to_string();
+                            }
+                        }
+                    });
+                ui.label(
+                    RichText::new(if is_gpt {
+                        "Sent as reasoning_effort for GPT reasoning models (gpt-5/o-series) and as reasoning.effort for ChatGPT Codex."
+                    } else {
+                        "Sent as output_config.effort only for Claude 4.6+ adaptive-thinking models."
+                    })
+                    .size(FS_TINY)
+                    .color(c_text_muted()),
+                );
             }
 
             // Base URL
@@ -536,7 +583,7 @@ impl OxiApp {
     }
 
     /// Kick off a background `/v1/models` fetch for `kind`, if one isn't already in
-    /// flight. Results arrive on `conv.model_rx` and are drained each frame.
+    /// flight. Results arrive on `conv.model_rxs` and are drained each frame.
     pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, kind: LlmProviderKind) {
         let cfg = self.conv.settings.provider(kind).clone();
         let entry = self.conv.fetched_models.entry(kind).or_default();
@@ -547,8 +594,7 @@ impl OxiApp {
         entry.error = None;
 
         let (tx, rx) = std::sync::mpsc::channel::<ModelFetchMsg>();
-        // Keep only the most recent receiver live (single global channel).
-        self.conv.model_rx = Some(rx);
+        self.conv.model_rxs.push(rx);
         let ctx = ctx.clone();
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
@@ -577,40 +623,68 @@ impl OxiApp {
                         return;
                     }
                 };
-                let base = match rt.block_on(crate::compute::resolve_base_url(&cfg, &tunnels)) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        let _ = tx.send(ModelFetchMsg {
-                            provider: kind,
-                            result: Err(e),
-                        });
-                        ctx.request_repaint();
-                        return;
-                    }
-                };
-                // OpenCode Go expects /v1/models but its default base lacks /v1.
-                let base = if cfg.provider == LlmProviderKind::OpenCodeGo
-                    && !base.trim_end_matches('/').ends_with("/v1")
+                let mut oauth = load_oauth_store();
+                let (base, key, extra) = if cfg.provider == LlmProviderKind::GptCodex
+                    && oauth.openai_codex.is_some()
                 {
-                    format!("{}/v1", base.trim_end_matches('/'))
+                    let creds = match rt.block_on(ensure_codex_access_token(&client, &mut oauth)) {
+                        Ok(creds) => creds,
+                        Err(e) => {
+                            let _ = tx.send(ModelFetchMsg {
+                                provider: kind,
+                                result: Err(e),
+                            });
+                            ctx.request_repaint();
+                            return;
+                        }
+                    };
+                    let base = if cfg.base_url.trim().is_empty() {
+                        "https://chatgpt.com/backend-api/codex".to_string()
+                    } else {
+                        cfg.effective_base_url()
+                    };
+                    let extra = vec![
+                        ("ChatGPT-Account-ID".to_string(), creds.1),
+                        ("originator".to_string(), "codex_cli_rs".to_string()),
+                    ];
+                    (base, creds.0, extra)
                 } else {
-                    base
-                };
-                let extra = if cfg.provider == LlmProviderKind::OpenRouter {
-                    crate::agent::runner::openrouter_extra_headers(&cfg)
-                } else {
-                    Vec::new()
-                };
-                let key = match resolve_fetch_key(&cfg) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        let _ = tx.send(ModelFetchMsg {
-                            provider: kind,
-                            result: Err(e),
-                        });
-                        ctx.request_repaint();
-                        return;
-                    }
+                    let base = match rt.block_on(crate::compute::resolve_base_url(&cfg, &tunnels)) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            let _ = tx.send(ModelFetchMsg {
+                                provider: kind,
+                                result: Err(e),
+                            });
+                            ctx.request_repaint();
+                            return;
+                        }
+                    };
+                    // OpenCode Go expects /v1/models but its default base lacks /v1.
+                    let base = if cfg.provider == LlmProviderKind::OpenCodeGo
+                        && !base.trim_end_matches('/').ends_with("/v1")
+                    {
+                        format!("{}/v1", base.trim_end_matches('/'))
+                    } else {
+                        base
+                    };
+                    let extra = if cfg.provider == LlmProviderKind::OpenRouter {
+                        crate::agent::runner::openrouter_extra_headers(&cfg)
+                    } else {
+                        Vec::new()
+                    };
+                    let key = match resolve_fetch_key(&cfg) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            let _ = tx.send(ModelFetchMsg {
+                                provider: kind,
+                                result: Err(e),
+                            });
+                            ctx.request_repaint();
+                            return;
+                        }
+                    };
+                    (base, key, extra)
                 };
                 let r = rt.block_on(crate::agent::fetch_models(&client, &base, &key, &extra));
                 let r = r.map(|ms| ms.into_iter().map(|m| m.id).collect::<Vec<_>>());

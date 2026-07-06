@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::{ToolResult, run_tool};
+use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult, run_tool};
 
 /// Overwrite `dst` with the u64 field `key` from a `usage` JSON object, if present.
 fn read_usage_field(usage: &Value, key: &str, dst: &mut u64) {
@@ -116,14 +116,23 @@ fn to_anthropic_messages(openai: &[Value], cache_control: Option<Value>) -> (Str
             "content": content
         }));
     }
-    if let Some(cache_control) = cache_control
-        && let Some(last_msg) = msgs.last_mut()
-        && last_msg.get("role").and_then(|x| x.as_str()) == Some("user")
-        && let Some(content) = last_msg.get_mut("content").and_then(|x| x.as_array_mut())
-        && let Some(last_block) = content.last_mut()
-        && let Some(obj) = last_block.as_object_mut()
-    {
-        obj.insert("cache_control".to_string(), cache_control);
+    if let Some(cache_control) = cache_control {
+        let mut added = 0usize;
+        for msg in msgs.iter_mut().rev() {
+            if added >= 2 {
+                break;
+            }
+            if msg.get("role").and_then(|x| x.as_str()) != Some("user") {
+                continue;
+            }
+            if let Some(content) = msg.get_mut("content").and_then(|x| x.as_array_mut())
+                && let Some(last_block) = content.last_mut()
+                && let Some(obj) = last_block.as_object_mut()
+            {
+                obj.insert("cache_control".to_string(), cache_control.clone());
+                added += 1;
+            }
+        }
     }
     (system, msgs)
 }
@@ -184,16 +193,37 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
     Some((media_type.to_string(), data.to_string()))
 }
 
-/// Check if a Claude model supports extended thinking.
-fn supports_extended_thinking(model: &str) -> bool {
+pub(crate) fn is_valid_effort(effort: &str) -> bool {
+    matches!(effort.trim(), "low" | "medium" | "high" | "xhigh" | "max")
+}
+
+pub(crate) fn thinking_config(model: &str) -> Option<Value> {
     let m = model.trim().to_ascii_lowercase();
-    m.starts_with("claude-sonnet-4")
-        || m.starts_with("claude-opus-4")
-        || m.starts_with("claude-4")
-        || m.starts_with("claude-3.7-sonnet")
-        || m.starts_with("claude-3-7-sonnet")
-        || m.starts_with("claude-3.5-sonnet")
-        || m.starts_with("claude-3-5-sonnet")
+    let adaptive = [
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-mythos-",
+    ];
+    if adaptive.iter().any(|prefix| m.starts_with(prefix)) {
+        return Some(json!({ "type": "adaptive" }));
+    }
+    let budgeted = [
+        "claude-sonnet-4",
+        "claude-opus-4",
+        "claude-4",
+        "claude-3.7-sonnet",
+        "claude-3-7-sonnet",
+        "claude-3.5-sonnet",
+        "claude-3-5-sonnet",
+    ];
+    budgeted
+        .iter()
+        .any(|prefix| m.starts_with(prefix))
+        .then(|| json!({ "type": "enabled", "budget_tokens": 10240 }))
 }
 
 pub async fn run_anthropic_loop(
@@ -211,12 +241,12 @@ pub async fn run_anthropic_loop(
     let tx = ctx.tx;
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
+    let effort_override = ctx.effort_override;
     let gate = &mut *ctx.gate;
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let anthropic_tools = to_anthropic_tools(tools_openai);
     let cache_control = Some(json!({ "type": "ephemeral" }));
-    // Enable extended thinking for models that support it.
-    let supports_thinking = supports_extended_thinking(model);
+    let thinking = thinking_config(model);
     let mut round = 0u32;
     let mut stream_retries = 0u32;
     loop {
@@ -232,17 +262,23 @@ pub async fn run_anthropic_loop(
         let _ = tx.send(AgentEvent::AgentStart);
         let mut body = json!({
             "model": model,
-            "max_tokens": if supports_thinking { 16384 } else { 8192 },
+            "max_tokens": if thinking.is_some() { 16384 } else { 8192 },
             "stream": true,
-            "system": system,
+            "system": [{"type":"text","text":system,"cache_control":{"type":"ephemeral"}}],
             "messages": anth_msgs,
             "tools": anthropic_tools,
         });
-        if supports_thinking {
-            body["thinking"] = json!({
-                "type": "enabled",
-                "budget_tokens": 10240
-            });
+        if let Some(thinking) = thinking.clone() {
+            body["thinking"] = thinking;
+        }
+        if thinking
+            .as_ref()
+            .and_then(|v| v.get("type"))
+            .and_then(|v| v.as_str())
+            == Some("adaptive")
+            && let Some(effort) = effort_override.filter(|e| is_valid_effort(e))
+        {
+            body["output_config"] = json!({ "effort": effort });
         }
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -428,7 +464,7 @@ pub async fn run_anthropic_loop(
                         let _ = tx.send(AgentEvent::ToolOutput {
                             tool_call_id: tc.id.clone(),
                             text: text.clone(),
-                            truncated: text.len() >= 120_000,
+                            truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                         });
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
@@ -463,7 +499,7 @@ pub async fn run_anthropic_loop(
                     let _ = tx.send(AgentEvent::ToolOutput {
                         tool_call_id: tc.id.clone(),
                         text: text.clone(),
-                        truncated: text.len() >= 120_000,
+                        truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
                     });
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
@@ -486,7 +522,7 @@ pub async fn run_anthropic_loop(
             "role": "assistant",
             "content": text_out,
         }));
-        let _ = tx.send(AgentEvent::AgentEnd);
+        let _ = tx.send(AgentEvent::ProviderDone);
         break;
     }
     Ok(())
@@ -605,18 +641,47 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn thinking_supported_for_known_models() {
-        assert!(supports_extended_thinking("claude-sonnet-4"));
-        assert!(supports_extended_thinking("claude-opus-4"));
-        assert!(supports_extended_thinking("claude-3.7-sonnet"));
-        assert!(supports_extended_thinking("claude-3-5-sonnet-20241022"));
+    fn thinking_budgeted_for_known_older_models() {
+        assert_eq!(
+            thinking_config("claude-sonnet-4").unwrap()["type"],
+            "enabled"
+        );
+        assert_eq!(thinking_config("claude-opus-4").unwrap()["type"], "enabled");
+        assert_eq!(
+            thinking_config("claude-3.7-sonnet").unwrap()["type"],
+            "enabled"
+        );
+        assert_eq!(
+            thinking_config("claude-3-5-sonnet-20241022").unwrap()["type"],
+            "enabled"
+        );
+    }
+
+    #[test]
+    fn thinking_adaptive_for_new_claude_models() {
+        assert_eq!(
+            thinking_config("claude-opus-4-6").unwrap()["type"],
+            "adaptive"
+        );
+        assert_eq!(
+            thinking_config("claude-sonnet-5").unwrap()["type"],
+            "adaptive"
+        );
+        assert_eq!(
+            thinking_config("claude-fable-5").unwrap()["type"],
+            "adaptive"
+        );
+        assert_eq!(
+            thinking_config("claude-mythos-next").unwrap()["type"],
+            "adaptive"
+        );
     }
 
     #[test]
     fn thinking_not_supported_for_old_models() {
-        assert!(!supports_extended_thinking("claude-3-opus-20240229"));
-        assert!(!supports_extended_thinking("claude-3-haiku-20240307"));
-        assert!(!supports_extended_thinking("claude-3.5-haiku-20241022"));
+        assert!(thinking_config("claude-3-opus-20240229").is_none());
+        assert!(thinking_config("claude-3-haiku-20240307").is_none());
+        assert!(thinking_config("claude-3.5-haiku-20241022").is_none());
     }
 
     #[test]

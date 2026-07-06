@@ -12,13 +12,22 @@ use super::paths::{err, resolve_under_cwd, resolve_under_cwd_for_create};
 
 const READ_MAX_LINES: usize = 2000;
 
+pub(crate) fn floor_char_boundary(s: &str, max: usize) -> usize {
+    let mut cut = max.min(s.len());
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    cut
+}
+
 pub(crate) fn truncate_out(s: String) -> String {
     if s.len() <= MAX_TOOL_OUTPUT_CHARS {
         s
     } else {
+        let cut = floor_char_boundary(&s, MAX_TOOL_OUTPUT_CHARS);
         format!(
             "{}\n\n[output truncated to {} chars]",
-            &s[..MAX_TOOL_OUTPUT_CHARS],
+            &s[..cut],
             MAX_TOOL_OUTPUT_CHARS
         )
     }
@@ -167,16 +176,22 @@ pub(crate) fn tool_read(cwd: &Path, args: &Value) -> Result<String, String> {
         .min(READ_MAX_LINES);
     let start = offset.saturating_sub(1);
     let end = (start + limit).min(lines.len());
-    let slice = if start < lines.len() {
-        lines[start..end].join("\n")
+    let (slice, real_end) = if start < lines.len() {
+        let numbered = lines[start..end]
+            .iter()
+            .enumerate()
+            .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        (numbered, end)
     } else {
-        String::new()
+        (String::new(), start)
     };
     Ok(truncate_out(format!(
         "File: {}\nLines {}-{}\n---\n{}",
         abs.display(),
         offset,
-        offset.saturating_add(limit).saturating_sub(1),
+        real_end,
         slice
     )))
 }

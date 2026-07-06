@@ -87,35 +87,43 @@ impl OxiApp {
     }
 
     pub(crate) fn drain_models(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.conv.model_rx.take() else {
+        if self.conv.model_rxs.is_empty() {
             return;
-        };
+        }
         let mut repainted = false;
-        loop {
-            match rx.try_recv() {
-                Ok(msg) => {
-                    let entry = self.conv.fetched_models.entry(msg.provider).or_default();
-                    entry.loading = false;
-                    match msg.result {
-                        Ok(models) => {
-                            entry.models = models;
-                            entry.error = None;
+        let mut pending = Vec::with_capacity(self.conv.model_rxs.len());
+        for rx in self.conv.model_rxs.drain(..) {
+            let mut keep_rx = true;
+            loop {
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        let entry = self.conv.fetched_models.entry(msg.provider).or_default();
+                        entry.loading = false;
+                        match msg.result {
+                            Ok(models) => {
+                                entry.models = models;
+                                entry.error = None;
+                            }
+                            Err(e) => {
+                                entry.error = Some(e);
+                            }
                         }
-                        Err(e) => {
-                            entry.error = Some(e);
-                        }
+                        repainted = true;
                     }
-                    repainted = true;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    self.conv.model_rx = Some(rx);
-                    break;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    break;
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        keep_rx = false;
+                        break;
+                    }
                 }
             }
+            if keep_rx {
+                pending.push(rx);
+            }
         }
+        self.conv.model_rxs = pending;
         if repainted {
             ctx.request_repaint();
         }
@@ -210,6 +218,7 @@ impl OxiApp {
                 self.finalize_tool_run(key, id, is_error, full_output_path, diff);
             }
             AgentEvent::StreamError(reason) => {
+                self.run_state_mut(key).wire_history = None;
                 self.append_assistant_answer(key, &format!("\n[Error] {reason}\n"));
                 self.finish_assistant_stream(key);
             }
@@ -223,6 +232,10 @@ impl OxiApp {
                 run.turn_usage.add(&usage);
                 run.session_usage.add(&usage);
             }
+            AgentEvent::WireHistory(history) => {
+                self.run_state_mut(key).wire_history = Some(history);
+            }
+            AgentEvent::ProviderDone => {}
             AgentEvent::AgentEnd => {
                 self.finish_assistant_stream(key);
             }
