@@ -115,6 +115,34 @@ pub fn render_message(
 ) -> egui::Response {
     let col_w = content_wrap_width(ui);
 
+    if msg.role == MsgRole::User && msg.is_summary {
+        let response = ui
+            .vertical(|ui| {
+                ui.set_width(col_w);
+                Frame::new()
+                    .fill(c_bg_elevated_2())
+                    .stroke(Stroke::new(1.0, c_border_subtle()))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(12, 9))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        egui::CollapsingHeader::new(
+                            RichText::new("Conversation summary")
+                                .size(FS_SMALL)
+                                .color(c_text_muted()),
+                        )
+                        .id_salt(("summary", msg_idx))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            markdown::render_markdown(ui, &msg.text);
+                        });
+                    });
+            })
+            .response;
+        ui.add_space(8.0);
+        return response;
+    }
+
     if msg.role == MsgRole::User {
         let response = ui
             .vertical(|ui| {

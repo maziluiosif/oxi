@@ -1,7 +1,7 @@
 //! read / write / edit and unified diff helpers.
 
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use serde_json::Value;
@@ -33,14 +33,31 @@ pub(crate) fn truncate_out(s: String) -> String {
     }
 }
 
-/// Produce a minimal unified diff between `before` and `after` text.
+/// Produce a minimal-ish unified diff between `before` and `after` text.
 /// Context lines: 3 (standard). Output is capped at 8 000 chars so it stays
-/// lightweight in the UI — the full file is never stored twice.
+/// lightweight in the UI. Small files use an LCS diff; large files use a
+/// bounded prefix/suffix diff so a big edit cannot allocate an O(m*n) matrix.
 pub(crate) fn make_unified_diff(path: &str, before: &str, after: &str) -> String {
+    if before == after {
+        return String::new();
+    }
+
     let before_lines: Vec<&str> = before.lines().collect();
     let after_lines: Vec<&str> = after.lines().collect();
+    let m = before_lines.len();
+    let n = after_lines.len();
 
-    // Build a simple LCS-based diff: compute edit script line-by-line.
+    const MAX_LCS_CELLS: usize = 1_000_000;
+    let ops = if m.saturating_mul(n) <= MAX_LCS_CELLS {
+        lcs_diff_ops(&before_lines, &after_lines)
+    } else {
+        bounded_diff_ops(&before_lines, &after_lines)
+    };
+
+    render_unified_diff(path, &ops)
+}
+
+fn lcs_diff_ops<'a>(before_lines: &[&'a str], after_lines: &[&'a str]) -> Vec<(char, &'a str)> {
     let m = before_lines.len();
     let n = after_lines.len();
 
@@ -74,7 +91,48 @@ pub(crate) fn make_unified_diff(path: &str, before: &str, after: &str) -> String
         }
     }
     ops.reverse();
+    ops
+}
 
+fn bounded_diff_ops<'a>(before_lines: &[&'a str], after_lines: &[&'a str]) -> Vec<(char, &'a str)> {
+    let mut prefix = 0usize;
+    while prefix < before_lines.len()
+        && prefix < after_lines.len()
+        && before_lines[prefix] == after_lines[prefix]
+    {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while suffix < before_lines.len().saturating_sub(prefix)
+        && suffix < after_lines.len().saturating_sub(prefix)
+        && before_lines[before_lines.len() - 1 - suffix]
+            == after_lines[after_lines.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let mut ops = Vec::with_capacity(before_lines.len() + after_lines.len());
+    ops.extend(before_lines[..prefix].iter().map(|line| (' ', *line)));
+    ops.extend(
+        before_lines[prefix..before_lines.len() - suffix]
+            .iter()
+            .map(|line| ('-', *line)),
+    );
+    ops.extend(
+        after_lines[prefix..after_lines.len() - suffix]
+            .iter()
+            .map(|line| ('+', *line)),
+    );
+    ops.extend(
+        before_lines[before_lines.len() - suffix..]
+            .iter()
+            .map(|line| (' ', *line)),
+    );
+    ops
+}
+
+fn render_unified_diff(path: &str, ops: &[(char, &str)]) -> String {
     // Render with 3 context lines, unified format
     const CTX: usize = 3;
     let total = ops.len();
@@ -111,7 +169,7 @@ pub(crate) fn make_unified_diff(path: &str, before: &str, after: &str) -> String
     let mut before_nums = Vec::with_capacity(ops.len());
     let mut after_nums = Vec::with_capacity(ops.len());
     let (mut bl, mut al) = (1usize, 1usize);
-    for (k, _) in &ops {
+    for (k, _) in ops {
         before_nums.push(bl);
         after_nums.push(al);
         match k {
@@ -159,10 +217,7 @@ pub(crate) fn tool_read(cwd: &Path, args: &Value) -> Result<String, String> {
         .and_then(|x| x.as_str())
         .ok_or_else(|| err("missing path"))?;
     let abs = resolve_under_cwd(cwd, path)?;
-    let mut f = File::open(&abs).map_err(|e| e.to_string())?;
-    let mut buf = String::new();
-    f.read_to_string(&mut buf).map_err(|e| e.to_string())?;
-    let lines: Vec<&str> = buf.lines().collect();
+    let f = File::open(&abs).map_err(|e| e.to_string())?;
     let offset = args
         .get("offset")
         .and_then(|x| x.as_u64())
@@ -175,18 +230,20 @@ pub(crate) fn tool_read(cwd: &Path, args: &Value) -> Result<String, String> {
         .unwrap_or(READ_MAX_LINES)
         .min(READ_MAX_LINES);
     let start = offset.saturating_sub(1);
-    let end = (start + limit).min(lines.len());
-    let (slice, real_end) = if start < lines.len() {
-        let numbered = lines[start..end]
-            .iter()
-            .enumerate()
-            .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        (numbered, end)
-    } else {
-        (String::new(), start)
-    };
+    let mut numbered_lines = Vec::new();
+    let mut real_end = start;
+    for (idx, line) in BufReader::new(f).lines().enumerate() {
+        if idx < start {
+            continue;
+        }
+        if numbered_lines.len() >= limit {
+            break;
+        }
+        let line = line.map_err(|e| e.to_string())?;
+        real_end = idx + 1;
+        numbered_lines.push(format!("{:>6}\t{}", idx + 1, line));
+    }
+    let slice = numbered_lines.join("\n");
     Ok(truncate_out(format!(
         "File: {}\nLines {}-{}\n---\n{}",
         abs.display(),
@@ -285,21 +342,30 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
         }
     };
     let mut content = before.clone();
-    let mut edits = Vec::new();
+    // Each entry: (oldText, newText, replace_all).
+    let mut edits: Vec<(String, String, bool)> = Vec::new();
     if let Some(arr) = args.get("edits").and_then(|x| x.as_array()) {
         for e in arr {
             let old = e.get("oldText").and_then(|x| x.as_str());
             let new = e.get("newText").and_then(|x| x.as_str());
+            let replace_all = e
+                .get("replaceAll")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
             if let (Some(o), Some(n)) = (old, new) {
-                edits.push((o.to_string(), n.to_string()));
+                edits.push((o.to_string(), n.to_string(), replace_all));
             }
         }
     }
     if edits.is_empty() {
         let old = args.get("oldText").and_then(|x| x.as_str());
         let new = args.get("newText").and_then(|x| x.as_str());
+        let replace_all = args
+            .get("replaceAll")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
         if let (Some(o), Some(n)) = (old, new) {
-            edits.push((o.to_string(), n.to_string()));
+            edits.push((o.to_string(), n.to_string(), replace_all));
         }
     }
     if edits.is_empty() {
@@ -309,21 +375,44 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
             diff: None,
         };
     }
-    for (old, _) in &edits {
+    // An empty oldText matches between every char; `str::replace("")` would interleave the
+    // replacement everywhere. Reject it outright.
+    if edits.iter().any(|(old, _, _)| old.is_empty()) {
+        return ToolResult {
+            output: err("oldText must not be empty"),
+            is_error: true,
+            diff: None,
+        };
+    }
+    for (old, _, replace_all) in &edits {
         let count = content.matches(old.as_str()).count();
-        if count != 1 {
+        if *replace_all {
+            if count == 0 {
+                return ToolResult {
+                    output: err("oldText not found in file"),
+                    is_error: true,
+                    diff: None,
+                };
+            }
+        } else if count != 1 {
             return ToolResult {
                 output: err(format!(
-                    "oldText must match exactly once in file, found {count} occurrences"
+                    "oldText must match exactly once in file, found {count} occurrences \
+                     (pass replaceAll: true to replace every occurrence)"
                 )),
                 is_error: true,
                 diff: None,
             };
         }
     }
-    for (old, new) in edits {
-        if let Some(idx) = content.find(old.as_str()) {
+    let mut total_replacements = 0usize;
+    for (old, new, replace_all) in edits {
+        if replace_all {
+            total_replacements += content.matches(old.as_str()).count();
+            content = content.replace(old.as_str(), &new);
+        } else if let Some(idx) = content.find(old.as_str()) {
             content.replace_range(idx..idx + old.len(), &new);
+            total_replacements += 1;
         }
     }
     if let Err(e) = fs::write(&abs, &content) {
@@ -335,7 +424,12 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
     }
     let diff = make_unified_diff(path, &before, &content);
     ToolResult {
-        output: format!("Edited {}", abs.display()),
+        output: format!(
+            "Edited {} ({} replacement{})",
+            abs.display(),
+            total_replacements,
+            if total_replacements == 1 { "" } else { "s" }
+        ),
         is_error: false,
         diff: if diff.is_empty() { None } else { Some(diff) },
     }

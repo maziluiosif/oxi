@@ -141,6 +141,31 @@ impl OxiApp {
                 .size(FS_TINY)
                 .color(c_text_muted()),
             );
+
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
+            field_label(ui, "Bash timeout cap (seconds)");
+            let mut bash_cap = self.conv.settings.bash_timeout_cap_secs.to_string();
+            let resp = ui.add(
+                TextEdit::singleline(&mut bash_cap)
+                    .desired_width(180.0)
+                    .hint_text("300")
+                    .margin(Margin::symmetric(8, 5)),
+            );
+            if resp.changed()
+                && let Ok(n) = bash_cap.trim().parse::<u32>()
+                && n >= 1
+            {
+                self.conv.settings.bash_timeout_cap_secs = n.clamp(5, 3600);
+            }
+            ui.label(
+                RichText::new(
+                    "Upper bound for a single bash tool call. The model's own timeout argument is clamped to this (5–3600s).",
+                )
+                .size(FS_TINY)
+                .color(c_text_muted()),
+            );
         });
 
         // Web search section

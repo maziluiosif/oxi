@@ -40,6 +40,11 @@ pub struct ChatMessage {
     pub role: MsgRole,
     /// User message only.
     pub text: String,
+    /// `true` for a synthetic [`MsgRole::User`] message holding an LLM-generated summary of
+    /// earlier turns (context compaction). Rendered as a distinct "Conversation summary" card
+    /// and sent to the model with a summary preamble. Older builds that don't know the flag
+    /// load it as a plain user message (graceful degradation).
+    pub is_summary: bool,
     /// User only: images and similar (empty for assistant).
     pub attachments: Vec<UserAttachment>,
     /// Assistant only: ordered thinking / answer / tool segments.
@@ -80,6 +85,11 @@ pub struct Session {
     /// Last activity: file mtime at load time, bumped to `now` on every save.
     /// Drives the relative "6h" age label on sidebar rows.
     pub modified: std::time::SystemTime,
+    /// Measured chars-per-token from the most recent provider `Usage` event
+    /// (estimated prompt chars ÷ reported prompt tokens), clamped to `[2.0, 6.0]`. In-memory
+    /// only (not persisted), used to calibrate the context trim budget and the composer
+    /// context indicator. `None` until the first turn reports usage.
+    pub chars_per_token: Option<f32>,
 }
 
 pub fn make_session_title(text: &str) -> String {
