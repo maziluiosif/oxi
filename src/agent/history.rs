@@ -326,7 +326,7 @@ mod tests {
         let msgs = build_openai_messages("system", &chat, budget);
         let total: usize = msgs.iter().map(|v| v.to_string().len()).sum();
         assert!(total <= trim_target(budget) + 2048, "total={total}");
-        assert!(msgs.len() >= 1 + MIN_KEEP_TURNS * 2);
+        assert!(msgs.len() > MIN_KEEP_TURNS * 2);
     }
 
     #[test]
