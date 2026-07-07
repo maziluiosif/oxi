@@ -40,8 +40,36 @@ pub async fn run_chat_loop(
     messages: &mut Vec<Value>,
     tools: &[Value],
 ) -> Result<(), String> {
+    let url = format!("{}/chat/completions", ctx.base_url.trim_end_matches('/'));
+    run_chat_loop_at(ctx, &url, api_key, true, extra_headers, messages, tools).await
+}
+
+pub async fn run_azure_chat_loop(
+    ctx: &mut LoopCtx<'_>,
+    api_key: &str,
+    api_version: &str,
+    messages: &mut Vec<Value>,
+    tools: &[Value],
+) -> Result<(), String> {
+    let sep = if ctx.base_url.contains('?') { "&" } else { "?" };
+    let url = format!(
+        "{}/chat/completions{sep}api-version={}",
+        ctx.base_url.trim_end_matches('/'),
+        api_version
+    );
+    run_chat_loop_at(ctx, &url, api_key, false, &[], messages, tools).await
+}
+
+async fn run_chat_loop_at(
+    ctx: &mut LoopCtx<'_>,
+    url: &str,
+    api_key: &str,
+    bearer_auth: bool,
+    extra_headers: &[(String, String)],
+    messages: &mut Vec<Value>,
+    tools: &[Value],
+) -> Result<(), String> {
     let client = ctx.client;
-    let base_url = ctx.base_url;
     let model = ctx.model;
     let cwd = ctx.cwd;
     let env = ctx.env;
@@ -49,7 +77,6 @@ pub async fn run_chat_loop(
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
     let gate = &mut *ctx.gate;
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut round = 0u32;
     let mut stream_retries = 0u32;
     loop {
@@ -79,17 +106,24 @@ pub async fn run_chat_loop(
             body["reasoning_effort"] = json!(effort);
         }
         let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|e| e.to_string())?,
-        );
+        if bearer_auth {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|e| e.to_string())?,
+            );
+        } else {
+            headers.insert(
+                HeaderName::from_static("api-key"),
+                HeaderValue::from_str(api_key).map_err(|e| e.to_string())?,
+            );
+        }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         for (k, v) in extra_headers {
             let name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| e.to_string())?;
             let val = HeaderValue::from_str(v).map_err(|e| e.to_string())?;
             headers.insert(name, val);
         }
-        let res = send_with_retry(client.post(&url).headers(headers).json(&body), cancel).await?;
+        let res = send_with_retry(client.post(url).headers(headers).json(&body), cancel).await?;
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
         let mut assistant_text = String::new();

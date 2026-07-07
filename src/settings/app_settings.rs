@@ -403,7 +403,7 @@ impl AppSettings {
         cfg.api_key = match provider {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
             LlmProviderKind::OpenRouter => old.openrouter_api_key,
-            LlmProviderKind::CustomOpenAi
+            LlmProviderKind::AzureOpenAi
             | LlmProviderKind::CustomAnthropic
             | LlmProviderKind::OpenCodeGo
             | LlmProviderKind::LmStudio
@@ -571,7 +571,7 @@ impl AppSettings {
             .into_iter()
             .filter(|&kind| match kind {
                 LlmProviderKind::LmStudio | LlmProviderKind::Ollama => true,
-                LlmProviderKind::CustomOpenAi => true,
+                LlmProviderKind::AzureOpenAi => true,
                 LlmProviderKind::CustomAnthropic => {
                     has_profile_key(kind)
                         || std::env::var("CUSTOM_ANTHROPIC_API_KEY").is_ok()

@@ -128,12 +128,12 @@ impl OxiApp {
                 LlmProviderKind::OpenAi
                     | LlmProviderKind::GptCodex
                     | LlmProviderKind::OpenCodeGo
-                    | LlmProviderKind::CustomOpenAi
+                    | LlmProviderKind::AzureOpenAi
                     | LlmProviderKind::CustomAnthropic
             ) {
                 let is_gpt = matches!(
                     kind,
-                    LlmProviderKind::OpenAi | LlmProviderKind::GptCodex | LlmProviderKind::CustomOpenAi
+                    LlmProviderKind::OpenAi | LlmProviderKind::GptCodex | LlmProviderKind::AzureOpenAi
                 );
                 field_label(ui, if is_gpt { "Thinking / reasoning level" } else { "Claude effort (4.6+ adaptive thinking)" });
                 let current = self.conv.settings.provider(kind).effort.clone();
@@ -193,7 +193,7 @@ impl OxiApp {
                     .hint_text(match kind {
                         LlmProviderKind::OpenAi => "OpenAI API key",
                         LlmProviderKind::OpenRouter => "OpenRouter API key",
-                        LlmProviderKind::CustomOpenAi => "Optional bearer token (or CUSTOM_OPENAI_API_KEY)",
+                        LlmProviderKind::AzureOpenAi => "Azure API key (or AZURE_OPENAI_API_KEY)",
                         LlmProviderKind::CustomAnthropic => "Anthropic-compatible API key",
                         LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
                         LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
@@ -808,10 +808,11 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         LlmProviderKind::CustomAnthropic => std::env::var("CUSTOM_ANTHROPIC_API_KEY")
             .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
             .map_err(|_| "Set an API key to list models.".into()),
-        // Custom OpenAI, OpenCode Go, LM Studio, and Ollama may expose the model list without auth.
-        LlmProviderKind::CustomOpenAi
-        | LlmProviderKind::OpenCodeGo
-        | LlmProviderKind::LmStudio
-        | LlmProviderKind::Ollama => Ok(String::new()),
+        LlmProviderKind::AzureOpenAi => std::env::var("AZURE_OPENAI_API_KEY")
+            .map_err(|_| "Set an API key to list models.".into()),
+        // OpenCode Go, LM Studio, and Ollama may expose the model list without auth.
+        LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
+            Ok(String::new())
+        }
     }
 }
