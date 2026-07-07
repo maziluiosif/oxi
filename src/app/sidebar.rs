@@ -55,7 +55,7 @@ impl OxiApp {
             .id_salt("sidebar_main_scroll")
             .max_height(scroll_h)
             .auto_shrink([false, false])
-            .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+            .scroll_bar_visibility(ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });

@@ -16,11 +16,12 @@ use crate::agent::approval::ApprovalGate;
 use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
 use crate::agent::loop_ctx::LoopCtx;
-use crate::agent::openai::run_chat_loop;
+use crate::agent::openai::{run_azure_chat_loop, run_chat_loop};
 use crate::agent::runner::{
-    configured_custom_anthropic_key, configured_custom_openai_key, configured_lmstudio_key,
-    configured_ollama_key, configured_openai_key, configured_opencode_go_key,
-    configured_openrouter_key, opencode_go_model_uses_anthropic, openrouter_extra_headers,
+    azure_openai_api_version, configured_azure_openai_key, configured_custom_anthropic_key,
+    configured_lmstudio_key, configured_ollama_key, configured_openai_key,
+    configured_opencode_go_key, configured_openrouter_key, opencode_go_model_uses_anthropic,
+    openrouter_extra_headers,
 };
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{LlmProviderKind, ProviderConfig, WebSearchBackend};
@@ -162,10 +163,11 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             )
             .await
         }
-        LlmProviderKind::CustomOpenAi => {
-            let key = configured_custom_openai_key(&cfg);
+        LlmProviderKind::AzureOpenAi => {
+            let key = configured_azure_openai_key(&cfg)?;
             let base = cfg.effective_base_url();
-            run_chat_loop(
+            let api_version = azure_openai_api_version();
+            run_azure_chat_loop(
                 &mut LoopCtx {
                     client: &client,
                     base_url: &base,
@@ -179,7 +181,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                     effort_override: effort_override.as_deref(),
                 },
                 &key,
-                &[],
+                &api_version,
                 &mut messages,
                 &tools,
             )

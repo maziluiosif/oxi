@@ -11,8 +11,8 @@ pub enum LlmProviderKind {
     #[default]
     OpenAi,
     OpenRouter,
-    /// User-configured OpenAI Chat Completions-compatible endpoint.
-    CustomOpenAi,
+    /// Azure OpenAI deployment endpoint.
+    AzureOpenAi,
     /// User-configured Anthropic Messages-compatible endpoint.
     CustomAnthropic,
     /// GPT Codex family via OpenAI Chat Completions (`api.openai.com`).
@@ -32,7 +32,7 @@ impl LlmProviderKind {
     pub const ALL: [LlmProviderKind; 8] = [
         LlmProviderKind::Ollama,
         LlmProviderKind::LmStudio,
-        LlmProviderKind::CustomOpenAi,
+        LlmProviderKind::AzureOpenAi,
         LlmProviderKind::CustomAnthropic,
         LlmProviderKind::OpenAi,
         LlmProviderKind::OpenRouter,
@@ -47,7 +47,7 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi => "openai",
             LlmProviderKind::OpenRouter => "openrouter",
-            LlmProviderKind::CustomOpenAi => "customopenai",
+            LlmProviderKind::AzureOpenAi => "azureopenai",
             LlmProviderKind::CustomAnthropic => "customanthropic",
             LlmProviderKind::GptCodex => "gptcodex",
             LlmProviderKind::OpenCodeGo => "opencodego",
@@ -60,7 +60,9 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => "https://api.openai.com/v1",
             LlmProviderKind::OpenRouter => "https://openrouter.ai/api/v1",
-            LlmProviderKind::CustomOpenAi => "http://localhost:8000/v1",
+            LlmProviderKind::AzureOpenAi => {
+                "https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT"
+            }
             LlmProviderKind::CustomAnthropic => "http://localhost:8000",
             LlmProviderKind::OpenCodeGo => "https://opencode.ai/zen/go",
             // LM Studio's built-in server speaks plain HTTP on port 1234 by default.
@@ -75,7 +77,7 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi => "OpenAI",
             LlmProviderKind::OpenRouter => "OpenRouter",
-            LlmProviderKind::CustomOpenAi => "Custom OpenAI",
+            LlmProviderKind::AzureOpenAi => "Azure OpenAI",
             LlmProviderKind::CustomAnthropic => "Custom Anthropic",
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
@@ -88,7 +90,7 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi => "gpt-4o-mini",
             LlmProviderKind::OpenRouter => "openai/gpt-4o-mini",
-            LlmProviderKind::CustomOpenAi => "custom-model",
+            LlmProviderKind::AzureOpenAi => "gpt-4o-mini",
             LlmProviderKind::CustomAnthropic => "claude-sonnet-4-5",
             LlmProviderKind::GptCodex => "gpt-4o-mini",
             LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
@@ -120,7 +122,7 @@ impl LlmProviderKind {
             self,
             LlmProviderKind::LmStudio
                 | LlmProviderKind::Ollama
-                | LlmProviderKind::CustomOpenAi
+                | LlmProviderKind::AzureOpenAi
                 | LlmProviderKind::CustomAnthropic
         )
     }

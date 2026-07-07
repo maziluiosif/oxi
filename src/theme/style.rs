@@ -243,13 +243,13 @@ pub fn setup_style(ctx: &egui::Context) {
     style.spacing.menu_margin = egui::Margin::same(6);
     style.spacing.window_margin = egui::Margin::same(10);
     style.spacing.combo_width = 220.0;
-    // Floating bar with a *reserved* gutter: `floating_allocated_width` keeps a constant
-    // 10px strip so the handle never overlays content and hovering never reflows layout
-    // (with `AlwaysVisible` the gutter is allocated every frame).
+    // Floating scroll bars stay hidden while dormant and fade in on hover/scroll.
     style.spacing.scroll.bar_width = 6.0;
     style.spacing.scroll.floating_width = 3.0;
-    style.spacing.scroll.floating_allocated_width = 10.0;
+    style.spacing.scroll.floating_allocated_width = 0.0;
     style.spacing.scroll.handle_min_length = 24.0;
     style.spacing.scroll.floating = true;
+    style.spacing.scroll.dormant_background_opacity = 0.0;
+    style.spacing.scroll.dormant_handle_opacity = 0.0;
     ctx.all_styles_mut(|s| *s = style.clone());
 }

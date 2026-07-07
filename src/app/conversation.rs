@@ -427,7 +427,7 @@ impl OxiApp {
             .max_height(transcript_h)
             // Keep full height when the transcript is short so the composer stays bottom-anchored.
             .auto_shrink([false, false])
-            .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
+            .scroll_bar_visibility(ScrollBarVisibility::VisibleWhenNeeded)
             .scroll_source(egui::containers::scroll_area::ScrollSource {
                 drag: egui::containers::scroll_area::DragScroll::Never,
                 ..Default::default()

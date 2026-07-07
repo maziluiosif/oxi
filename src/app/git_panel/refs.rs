@@ -42,7 +42,7 @@ impl OxiApp {
             .id_salt("git_branches_scroll")
             .max_height(ui.available_height())
             .auto_shrink([false, true])
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 for (i, b) in branches.iter().enumerate() {
                     ui.push_id(("branch", i), |ui| {
@@ -106,7 +106,7 @@ impl OxiApp {
             .id_salt("git_history_scroll")
             .max_height(ui.available_height())
             .auto_shrink([false, true])
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 if log.is_empty() {
                     ui.label(

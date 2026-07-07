@@ -16,7 +16,7 @@ use crate::agent::history::{
     build_openai_messages, trim_wire_history_to_budget, user_content_to_openai,
 };
 use crate::agent::loop_ctx::LoopCtx;
-use crate::agent::openai::run_chat_loop;
+use crate::agent::openai::{run_azure_chat_loop, run_chat_loop};
 use crate::agent::prompt::build_system_prompt;
 use crate::agent::tools::{ToolEnv, tool_definitions_json};
 use crate::model::ChatMessage;
@@ -53,12 +53,18 @@ pub(super) fn configured_openai_key(cfg: &ProviderConfig) -> Result<String, Stri
         .map_err(|_| "Set OpenAI API key in Settings or OPENAI_API_KEY, or sign in with ChatGPT (Codex) OAuth.".into())
 }
 
-pub(super) fn configured_custom_openai_key(cfg: &ProviderConfig) -> String {
+pub(super) fn configured_azure_openai_key(cfg: &ProviderConfig) -> Result<String, String> {
     let key = cfg.api_key.trim();
     if !key.is_empty() {
-        return key.to_string();
+        return Ok(key.to_string());
     }
-    std::env::var("CUSTOM_OPENAI_API_KEY").unwrap_or_default()
+    std::env::var("AZURE_OPENAI_API_KEY").map_err(|_| {
+        "Set Azure OpenAI API key in Settings or AZURE_OPENAI_API_KEY in the environment.".into()
+    })
+}
+
+pub(super) fn azure_openai_api_version() -> String {
+    std::env::var("AZURE_OPENAI_API_VERSION").unwrap_or_else(|_| "2024-10-21".to_string())
 }
 
 pub(super) fn configured_custom_anthropic_key(cfg: &ProviderConfig) -> Result<String, String> {
@@ -338,10 +344,17 @@ pub fn spawn_agent_run(
                     )
                     .await
                 }
-                LlmProviderKind::CustomOpenAi => {
-                    let key = configured_custom_openai_key(&cfg);
+                LlmProviderKind::AzureOpenAi => {
+                    let key = match configured_azure_openai_key(&cfg) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            finish_with_error(&tx, e);
+                            return;
+                        }
+                    };
                     let base = cfg.effective_base_url();
-                    run_chat_loop(
+                    let api_version = azure_openai_api_version();
+                    run_azure_chat_loop(
                         &mut LoopCtx {
                             client: &client,
                             base_url: &base,
@@ -355,7 +368,7 @@ pub fn spawn_agent_run(
                             effort_override,
                         },
                         &key,
-                        &[],
+                        &api_version,
                         &mut messages,
                         &tools,
                     )
