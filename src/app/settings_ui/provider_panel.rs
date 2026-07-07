@@ -125,9 +125,16 @@ impl OxiApp {
 
             if matches!(
                 kind,
-                LlmProviderKind::OpenAi | LlmProviderKind::GptCodex | LlmProviderKind::OpenCodeGo
+                LlmProviderKind::OpenAi
+                    | LlmProviderKind::GptCodex
+                    | LlmProviderKind::OpenCodeGo
+                    | LlmProviderKind::CustomOpenAi
+                    | LlmProviderKind::CustomAnthropic
             ) {
-                let is_gpt = matches!(kind, LlmProviderKind::OpenAi | LlmProviderKind::GptCodex);
+                let is_gpt = matches!(
+                    kind,
+                    LlmProviderKind::OpenAi | LlmProviderKind::GptCodex | LlmProviderKind::CustomOpenAi
+                );
                 field_label(ui, if is_gpt { "Thinking / reasoning level" } else { "Claude effort (4.6+ adaptive thinking)" });
                 let current = self.conv.settings.provider(kind).effort.clone();
                 let values: &[(&str, &str)] = if is_gpt {
@@ -186,6 +193,8 @@ impl OxiApp {
                     .hint_text(match kind {
                         LlmProviderKind::OpenAi => "OpenAI API key",
                         LlmProviderKind::OpenRouter => "OpenRouter API key",
+                        LlmProviderKind::CustomOpenAi => "Optional bearer token (or CUSTOM_OPENAI_API_KEY)",
+                        LlmProviderKind::CustomAnthropic => "Anthropic-compatible API key",
                         LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
                         LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
                         LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
@@ -751,6 +760,8 @@ impl OxiApp {
                     } else {
                         base
                     };
+                    // Anthropic-compatible APIs typically expose `/v1/models` relative to the
+                    // same root used for `/v1/messages`; `fetch_models` appends that suffix.
                     let extra = if cfg.provider == LlmProviderKind::OpenRouter {
                         crate::agent::runner::openrouter_extra_headers(&cfg)
                     } else {
@@ -794,9 +805,13 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         LlmProviderKind::OpenRouter => {
             std::env::var("OPENROUTER_API_KEY").map_err(|_| "Set an API key to list models.".into())
         }
-        // OpenCode Go, LM Studio, and Ollama expose the model list without auth.
-        LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
-            Ok(String::new())
-        }
+        LlmProviderKind::CustomAnthropic => std::env::var("CUSTOM_ANTHROPIC_API_KEY")
+            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+            .map_err(|_| "Set an API key to list models.".into()),
+        // Custom OpenAI, OpenCode Go, LM Studio, and Ollama may expose the model list without auth.
+        LlmProviderKind::CustomOpenAi
+        | LlmProviderKind::OpenCodeGo
+        | LlmProviderKind::LmStudio
+        | LlmProviderKind::Ollama => Ok(String::new()),
     }
 }

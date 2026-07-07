@@ -53,6 +53,24 @@ pub(super) fn configured_openai_key(cfg: &ProviderConfig) -> Result<String, Stri
         .map_err(|_| "Set OpenAI API key in Settings or OPENAI_API_KEY, or sign in with ChatGPT (Codex) OAuth.".into())
 }
 
+pub(super) fn configured_custom_openai_key(cfg: &ProviderConfig) -> String {
+    let key = cfg.api_key.trim();
+    if !key.is_empty() {
+        return key.to_string();
+    }
+    std::env::var("CUSTOM_OPENAI_API_KEY").unwrap_or_default()
+}
+
+pub(super) fn configured_custom_anthropic_key(cfg: &ProviderConfig) -> Result<String, String> {
+    let key = cfg.api_key.trim();
+    if !key.is_empty() {
+        return Ok(key.to_string());
+    }
+    std::env::var("CUSTOM_ANTHROPIC_API_KEY")
+        .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+        .map_err(|_| "Set Custom Anthropic API key in Settings or CUSTOM_ANTHROPIC_API_KEY / ANTHROPIC_API_KEY in the environment.".into())
+}
+
 pub(super) fn configured_openrouter_key(cfg: &ProviderConfig) -> Result<String, String> {
     let key = cfg.api_key.trim();
     if !key.is_empty() {
@@ -315,6 +333,58 @@ pub fn spawn_agent_run(
                         },
                         &key,
                         &openrouter_extra_headers(&cfg),
+                        &mut messages,
+                        &tools,
+                    )
+                    .await
+                }
+                LlmProviderKind::CustomOpenAi => {
+                    let key = configured_custom_openai_key(&cfg);
+                    let base = cfg.effective_base_url();
+                    run_chat_loop(
+                        &mut LoopCtx {
+                            client: &client,
+                            base_url: &base,
+                            model: &model,
+                            cwd: cwd_ref,
+                            env: &tool_env,
+                            tx: &tx,
+                            cancel: &cancel,
+                            gate: &mut gate,
+                            max_rounds,
+                            effort_override,
+                        },
+                        &key,
+                        &[],
+                        &mut messages,
+                        &tools,
+                    )
+                    .await
+                }
+                LlmProviderKind::CustomAnthropic => {
+                    let key = match configured_custom_anthropic_key(&cfg) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            finish_with_error(&tx, e);
+                            return;
+                        }
+                    };
+                    let base = cfg.effective_base_url();
+                    run_anthropic_loop(
+                        &mut LoopCtx {
+                            client: &client,
+                            base_url: &base,
+                            model: &model,
+                            cwd: cwd_ref,
+                            env: &tool_env,
+                            tx: &tx,
+                            cancel: &cancel,
+                            gate: &mut gate,
+                            max_rounds,
+                            effort_override,
+                        },
+                        &key,
+                        &[],
                         &mut messages,
                         &tools,
                     )
