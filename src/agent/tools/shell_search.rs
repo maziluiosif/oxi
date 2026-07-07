@@ -146,13 +146,22 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<Strin
             .spawn()
             .map_err(|e| e.to_string())?
     } else {
-        Command::new("cmd")
-            .args(["/C", cmd])
-            .current_dir(cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| e.to_string())?
+        {
+            let mut c = Command::new("cmd");
+            c.args(["/C", cmd])
+                .current_dir(cwd)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            // No console on a Windows GUI process: without CREATE_NO_WINDOW every shell
+            // tool call would flash a `cmd` window. Keep the child headless.
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                c.creation_flags(CREATE_NO_WINDOW);
+            }
+            c.spawn().map_err(|e| e.to_string())?
+        }
     };
     let timeout = Some(Duration::from_secs_f64(timeout_s));
     let status = loop {
