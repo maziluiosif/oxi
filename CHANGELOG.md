@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-07
+
+### Added
+- Azure OpenAI provider support with API key authentication and configurable endpoints
+- Windows app icon embedding and console window hiding for improved Windows experience
+- Lazy-loading scrollbars for a cleaner UI
+
+### Changed
+- Session directory names are now sanitized for Windows path compatibility
+- OpenAI provider settings labels and model listing updated for Azure support
+
+
 ## [0.12.0] - 2026-07-07
 
 ### Added
@@ -308,7 +320,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/maziluiosif/oxi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/maziluiosif/oxi/compare/v0.11.4...v0.12.0
 [0.11.4]: https://github.com/maziluiosif/oxi/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/maziluiosif/oxi/compare/v0.11.2...v0.11.3
