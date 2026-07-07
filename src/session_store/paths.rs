@@ -16,17 +16,32 @@ pub fn configured_session_dir(root_path: &Path, agent_dir: &Path) -> Option<Path
 pub fn default_session_dir(root_path: &Path, agent_dir: &Path) -> PathBuf {
     let cwd = root_path.to_string_lossy();
     let trimmed = cwd.trim_start_matches(['/', '\\']);
-    let safe_path: String = trimmed
+    let safe_path = sanitize_path_component(trimmed.as_ref());
+    agent_dir.join("sessions").join(format!("--{safe_path}--"))
+}
+
+fn sanitize_path_component(raw: &str) -> String {
+    let safe: String = raw
         .chars()
         .map(|ch| {
-            if matches!(ch, '/' | '\\' | ':') {
+            if is_invalid_path_component_char(ch) {
                 '-'
             } else {
                 ch
             }
         })
         .collect();
-    agent_dir.join("sessions").join(format!("--{safe_path}--"))
+    let trimmed = safe.trim_matches([' ', '.']);
+    if trimmed.is_empty() {
+        "workspace".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn is_invalid_path_component_char(ch: char) -> bool {
+    // Windows rejects these characters in path components; replacing them is safe on Unix too.
+    matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control()
 }
 
 pub fn session_file_path(root_path: &str, session: &Session) -> Result<PathBuf, String> {
@@ -141,6 +156,17 @@ mod tests {
         assert!(!name.contains('/'));
         assert!(name.starts_with("--"));
         assert!(name.ends_with("--"));
+    }
+
+    #[test]
+    fn default_session_dir_sanitizes_windows_invalid_chars() {
+        let root = Path::new(r#"C:\Users\Manu\Project<Name>|bad?*"#);
+        let agent = Path::new("/agent");
+        let dir = default_session_dir(root, agent);
+        let name = dir.file_name().unwrap().to_string_lossy();
+        for ch in ['<', '>', ':', '"', '/', '\\', '|', '?', '*'] {
+            assert!(!name.contains(ch), "name should not contain {ch:?}: {name}");
+        }
     }
 
     #[test]

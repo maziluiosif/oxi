@@ -65,7 +65,7 @@ impl OxiApp {
                             .id_salt("settings_page_scroll")
                             .auto_shrink([false, false])
                             .scroll_bar_visibility(
-                                egui::scroll_area::ScrollBarVisibility::AlwaysVisible,
+                                egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
                             )
                             .show(ui, |ui| {
                                 Frame::new()

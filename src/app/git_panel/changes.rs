@@ -257,7 +257,7 @@ impl OxiApp {
             .id_salt("git_changes_scroll")
             .max_height(available_h)
             .auto_shrink([false, true])
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 if !staged.is_empty() {
                     self.render_section(ui, "Staged Changes", &staged, true);
@@ -512,7 +512,7 @@ impl OxiApp {
             .id_salt("diff_view_scroll")
             .max_height(avail_h)
             .auto_shrink([false, false])
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 let viewport_w = ui.max_rect().width();
                 ui.set_max_width(viewport_w);
