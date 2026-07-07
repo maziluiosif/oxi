@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-07-07
+
+### Changed
+- Update screenshot descriptions in documentation
+
+
 ## [0.11.3] - 2026-07-06
 
 ### Changed
@@ -296,7 +302,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/maziluiosif/oxi/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/maziluiosif/oxi/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/maziluiosif/oxi/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/maziluiosif/oxi/compare/v0.11.0...v0.11.1
