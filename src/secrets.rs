@@ -136,7 +136,7 @@ pub fn load_unified() -> UnifiedSecrets {
     if let Some(s) = UNIFIED_CACHE.lock().unwrap().as_ref() {
         return s.clone();
     }
-    let stored = load(UNIFIED_ACCOUNT);
+    let stored = load_blob(UNIFIED_ACCOUNT);
     let unified = if !stored.is_empty() {
         serde_json::from_str(&stored).unwrap_or_default()
     } else {
@@ -148,9 +148,74 @@ pub fn load_unified() -> UnifiedSecrets {
 
 pub fn save_unified(unified: &UnifiedSecrets) -> Result<(), String> {
     let json = serde_json::to_string(unified).map_err(|e| e.to_string())?;
-    let result = store(UNIFIED_ACCOUNT, &json);
+    let result = store_blob(UNIFIED_ACCOUNT, &json);
     *UNIFIED_CACHE.lock().unwrap() = Some(unified.clone());
     result
+}
+
+/// Windows Credential Manager caps a single credential blob at
+/// `CRED_MAX_CREDENTIAL_BLOB_SIZE` (2560 bytes), and the native store encodes the value as
+/// UTF-16 (2 bytes/char), so one entry holds at most ~1280 chars. The unified secrets blob
+/// carries a large Codex OAuth JWT and blows past that, so `set_password` fails with
+/// "too long" and the login never persists (this is the "have to sign in to ChatGPT every
+/// launch" bug). To stay under the cap we split the blob across numbered sibling entries on
+/// Windows; other platforms have no such limit (and macOS charges one auth prompt per item)
+/// so they keep a single entry.
+#[cfg(windows)]
+const CHUNK_CHARS: usize = 1000;
+
+/// Store a possibly-large value, transparently splitting it on Windows (see [`CHUNK_CHARS`]).
+fn store_blob(account: &str, value: &str) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        store(account, value)
+    }
+    #[cfg(windows)]
+    {
+        // Split on char boundaries so a multi-byte char never straddles two entries.
+        let chars: Vec<char> = value.chars().collect();
+        let chunks: Vec<String> = chars
+            .chunks(CHUNK_CHARS)
+            .map(|c| c.iter().collect())
+            .collect();
+        // The base entry holds the chunk count; chunk `i` lives under `account.i`. A count
+        // header is always numeric, which is how [`load_blob`] tells chunked writes apart
+        // from a legacy single-item JSON blob.
+        store(account, &chunks.len().to_string())?;
+        for (i, ch) in chunks.iter().enumerate() {
+            store(&format!("{account}.{i}"), ch)?;
+        }
+        // Drop any higher-index chunks left over from a previously longer value.
+        let mut i = chunks.len();
+        while !load(&format!("{account}.{i}")).is_empty() {
+            let _ = delete(&format!("{account}.{i}"));
+            i += 1;
+        }
+        Ok(())
+    }
+}
+
+/// Load a value written by [`store_blob`], reassembling Windows chunks. Falls back to
+/// treating the base entry as the whole value, so pre-chunking single-item blobs still load.
+fn load_blob(account: &str) -> String {
+    #[cfg(not(windows))]
+    {
+        load(account)
+    }
+    #[cfg(windows)]
+    {
+        let header = load(account);
+        // A legacy blob is JSON (starts with `{`) and won't parse as a count; return it
+        // as-is. An absent entry is "" → also not a count → returns "" (empty/default).
+        let Ok(count) = header.parse::<usize>() else {
+            return header;
+        };
+        let mut out = String::new();
+        for i in 0..count {
+            out.push_str(&load(&format!("{account}.{i}")));
+        }
+        out
+    }
 }
 
 /// One-time migration: pulls whatever exists under the old per-item accounts into a

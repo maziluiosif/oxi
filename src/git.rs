@@ -173,6 +173,16 @@ fn git(cwd: &str, args: &[&str]) -> (bool, String) {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    // On Windows a GUI process has no console, so each `git` spawn would otherwise pop
+    // (and immediately close) a `cmd`-style window. A single sidebar refresh shells out
+    // ~7 times, producing the flurry of flashing terminals users see when opening a repo.
+    // `CREATE_NO_WINDOW` keeps the child headless.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     match cmd.output() {
         Ok(out) => {
             let mut s = String::from_utf8_lossy(&out.stdout).to_string();
