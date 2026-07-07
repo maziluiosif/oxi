@@ -571,9 +571,7 @@ impl AppSettings {
             .into_iter()
             .filter(|&kind| match kind {
                 LlmProviderKind::LmStudio | LlmProviderKind::Ollama => true,
-                LlmProviderKind::CustomOpenAi => {
-                    true
-                }
+                LlmProviderKind::CustomOpenAi => true,
                 LlmProviderKind::CustomAnthropic => {
                     has_profile_key(kind)
                         || std::env::var("CUSTOM_ANTHROPIC_API_KEY").is_ok()
