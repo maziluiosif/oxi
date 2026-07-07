@@ -403,9 +403,11 @@ impl AppSettings {
         cfg.api_key = match provider {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => old.openai_api_key,
             LlmProviderKind::OpenRouter => old.openrouter_api_key,
-            LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
-                String::new()
-            }
+            LlmProviderKind::CustomOpenAi
+            | LlmProviderKind::CustomAnthropic
+            | LlmProviderKind::OpenCodeGo
+            | LlmProviderKind::LmStudio
+            | LlmProviderKind::Ollama => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;
         cfg.openrouter_title = old.openrouter_title;
@@ -569,6 +571,12 @@ impl AppSettings {
             .into_iter()
             .filter(|&kind| match kind {
                 LlmProviderKind::LmStudio | LlmProviderKind::Ollama => true,
+                LlmProviderKind::CustomOpenAi => true,
+                LlmProviderKind::CustomAnthropic => {
+                    has_profile_key(kind)
+                        || std::env::var("CUSTOM_ANTHROPIC_API_KEY").is_ok()
+                        || std::env::var("ANTHROPIC_API_KEY").is_ok()
+                }
                 LlmProviderKind::OpenAi => {
                     has_profile_key(kind) || std::env::var("OPENAI_API_KEY").is_ok()
                 }

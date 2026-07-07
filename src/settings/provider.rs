@@ -11,6 +11,10 @@ pub enum LlmProviderKind {
     #[default]
     OpenAi,
     OpenRouter,
+    /// User-configured OpenAI Chat Completions-compatible endpoint.
+    CustomOpenAi,
+    /// User-configured Anthropic Messages-compatible endpoint.
+    CustomAnthropic,
     /// GPT Codex family via OpenAI Chat Completions (`api.openai.com`).
     GptCodex,
     /// OpenCode Go subscription models (OpenAI/Anthropic-compatible endpoints).
@@ -25,9 +29,11 @@ impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 6] = [
+    pub const ALL: [LlmProviderKind; 8] = [
         LlmProviderKind::Ollama,
         LlmProviderKind::LmStudio,
+        LlmProviderKind::CustomOpenAi,
+        LlmProviderKind::CustomAnthropic,
         LlmProviderKind::OpenAi,
         LlmProviderKind::OpenRouter,
         LlmProviderKind::GptCodex,
@@ -41,6 +47,8 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi => "openai",
             LlmProviderKind::OpenRouter => "openrouter",
+            LlmProviderKind::CustomOpenAi => "customopenai",
+            LlmProviderKind::CustomAnthropic => "customanthropic",
             LlmProviderKind::GptCodex => "gptcodex",
             LlmProviderKind::OpenCodeGo => "opencodego",
             LlmProviderKind::LmStudio => "lmstudio",
@@ -52,6 +60,8 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => "https://api.openai.com/v1",
             LlmProviderKind::OpenRouter => "https://openrouter.ai/api/v1",
+            LlmProviderKind::CustomOpenAi => "http://localhost:8000/v1",
+            LlmProviderKind::CustomAnthropic => "http://localhost:8000",
             LlmProviderKind::OpenCodeGo => "https://opencode.ai/zen/go",
             // LM Studio's built-in server speaks plain HTTP on port 1234 by default.
             // (HTTPS would need a separate reverse proxy.)
@@ -65,6 +75,8 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi => "OpenAI",
             LlmProviderKind::OpenRouter => "OpenRouter",
+            LlmProviderKind::CustomOpenAi => "Custom OpenAI",
+            LlmProviderKind::CustomAnthropic => "Custom Anthropic",
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
             LlmProviderKind::LmStudio => "LM Studio",
@@ -76,6 +88,8 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::OpenAi => "gpt-4o-mini",
             LlmProviderKind::OpenRouter => "openai/gpt-4o-mini",
+            LlmProviderKind::CustomOpenAi => "custom-model",
+            LlmProviderKind::CustomAnthropic => "claude-sonnet-4-5",
             LlmProviderKind::GptCodex => "gpt-4o-mini",
             LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
             // LM Studio / Ollama model ids depend on what's loaded/pulled; fetch the real
@@ -102,7 +116,13 @@ impl LlmProviderKind {
     /// HTTPS with a self-signed cert — same trust model as a local SearXNG instance.
     /// Stays off for public providers so their certs are always validated.
     pub fn allows_self_signed_tls(&self) -> bool {
-        matches!(self, LlmProviderKind::LmStudio | LlmProviderKind::Ollama)
+        matches!(
+            self,
+            LlmProviderKind::LmStudio
+                | LlmProviderKind::Ollama
+                | LlmProviderKind::CustomOpenAi
+                | LlmProviderKind::CustomAnthropic
+        )
     }
 }
 
