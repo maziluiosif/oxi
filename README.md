@@ -68,17 +68,17 @@ target/release/oxi
 
 ## Screenshots
 
-| Chat | Workspace / sessions |
+| Git and terminal | Diff view |
 |---|---|
-| ![oxi screenshot 1](assets/screenshots/scr1.png) | ![oxi screenshot 2](assets/screenshots/scr2.png) |
+| ![oxi git and terminal](assets/screenshots/scr1.png) | ![oxi diff view](assets/screenshots/scr2.png) |
 
 | Coding flow | Provider settings |
 |---|---|
 | ![oxi screenshot 3](assets/screenshots/scr3.png) | ![oxi provider settings](assets/screenshots/set1.png) |
 
-| Local model setup | Tools/settings |
+| Editable system prompt | Tools/settings |
 |---|---|
-| ![oxi local model settings](assets/screenshots/set2.png) | ![oxi settings](assets/screenshots/set3.png) |
+| ![oxi editable system prompt](assets/screenshots/set2.png) | ![oxi settings](assets/screenshots/set3.png) |
 
 ## Overview
 
