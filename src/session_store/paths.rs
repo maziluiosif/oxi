@@ -16,7 +16,7 @@ pub fn configured_session_dir(root_path: &Path, agent_dir: &Path) -> Option<Path
 pub fn default_session_dir(root_path: &Path, agent_dir: &Path) -> PathBuf {
     let cwd = root_path.to_string_lossy();
     let trimmed = cwd.trim_start_matches(['/', '\\']);
-    let safe_path = sanitize_path_component(trimmed.as_ref());
+    let safe_path = sanitize_path_component(trimmed);
     agent_dir.join("sessions").join(format!("--{safe_path}--"))
 }
 
