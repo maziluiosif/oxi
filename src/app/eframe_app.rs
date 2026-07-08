@@ -46,12 +46,10 @@ impl eframe::App for OxiApp {
             c_bg_main(),
         );
 
-        // Persistent status bar (sidebar/git/terminal toggles + branch) — claims the very
-        // bottom strip of the window, below the terminal panel. Hidden while the settings
-        // page is open, matching the terminal panel's own visibility rule.
-        if !self.conv.settings_open {
-            self.render_status_bar(ui);
-        }
+        // Persistent status bar (sidebar/git/terminal/settings toggles + branch) — claims the very
+        // bottom strip of the window, below the terminal panel. It stays visible on Settings too;
+        // clicking any non-settings toggle leaves Settings and returns to the normal chat layout.
+        self.render_status_bar(ui);
 
         // Bottom terminal panel (added before the CentralPanel so it claims the bottom strip and
         // the chat area fills what's left). Hidden while the settings page is open.

@@ -63,8 +63,6 @@ pub const ICON_CHECK: &str = "\u{f00c}";
 pub const ICON_SETTINGS: &str = "\u{f013}";
 /// Plus — "new" / "add" actions (new chat, add profile) (`nf-fa-plus`).
 pub const ICON_PLUS: &str = "\u{f067}";
-/// Chevron pointed left — "back" / hide panel (`nf-fa-chevron-left`).
-pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
 /// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
 pub const ICON_CHEVRON_RIGHT: &str = "\u{f054}";
 /// Hamburger menu — toggle sidebar (`nf-fa-bars`).

@@ -9,6 +9,8 @@ use super::super::OxiApp;
 
 impl OxiApp {
     pub(crate) fn toggle_git_panel_tab(&mut self, tab: super::GitTab) {
+        self.conv.settings_open = false;
+
         if self.conv.git_open && self.conv.git_tab == tab {
             self.conv.git_open = false;
             self.conv.settings.git_open = false;

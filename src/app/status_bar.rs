@@ -37,15 +37,20 @@ impl OxiApp {
                         })
                         .clicked()
                     {
+                        self.conv.settings_open = false;
                         self.conv.sidebar_open = !sidebar_on;
                         self.conv.focus_chat_input_next_frame = true;
                     }
 
-                    if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, self.conv.settings_open)
-                        .on_hover_text("Open settings")
+                    let settings_on = self.conv.settings_open;
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, settings_on)
+                        .on_hover_text(if settings_on { "Back to chat" } else { "Open settings" })
                         .clicked()
                     {
-                        self.conv.settings_open = true;
+                        self.conv.settings_open = !settings_on;
+                        if settings_on {
+                            self.conv.focus_chat_input_next_frame = true;
+                        }
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -54,6 +59,7 @@ impl OxiApp {
                             .on_hover_text("Toggle terminal panel")
                             .clicked()
                         {
+                            self.conv.settings_open = false;
                             self.toggle_terminal();
                         }
                         let branches_on = self.conv.git_open && self.conv.git_tab == GitTab::Branches;

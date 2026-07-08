@@ -120,15 +120,6 @@ impl OxiApp {
                             .size(FS_SMALL)
                             .color(c_text_muted()),
                     );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if crate::ui::chrome::ghost_button_icon(ui, ICON_CLOSE, "Close", false)
-                            .on_hover_text("Back to chat")
-                            .clicked()
-                        {
-                            self.conv.settings_open = false;
-                            self.conv.focus_chat_input_next_frame = true;
-                        }
-                    });
                 });
             });
         ui.painter().hline(
@@ -141,22 +132,7 @@ impl OxiApp {
     fn render_settings_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
-        if crate::ui::chrome::flat_button_icon(
-            ui,
-            ICON_CHEVRON_LEFT,
-            "Back to chat",
-            FS_SMALL,
-            egui::vec2(0.0, 24.0),
-            c_text_muted(),
-        )
-        .on_hover_text("Close settings")
-        .clicked()
-        {
-            self.conv.settings_open = false;
-            self.conv.focus_chat_input_next_frame = true;
-        }
-
-        ui.add_space(18.0);
+        ui.add_space(4.0);
         settings_caption(ui, "Settings");
         ui.add_space(4.0);
 
