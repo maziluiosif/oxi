@@ -30,7 +30,7 @@ impl eframe::App for OxiApp {
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
             })
         });
-        if self.any_waiting_response() || any_assistant_streaming {
+        if self.any_waiting_response() || any_assistant_streaming || self.conv.voice_ui.transcribing {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }

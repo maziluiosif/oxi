@@ -298,13 +298,36 @@ impl OxiApp {
 
     /// Round mic button: idle → click starts recording (lazy-loads the whisper model on
     /// first use if needed); recording → click stops and transcribes into `conv.input`.
+    ///
+    /// While `transcribing` (mic just turned off, waiting on model load + inference — can
+    /// take a few seconds on first use) the button shows three pulsing dots instead of the
+    /// mic glyph so it's clear the app is still working, not stuck.
     fn render_mic_button(&mut self, ui: &mut Ui) {
         let recording = self.conv.voice_ui.recording;
         let transcribing = self.conv.voice_ui.transcribing;
+        let rounding = CornerRadius::same((MIC_DIAM * 0.5) as u8);
+
+        if transcribing {
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(MIC_DIAM, MIC_DIAM),
+                Sense::hover(),
+            );
+            ui.painter()
+                .rect_filled(rect, rounding, c_bg_elevated_2());
+            ui.painter().rect_stroke(
+                rect,
+                rounding,
+                Stroke::new(1.0, c_border_subtle()),
+                egui::StrokeKind::Middle,
+            );
+            let time = ui.input(|i| i.time);
+            crate::theme::paint_three_dots(ui.painter(), rect.center(), time, c_text_faint(), 1.6);
+            response.on_hover_text("Transcribing…");
+            return;
+        }
+
         let (fill, stroke, glyph, hover) = if recording {
             (c_danger(), c_danger(), c_on_accent(), "Stop recording")
-        } else if transcribing {
-            (c_bg_elevated_2(), c_border_subtle(), c_text_faint(), "Transcribing…")
         } else {
             (c_bg_input(), c_border_subtle(), c_text_muted(), "Dictate")
         };
@@ -319,12 +342,12 @@ impl OxiApp {
                 hover_fill: c_row_hover(),
                 stroke,
                 hover_stroke: c_border(),
-                rounding: CornerRadius::same((MIC_DIAM * 0.5) as u8),
+                rounding,
                 glyph,
             },
         )
         .on_hover_text(hover);
-        if mic.clicked() && !transcribing {
+        if mic.clicked() {
             self.toggle_dictation();
         }
     }
