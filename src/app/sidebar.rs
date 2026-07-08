@@ -16,31 +16,32 @@ impl OxiApp {
     pub(crate) fn render_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
-        // Top row: app title + add-workspace button
+        // Search row + add-workspace button.
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(
-                RichText::new("oxi")
-                    .size(FS_H3)
-                    .color(crate::theme::c_accent())
-                    .strong(),
+            ui.set_height(24.0);
+
+            let add_w = 22.0;
+            let search_w = (ui.available_width() - add_w - ui.spacing().item_spacing.x).max(48.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(search_w, 24.0),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_width(search_w);
+                    sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
+                },
             );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, 22.0, false)
-                    .on_hover_text(
-                        "Add a project folder. Each workspace has its own chats; \
-                         tools run with that folder as cwd.",
-                    )
-                    .clicked()
-                {
-                    self.open_workspace_folder();
-                }
-            });
+
+            if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, add_w, false)
+                .on_hover_text(
+                    "Add a project folder. Each workspace has its own chats; \
+                     tools run with that folder as cwd.",
+                )
+                .clicked()
+            {
+                self.open_workspace_folder();
+            }
         });
-
-        ui.add_space(8.0);
-
-        sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
 
         ui.add_space(8.0);
 

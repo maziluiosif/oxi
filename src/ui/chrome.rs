@@ -12,7 +12,7 @@ pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
         .corner_radius(RADIUS_BUTTON)
-        .inner_margin(Margin::symmetric(8, 4))
+        .inner_margin(Margin::symmetric(7, 2))
         .show(ui, |ui| {
             ui.add(
                 TextEdit::singleline(text)
