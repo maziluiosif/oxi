@@ -261,6 +261,8 @@ pub struct ConversationState {
     pub git: crate::git::GitState,
     pub git_commit_message: String,
     pub git_new_branch: String,
+    /// Pending confirmation for the destructive "Discard all changes" action.
+    pub git_discard_all_prompt: Option<Vec<String>>,
     /// Set while a commit-message generation is in flight: we've asked the git worker for
     /// the diff and are waiting for it to come back so we can kick off the LLM completion.
     pub commit_gen_pending: bool,
