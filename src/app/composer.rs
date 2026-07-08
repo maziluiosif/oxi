@@ -221,11 +221,6 @@ impl OxiApp {
             self.pick_image_attachment();
         }
 
-        // ── Left: mic (dictation) button, only when configured in Settings ──
-        if self.conv.settings.dictation.enabled {
-            self.render_mic_button(ui);
-        }
-
         // ── Left: minimal model selector (plain text + chevron) ────────────
         self.render_model_selector(ui);
 
@@ -275,6 +270,11 @@ impl OxiApp {
                 } else if can_send {
                     self.send_message();
                 }
+            }
+
+            // ── Mic (dictation) button, only when configured in Settings ──
+            if self.conv.settings.dictation.enabled {
+                self.render_mic_button(ui);
             }
 
             self.render_context_indicator(ui);
