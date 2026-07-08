@@ -16,7 +16,7 @@ impl OxiApp {
     pub(crate) fn render_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
-        // Top row: app title + collapse button
+        // Top row: app title + add-workspace button
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.label(
@@ -26,13 +26,6 @@ impl OxiApp {
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if crate::ui::chrome::icon_button_plain(ui, ICON_CHEVRON_LEFT, 22.0, false)
-                    .on_hover_text("Hide sidebar")
-                    .clicked()
-                {
-                    self.conv.sidebar_open = false;
-                    self.conv.focus_chat_input_next_frame = true;
-                }
                 if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, 22.0, false)
                     .on_hover_text(
                         "Add a project folder. Each workspace has its own chats; \
@@ -51,7 +44,7 @@ impl OxiApp {
 
         ui.add_space(8.0);
 
-        let scroll_h = (ui.available_height() - 38.0).max(48.0);
+        let scroll_h = ui.available_height().max(48.0);
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
             .max_height(scroll_h)
@@ -61,28 +54,6 @@ impl OxiApp {
                 self.render_sidebar_session_list(ui);
             });
 
-        ui.add_space(8.0);
-        // Settings footer row: same rounded pill styling
-        let settings_resp = crate::ui::chrome::row_button_icon(
-            ui,
-            ICON_SETTINGS,
-            "Settings",
-            egui::vec2(ui.available_width(), 30.0),
-        );
-        // Quiet accent dot on the row while a newer release is available.
-        let settings_resp = if self.update_available().is_some() {
-            let dot = egui::pos2(
-                settings_resp.rect.right() - 10.0,
-                settings_resp.rect.center().y,
-            );
-            ui.painter().circle_filled(dot, 3.0, c_accent());
-            settings_resp.on_hover_text("Open settings — update available")
-        } else {
-            settings_resp.on_hover_text("Open settings")
-        };
-        if settings_resp.clicked() {
-            self.conv.settings_open = true;
-        }
         ui.expand_to_include_rect(ui.max_rect());
     }
 

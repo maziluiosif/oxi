@@ -20,6 +20,7 @@ mod sessions;
 mod settings_ui;
 mod sidebar;
 mod state;
+mod status_bar;
 mod streaming;
 mod task_runner;
 mod terminal_panel;
@@ -105,6 +106,7 @@ impl OxiApp {
                 input_history_index: None,
                 input_history_draft: String::new(),
                 focus_chat_input_next_frame: true,
+                focus_terminal_next_frame: false,
                 sidebar_open: true,
                 sidebar_width: settings.sidebar_width,
                 terminal_open: settings.terminal_open,

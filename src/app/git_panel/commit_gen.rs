@@ -8,22 +8,32 @@ use crate::git::{GitOp, GitState};
 use super::super::OxiApp;
 
 impl OxiApp {
-    pub(crate) fn toggle_git_panel(&mut self) {
-        self.conv.git_open = !self.conv.git_open;
-        self.conv.settings.git_open = self.conv.git_open;
-        if let Err(e) = self.conv.settings.save() {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some(format!("Save settings: {e}"));
-        }
-        if self.conv.git_open {
-            // Ensure the worker exists and request an initial snapshot.
-            self.ensure_git_channels();
-            let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+    pub(crate) fn toggle_git_panel_tab(&mut self, tab: super::GitTab) {
+        if self.conv.git_open && self.conv.git_tab == tab {
+            self.conv.git_open = false;
+            self.conv.settings.git_open = false;
             self.conv.focus_chat_input_next_frame = true;
-        } else {
-            self.conv.focus_chat_input_next_frame = true;
+            if let Err(e) = self.conv.settings.save() {
+                self.run_state_mut(self.active_session_key()).stream_error =
+                    Some(format!("Save settings: {e}"));
+            }
+            return;
         }
+
+        self.conv.git_tab = tab;
+        if !self.conv.git_open {
+            self.conv.git_open = true;
+            self.conv.settings.git_open = true;
+            if let Err(e) = self.conv.settings.save() {
+                self.run_state_mut(self.active_session_key()).stream_error =
+                    Some(format!("Save settings: {e}"));
+            }
+        }
+        self.ensure_git_channels();
+        let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+        self.conv.focus_chat_input_next_frame = true;
     }
+
 
     pub(crate) fn bind_git_ctx(&mut self, ctx: &egui::Context) {
         self.conv.git_ctx = ctx.clone();

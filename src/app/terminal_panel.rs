@@ -17,7 +17,10 @@ impl OxiApp {
     pub(crate) fn toggle_terminal(&mut self) {
         self.conv.terminal_open = !self.conv.terminal_open;
         self.conv.settings.terminal_open = self.conv.terminal_open;
-        if !self.conv.terminal_open {
+        if self.conv.terminal_open {
+            self.conv.focus_terminal_next_frame = true;
+        } else {
+            self.conv.focus_terminal_next_frame = false;
             self.conv.focus_chat_input_next_frame = true;
         }
         self.save_settings_quietly();
@@ -137,7 +140,7 @@ impl OxiApp {
         }
 
         if let Some(term) = self.terminal.as_mut() {
-            term.ui(ui, inner);
+            term.ui(ui, inner, &mut self.conv.focus_terminal_next_frame);
         }
     }
 

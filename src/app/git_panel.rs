@@ -33,9 +33,9 @@ impl OxiApp {
     pub(crate) fn render_git_panel(&mut self, ui: &mut Ui, full_h: f32) {
         let _ = full_h;
 
-        // The panel can come up open straight from settings (git_open persisted), in
-        // which case no one went through `toggle_git_panel` — make sure the worker
-        // exists so we don't sit on a stale "Not a git repository" default state.
+        // The panel can come up open straight from settings (git_open persisted), so
+        // make sure the worker exists and we don't sit on a stale "Not a git repository"
+        // default state.
         if self.conv.git_rx.is_none() {
             self.ensure_git_channels();
             let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));

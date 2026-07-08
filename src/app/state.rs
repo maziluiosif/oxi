@@ -218,6 +218,8 @@ pub struct ConversationState {
     pub input_history_draft: String,
     /// Set when navigation should hand keyboard focus back to the chat composer.
     pub focus_chat_input_next_frame: bool,
+    /// Set when opening the terminal from chrome so keyboard focus moves into the PTY.
+    pub focus_terminal_next_frame: bool,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
     /// Bottom terminal panel visibility and height (persisted in settings).

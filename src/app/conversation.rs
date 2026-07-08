@@ -116,30 +116,6 @@ impl OxiApp {
                             {
                                 self.new_chat();
                             }
-                            let term_on = self.conv.terminal_open;
-                            if crate::ui::chrome::icon_button_framed(
-                                ui,
-                                ICON_TERMINAL,
-                                egui::vec2(34.0, 28.0),
-                                term_on,
-                            )
-                            .on_hover_text("Toggle terminal panel")
-                            .clicked()
-                            {
-                                self.toggle_terminal();
-                            }
-                            let git_on = self.conv.git_open;
-                            if crate::ui::chrome::icon_button_framed(
-                                ui,
-                                ICON_GIT,
-                                egui::vec2(34.0, 28.0),
-                                git_on,
-                            )
-                            .on_hover_text("Toggle source-control (git) panel")
-                            .clicked()
-                            {
-                                self.toggle_git_panel();
-                            }
                             self.render_header_status_chip(ui);
                         },
                     );
@@ -151,20 +127,6 @@ impl OxiApp {
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            if !self.conv.sidebar_open
-                                && crate::ui::chrome::icon_button_framed(
-                                    ui,
-                                    ICON_MENU,
-                                    egui::vec2(30.0, 28.0),
-                                    false,
-                                )
-                                .on_hover_text("Show sidebar")
-                                .clicked()
-                            {
-                                self.conv.sidebar_open = true;
-                                self.conv.focus_chat_input_next_frame = true;
-                            }
-
                             let workspace =
                                 workspace_sidebar_label(&self.active_workspace().root_path);
                             let session_title =

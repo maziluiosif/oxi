@@ -576,30 +576,6 @@ pub fn flat_button_icon(
     )
 }
 
-/// Full-width elevated row button with icon + label — the sidebar "Add workspace" look as a
-/// reusable widget (elevated fill → `c_row_hover`, subtle border → `c_border`, accent icon on
-/// hover). Used for sidebar-style rows like the Settings footer.
-pub fn row_button_icon(ui: &mut Ui, icon: &str, label: &str, min_size: egui::Vec2) -> Response {
-    icon_text_button_core(
-        ui,
-        icon,
-        label,
-        FS_SMALL,
-        min_size,
-        &IconButtonLook {
-            fill: c_bg_elevated(),
-            hover_fill: c_row_hover(),
-            stroke: c_border_subtle(),
-            hover_stroke: c_border(),
-            rounding: CornerRadius::same(RADIUS_CHIP),
-            glyph: c_text_muted(),
-        },
-        c_text(),
-        c_accent(),
-        true,
-    )
-}
-
 /// Settings-page sidebar nav row (icon + label, rounded pill row).
 pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) -> Response {
     let row_w = ui.available_width();

@@ -47,12 +47,6 @@ impl OxiApp {
                     self.ensure_git_channels();
                     let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
                 }
-                if crate::ui::chrome::icon_button_plain(ui, ICON_CHEVRON_RIGHT, 22.0, false)
-                    .on_hover_text("Hide git panel")
-                    .clicked()
-                {
-                    self.toggle_git_panel();
-                }
             });
         });
 
