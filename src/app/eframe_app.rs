@@ -11,6 +11,8 @@ impl eframe::App for OxiApp {
         self.drain_agent(ctx);
         self.drain_models(ctx);
         self.drain_local_models(ctx);
+        self.drain_voice(ctx);
+        self.drain_voice_models(ctx);
         self.drain_ssh_test(ctx);
         self.pin_observed_host_keys();
         self.drain_oauth(ctx);

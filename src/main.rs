@@ -17,6 +17,8 @@ mod terminal;
 mod theme;
 mod ui;
 mod update;
+mod voice_engine;
+mod voice_models;
 
 use app::OxiApp;
 use eframe::egui::IconData;

@@ -5,6 +5,7 @@
 //! appearance, about), and [`provider_panel`] (per-provider config editing,
 //! compute-target/SSH, Codex OAuth, and model-list fetching).
 
+mod dictation_panel;
 mod layout;
 mod local_hf_panel;
 mod panels;

@@ -30,6 +30,7 @@ pub enum SettingsTab {
     Providers,
     Agent,
     Prompts,
+    Voice,
     Appearance,
     About,
 }
@@ -165,6 +166,24 @@ pub struct LocalRuntimeState {
     pub port: u16,
 }
 
+/// UI state for the Settings → Voice panel and the composer's mic button. The whisper model
+/// itself lives in the background [`crate::voice_engine::VoiceManager`] thread, not here;
+/// this only tracks what the UI shows.
+#[derive(Debug, Clone, Default)]
+pub struct VoiceUiState {
+    pub downloaded: Vec<crate::voice_models::DownloadedVoiceModel>,
+    /// Catalog id currently downloading, if any.
+    pub downloading_id: Option<String>,
+    pub download_progress: Option<(u64, Option<u64>)>,
+    pub download_error: Option<String>,
+    /// True from the moment the mic button starts a recording until it's stopped.
+    pub recording: bool,
+    /// True while waiting on [`crate::voice_engine::VoiceMsg::TranscriptionDone`] (covers
+    /// lazy model load + inference).
+    pub transcribing: bool,
+    pub error: Option<String>,
+}
+
 /// Status of an in-flight or completed SSH tunnel "Test connection" check, keyed by
 /// provider kind.
 #[derive(Debug, Clone, Default)]
@@ -271,4 +290,13 @@ pub struct ConversationState {
     /// In-flight context compaction (manual `/compact` or automatic pre-send), if any.
     /// At most one runs app-wide; drained each frame. See [`super::compaction`].
     pub compaction: Option<super::compaction::ActiveCompaction>,
+    /// UI state for Settings → Voice + the composer mic button.
+    pub voice_ui: VoiceUiState,
+    /// Per-download-operation channel for the voice model catalog (drained each frame),
+    /// same take/put-back pattern as `local_model_rx`.
+    pub voice_model_rx: Option<std::sync::mpsc::Receiver<crate::voice_models::VoiceModelMsg>>,
+    /// Long-lived channel from the background [`crate::voice_engine::VoiceManager`] thread
+    /// (created once at startup, never disconnects — `OxiApp::voice` keeps a sender alive
+    /// for the app's lifetime).
+    pub voice_rx: std::sync::mpsc::Receiver<crate::voice_engine::VoiceMsg>,
 }

@@ -164,6 +164,7 @@ impl OxiApp {
             (SettingsTab::Providers, ICON_PROVIDERS, "Models & providers"),
             (SettingsTab::Agent, ICON_AGENT, "Agent"),
             (SettingsTab::Prompts, ICON_PROMPTS, "Prompts"),
+            (SettingsTab::Voice, ICON_MIC, "Voice"),
             (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
             (SettingsTab::About, ICON_INFO, "About"),
         ];
@@ -212,6 +213,7 @@ impl OxiApp {
             SettingsTab::Providers => self.render_settings_providers_panel(ui),
             SettingsTab::Agent => self.render_settings_agent_panel(ui),
             SettingsTab::Prompts => self.render_settings_prompts_panel(ui),
+            SettingsTab::Voice => self.render_settings_voice_panel(ui),
             SettingsTab::Appearance => self.render_settings_appearance_panel(ui),
             SettingsTab::About => self.render_settings_about_panel(ui),
         }

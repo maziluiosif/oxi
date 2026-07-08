@@ -16,6 +16,8 @@ use super::{OxiApp, SessionKey};
 const SEND_DIAM: f32 = 30.0;
 /// Diameter of the round attach (`+`) button.
 const ATTACH_DIAM: f32 = 28.0;
+/// Diameter of the round mic (dictation) button.
+const MIC_DIAM: f32 = 28.0;
 const COMPOSER_FRAME_MARGIN: f32 = 10.0;
 const COMPOSER_GAP: f32 = 6.0;
 /// Fixed height of an attachment thumbnail; width follows the image aspect ratio.
@@ -218,6 +220,11 @@ impl OxiApp {
             self.pick_image_attachment();
         }
 
+        // ── Left: mic (dictation) button, only when configured in Settings ──
+        if self.conv.settings.dictation.enabled {
+            self.render_mic_button(ui);
+        }
+
         // ── Left: minimal model selector (plain text + chevron) ────────────
         self.render_model_selector(ui);
 
@@ -287,6 +294,112 @@ impl OxiApp {
                 );
             }
         });
+    }
+
+    /// Round mic button: idle → click starts recording (lazy-loads the whisper model on
+    /// first use if needed); recording → click stops and transcribes into `conv.input`.
+    fn render_mic_button(&mut self, ui: &mut Ui) {
+        let recording = self.conv.voice_ui.recording;
+        let transcribing = self.conv.voice_ui.transcribing;
+        let (fill, stroke, glyph, hover) = if recording {
+            (c_danger(), c_danger(), c_on_accent(), "Stop recording")
+        } else if transcribing {
+            (c_bg_elevated_2(), c_border_subtle(), c_text_faint(), "Transcribing…")
+        } else {
+            (c_bg_input(), c_border_subtle(), c_text_muted(), "Dictate")
+        };
+        let mic = crate::ui::chrome::icon_button_core(
+            ui,
+            ICON_MIC,
+            egui::vec2(MIC_DIAM, MIC_DIAM),
+            14.0,
+            false,
+            &crate::ui::chrome::IconButtonLook {
+                fill,
+                hover_fill: c_row_hover(),
+                stroke,
+                hover_stroke: c_border(),
+                rounding: CornerRadius::same((MIC_DIAM * 0.5) as u8),
+                glyph,
+            },
+        )
+        .on_hover_text(hover);
+        if mic.clicked() && !transcribing {
+            self.toggle_dictation();
+        }
+    }
+
+    /// Path of the downloaded model selected in Settings → Voice, if any.
+    fn active_voice_model_path(&self) -> Option<std::path::PathBuf> {
+        let id = self.conv.settings.dictation.model_id.as_ref()?;
+        self.conv
+            .voice_ui
+            .downloaded
+            .iter()
+            .find(|m| &m.id == id)
+            .map(|m| std::path::PathBuf::from(&m.path))
+    }
+
+    fn toggle_dictation(&mut self) {
+        let Some(model_path) = self.active_voice_model_path() else {
+            self.conv.settings_open = true;
+            self.conv.settings_tab = super::state::SettingsTab::Voice;
+            return;
+        };
+        if self.conv.voice_ui.recording {
+            self.conv.voice_ui.recording = false;
+            self.conv.voice_ui.transcribing = true;
+            self.conv.voice_ui.error = None;
+            let keep_loaded = self.conv.settings.dictation.keep_loaded;
+            let language = self.conv.settings.dictation.language.clone();
+            self.voice.stop_and_transcribe(model_path, keep_loaded, language);
+        } else {
+            self.conv.voice_ui.error = None;
+            self.conv.voice_ui.recording = true;
+            self.voice.start_recording();
+        }
+    }
+
+    /// Drain results from the background voice engine (see [`crate::voice_engine`]),
+    /// called once per frame from the main update loop.
+    pub(crate) fn drain_voice(&mut self, ctx: &egui::Context) {
+        use crate::voice_engine::VoiceMsg;
+        loop {
+            match self.conv.voice_rx.try_recv() {
+                Ok(VoiceMsg::RecordingStarted(Ok(()))) => {
+                    ctx.request_repaint();
+                }
+                Ok(VoiceMsg::RecordingStarted(Err(e))) => {
+                    self.conv.voice_ui.recording = false;
+                    self.conv.voice_ui.error = Some(e);
+                    ctx.request_repaint();
+                }
+                Ok(VoiceMsg::ModelLoading) => {
+                    ctx.request_repaint();
+                }
+                Ok(VoiceMsg::TranscriptionDone(result)) => {
+                    self.conv.voice_ui.transcribing = false;
+                    match result {
+                        Ok(text) if !text.trim().is_empty() => {
+                            let text = text.trim();
+                            if !self.conv.input.is_empty()
+                                && !self.conv.input.ends_with(' ')
+                                && !self.conv.input.ends_with('\n')
+                            {
+                                self.conv.input.push(' ');
+                            }
+                            self.conv.input.push_str(text);
+                            self.conv.focus_chat_input_next_frame = true;
+                        }
+                        Ok(_) => {}
+                        Err(e) => self.conv.voice_ui.error = Some(e),
+                    }
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
     }
 
     fn render_context_indicator(&self, ui: &mut Ui) {

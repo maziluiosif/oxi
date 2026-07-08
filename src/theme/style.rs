@@ -81,6 +81,8 @@ pub const ICON_SEND: &str = "\u{f062}";
 pub const ICON_STOP: &str = "\u{f04d}";
 /// Paperclip — attach image composer button (`nf-fa-paperclip`).
 pub const ICON_ATTACH: &str = "\u{f0c6}";
+/// Microphone — voice dictation composer button (`nf-fa-microphone`).
+pub const ICON_MIC: &str = "\u{f130}";
 /// Arrow rising out of a box — "external" suggestion / prompt chips (`nf-fa-external-link`).
 pub const ICON_EXTERNAL: &str = "\u{f08e}";
 /// Trash — delete / discard actions (`nf-fa-trash`).

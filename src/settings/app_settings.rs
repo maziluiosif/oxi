@@ -107,6 +107,47 @@ pub struct AppSettings {
     /// The cwd workspace is always present at runtime even if missing here.
     #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
+    /// Local voice dictation (see [`crate::voice_engine`]).
+    #[serde(default)]
+    pub dictation: DictationSettings,
+}
+
+/// Settings for local speech-to-text dictation. The whisper model itself is loaded lazily
+/// by [`crate::voice_engine::VoiceManager`] — nothing here causes a model to load; this
+/// just records what the user picked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictationSettings {
+    /// Master on/off switch. When false the mic button doesn't appear in the composer and
+    /// no model is ever loaded.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Catalog id (see [`crate::voice_models::VOICE_MODEL_CATALOG`]) of the downloaded model
+    /// to use, if any has been selected.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Keep the whisper model resident in memory after a transcription instead of unloading
+    /// it immediately. Off by default: the user asked for dictation to cost no memory when
+    /// not actively in use.
+    #[serde(default)]
+    pub keep_loaded: bool,
+    /// Whisper language hint (e.g. `"en"`, `"ro"`), or `"auto"` to let whisper detect it.
+    #[serde(default = "default_dictation_language")]
+    pub language: String,
+}
+
+fn default_dictation_language() -> String {
+    "auto".to_string()
+}
+
+impl Default for DictationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_id: None,
+            keep_loaded: false,
+            language: default_dictation_language(),
+        }
+    }
 }
 
 /// One persisted sidebar workspace: its root folder and whether its chat list is folded.
@@ -220,6 +261,7 @@ impl Default for AppSettings {
             commit_msg_model_id: String::new(),
             commit_msg_system_prompt: default_commit_msg_system_prompt(),
             workspaces: Vec::new(),
+            dictation: DictationSettings::default(),
         }
     }
 }

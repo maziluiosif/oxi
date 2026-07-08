@@ -41,9 +41,14 @@ keyring-core = "1"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
+cpal = "0.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
+whisper-rs = { version = "0.16", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = "0.16"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1"

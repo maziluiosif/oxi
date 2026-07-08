@@ -43,6 +43,10 @@ pub struct OxiApp {
     /// Persistent Claude Code (ACP) agent subprocesses, one per session. Cheap to clone; the
     /// subprocesses live on a dedicated background thread/runtime started once here.
     pub acp: crate::agent::acp::AcpManager,
+    /// Local voice dictation engine (mic capture + lazy-loaded whisper model). Cheap to
+    /// clone; lives on a dedicated background thread started once here. See
+    /// [`crate::voice_engine`].
+    pub voice: crate::voice_engine::VoiceManager,
 }
 
 impl OxiApp {
@@ -76,6 +80,7 @@ impl OxiApp {
                 sidebar_folded: entry.folded,
             });
         }
+        let (voice, voice_rx) = crate::voice_engine::VoiceManager::spawn();
         let mut app = Self {
             conn: ConnectionState {
                 connect_error: None,
@@ -148,10 +153,17 @@ impl OxiApp {
                 update_result: None,
                 update_rx: None,
                 compaction: None,
+                voice_ui: crate::app::state::VoiceUiState {
+                    downloaded: crate::voice_models::load_manifest().models,
+                    ..Default::default()
+                },
+                voice_model_rx: None,
+                voice_rx,
             },
             terminal: None,
             tunnels: crate::compute::TunnelManager::spawn(),
             acp: crate::agent::acp::AcpManager::spawn(),
+            voice,
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
