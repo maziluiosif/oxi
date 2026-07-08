@@ -408,7 +408,8 @@ impl AppSettings {
             | LlmProviderKind::OpenCodeGo
             | LlmProviderKind::LmStudio
             | LlmProviderKind::Ollama
-            | LlmProviderKind::LocalHf => String::new(),
+            | LlmProviderKind::LocalHf
+            | LlmProviderKind::ClaudeCodeAcp => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;
         cfg.openrouter_title = old.openrouter_title;
@@ -572,6 +573,9 @@ impl AppSettings {
             .into_iter()
             .filter(|&kind| match kind {
                 LlmProviderKind::LmStudio | LlmProviderKind::Ollama | LlmProviderKind::LocalHf => true,
+                // Claude Code handles its own auth (subscription login or ANTHROPIC_API_KEY),
+                // so it's always offered; the subprocess reports a clear error if not logged in.
+                LlmProviderKind::ClaudeCodeAcp => true,
                 LlmProviderKind::AzureOpenAi => true,
                 LlmProviderKind::CustomAnthropic => {
                     has_profile_key(kind)

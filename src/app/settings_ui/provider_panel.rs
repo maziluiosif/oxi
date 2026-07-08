@@ -175,14 +175,35 @@ impl OxiApp {
                 );
             }
 
-            // Base URL
-            field_label(ui, "Base URL (optional)");
-            ui.add(
-                TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).base_url)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(kind.default_base_url())
-                    .margin(Margin::symmetric(8, 5)),
-            );
+            if kind == LlmProviderKind::ClaudeCodeAcp {
+                // ACP launches a subprocess instead of hitting an HTTP endpoint.
+                field_label(ui, "Agent command");
+                ui.add(
+                    TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).acp_command)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(ProviderConfig::DEFAULT_ACP_COMMAND)
+                        .margin(Margin::symmetric(8, 5)),
+                );
+                ui.label(
+                    RichText::new(
+                        "Run through your shell. Requires the Claude Code ACP adapter (default: \
+                         npx @agentclientprotocol/claude-agent-acp). The model above is applied \
+                         via ANTHROPIC_MODEL (alias like `sonnet`/`opus` or a full id like \
+                         `claude-sonnet-5`); changing it restarts the agent.",
+                    )
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
+                );
+            } else {
+                // Base URL
+                field_label(ui, "Base URL (optional)");
+                ui.add(
+                    TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).base_url)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(kind.default_base_url())
+                        .margin(Margin::symmetric(8, 5)),
+                );
+            }
 
             // API key
             field_label(ui, "API key / token");
@@ -200,6 +221,9 @@ impl OxiApp {
                         LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
                         LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
                         LlmProviderKind::LocalHf => "Optional (llama-server usually ignores it)",
+                        LlmProviderKind::ClaudeCodeAcp => {
+                            "Optional ANTHROPIC_API_KEY (else Claude Code's own login is used)"
+                        }
                     })
                     .margin(Margin::symmetric(8, 5)),
             );
@@ -673,18 +697,86 @@ impl OxiApp {
     /// instead of falling back to just the current model id.
     pub(crate) fn ensure_active_models_fetched(&mut self, ctx: &egui::Context) {
         let kind = self.conv.settings.active_provider;
-        // Already fetched (or in flight)? Then nothing to do.
+        // Already fetched, in flight, or failed? Then nothing to do — don't auto-retry every
+        // frame (a failed retry would re-launch the ACP subprocess on each repaint). The manual
+        // refresh button clears the error and re-fetches.
         if let Some(f) = self.conv.fetched_models.get(&kind)
-            && (f.loading || !f.models.is_empty())
+            && (f.loading || !f.models.is_empty() || f.error.is_some())
         {
             return;
         }
         self.spawn_model_fetch(ctx, kind);
     }
 
+    /// Warm the Claude Code (ACP) subprocess for the active session in the background and load
+    /// its advertised model list, if a fetch isn't already in flight. Reuses the same per-session
+    /// key as [`Self::send_prompt_payload`] so the warmed subprocess is reused by the first
+    /// prompt. Results arrive on `conv.model_rxs` (as a [`ModelFetchMsg`]) and are drained each
+    /// frame like an HTTP model fetch.
+    fn spawn_acp_warm(&mut self, ctx: &egui::Context, kind: LlmProviderKind) {
+        let entry = self.conv.fetched_models.entry(kind).or_default();
+        if entry.loading {
+            return;
+        }
+        entry.loading = true;
+        entry.error = None;
+
+        let cfg = self.conv.settings.provider(kind).clone();
+        let key = self.active_session_key();
+        let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
+            .session_file
+            .clone();
+        let acp_session_key = session_file
+            .unwrap_or_else(|| format!("mem:{}:{}", key.workspace_idx, key.session_idx));
+        let cwd =
+            std::path::PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
+        let mut env = Vec::new();
+        let api_key = cfg.api_key.trim();
+        if !api_key.is_empty() {
+            env.push(("ANTHROPIC_API_KEY".to_string(), api_key.to_string()));
+        }
+        let command_line = cfg.effective_acp_command();
+        let acp = self.acp.clone();
+
+        let (tx, rx) = std::sync::mpsc::channel::<ModelFetchMsg>();
+        self.conv.model_rxs.push(rx);
+        let ctx = ctx.clone();
+        let err_tx = tx.clone();
+        let err_ctx = ctx.clone();
+        spawn_async_task(
+            move |err| {
+                let _ = err_tx.send(ModelFetchMsg {
+                    provider: kind,
+                    result: Err(err),
+                });
+                err_ctx.request_repaint();
+            },
+            move |rt| {
+                let r = rt.block_on(acp.warm(crate::agent::acp::AcpWarm {
+                    session_key: acp_session_key,
+                    cwd,
+                    command_line,
+                    env,
+                    model: cfg.model_id.clone(),
+                }));
+                let _ = tx.send(ModelFetchMsg {
+                    provider: kind,
+                    result: r,
+                });
+                ctx.request_repaint();
+            },
+        );
+    }
+
     /// Kick off a background `/v1/models` fetch for `kind`, if one isn't already in
     /// flight. Results arrive on `conv.model_rxs` and are drained each frame.
     pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, kind: LlmProviderKind) {
+        // Claude Code (ACP) has no HTTP `/v1/models` endpoint — the agent advertises its models
+        // over the protocol, so warm the subprocess and read them from `session/new` instead.
+        if kind == LlmProviderKind::ClaudeCodeAcp {
+            self.spawn_acp_warm(ctx, kind);
+            return;
+        }
         let cfg = self.conv.settings.provider(kind).clone();
         let entry = self.conv.fetched_models.entry(kind).or_default();
         if entry.loading {
@@ -822,6 +914,6 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
             Ok(String::new())
         }
-        LlmProviderKind::LocalHf => Ok(String::new()),
+        LlmProviderKind::LocalHf | LlmProviderKind::ClaudeCodeAcp => Ok(String::new()),
     }
 }

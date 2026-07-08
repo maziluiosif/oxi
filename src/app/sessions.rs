@@ -265,6 +265,13 @@ impl OxiApp {
         let deleting_current_backend_session =
             session_file.as_deref() == self.flow.current_backend_session_file.as_deref();
 
+        // Tear down any Claude Code (ACP) subprocess bound to this session so it doesn't leak.
+        // Keyed the same way as `send_prompt_payload` in streaming.rs.
+        let acp_key = session_file.clone().unwrap_or_else(|| {
+            format!("mem:{}:{}", delete_key.workspace_idx, delete_key.session_idx)
+        });
+        self.acp.close(&acp_key);
+
         if let Some(session_file) = session_file.as_deref() {
             if deleting_current_backend_session {
                 self.flow.current_backend_session_file = None;

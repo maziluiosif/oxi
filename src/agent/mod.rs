@@ -1,5 +1,6 @@
 //! Local agent (no pi RPC): LLM streaming + tools.
 
+pub mod acp;
 mod anthropic;
 mod approval;
 mod codex_responses;

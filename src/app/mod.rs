@@ -40,6 +40,9 @@ pub struct OxiApp {
     /// Cheap to clone; the actual tunnels live on a dedicated background thread/runtime
     /// started once here and kept alive for the life of the app.
     pub tunnels: crate::compute::TunnelManager,
+    /// Persistent Claude Code (ACP) agent subprocesses, one per session. Cheap to clone; the
+    /// subprocesses live on a dedicated background thread/runtime started once here.
+    pub acp: crate::agent::acp::AcpManager,
 }
 
 impl OxiApp {
@@ -147,6 +150,7 @@ impl OxiApp {
             },
             terminal: None,
             tunnels: crate::compute::TunnelManager::spawn(),
+            acp: crate::agent::acp::AcpManager::spawn(),
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.

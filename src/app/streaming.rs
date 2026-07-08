@@ -356,12 +356,26 @@ impl OxiApp {
         });
         let used_prior_wire = prior_wire.is_some();
         let chars_per_token = self.calibrated_chars_per_token(key);
+        // Stable key for the per-session ACP subprocess: prefer the session file, falling back
+        // to a synthetic id for an as-yet-unsaved chat. Once a chat has been saved it switches
+        // from the `mem:` key (used while warming a brand-new chat) to its file path, so retire
+        // the now-orphaned warm subprocess to avoid leaking an idle Claude Code process.
+        let acp_session_key = match &session_file {
+            Some(path) => {
+                self.acp
+                    .close(&format!("mem:{}:{}", key.workspace_idx, key.session_idx));
+                path.clone()
+            }
+            None => format!("mem:{}:{}", key.workspace_idx, key.session_idx),
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let _join = spawn_agent_run(
             settings,
             self.tunnels.clone(),
+            self.acp.clone(),
+            acp_session_key,
             cwd,
             chat,
             tx,
