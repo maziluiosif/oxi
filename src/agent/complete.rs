@@ -210,7 +210,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             )
             .await
         }
-        LlmProviderKind::LmStudio => {
+        LlmProviderKind::LmStudio | LlmProviderKind::LocalHf => {
             let key = configured_lmstudio_key(&cfg);
             let base = cfg.effective_base_url();
             run_chat_loop(

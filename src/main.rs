@@ -5,6 +5,8 @@ mod app;
 mod compute;
 mod git;
 mod hydrate;
+mod local_models;
+mod local_models_remote;
 mod markdown;
 mod model;
 mod oauth;

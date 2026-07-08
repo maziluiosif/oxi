@@ -199,6 +199,7 @@ impl OxiApp {
                         LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
                         LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
                         LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
+                        LlmProviderKind::LocalHf => "Optional (llama-server usually ignores it)",
                     })
                     .margin(Margin::symmetric(8, 5)),
             );
@@ -231,7 +232,10 @@ impl OxiApp {
                 });
             }
 
-            if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
+            if kind == LlmProviderKind::LocalHf {
+                self.render_compute_target_section(ui, kind);
+                self.render_local_hf_section(ui);
+            } else if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
                 self.render_compute_target_section(ui, kind);
             }
         });
@@ -267,9 +271,13 @@ impl OxiApp {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(
-                        "Runs the model on another host (e.g. a machine on your LAN) reached over SSH. \
-                         The runtime must be listening on 127.0.0.1 on that host; oxi \
-                         forwards a local port to it.",
+                        if kind == LlmProviderKind::LocalHf {
+                            "Runs the oxi-managed HF model on another host over SSH. oxi can install llama-server, download GGUF files, start/stop the runtime, and tunnel chat to it."
+                        } else {
+                            "Runs the model on another host (e.g. a machine on your LAN) reached over SSH. \
+                             The runtime must be listening on 127.0.0.1 on that host; oxi \
+                             forwards a local port to it."
+                        },
                     )
                     .size(FS_TINY)
                     .color(c_text_faint()),
@@ -814,5 +822,6 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
             Ok(String::new())
         }
+        LlmProviderKind::LocalHf => Ok(String::new()),
     }
 }

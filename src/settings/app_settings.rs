@@ -407,7 +407,8 @@ impl AppSettings {
             | LlmProviderKind::CustomAnthropic
             | LlmProviderKind::OpenCodeGo
             | LlmProviderKind::LmStudio
-            | LlmProviderKind::Ollama => String::new(),
+            | LlmProviderKind::Ollama
+            | LlmProviderKind::LocalHf => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;
         cfg.openrouter_title = old.openrouter_title;
@@ -570,7 +571,7 @@ impl AppSettings {
         LlmProviderKind::ALL
             .into_iter()
             .filter(|&kind| match kind {
-                LlmProviderKind::LmStudio | LlmProviderKind::Ollama => true,
+                LlmProviderKind::LmStudio | LlmProviderKind::Ollama | LlmProviderKind::LocalHf => true,
                 LlmProviderKind::AzureOpenAi => true,
                 LlmProviderKind::CustomAnthropic => {
                     has_profile_key(kind)

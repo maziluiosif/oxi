@@ -23,13 +23,16 @@ pub enum LlmProviderKind {
     LmStudio,
     /// Ollama local server (OpenAI-compatible API at `/v1`, on this machine or a LAN host).
     Ollama,
+    /// oxi-managed HuggingFace GGUF models run via a local llama.cpp `llama-server` process.
+    LocalHf,
 }
 
 impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 8] = [
+    pub const ALL: [LlmProviderKind; 9] = [
+        LlmProviderKind::LocalHf,
         LlmProviderKind::Ollama,
         LlmProviderKind::LmStudio,
         LlmProviderKind::AzureOpenAi,
@@ -53,6 +56,7 @@ impl LlmProviderKind {
             LlmProviderKind::OpenCodeGo => "opencodego",
             LlmProviderKind::LmStudio => "lmstudio",
             LlmProviderKind::Ollama => "ollama",
+            LlmProviderKind::LocalHf => "localhf",
         }
     }
 
@@ -70,6 +74,7 @@ impl LlmProviderKind {
             LlmProviderKind::LmStudio => "http://localhost:1234/v1",
             // Ollama's OpenAI-compatible API lives under `/v1` on its default port 11434.
             LlmProviderKind::Ollama => "http://localhost:11434/v1",
+            LlmProviderKind::LocalHf => "http://127.0.0.1:18080/v1",
         }
     }
 
@@ -83,6 +88,7 @@ impl LlmProviderKind {
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
             LlmProviderKind::LmStudio => "LM Studio",
             LlmProviderKind::Ollama => "Ollama",
+            LlmProviderKind::LocalHf => "Local HF",
         }
     }
 
@@ -98,6 +104,7 @@ impl LlmProviderKind {
             // list from the dropdown.
             LlmProviderKind::LmStudio => "local-model",
             LlmProviderKind::Ollama => "qwen2.5-coder:7b",
+            LlmProviderKind::LocalHf => "local-hf-model",
         }
     }
 
@@ -108,6 +115,7 @@ impl LlmProviderKind {
     pub fn default_remote_runtime_port(&self) -> u16 {
         match self {
             LlmProviderKind::LmStudio => 1234,
+            LlmProviderKind::LocalHf => 18080,
             _ => 11434,
         }
     }
@@ -122,6 +130,7 @@ impl LlmProviderKind {
             self,
             LlmProviderKind::LmStudio
                 | LlmProviderKind::Ollama
+                | LlmProviderKind::LocalHf
                 | LlmProviderKind::AzureOpenAi
                 | LlmProviderKind::CustomAnthropic
         )

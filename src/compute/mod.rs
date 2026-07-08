@@ -2,8 +2,10 @@
 //! another host reachable only over SSH.
 
 pub mod store;
+mod ssh;
 mod tunnel;
 
+pub use ssh::exec as ssh_exec;
 pub use store::{load_ssh_credentials, save_ssh_credentials};
 pub use tunnel::{TunnelError, TunnelManager};
 

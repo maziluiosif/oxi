@@ -6,5 +6,6 @@
 //! compute-target/SSH, Codex OAuth, and model-list fetching).
 
 mod layout;
+mod local_hf_panel;
 mod panels;
 mod provider_panel;

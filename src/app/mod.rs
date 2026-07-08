@@ -26,8 +26,8 @@ mod terminal_panel;
 mod update_check;
 
 pub use state::{
-    ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState, SessionKey,
-    SessionRunState, SshTestMsg, Workspace,
+    ConnectionState, ConversationState, LocalRuntimeState, ModelFetchMsg, PendingApproval,
+    RunState, SessionKey, SessionRunState, SshTestMsg, Workspace,
 };
 
 pub struct OxiApp {
@@ -124,6 +124,18 @@ impl OxiApp {
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),
                 model_rxs: Vec::new(),
+                local_models: crate::app::state::LocalModelsUiState {
+                    downloaded: crate::local_models::load_manifest().models,
+                    runtime_path: crate::local_models::installed_runtime_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    runtime_port: 18080,
+                    context_size: 32768,
+                    gpu_layers: 999,
+                    ..Default::default()
+                },
+                local_model_rx: None,
+                local_runtime: None,
                 ssh_password_drafts: std::collections::HashMap::new(),
                 ssh_test: std::collections::HashMap::new(),
                 ssh_test_rx: None,

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::process::Child;
 use std::time::Instant;
 
 use serde_json::Value;
@@ -133,6 +134,37 @@ pub struct ModelFetchMsg {
     pub result: Result<Vec<String>, String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct LocalModelsUiState {
+    pub search_query: String,
+    pub search_loading: bool,
+    pub search_error: Option<String>,
+    pub search_results: Vec<crate::local_models::HfModelHit>,
+    pub selected_repo: String,
+    pub files_loading: bool,
+    pub files_error: Option<String>,
+    pub gguf_files: Vec<String>,
+    pub selected_file: String,
+    pub downloading: bool,
+    pub download_label: String,
+    pub download_progress: Option<(u64, Option<u64>)>,
+    pub downloaded: Vec<crate::local_models::DownloadedModel>,
+    pub runtime_path: String,
+    pub runtime_installing: bool,
+    pub runtime_install_progress: Option<(u64, Option<u64>)>,
+    pub runtime_port: u16,
+    pub context_size: usize,
+    pub gpu_layers: i32,
+    pub running_model_id: Option<String>,
+    pub runtime_status: Option<String>,
+}
+
+pub struct LocalRuntimeState {
+    pub child: Child,
+    pub model_id: String,
+    pub port: u16,
+}
+
 /// Status of an in-flight or completed SSH tunnel "Test connection" check, keyed by
 /// provider kind.
 #[derive(Debug, Clone, Default)]
@@ -213,6 +245,9 @@ pub struct ConversationState {
     /// receivers prevents an older provider from getting stuck in `loading` after its
     /// receiver is overwritten.
     pub model_rxs: Vec<std::sync::mpsc::Receiver<ModelFetchMsg>>,
+    pub local_models: LocalModelsUiState,
+    pub local_model_rx: Option<std::sync::mpsc::Receiver<crate::local_models::LocalModelMsg>>,
+    pub local_runtime: Option<LocalRuntimeState>,
     /// Draft (in-memory only) SSH passwords for Remote SSH compute targets, keyed by
     /// provider kind. Loaded lazily from the credential store on first edit, written
     /// through on change; never stored in `settings.json`.
