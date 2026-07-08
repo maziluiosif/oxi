@@ -111,6 +111,7 @@ impl OxiApp {
 
         self.conv.scroll_to_bottom_once = true;
         self.conv.focus_chat_input_next_frame = true;
+        self.persist_active_session_selection();
         if let Some(state) = self.flow.sessions.get_mut(&self.active_session_key()) {
             state.stream_error = None;
         }
@@ -156,6 +157,7 @@ impl OxiApp {
                 folded: w.sidebar_folded,
             })
             .collect();
+        self.sync_active_session_to_settings();
         if let Err(e) = self.conv.settings.save() {
             self.run_state_mut(self.active_session_key()).stream_error =
                 Some(format!("Save settings: {e}"));
@@ -356,6 +358,7 @@ impl OxiApp {
                 self.active_workspace_mut().active = new_active;
             }
         }
+        self.persist_active_session_selection();
         self.run_state_mut(self.active_session_key()).stream_error = None;
     }
 

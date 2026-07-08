@@ -111,6 +111,8 @@ impl OxiApp {
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
         {
             self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
+        } else if key == self.active_session_key() {
+            self.persist_active_session_selection();
         }
 
         if let Err(e) = self.send_prompt_payload(key) {
@@ -412,6 +414,8 @@ impl OxiApp {
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
         {
             self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
+        } else if key == self.active_session_key() {
+            self.persist_active_session_selection();
         }
         let completed_turn_usage = self
             .run_state(key)

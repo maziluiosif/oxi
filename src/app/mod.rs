@@ -58,6 +58,8 @@ impl OxiApp {
         let settings = AppSettings::load();
         let git_open = settings.git_open;
         let git_width = settings.git_width;
+        let last_active_workspace_root_path = settings.last_active_workspace_root_path.clone();
+        let last_active_session_file = settings.last_active_session_file.clone();
         // Restore persisted workspaces; the cwd workspace is always present, first, and active.
         let cwd_folded = settings
             .workspaces
@@ -81,6 +83,18 @@ impl OxiApp {
                 sidebar_folded: entry.folded,
             });
         }
+        let active_workspace = last_active_workspace_root_path
+            .as_deref()
+            .and_then(|root| workspaces.iter().position(|w| w.root_path == root))
+            .unwrap_or(0);
+        if let Some(session_file) = last_active_session_file.as_deref()
+            && let Some(active) = workspaces[active_workspace]
+                .sessions
+                .iter()
+                .position(|s| s.session_file.as_deref() == Some(session_file))
+        {
+            workspaces[active_workspace].active = active;
+        }
         let (voice, voice_rx) = crate::voice_engine::VoiceManager::spawn();
         let mut app = Self {
             conn: ConnectionState {
@@ -96,7 +110,7 @@ impl OxiApp {
             },
             conv: ConversationState {
                 workspaces,
-                active_workspace: 0,
+                active_workspace,
                 input: String::new(),
                 sidebar_search: String::new(),
                 chat_scroll_id: egui::Id::new("main_chat_scroll"),
@@ -320,6 +334,7 @@ impl OxiApp {
         self.conv.scroll_to_bottom_once = true;
         self.conv.focus_chat_input_next_frame = true;
         self.ensure_active_session_loaded();
+        self.persist_active_session_selection();
         self.refresh_git_cwd();
     }
 
@@ -345,6 +360,7 @@ impl OxiApp {
         self.conv.scroll_to_bottom_once = true;
         self.conv.focus_chat_input_next_frame = true;
         self.ensure_active_session_loaded();
+        self.persist_active_session_selection();
         if workspace_changed {
             self.refresh_git_cwd();
         }
@@ -375,6 +391,26 @@ impl OxiApp {
             vec![Self::blank_session("New chat")]
         } else {
             sessions
+        }
+    }
+
+    pub(crate) fn sync_active_session_to_settings(&mut self) {
+        let key = self.active_session_key();
+        let Some(workspace) = self.conv.workspaces.get(key.workspace_idx) else {
+            return;
+        };
+        self.conv.settings.last_active_workspace_root_path = Some(workspace.root_path.clone());
+        self.conv.settings.last_active_session_file = workspace
+            .sessions
+            .get(key.session_idx)
+            .and_then(|session| session.session_file.clone());
+    }
+
+    pub(crate) fn persist_active_session_selection(&mut self) {
+        self.sync_active_session_to_settings();
+        if let Err(e) = self.conv.settings.save() {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
         }
     }
 
