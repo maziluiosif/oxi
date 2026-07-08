@@ -100,7 +100,10 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
     ];
     let cancel = Arc::new(AtomicBool::new(false));
     let (_approval_tx, approval_rx) = mpsc::channel();
-    let mut gate = ApprovalGate::new(false, approval_rx);
+    let mut gate = ApprovalGate::new(
+        crate::agent::approval::ApprovalPolicy::disabled(),
+        approval_rx,
+    );
     let max_rounds = 1;
 
     // Bridge agent events into completion deltas.
@@ -210,7 +213,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             )
             .await
         }
-        LlmProviderKind::LmStudio => {
+        LlmProviderKind::LmStudio | LlmProviderKind::LocalHf => {
             let key = configured_lmstudio_key(&cfg);
             let base = cfg.effective_base_url();
             run_chat_loop(
@@ -362,6 +365,13 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 )
                 .await
             }
+        }
+        LlmProviderKind::ClaudeCodeAcp => {
+            // ACP drives a full interactive agent session; it has no cheap one-shot
+            // text-completion path for helpers like commit-message generation.
+            Err("Claude Code (ACP) does not support one-shot completion. \
+                 Pick another provider for commit-message generation."
+                .to_string())
         }
     };
 

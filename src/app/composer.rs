@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use eframe::egui::{
     self, Button, Color32, ComboBox, CornerRadius, Frame, Id, Image, Margin, Order, Pos2, RichText,
-    Sense, Stroke, TextEdit, TextureHandle, Ui,
+    Sense, Stroke, TextEdit, TextureHandle, Ui, text::CCursor, text::CCursorRange,
 };
 
 use crate::agent::context_char_budget_from_tokens;
@@ -16,6 +16,8 @@ use super::{OxiApp, SessionKey};
 const SEND_DIAM: f32 = 30.0;
 /// Diameter of the round attach (`+`) button.
 const ATTACH_DIAM: f32 = 28.0;
+/// Diameter of the round mic (dictation) button.
+const MIC_DIAM: f32 = 28.0;
 const COMPOSER_FRAME_MARGIN: f32 = 10.0;
 const COMPOSER_GAP: f32 = 6.0;
 /// Fixed height of an attachment thumbnail; width follows the image aspect ratio.
@@ -86,7 +88,8 @@ fn quiet_combo_icon(
 
 impl OxiApp {
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
-        let pad = ((column_center_w - CHAT_COLUMN_MAX.min(column_center_w)) * 0.5).max(0.0);
+        let chat_column_max = crate::theme::chat_column_max_width(ui.ctx());
+        let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
         let can_send = !self.conv.input.trim().is_empty() || !self.conv.pending_images.is_empty();
 
         // Focus state persists in egui memory across frames, so reading it here (before
@@ -105,9 +108,9 @@ impl OxiApp {
                 ui.add_space(pad);
             }
             ui.vertical(|ui| {
-                let composer_w = CHAT_COLUMN_MAX.min(column_center_w);
+                let composer_w = chat_column_max.min(column_center_w);
                 ui.set_width(composer_w);
-                Frame::new()
+                let composer_card = Frame::new()
                     .fill(c_bg_elevated())
                     .stroke(Stroke::new(1.0, card_border))
                     .corner_radius(crate::theme::RADIUS_PANEL)
@@ -122,7 +125,7 @@ impl OxiApp {
                         // === Text area ===
                         // desired_rows(1) keeps it compact; it grows naturally
                         // as the user types (both newlines and soft-wrap).
-                        let te_output = TextEdit::multiline(&mut self.conv.input)
+                        let mut te_output = TextEdit::multiline(&mut self.conv.input)
                             .id(input_id)
                             .hint_text(
                                 RichText::new("Message oxi…")
@@ -133,6 +136,18 @@ impl OxiApp {
                             .desired_rows(1)
                             .frame(egui::Frame::NONE)
                             .show(ui);
+                        if self.conv.focus_chat_input_next_frame {
+                            // Navigation should put the caret at the end of any existing draft,
+                            // not at egui's default/start position.
+                            let end = CCursor::new(self.conv.input.chars().count());
+                            te_output
+                                .state
+                                .cursor
+                                .set_char_range(Some(CCursorRange::one(end)));
+                            te_output.state.store(ui.ctx(), input_id);
+                            te_output.response.request_focus();
+                            self.conv.focus_chat_input_next_frame = false;
+                        }
 
                         let galley_h = te_output.galley.rect.height();
                         self.conv.composer_measured_text_h = galley_h;
@@ -158,6 +173,21 @@ impl OxiApp {
                             self.render_controls_row(ui, can_send, composer_focused);
                         });
                     });
+
+                // Clicking anywhere inside the composer card should focus the text input, not just
+                // the TextEdit's own line-height rect. This makes the lower controls/empty area of
+                // the orange-focused border behave like one large chat input surface. We request
+                // focus without consuming the click, so buttons/combos inside the card keep their
+                // normal behavior.
+                let clicked_inside_card = ui.ctx().input(|i| {
+                    i.pointer.primary_clicked()
+                        && i.pointer
+                            .interact_pos()
+                            .is_some_and(|pos| composer_card.response.rect.contains(pos))
+                });
+                if clicked_inside_card {
+                    ui.ctx().memory_mut(|m| m.request_focus(input_id));
+                }
             });
             if pad > 0.0 {
                 ui.add_space(pad);
@@ -242,6 +272,11 @@ impl OxiApp {
                 }
             }
 
+            // ── Mic (dictation) button, only when configured in Settings ──
+            if self.conv.settings.dictation.enabled {
+                self.render_mic_button(ui);
+            }
+
             self.render_context_indicator(ui);
             ui.add_space(8.0);
 
@@ -260,6 +295,133 @@ impl OxiApp {
                 );
             }
         });
+    }
+
+    /// Round mic button: idle → click starts recording (lazy-loads the whisper model on
+    /// first use if needed); recording → click stops and transcribes into `conv.input`.
+    ///
+    /// While `transcribing` (mic just turned off, waiting on model load + inference — can
+    /// take a few seconds on first use) the button shows three pulsing dots instead of the
+    /// mic glyph so it's clear the app is still working, not stuck.
+    fn render_mic_button(&mut self, ui: &mut Ui) {
+        let recording = self.conv.voice_ui.recording;
+        let transcribing = self.conv.voice_ui.transcribing;
+        let rounding = CornerRadius::same((MIC_DIAM * 0.5) as u8);
+
+        if transcribing {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(MIC_DIAM, MIC_DIAM), Sense::hover());
+            ui.painter().rect_filled(rect, rounding, c_bg_elevated_2());
+            ui.painter().rect_stroke(
+                rect,
+                rounding,
+                Stroke::new(1.0, c_border_subtle()),
+                egui::StrokeKind::Middle,
+            );
+            let time = ui.input(|i| i.time);
+            crate::theme::paint_three_dots(ui.painter(), rect.center(), time, c_text_faint(), 1.6);
+            response.on_hover_text("Transcribing…");
+            return;
+        }
+
+        let (fill, stroke, glyph, hover) = if recording {
+            (c_danger(), c_danger(), c_on_accent(), "Stop recording")
+        } else {
+            (c_bg_input(), c_border_subtle(), c_text_muted(), "Dictate")
+        };
+        let mic = crate::ui::chrome::icon_button_core(
+            ui,
+            ICON_MIC,
+            egui::vec2(MIC_DIAM, MIC_DIAM),
+            14.0,
+            false,
+            &crate::ui::chrome::IconButtonLook {
+                fill,
+                hover_fill: c_row_hover(),
+                stroke,
+                hover_stroke: c_border(),
+                rounding,
+                glyph,
+            },
+        )
+        .on_hover_text(hover);
+        if mic.clicked() {
+            self.toggle_dictation();
+        }
+    }
+
+    /// Path of the downloaded model selected in Settings → Voice, if any.
+    fn active_voice_model_path(&self) -> Option<std::path::PathBuf> {
+        let id = self.conv.settings.dictation.model_id.as_ref()?;
+        self.conv
+            .voice_ui
+            .downloaded
+            .iter()
+            .find(|m| &m.id == id)
+            .map(|m| std::path::PathBuf::from(&m.path))
+    }
+
+    fn toggle_dictation(&mut self) {
+        let Some(model_path) = self.active_voice_model_path() else {
+            self.open_settings_page();
+            self.conv.settings_tab = super::state::SettingsTab::Voice;
+            return;
+        };
+        if self.conv.voice_ui.recording {
+            self.conv.voice_ui.recording = false;
+            self.conv.voice_ui.transcribing = true;
+            self.conv.voice_ui.error = None;
+            let keep_loaded = self.conv.settings.dictation.keep_loaded;
+            let language = self.conv.settings.dictation.language.clone();
+            self.voice
+                .stop_and_transcribe(model_path, keep_loaded, language);
+        } else {
+            self.conv.voice_ui.error = None;
+            self.conv.voice_ui.recording = true;
+            self.voice.start_recording();
+        }
+    }
+
+    /// Drain results from the background voice engine (see [`crate::voice_engine`]),
+    /// called once per frame from the main update loop.
+    pub(crate) fn drain_voice(&mut self, ctx: &egui::Context) {
+        use crate::voice_engine::VoiceMsg;
+        loop {
+            match self.conv.voice_rx.try_recv() {
+                Ok(VoiceMsg::RecordingStarted(Ok(()))) => {
+                    ctx.request_repaint();
+                }
+                Ok(VoiceMsg::RecordingStarted(Err(e))) => {
+                    self.conv.voice_ui.recording = false;
+                    self.conv.voice_ui.error = Some(e);
+                    ctx.request_repaint();
+                }
+                Ok(VoiceMsg::ModelLoading) => {
+                    ctx.request_repaint();
+                }
+                Ok(VoiceMsg::TranscriptionDone(result)) => {
+                    self.conv.voice_ui.transcribing = false;
+                    match result {
+                        Ok(text) if !text.trim().is_empty() => {
+                            let text = text.trim();
+                            if !self.conv.input.is_empty()
+                                && !self.conv.input.ends_with(' ')
+                                && !self.conv.input.ends_with('\n')
+                            {
+                                self.conv.input.push(' ');
+                            }
+                            self.conv.input.push_str(text);
+                            self.conv.focus_chat_input_next_frame = true;
+                        }
+                        Ok(_) => {}
+                        Err(e) => self.conv.voice_ui.error = Some(e),
+                    }
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
     }
 
     fn render_context_indicator(&self, ui: &mut Ui) {

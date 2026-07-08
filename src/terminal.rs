@@ -165,7 +165,7 @@ impl TerminalSession {
     }
 
     /// Render the terminal into `rect` and forward keyboard input when focused.
-    pub fn ui(&mut self, ui: &mut Ui, rect: Rect) {
+    pub fn ui(&mut self, ui: &mut Ui, rect: Rect, focus_next_frame: &mut bool) {
         let font = FontId::monospace(TERM_FONT_SIZE);
         let (cell_w, cell_h) = ui.fonts_mut(|f| {
             (
@@ -180,6 +180,10 @@ impl TerminalSession {
 
         let id = ui.id().with("terminal_surface");
         let resp = ui.interact(rect, id, Sense::click_and_drag());
+        if *focus_next_frame {
+            resp.request_focus();
+            *focus_next_frame = false;
+        }
         if resp.clicked() || resp.drag_started() {
             resp.request_focus();
         }

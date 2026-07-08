@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
 use crate::agent::anthropic::run_anthropic_loop;
-use crate::agent::approval::{ApprovalDecision, ApprovalGate};
+use crate::agent::approval::{ApprovalDecision, ApprovalGate, ApprovalPolicy};
 use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
 use crate::agent::history::{
@@ -153,6 +153,8 @@ pub fn openrouter_extra_headers(cfg: &ProviderConfig) -> Vec<(String, String)> {
 pub fn spawn_agent_run(
     settings: AppSettings,
     tunnels: crate::compute::TunnelManager,
+    acp: crate::agent::acp::AcpManager,
+    acp_session_key: String,
     cwd: PathBuf,
     chat_for_history: Vec<ChatMessage>,
     tx: Sender<AgentEvent>,
@@ -172,6 +174,29 @@ pub fn spawn_agent_run(
         rt.block_on(async move {
             let cwd_ref = cwd.as_path();
             let cfg = settings.active_config().clone();
+
+            // ACP inverts oxi's model: Claude Code runs the agent loop in a subprocess. Handle
+            // it entirely here — no system prompt, wire history, or tool definitions from oxi —
+            // then return before the HTTP-provider machinery below.
+            if cfg.provider == LlmProviderKind::ClaudeCodeAcp {
+                run_acp_turn(
+                    &cfg,
+                    &acp,
+                    acp_session_key,
+                    cwd.clone(),
+                    &chat_for_history,
+                    &tx,
+                    approval_rx,
+                    ApprovalPolicy {
+                        write_edit: settings.require_write_edit_approval,
+                        bash: settings.require_bash_approval,
+                    },
+                    &cancel,
+                )
+                .await;
+                return;
+            }
+
             let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
             let context_tokens = cfg.effective_context_window(settings.context_window_default);
             let context_budget = crate::agent::history::context_char_budget_from_tokens(
@@ -220,7 +245,13 @@ pub fn spawn_agent_run(
                 }
             };
             let mut oauth = load_oauth_store();
-            let mut gate = ApprovalGate::new(settings.require_approval, approval_rx);
+            let mut gate = ApprovalGate::new(
+                ApprovalPolicy {
+                    write_edit: settings.require_write_edit_approval,
+                    bash: settings.require_bash_approval,
+                },
+                approval_rx,
+            );
 
             let r = match cfg.provider {
                 LlmProviderKind::GptCodex => {
@@ -403,7 +434,7 @@ pub fn spawn_agent_run(
                     )
                     .await
                 }
-                LlmProviderKind::LmStudio => {
+                LlmProviderKind::LmStudio | LlmProviderKind::LocalHf => {
                     let key = configured_lmstudio_key(&cfg);
                     let base = match crate::compute::resolve_base_url(&cfg, &tunnels).await {
                         Ok(b) => b,
@@ -528,6 +559,9 @@ pub fn spawn_agent_run(
                         .await
                     }
                 }
+                LlmProviderKind::ClaudeCodeAcp => {
+                    unreachable!("ACP is handled before the provider match")
+                }
             };
             if let Err(e) = r {
                 if !cancel.load(Ordering::SeqCst) {
@@ -540,6 +574,69 @@ pub fn spawn_agent_run(
             }
         });
     })
+}
+
+/// Drive one Claude Code (ACP) turn: extract the latest user message, submit it to the ACP
+/// manager, and translate the outcome into the terminal [`AgentEvent`]s the UI expects. Unlike
+/// the HTTP providers there is no wire history to emit — the agent keeps session state in its
+/// subprocess.
+#[allow(clippy::too_many_arguments)]
+async fn run_acp_turn(
+    cfg: &ProviderConfig,
+    acp: &crate::agent::acp::AcpManager,
+    acp_session_key: String,
+    cwd: PathBuf,
+    chat_for_history: &[ChatMessage],
+    tx: &Sender<AgentEvent>,
+    approval_rx: Receiver<ApprovalDecision>,
+    approval_policy: ApprovalPolicy,
+    cancel: &Arc<AtomicBool>,
+) {
+    let last_user = chat_for_history
+        .iter()
+        .rev()
+        .find(|m| m.role == crate::model::MsgRole::User);
+    let text = last_user.map(|m| m.text.clone()).unwrap_or_default();
+    let images: Vec<(String, Vec<u8>)> = last_user
+        .map(|m| {
+            m.attachments
+                .iter()
+                .map(|a| match a {
+                    crate::model::UserAttachment::Image { mime, data } => {
+                        (mime.clone(), data.clone())
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut env = Vec::new();
+    let key = cfg.api_key.trim();
+    if !key.is_empty() {
+        env.push(("ANTHROPIC_API_KEY".to_string(), key.to_string()));
+    }
+
+    let req = crate::agent::acp::AcpPrompt {
+        session_key: acp_session_key,
+        cwd,
+        command_line: cfg.effective_acp_command(),
+        env,
+        model: cfg.model_id.clone(),
+        text,
+        images,
+        event_tx: tx.clone(),
+        approval_rx,
+        approval_policy,
+        cancel: cancel.clone(),
+    };
+
+    let r = acp.prompt(req).await;
+    if let Err(e) = r
+        && !cancel.load(Ordering::SeqCst)
+    {
+        let _ = tx.send(AgentEvent::StreamError(e));
+    }
+    let _ = tx.send(AgentEvent::AgentEnd);
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{Color32, FontId, Label, Ui};
+use eframe::egui::{Color32, FontId, Label, Painter, Pos2, Ui};
 
 use super::palette::{c_accent, c_text_muted};
 
@@ -52,6 +52,26 @@ pub fn animated_status_job(label: &str, size: f32, time: f64) -> LayoutJob {
 pub fn animated_status_label(ui: &mut Ui, label: &str, size: f32) {
     let time = ui.input(|i| i.time);
     ui.add(Label::new(animated_status_job(label, size, time)).selectable(false));
+}
+
+/// Three dots that pulse in and out in sequence, left to right — a compact "still working"
+/// indicator for spots too small for [`animated_status_label`] (e.g. inside a round icon
+/// button). Caller is responsible for requesting repaints while this is visible; the dots
+/// only animate as often as the surrounding UI redraws.
+pub fn paint_three_dots(
+    painter: &Painter,
+    center: Pos2,
+    time: f64,
+    color: Color32,
+    dot_radius: f32,
+) {
+    let spacing = dot_radius * 3.0;
+    for i in 0..3 {
+        let phase = time * 3.2 - i as f64 * 0.5;
+        let alpha = (0.25 + 0.75 * (0.5 + 0.5 * phase.sin())) as f32;
+        let pos = center + eframe::egui::vec2((i as f32 - 1.0) * spacing, 0.0);
+        painter.circle_filled(pos, dot_radius, color.gamma_multiply(alpha.clamp(0.0, 1.0)));
+    }
 }
 
 pub fn format_stream_elapsed(d: Duration) -> String {

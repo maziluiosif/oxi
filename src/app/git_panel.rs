@@ -33,9 +33,9 @@ impl OxiApp {
     pub(crate) fn render_git_panel(&mut self, ui: &mut Ui, full_h: f32) {
         let _ = full_h;
 
-        // The panel can come up open straight from settings (git_open persisted), in
-        // which case no one went through `toggle_git_panel` — make sure the worker
-        // exists so we don't sit on a stale "Not a git repository" default state.
+        // The panel can come up open straight from settings (git_open persisted), so
+        // make sure the worker exists and we don't sit on a stale "Not a git repository"
+        // default state.
         if self.conv.git_rx.is_none() {
             self.ensure_git_channels();
             let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
@@ -82,24 +82,6 @@ impl OxiApp {
                 if let Some(err) = self.conv.git.error.clone() {
                     crate::ui::chrome::alert_banner(ui, &err, true);
                     ui.add_space(6.0);
-                }
-
-                if self.conv.git.busy {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new().size(12.0).color(c_text_muted()));
-                        ui.label(
-                            RichText::new(
-                                self.conv
-                                    .git
-                                    .last_op
-                                    .clone()
-                                    .unwrap_or_else(|| "working".to_string()),
-                            )
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                        );
-                    });
-                    ui.add_space(4.0);
                 }
 
                 match self.conv.git_tab {

@@ -5,6 +5,8 @@ mod app;
 mod compute;
 mod git;
 mod hydrate;
+mod local_models;
+mod local_models_remote;
 mod markdown;
 mod model;
 mod oauth;
@@ -15,6 +17,8 @@ mod terminal;
 mod theme;
 mod ui;
 mod update;
+mod voice_engine;
+mod voice_models;
 
 use app::OxiApp;
 use eframe::egui::IconData;

@@ -8,18 +8,32 @@ use crate::git::{GitOp, GitState};
 use super::super::OxiApp;
 
 impl OxiApp {
-    pub(crate) fn toggle_git_panel(&mut self) {
-        self.conv.git_open = !self.conv.git_open;
-        self.conv.settings.git_open = self.conv.git_open;
-        if let Err(e) = self.conv.settings.save() {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some(format!("Save settings: {e}"));
+    pub(crate) fn toggle_git_panel_tab(&mut self, tab: super::GitTab) {
+        self.close_settings_page();
+
+        if self.conv.git_open && self.conv.git_tab == tab {
+            self.conv.git_open = false;
+            self.conv.settings.git_open = false;
+            self.conv.focus_chat_input_next_frame = true;
+            if let Err(e) = self.conv.settings.save() {
+                self.run_state_mut(self.active_session_key()).stream_error =
+                    Some(format!("Save settings: {e}"));
+            }
+            return;
         }
-        if self.conv.git_open {
-            // Ensure the worker exists and request an initial snapshot.
-            self.ensure_git_channels();
-            let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+
+        self.conv.git_tab = tab;
+        if !self.conv.git_open {
+            self.conv.git_open = true;
+            self.conv.settings.git_open = true;
+            if let Err(e) = self.conv.settings.save() {
+                self.run_state_mut(self.active_session_key()).stream_error =
+                    Some(format!("Save settings: {e}"));
+            }
         }
+        self.ensure_git_channels();
+        let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+        self.conv.focus_chat_input_next_frame = true;
     }
 
     pub(crate) fn bind_git_ctx(&mut self, ctx: &egui::Context) {
@@ -63,7 +77,27 @@ impl OxiApp {
         // The diff collected for the commit-message generator can arrive on any drained
         // state, so capture it across all of them rather than only the last one.
         let mut collected_diff: Option<String> = None;
-        while let Ok(state) = rx.try_recv() {
+        while let Ok(mut state) = rx.try_recv() {
+            if state.busy {
+                // The worker emits a lightweight "busy" snapshot before each git op.
+                // Keep the last real snapshot's content in place while only updating
+                // the busy marker; otherwise the diff view (and sidebar lists) briefly
+                // disappear until the final snapshot arrives, which looks like flicker
+                // when switching between files/commits.
+                let previous = &self.conv.git;
+                state.repo = previous.repo;
+                state.branch = previous.branch.clone();
+                state.branches = previous.branches.clone();
+                state.ahead = previous.ahead;
+                state.behind = previous.behind;
+                state.staged = previous.staged.clone();
+                state.unstaged = previous.unstaged.clone();
+                state.log = previous.log.clone();
+                state.diff = previous.diff.clone();
+                state.error = previous.error.clone();
+                state.current_diff_path = previous.current_diff_path.clone();
+                state.current_diff_staged = previous.current_diff_staged;
+            }
             if let Some(diff) = &state.commit_diff {
                 collected_diff = Some(diff.clone());
             }

@@ -63,8 +63,6 @@ pub const ICON_CHECK: &str = "\u{f00c}";
 pub const ICON_SETTINGS: &str = "\u{f013}";
 /// Plus — "new" / "add" actions (new chat, add profile) (`nf-fa-plus`).
 pub const ICON_PLUS: &str = "\u{f067}";
-/// Chevron pointed left — "back" / hide panel (`nf-fa-chevron-left`).
-pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
 /// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
 pub const ICON_CHEVRON_RIGHT: &str = "\u{f054}";
 /// Hamburger menu — toggle sidebar (`nf-fa-bars`).
@@ -81,6 +79,8 @@ pub const ICON_SEND: &str = "\u{f062}";
 pub const ICON_STOP: &str = "\u{f04d}";
 /// Paperclip — attach image composer button (`nf-fa-paperclip`).
 pub const ICON_ATTACH: &str = "\u{f0c6}";
+/// Microphone — voice dictation composer button (`nf-fa-microphone`).
+pub const ICON_MIC: &str = "\u{f130}";
 /// Arrow rising out of a box — "external" suggestion / prompt chips (`nf-fa-external-link`).
 pub const ICON_EXTERNAL: &str = "\u{f08e}";
 /// Trash — delete / discard actions (`nf-fa-trash`).

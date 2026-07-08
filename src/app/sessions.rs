@@ -110,6 +110,7 @@ impl OxiApp {
         }
 
         self.conv.scroll_to_bottom_once = true;
+        self.conv.focus_chat_input_next_frame = true;
         if let Some(state) = self.flow.sessions.get_mut(&self.active_session_key()) {
             state.stream_error = None;
         }
@@ -249,10 +250,11 @@ impl OxiApp {
     }
 
     pub(crate) fn delete_session(&mut self, idx: usize) {
-        if self.active_workspace().sessions.len() <= 1 {
+        let active_key = self.active_session_key();
+        if idx >= self.active_workspace().sessions.len() {
             return;
         }
-        let active_key = self.active_session_key();
+        let deleting_last_session = self.active_workspace().sessions.len() == 1;
         let delete_key = self.session_key(active_key.workspace_idx, idx);
         if self
             .run_state(delete_key)
@@ -264,6 +266,16 @@ impl OxiApp {
         let session_file = self.active_workspace().sessions[idx].session_file.clone();
         let deleting_current_backend_session =
             session_file.as_deref() == self.flow.current_backend_session_file.as_deref();
+
+        // Tear down any Claude Code (ACP) subprocess bound to this session so it doesn't leak.
+        // Keyed the same way as `send_prompt_payload` in streaming.rs.
+        let acp_key = session_file.clone().unwrap_or_else(|| {
+            format!(
+                "mem:{}:{}",
+                delete_key.workspace_idx, delete_key.session_idx
+            )
+        });
+        self.acp.close(&acp_key);
 
         if let Some(session_file) = session_file.as_deref() {
             if deleting_current_backend_session {
@@ -280,39 +292,69 @@ impl OxiApp {
         let old_states = std::mem::take(&mut self.flow.sessions);
         let workspace_idx = active_key.workspace_idx;
         self.active_workspace_mut().sessions.remove(idx);
-        if idx < self.active_workspace().active {
-            self.active_workspace_mut().active -= 1;
-        }
 
-        self.flow.sessions = old_states
-            .into_iter()
-            .filter_map(|(mut key, state)| {
-                if key.workspace_idx != workspace_idx {
-                    return Some((key, state));
-                }
-                if key.session_idx == idx {
-                    return None;
-                }
-                if key.session_idx > idx {
-                    key.session_idx -= 1;
-                }
-                Some((key, state))
-            })
-            .collect();
-
-        if let Some(pending_idx) = self.flow.pending_session_idx {
-            if idx == pending_idx {
-                self.flow.pending_session_idx = None;
-                self.flow.pending_load_session_idx = None;
-            } else if idx < pending_idx {
-                let new_idx = pending_idx - 1;
-                self.flow.pending_session_idx = Some(new_idx);
-                self.flow.pending_load_session_idx = Some(new_idx);
+        if deleting_last_session {
+            self.active_workspace_mut()
+                .sessions
+                .push(Self::blank_session("Chat 1"));
+            self.active_workspace_mut().active = 0;
+            self.flow.sessions = old_states
+                .into_iter()
+                .filter_map(|(key, state)| {
+                    if key.workspace_idx == workspace_idx {
+                        None
+                    } else {
+                        Some((key, state))
+                    }
+                })
+                .collect();
+            self.flow.pending_session_idx = None;
+            self.flow.pending_load_session_idx = None;
+            if let Some(c) = self.conv.compaction.as_ref()
+                && c.key.workspace_idx == workspace_idx
+            {
+                self.conv.compaction = None;
             }
-        }
-        if self.active_workspace().active >= self.active_workspace().sessions.len() {
-            let new_active = self.active_workspace().sessions.len().saturating_sub(1);
-            self.active_workspace_mut().active = new_active;
+            self.conv.input.clear();
+            self.conv.pending_images.clear();
+            self.conv.input_history_index = None;
+            self.conv.input_history_draft.clear();
+            self.conv.scroll_to_bottom_once = true;
+        } else {
+            if idx < self.active_workspace().active {
+                self.active_workspace_mut().active -= 1;
+            }
+
+            self.flow.sessions = old_states
+                .into_iter()
+                .filter_map(|(mut key, state)| {
+                    if key.workspace_idx != workspace_idx {
+                        return Some((key, state));
+                    }
+                    if key.session_idx == idx {
+                        return None;
+                    }
+                    if key.session_idx > idx {
+                        key.session_idx -= 1;
+                    }
+                    Some((key, state))
+                })
+                .collect();
+
+            if let Some(pending_idx) = self.flow.pending_session_idx {
+                if idx == pending_idx {
+                    self.flow.pending_session_idx = None;
+                    self.flow.pending_load_session_idx = None;
+                } else if idx < pending_idx {
+                    let new_idx = pending_idx - 1;
+                    self.flow.pending_session_idx = Some(new_idx);
+                    self.flow.pending_load_session_idx = Some(new_idx);
+                }
+            }
+            if self.active_workspace().active >= self.active_workspace().sessions.len() {
+                let new_active = self.active_workspace().sessions.len().saturating_sub(1);
+                self.active_workspace_mut().active = new_active;
+            }
         }
         self.run_state_mut(self.active_session_key()).stream_error = None;
     }

@@ -10,6 +10,9 @@ impl eframe::App for OxiApp {
         self.consume_dropped_files(ctx);
         self.drain_agent(ctx);
         self.drain_models(ctx);
+        self.drain_local_models(ctx);
+        self.drain_voice(ctx);
+        self.drain_voice_models(ctx);
         self.drain_ssh_test(ctx);
         self.pin_observed_host_keys();
         self.drain_oauth(ctx);
@@ -27,17 +30,24 @@ impl eframe::App for OxiApp {
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
             })
         });
-        if self.any_waiting_response() || any_assistant_streaming {
+        if self.any_waiting_response() || any_assistant_streaming || self.conv.voice_ui.transcribing
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        crate::theme::set_chat_column_max_width(ui.ctx(), self.conv.settings.chat_column_max_width);
         ui.ctx().layer_painter(LayerId::background()).rect_filled(
             ui.ctx().content_rect(),
             0,
             c_bg_main(),
         );
+
+        // Persistent status bar (sidebar/git/terminal/settings toggles + branch) — claims the very
+        // bottom strip of the window, below the terminal panel. It stays visible on Settings too;
+        // clicking any non-settings toggle leaves Settings and returns to the normal chat layout.
+        self.render_status_bar(ui);
 
         // Bottom terminal panel (added before the CentralPanel so it claims the bottom strip and
         // the chat area fills what's left). Hidden while the settings page is open.

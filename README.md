@@ -3,7 +3,9 @@
 [![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**oxi** is a fast, lightweight desktop coding-agent chat app built in Rust with **egui/eframe** — **a local-first coding agent you fully control**. It runs as a **single native binary**, keeps your workspaces and sessions local, and makes local models from **LM Studio** or **Ollama** easy to configure — including models running on another machine over **SSH**. The **system prompt is yours to edit**, so oxi can stay a focused coding agent or become whatever assistant you point it at.
+**oxi** is a fast, local-first desktop coding-agent app built in Rust with **egui/eframe**. It is a single native binary with a chat UI, local workspace tools, session persistence, Git controls, an embedded terminal, local voice dictation, and provider support for hosted APIs, local runtimes, SSH-tunneled runtimes, and oxi-managed HuggingFace GGUF models.
+
+The default workflow is coding-agent oriented, but the system prompt is editable, so oxi can be adapted to other assistant workflows too.
 
 ![oxi chat UI](assets/screenshots/chat.png)
 
@@ -40,7 +42,7 @@ Then launch it normally.
 
 Requirements:
 
-- Rust toolchain
+- Rust toolchain compatible with the crate's `rust-version` in `Cargo.toml`
 - desktop environment supported by `eframe`
 
 ```bash
@@ -55,14 +57,14 @@ target/release/oxi
 
 ## Why oxi
 
-- **Efficient native desktop app** — Rust + egui, no Electron/webview runtime, shipped as a single binary.
-- **Low memory footprint** — designed for day-to-day coding-agent workflows without a heavy app shell.
-- **You fully control it** — the system prompt is an editable template, so oxi can stay a focused coding agent or be repurposed into any assistant you need.
-- **Local-first workflow** — settings, workspaces, sessions, OAuth tokens, SSH passwords, and tool execution are handled locally.
-- **Local model friendly** — first-class profiles for LM Studio and Ollama, with model discovery from the UI.
-- **Remote local models over SSH** — run LM Studio/Ollama on a stronger LAN machine and let oxi create the tunnel.
-- **Workspace-aware coding tools** — read, write, edit, grep, find, list files, run shell commands, and fetch/search web content.
-- **Multiple providers** — OpenAI, OpenRouter, GPT Codex, OpenCode Go, LM Studio, and Ollama.
+- **Native desktop app** — Rust + egui, no Electron/webview runtime.
+- **Local-first** — settings, sessions, tool execution, SSH credentials, OAuth tokens, local models, and voice models are handled on your machine.
+- **Workspace-aware agent tools** — read, write, edit, grep, find, list files, run shell commands, and search/fetch web content.
+- **Provider flexibility** — OpenAI, Azure OpenAI, OpenRouter, GPT Codex, OpenCode Go, Custom Anthropic-compatible endpoints, LM Studio, Ollama, Local HF, and Claude Code over ACP.
+- **Local model friendly** — connect to LM Studio/Ollama, tunnel to a remote runtime over SSH, or let oxi download GGUF models from HuggingFace and run them through `llama-server`.
+- **Built-in developer surfaces** — source-control panel, diffs, commit-message generation, and a workspace-rooted terminal.
+- **User-controlled prompting** — editable agent prompt and separate commit-message prompt.
+- **Local voice dictation** — optional microphone dictation using local Whisper models.
 
 ![oxi RAM usage](assets/screenshots/resource_ussage.png)
 
@@ -80,43 +82,35 @@ target/release/oxi
 |---|---|
 | ![oxi editable system prompt](assets/screenshots/set2.png) | ![oxi settings](assets/screenshots/set3.png) |
 
-## Overview
-
-`oxi` is meant for local coding workflows rather than generic chat. It combines:
-
-- a desktop chat UI
-- streaming LLM responses
-- built-in workspace tools
-- local session persistence per workspace
-- configurable provider profiles
-- optional OAuth for Codex
-- image attachments in chat messages
-- local and remote compute targets for LM Studio/Ollama profiles
-
 ## Main capabilities
 
 ### Workspace-oriented chats
 
-On startup, the app uses the current working directory as the first workspace. You can add more workspace folders from the UI.
+On startup, oxi uses the current working directory as the first workspace. Additional workspace folders can be added from the UI and are persisted in settings.
 
 Each workspace has:
 
-- its own list of chat sessions
-- its own active session
-- tool execution rooted in that workspace directory
+- its own chat sessions
+- its own active/new chat state
+- its own composer draft and pending image attachments
+- local tool execution rooted in that workspace directory
+- Git and terminal operations rooted in that workspace when selected
 
-Tool calls are executed with the selected workspace as the current directory.
+### Sessions and local history
 
-### Multiple sessions per workspace
+Chat sessions are persisted as `.jsonl` files per workspace. Saved sessions are shown in the sidebar, sorted by modification time, and loaded lazily when opened.
 
-Sessions are shown in the sidebar and loaded from disk when available. Current behavior visible in code:
+Session storage preserves:
 
-- if no saved sessions exist, the app creates an in-memory `New chat`
-- saved sessions are sorted by modification time
-- session message bodies are loaded lazily when selected
-- session drafts keep per-session composer text and pending images when switching chats
-- deleting a session removes its backing `.jsonl` file
-- deletion tries the `trash` command first, then falls back to direct file removal
+- user/assistant messages
+- structured assistant blocks
+- thinking text
+- tool calls and tool output
+- diffs from file operations
+- image attachments
+- generated session metadata such as titles
+
+If no saved sessions exist, oxi starts with an in-memory `New chat`.
 
 ### Local built-in tools
 
@@ -131,190 +125,175 @@ The agent can call these tools when enabled in Settings:
 | `grep` | Search regex text in files under the workspace |
 | `find` | Find files matching a glob pattern |
 | `ls` | List directory entries |
-| `web_search` | Search the web through a configured SearXNG instance |
-| `web_fetch` | Fetch a URL and return its content as readable text |
+| `web_search` | Search the web through Bing RSS, DuckDuckGo, or a configured SearXNG instance |
+| `web_fetch` | Fetch a URL and return readable text |
 
-Behavior confirmed in `src/agent/tools/`:
+Tool behavior:
 
 - path-based tools reject paths that escape the workspace root
 - `write` can create new files under the workspace
-- `edit` requires each `oldText` to match exactly once
-- `read` is capped at 2000 lines per call
-- `grep` skips `.git`, `target`, and `node_modules`
-- `find` also skips `.git`, `target`, and `node_modules`
+- `edit` requires each `oldText` to match exactly once unless `replaceAll` is set
+- `read` is capped per call
+- `grep` / `find` skip common large folders such as `.git`, `target`, and `node_modules`
 - `grep`, `find`, and `ls` have result caps
-- `web_search` queries the SearXNG JSON API (configure the URL in Settings → Tools; its JSON format must be enabled)
 - `web_fetch` only accepts `http://` / `https://` URLs and strips HTML to plain text
-- `web_search` and `web_fetch` run as read-only tools (no approval prompt)
-- `bash`, `write`, and `edit` require explicit user approval before each call, or “approve rest of this run”, when the approval gate is enabled in Settings
-- tool output is truncated when too large
-- `bash` defaults to a 15s timeout and is capped at 30s
-- `bash` blocks a small deny-list of risky command substrings as a best-effort deterrent. It is not a sandbox; the approval prompt showing the raw command before it runs is the real safety boundary.
+- web tools are read-only and do not require approval
+- `write`, `edit`, and `bash` can require explicit approval, controlled separately in Settings
 - `write` and `edit` generate unified diffs for the UI
+- `bash` has a configurable timeout cap, defaulting to 300 seconds
+- `bash` includes a small deny-list for obviously risky command substrings, but this is not a sandbox; the approval prompt is the real safety boundary
 
 ### Streaming coding UI
 
 Assistant output is rendered as structured blocks rather than plain text only. The app supports:
 
+- streaming responses
 - thinking blocks
 - grouped tool activity for exploration-style runs
 - compact tool pills
-- diff rendering for file edits/writes
+- diff rendering for file writes/edits
 - markdown final answers
-- visible user attachments in the transcript
+- image attachments in the transcript
 - stop/cancel while a response is streaming
+- heuristic long-history trimming before provider requests
 
-### Provider profiles
+### Git panel
 
-Settings support multiple profiles across multiple providers. Each profile stores:
+oxi includes a right-side source-control panel backed by the `git` CLI. The worker runs in the selected workspace and updates the UI without blocking it.
 
-- profile id
-- display name
-- provider kind
-- model id
-- optional base URL override
-- API key / token
-- OpenRouter optional headers
+Current Git features include:
 
-The active profile can be switched from:
+- status for staged and unstaged changes
+- branch list and checkout
+- new branch creation
+- commit history
+- per-file and per-commit diff viewing
+- stage / unstage / discard
+- commit
+- fetch / pull / push
+- AI commit-message generation from the current diff
 
-- the Settings page
-- the composer profile dropdown in the main chat UI
+The commit-message generator can use the active provider or a provider/model pinned in Settings, with its own editable system prompt.
 
-Settings are auto-saved when changed.
+### Embedded terminal
 
-## Local models: LM Studio and Ollama
+A bottom terminal panel hosts a live PTY shell rooted at the active workspace. It is resizable, hideable, persisted in settings, and can be restarted from the panel header.
 
-oxi is intentionally easy to pair with local models. Create an LM Studio or Ollama provider profile, point the base URL at your runtime, and use **Load available models** in the UI to select the model that is actually loaded/pulled.
+### Voice dictation
 
-### LM Studio
+Voice dictation is optional and fully local:
 
-Defaults:
-
-- base URL: `http://localhost:1234/v1` (point this at whichever host runs LM Studio)
-- default model: `local-model` (use the profile's **Load available models** button)
-
-Authentication:
-
-- LM Studio's local server ignores the bearer token, so an API key is optional. Use the profile value or `LMSTUDIO_API_KEY` if set; otherwise an empty key is sent.
-- Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
-
-### Ollama
-
-Defaults:
-
-- base URL: `http://localhost:11434/v1` (Ollama's OpenAI-compatible API)
-- default model: `qwen2.5-coder:7b` (use the profile's **Load available models** button)
-
-Authentication:
-
-- Ollama has no auth by default, so an API key is optional. Use the profile value or `OLLAMA_API_KEY` if set; otherwise an empty key is sent.
-- Self-signed TLS certs are accepted for this provider (LAN host behind HTTPS).
-
-## Remote compute over SSH
-
-![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png)
-
-LM Studio and Ollama profiles support a **compute target**, configurable per profile in Settings → Providers:
-
-- **Local** (default) — connect directly to `effective_base_url()`.
-- **Remote (SSH)** — run the model on another host, for example a stronger machine on your LAN, reached over SSH. oxi opens an SSH tunnel and forwards a local port to the remote runtime port, so the rest of the app talks to it like a local server.
-
-Behavior visible in code (`src/compute/`):
-
-- the SSH client is implemented with `russh` (password authentication; no external `ssh` binary required)
-- one tunnel is kept alive per profile, reused across agent runs and model-list fetches; it reconnects lazily on first use
-- host key verification is intentionally permissive (trust-on-every-connect) — this is a convenience tunnel to a host you typed in yourself, not a general-purpose SSH client
-- the Settings UI exposes host / SSH port / user / remote runtime port fields plus a password field and a **Test connection** button
-- SSH passwords are stored in the OS keychain, keyed by profile id — not in `settings.json`
+- microphone capture uses `cpal`
+- transcription uses `whisper-rs` / whisper.cpp bindings
+- voice models are downloaded from `ggerganov/whisper.cpp` on HuggingFace
+- available model sizes range from Tiny to Large v3, including English-only and multilingual variants
+- the Whisper model is loaded lazily only when transcribing
+- by default, the model is unloaded after each transcription so idle dictation does not keep extra memory resident
+- language can be set explicitly or left as `auto`
 
 ## Providers
 
-The current code supports these provider kinds:
+Settings keep one configuration per provider kind. The active provider can be switched from Settings or from the composer provider control.
 
-- **OpenAI**
-- **OpenRouter**
-- **GPT Codex**
-- **OpenCode Go**
-- **LM Studio**
-- **Ollama**
+Supported provider kinds:
 
-### OpenAI
+| Provider | Notes |
+|---|---|
+| OpenAI | OpenAI-compatible chat completions |
+| Azure OpenAI | Azure deployment endpoint style |
+| OpenRouter | OpenRouter chat completions with optional referer/title headers |
+| GPT Codex | ChatGPT/Codex OAuth mode or OpenAI API-key fallback |
+| OpenCode Go | OpenCode Go subscription endpoint; backend shape depends on model family |
+| Custom Anthropic | User-configured Anthropic Messages-compatible endpoint |
+| LM Studio | Local/LAN OpenAI-compatible server |
+| Ollama | Local/LAN OpenAI-compatible server at `/v1` |
+| Local HF | oxi-managed GGUF model + `llama-server` runtime |
+| Claude Code (ACP) | oxi acts as an Agent Client Protocol client and spawns an ACP subprocess |
 
-Defaults from `src/settings.rs`:
+### Provider defaults
 
-- base URL: `https://api.openai.com/v1`
-- default model: `gpt-4o-mini`
+| Provider | Default base URL | Default model |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| Azure OpenAI | `https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT` | `gpt-4o-mini` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` |
+| GPT Codex | `https://api.openai.com/v1` for API-key fallback | `gpt-4o-mini` |
+| OpenCode Go | `https://opencode.ai/zen/go` | `kimi-k2.7-code` |
+| Custom Anthropic | `http://localhost:8000` | `claude-sonnet-4-5` |
+| LM Studio | `http://localhost:1234/v1` | `local-model` |
+| Ollama | `http://localhost:11434/v1` | `qwen2.5-coder:7b` |
+| Local HF | `http://127.0.0.1:18080/v1` | `local-hf-model` |
+| Claude Code (ACP) | not HTTP-based | `sonnet` informational default |
 
-Authentication fallback order:
+### Auth fallback environment variables
 
-- profile API key
-- `OPENAI_API_KEY`
+| Purpose | Variable(s) |
+|---|---|
+| OpenAI auth | `OPENAI_API_KEY` |
+| Azure OpenAI auth | `AZURE_OPENAI_API_KEY` |
+| OpenRouter auth | `OPENROUTER_API_KEY` |
+| OpenRouter referer | `OPENROUTER_HTTP_REFERER` |
+| OpenRouter title | `OPENROUTER_TITLE` |
+| Codex API-key fallback auth | `OPENAI_API_KEY` |
+| OpenCode Go auth | `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY` |
+| Custom Anthropic auth | `CUSTOM_ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEY` |
+| LM Studio auth, optional | `LMSTUDIO_API_KEY` |
+| Ollama auth, optional | `OLLAMA_API_KEY` |
 
-### OpenRouter
+API keys saved through the UI are stored in the OS credential store, not in `settings.json`.
 
-Defaults:
+## Local and remote models
 
-- base URL: `https://openrouter.ai/api/v1`
-- default model: `openai/gpt-4o-mini`
+### LM Studio and Ollama
 
-Authentication fallback order:
+Create an LM Studio or Ollama provider config, point the base URL at your runtime, and use **Load available models** in the UI to choose a model that is actually loaded/pulled.
 
-- profile API key
-- `OPENROUTER_API_KEY`
+LM Studio and Ollama API keys are optional because local servers usually ignore bearer tokens. oxi will use the profile value, then the relevant environment variable, then an empty key.
 
-Optional headers supported:
+### Local HF
 
-- `HTTP-Referer` from profile field or `OPENROUTER_HTTP_REFERER`
-- `X-Title` from profile field or `OPENROUTER_TITLE`
+The **Local HF** provider lets oxi manage GGUF models directly:
 
-### GPT Codex
+- search HuggingFace for GGUF repositories
+- list available `.gguf` files
+- download selected models into oxi's data directory
+- install a matching `llama-server` runtime
+- start/stop a local `llama-server` process
+- talk to it through the OpenAI-compatible `/v1` API
 
-Defaults:
+Local HF can also be combined with the SSH compute target below to manage and start a runtime on another machine.
 
-- default model: `gpt-4o-mini`
-- API-key fallback base URL: `https://api.openai.com/v1`
+### Remote compute over SSH
 
-Two runtime modes exist:
+![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png)
 
-1. **OAuth mode**
-   - uses ChatGPT/Codex OAuth
-   - uses the Responses-style backend at `https://chatgpt.com/backend-api` unless the profile overrides the base URL
-   - sends requests to the Codex responses endpoint under that base URL
-2. **API key fallback mode**
-   - uses OpenAI-compatible chat completions
-   - authenticates with profile API key or `OPENAI_API_KEY`
+LM Studio, Ollama, and Local HF provider configs support a compute target:
 
-### OpenCode Go
+- **Local** — connect directly to the provider's effective base URL.
+- **Remote (SSH)** — connect to another machine through an SSH tunnel and forward a local port to the model runtime running there.
 
-Defaults:
+Implementation notes:
 
-- base URL: `https://opencode.ai/zen/go`
-- default model: `kimi-k2.7-code`
-
-Authentication fallback order:
-
-- profile API key
-- `OPENCODE_GO_API_KEY` / `OPENCODE_API_KEY`
-
-Backend selection is model-dependent:
-
-- `minimax-*` / `qwen*` → Anthropic Messages API path
-- everything else → chat-completions-style path
+- SSH uses `russh`; no external `ssh` binary is required
+- password authentication is supported
+- one tunnel is reused per provider and reconnects lazily
+- SSH passwords are stored in the OS keychain
+- host keys use trust-on-first-use pinning; a changed key is rejected until accepted/reset by the user
+- the Settings UI exposes host, SSH port, user, remote runtime port, password, and connection testing
 
 ## OAuth flows
 
 ### ChatGPT / Codex OAuth
 
-Implemented via PKCE.
+GPT Codex supports a PKCE OAuth flow:
 
-Behavior visible in code:
-
-- the app opens the browser for login
+- oxi opens the browser for login
 - it listens on `http://localhost:1455/auth/callback`
-- access and refresh tokens are stored in the OS keychain
-- the access token is refreshed automatically before expiry
-- the callback port `1455` must be available
+- access and refresh tokens are stored in the OS credential store
+- access tokens are refreshed automatically before expiry
+- callback port `1455` must be available
+
+If OAuth is not used, GPT Codex can fall back to OpenAI-compatible chat completions with an API key.
 
 ## Attachments
 
@@ -324,79 +303,47 @@ The UI supports image attachments through:
 - drag and drop
 - paste from clipboard
 
-Supported image formats in code:
+Supported image formats:
 
 - PNG
 - JPEG
 - GIF
 - WebP
 
-Attachment limits are enforced in the UI layer:
+Images are stored in session history and rendered in the transcript. They are converted to OpenAI-style `image_url` blocks when history is prepared, but actual compatibility depends on the selected provider/model.
 
-- max image count per message
-- max bytes per image
+## Settings and local data
 
-Important note about provider payloads:
+Settings are stored under the platform config directory, for example:
 
-- user image attachments are stored in messages and rendered in the transcript
-- they are converted into OpenAI-style `image_url` content blocks when history is prepared
-- actual provider compatibility still depends on the selected backend/model
+- `~/.config/oxi/settings.json` on many Linux systems
+- the platform-equivalent config directory on macOS and Windows
 
-## Settings and configuration
+Secrets are not stored in `settings.json`:
 
-Settings are stored at:
+- provider API keys
+- OAuth tokens
+- SSH passwords
 
-- `~/.config/oxi/settings.json` on systems where `dirs::config_dir()` resolves there
-- or the platform-equivalent config directory
+They are stored in the OS credential store:
 
-Provider API keys, OAuth tokens, and SSH passwords for Remote compute targets are **not** in that file — they're stored in the OS credential store (see `src/secrets.rs` and [Current limitations and safety notes](#current-limitations-and-safety-notes)). If `oauth.json` or `ssh_credentials.json` exist from an older version, they're migrated into the keychain and deleted the next time oxi reads them.
+- macOS Keychain
+- Windows Credential Manager
+- Secret Service over D-Bus on Linux
 
-The settings model currently contains:
+Other local data includes:
 
-- active profile id
-- provider profiles
-- system prompt template
-- tool enable/disable flags
+- chat sessions per workspace
+- downloaded Local HF models and runtime files
+- downloaded Whisper voice models
+- local manifests for downloaded models
+- optional crash log at `<config_dir>/oxi/crash.log`
 
-The settings UI allows:
+On Unix, `settings.json` is written with `0600` permissions as defense in depth for non-secret configuration.
 
-- adding/removing profiles
-- selecting the active profile
-- editing model id, base URL, and API key/token
-- editing OpenRouter headers
-- enabling/disabling tools
-- launching OAuth sign-in and sign-out
-- editing the system prompt
-- saving settings automatically to disk
+## System prompts
 
-## Sessions and local data
-
-Chat sessions are persisted as `.jsonl` files.
-
-Behavior visible in the session store:
-
-- sessions are loaded per workspace
-- titles are derived from session metadata or the first user message
-- duplicate trailing history can be deduplicated before save/load flows
-- assistant blocks and attachments are preserved in session serialization
-- saved sessions initially load as headers-only rows and full messages are read lazily when opened
-
-## Environment variables
-
-| Purpose | Variable(s) |
-|---|---|
-| OpenAI auth | `OPENAI_API_KEY` |
-| OpenRouter auth | `OPENROUTER_API_KEY` |
-| OpenRouter referer | `OPENROUTER_HTTP_REFERER` |
-| OpenRouter title | `OPENROUTER_TITLE` |
-| Codex fallback auth | `OPENAI_API_KEY` |
-| OpenCode Go auth | `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY` |
-| LM Studio auth (optional) | `LMSTUDIO_API_KEY` |
-| Ollama auth (optional) | `OLLAMA_API_KEY` |
-
-## System prompt behavior
-
-The app stores one editable system prompt template.
+oxi stores an editable main agent system prompt.
 
 Supported placeholder:
 
@@ -407,60 +354,72 @@ At runtime, the prompt builder also appends:
 - current date
 - current working directory
 
-Default prompt guidance includes:
+There is also a separate editable system prompt for AI commit-message generation.
 
-- prefer reading files before editing
-- keep shell commands safe and relevant
-- do not guess when the codebase can be inspected
-- verify claims from source files before answering
+## Web search
+
+The `web_search` tool supports multiple backends:
+
+- **Bing** — default zero-config backend using RSS results
+- **DuckDuckGo** — optional backend
+- **SearXNG** — user-configured instance URL; JSON support must be available
+
+`web_fetch` is separate and can fetch readable text from HTTP(S) URLs.
+
+## Appearance
+
+Settings include theme and density controls. Built-in themes are managed by the theme catalog, and UI density is applied through egui zoom so text and spacing scale together.
 
 ## Architecture
 
-High-level layout:
+High-level source layout:
 
-- `src/main.rs` — native `eframe` entry point and window setup
-- `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior
-- `src/agent/` — local agent runner, prompt building, message history conversion, tool execution, provider loops
-- `src/oauth/` — OAuth flows and token persistence
-- `src/compute/` — SSH tunnels for Remote compute targets and their credential storage
+- `src/main.rs` — native `eframe` entry point, window setup, panic logging
+- `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior, Git/terminal panels
+- `src/agent/` — agent runner, prompts, provider adapters, history conversion/trimming, approvals, tool execution
+- `src/agent/tools/` — read/write/edit/bash/grep/find/ls/web tools
+- `src/git.rs` — background Git worker and typed Git operations
+- `src/terminal.rs` — PTY terminal session
+- `src/local_models.rs` — HuggingFace GGUF downloads and local `llama-server` runtime management
+- `src/local_models_remote.rs` — remote SSH helpers for Local HF
+- `src/voice_engine.rs` — local microphone capture and Whisper transcription
+- `src/voice_models.rs` — Whisper model catalog/downloads
+- `src/oauth/` — Codex OAuth and token persistence
+- `src/compute/` — SSH tunnels and credential storage
 - `src/session_store/` — session loading/saving and storage path handling
-- `src/ui/` — transcript and chrome rendering helpers
-- `src/settings.rs` — persistent settings and provider profile model
+- `src/settings/` — persistent settings and provider config model
+- `src/theme/` — theme catalog, palette, formatting, and style helpers
+- `src/ui/` — shared UI chrome helpers
 
-Important runtime behavior from the current implementation:
+Important runtime behavior:
 
-- the app starts with the current working directory as the initial workspace
-- agent runs happen in a background thread with a Tokio runtime
-- settings are loaded on startup from the app config directory
-- tools are executed locally against the selected workspace root
-- the system prompt is expanded at runtime with enabled tools, current date, and working directory
-- conversation history is converted to OpenAI-style message JSON before provider requests are sent
-- long history is trimmed by an approximate character budget before sending
+- the current working directory becomes the initial workspace
+- agent runs happen off the UI thread with a Tokio runtime
+- Git operations run on a background worker thread
+- the terminal is spawned lazily when the panel opens
+- voice transcription runs on its own background thread
+- settings are loaded on startup and saved through the Settings page or relevant toggles
+- tools execute locally against the selected workspace root
+- conversation history is converted to provider-specific payloads before requests are sent
 
 ## Current limitations and safety notes
 
-Based on the current source code:
-
-- `bash` safety checks are basic and not a real sandbox
+- `bash` safety checks are best-effort and not a sandbox
 - tool execution can modify files inside the selected workspace
-- provider API keys, OAuth tokens, and SSH passwords for Remote compute targets are stored in the OS credential store (Keychain Services on macOS, Credential Manager on Windows, Secret Service over D-Bus on Linux) rather than as plaintext JSON — see `src/secrets.rs`. Settings previously written by an older version are migrated into the keychain and the plaintext removed on next load/save.
-- `settings.json` itself is written with `0600` permissions on Unix as defense in depth for its non-secret contents; no such restriction is applied on Windows
-- Remote SSH tunnels trust the remote host key on every connection (no pinning/known_hosts verification) — only point this at hosts you control
-- workspace path protections apply to file-based tools, but you should still use the app on trusted repositories
-- long conversations are trimmed heuristically by character budget, not exact tokenizer counts
-- image support in provider requests depends on backend/model compatibility
+- Git panel actions can modify the repository, including discard/commit/checkout/pull/push
+- Remote SSH tunnels should only be pointed at hosts you control
+- long conversation trimming uses approximate budgets, not exact tokenizer accounting
+- image input support depends on backend/model compatibility
+- Local HF runtime support depends on the platform/runtime artifacts available for `llama.cpp`
+- voice dictation requires a usable microphone input device and a downloaded Whisper model
 
-## Useful source files
+## Development checks
 
-- `src/agent/tools/mod.rs` — built-in tool dispatch and shared limits
-- `src/agent/tools/file_ops.rs` — `read` / `write` / `edit` and diff generation
-- `src/agent/tools/shell_search.rs` — `bash` / `grep` / `find` / `ls`
-- `src/agent/tools/web.rs` — `web_search` (SearXNG) / `web_fetch` (URL → text)
-- `src/agent/runner.rs` — provider selection, auth fallback, and run orchestration
-- `src/agent/history.rs` — conversation-to-provider message conversion and context trimming
-- `src/agent/prompt.rs` — system prompt construction
-- `src/settings.rs` — settings and provider profile model
-- `src/app/settings_ui.rs` — settings UI
-- `src/app/sessions.rs` — workspaces, attachments, and session deletion behavior
-- `src/session_store.rs` — session persistence entry points
-- `src/compute/tunnel.rs` — SSH tunnel manager (`russh`) for Remote compute targets
+The CI workflow runs:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo audit
+cargo test
+```

@@ -23,15 +23,24 @@ pub enum LlmProviderKind {
     LmStudio,
     /// Ollama local server (OpenAI-compatible API at `/v1`, on this machine or a LAN host).
     Ollama,
+    /// oxi-managed HuggingFace GGUF models run via a local llama.cpp `llama-server` process.
+    LocalHf,
+    /// Claude Code driven over the Agent Client Protocol (ACP): oxi spawns the
+    /// `claude-code-acp` adapter as a subprocess and speaks JSON-RPC over stdio, letting
+    /// Claude Code run its own agent loop and tools. Unlike every other provider, oxi is an
+    /// ACP *client* here rather than the agent. See [`crate::agent::acp`].
+    ClaudeCodeAcp,
 }
 
 impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 8] = [
+    pub const ALL: [LlmProviderKind; 10] = [
+        LlmProviderKind::LocalHf,
         LlmProviderKind::Ollama,
         LlmProviderKind::LmStudio,
+        LlmProviderKind::ClaudeCodeAcp,
         LlmProviderKind::AzureOpenAi,
         LlmProviderKind::CustomAnthropic,
         LlmProviderKind::OpenAi,
@@ -53,6 +62,8 @@ impl LlmProviderKind {
             LlmProviderKind::OpenCodeGo => "opencodego",
             LlmProviderKind::LmStudio => "lmstudio",
             LlmProviderKind::Ollama => "ollama",
+            LlmProviderKind::LocalHf => "localhf",
+            LlmProviderKind::ClaudeCodeAcp => "claudecodeacp",
         }
     }
 
@@ -70,6 +81,9 @@ impl LlmProviderKind {
             LlmProviderKind::LmStudio => "http://localhost:1234/v1",
             // Ollama's OpenAI-compatible API lives under `/v1` on its default port 11434.
             LlmProviderKind::Ollama => "http://localhost:11434/v1",
+            LlmProviderKind::LocalHf => "http://127.0.0.1:18080/v1",
+            // ACP does not use an HTTP base URL; it launches a subprocess (see `acp_command`).
+            LlmProviderKind::ClaudeCodeAcp => "",
         }
     }
 
@@ -83,6 +97,8 @@ impl LlmProviderKind {
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
             LlmProviderKind::LmStudio => "LM Studio",
             LlmProviderKind::Ollama => "Ollama",
+            LlmProviderKind::LocalHf => "Local HF",
+            LlmProviderKind::ClaudeCodeAcp => "Claude Code (ACP)",
         }
     }
 
@@ -98,6 +114,9 @@ impl LlmProviderKind {
             // list from the dropdown.
             LlmProviderKind::LmStudio => "local-model",
             LlmProviderKind::Ollama => "qwen2.5-coder:7b",
+            LlmProviderKind::LocalHf => "local-hf-model",
+            // Informational only: Claude Code picks the model from its own config/login.
+            LlmProviderKind::ClaudeCodeAcp => "sonnet",
         }
     }
 
@@ -108,6 +127,7 @@ impl LlmProviderKind {
     pub fn default_remote_runtime_port(&self) -> u16 {
         match self {
             LlmProviderKind::LmStudio => 1234,
+            LlmProviderKind::LocalHf => 18080,
             _ => 11434,
         }
     }
@@ -122,6 +142,7 @@ impl LlmProviderKind {
             self,
             LlmProviderKind::LmStudio
                 | LlmProviderKind::Ollama
+                | LlmProviderKind::LocalHf
                 | LlmProviderKind::AzureOpenAi
                 | LlmProviderKind::CustomAnthropic
         )
@@ -212,6 +233,12 @@ pub struct ProviderConfig {
     /// so existing/older settings files (no `location` field) behave exactly as before.
     #[serde(default)]
     pub location: ComputeLocation,
+    /// Command line used to launch the ACP agent subprocess (only for
+    /// [`LlmProviderKind::ClaudeCodeAcp`]). Empty = the built-in default
+    /// (`npx @zed-industries/claude-code-acp`). Run through the platform shell so `npx`,
+    /// PATH lookup, and arguments all work as typed.
+    #[serde(default)]
+    pub acp_command: String,
 }
 
 impl ProviderConfig {
@@ -242,6 +269,22 @@ impl ProviderConfig {
 
     pub fn subtitle(&self) -> String {
         format!("{} · {}", self.provider.label(), self.model_id)
+    }
+
+    /// Default command line for launching an ACP agent subprocess. Uses the actively-maintained
+    /// adapter (the older `@zed-industries/claude-code-acp` is deprecated and pins older model
+    /// versions).
+    pub const DEFAULT_ACP_COMMAND: &'static str = "npx @agentclientprotocol/claude-agent-acp";
+
+    /// The command line used to spawn the ACP agent, falling back to the built-in default
+    /// when the user hasn't overridden it.
+    pub fn effective_acp_command(&self) -> String {
+        let t = self.acp_command.trim();
+        if t.is_empty() {
+            Self::DEFAULT_ACP_COMMAND.to_string()
+        } else {
+            t.to_string()
+        }
     }
 
     /// Resolve the effective context window in tokens for this provider.
@@ -295,6 +338,7 @@ impl From<ProviderProfile> for ProviderConfig {
             context_window: p.context_window,
             effort: p.effort,
             location: p.location,
+            acp_command: String::new(),
         }
     }
 }
@@ -452,8 +496,11 @@ mod tests {
     fn provider_labels_not_empty() {
         for kind in LlmProviderKind::ALL {
             assert!(!kind.label().is_empty());
-            assert!(!kind.default_base_url().is_empty());
             assert!(!kind.default_model_id().is_empty());
+            // Claude Code (ACP) launches a subprocess and has no HTTP base URL.
+            if kind != LlmProviderKind::ClaudeCodeAcp {
+                assert!(!kind.default_base_url().is_empty());
+            }
         }
     }
 

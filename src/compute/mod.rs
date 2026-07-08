@@ -1,9 +1,11 @@
 //! Remote compute targets: SSH tunnels to model runtimes (Ollama / LM Studio) running on
 //! another host reachable only over SSH.
 
+mod ssh;
 pub mod store;
 mod tunnel;
 
+pub use ssh::exec as ssh_exec;
 pub use store::{load_ssh_credentials, save_ssh_credentials};
 pub use tunnel::{TunnelError, TunnelManager};
 

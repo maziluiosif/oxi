@@ -20,14 +20,15 @@ mod sessions;
 mod settings_ui;
 mod sidebar;
 mod state;
+mod status_bar;
 mod streaming;
 mod task_runner;
 mod terminal_panel;
 mod update_check;
 
 pub use state::{
-    ConnectionState, ConversationState, ModelFetchMsg, PendingApproval, RunState, SessionKey,
-    SessionRunState, SshTestMsg, Workspace,
+    ConnectionState, ConversationState, LocalRuntimeState, ModelFetchMsg, PendingApproval,
+    RunState, SessionKey, SessionRunState, SshTestMsg, Workspace,
 };
 
 pub struct OxiApp {
@@ -40,6 +41,13 @@ pub struct OxiApp {
     /// Cheap to clone; the actual tunnels live on a dedicated background thread/runtime
     /// started once here and kept alive for the life of the app.
     pub tunnels: crate::compute::TunnelManager,
+    /// Persistent Claude Code (ACP) agent subprocesses, one per session. Cheap to clone; the
+    /// subprocesses live on a dedicated background thread/runtime started once here.
+    pub acp: crate::agent::acp::AcpManager,
+    /// Local voice dictation engine (mic capture + lazy-loaded whisper model). Cheap to
+    /// clone; lives on a dedicated background thread started once here. See
+    /// [`crate::voice_engine`].
+    pub voice: crate::voice_engine::VoiceManager,
 }
 
 impl OxiApp {
@@ -73,6 +81,7 @@ impl OxiApp {
                 sidebar_folded: entry.folded,
             });
         }
+        let (voice, voice_rx) = crate::voice_engine::VoiceManager::spawn();
         let mut app = Self {
             conn: ConnectionState {
                 connect_error: None,
@@ -96,11 +105,15 @@ impl OxiApp {
                 input_history: Vec::new(),
                 input_history_index: None,
                 input_history_draft: String::new(),
+                focus_chat_input_next_frame: true,
+                focus_terminal_next_frame: false,
                 sidebar_open: true,
                 sidebar_width: settings.sidebar_width,
                 terminal_open: settings.terminal_open,
                 terminal_height: settings.terminal_height,
                 settings,
+                settings_original: None,
+                settings_exit_prompt: None,
                 settings_open: false,
                 settings_tab: state::SettingsTab::default(),
                 settings_provider_tab: crate::settings::LlmProviderKind::OpenAi,
@@ -116,6 +129,7 @@ impl OxiApp {
                 git: crate::git::GitState::default(),
                 git_commit_message: String::new(),
                 git_new_branch: String::new(),
+                git_discard_all_prompt: None,
                 commit_gen_pending: false,
                 commit_gen_rx: None,
                 commit_gen_error: None,
@@ -124,6 +138,18 @@ impl OxiApp {
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),
                 model_rxs: Vec::new(),
+                local_models: crate::app::state::LocalModelsUiState {
+                    downloaded: crate::local_models::load_manifest().models,
+                    runtime_path: crate::local_models::installed_runtime_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    runtime_port: 18080,
+                    context_size: 32768,
+                    gpu_layers: 999,
+                    ..Default::default()
+                },
+                local_model_rx: None,
+                local_runtime: None,
                 ssh_password_drafts: std::collections::HashMap::new(),
                 ssh_test: std::collections::HashMap::new(),
                 ssh_test_rx: None,
@@ -132,9 +158,17 @@ impl OxiApp {
                 update_result: None,
                 update_rx: None,
                 compaction: None,
+                voice_ui: crate::app::state::VoiceUiState {
+                    downloaded: crate::voice_models::load_manifest().models,
+                    ..Default::default()
+                },
+                voice_model_rx: None,
+                voice_rx,
             },
             terminal: None,
             tunnels: crate::compute::TunnelManager::spawn(),
+            acp: crate::agent::acp::AcpManager::spawn(),
+            voice,
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
@@ -284,6 +318,7 @@ impl OxiApp {
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
         self.conv.scroll_to_bottom_once = true;
+        self.conv.focus_chat_input_next_frame = true;
         self.ensure_active_session_loaded();
         self.refresh_git_cwd();
     }
@@ -300,6 +335,7 @@ impl OxiApp {
             && session_idx == self.conv.workspaces[workspace_idx].active
         {
             self.ensure_active_session_loaded();
+            self.conv.focus_chat_input_next_frame = true;
             return;
         }
         let workspace_changed = workspace_idx != self.conv.active_workspace;
@@ -307,6 +343,7 @@ impl OxiApp {
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
         self.conv.scroll_to_bottom_once = true;
+        self.conv.focus_chat_input_next_frame = true;
         self.ensure_active_session_loaded();
         if workspace_changed {
             self.refresh_git_cwd();

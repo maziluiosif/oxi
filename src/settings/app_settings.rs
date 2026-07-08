@@ -50,9 +50,15 @@ pub struct AppSettings {
     /// than falling back to another provider.
     #[serde(default = "default_searxng_url")]
     pub searxng_url: String,
-    /// Require explicit user approval before each mutating tool (`bash` / `write` / `edit`).
+    /// Require explicit user approval before each filesystem-changing tool (`write` / `edit`).
     #[serde(default = "default_require_approval")]
-    pub require_approval: bool,
+    pub require_write_edit_approval: bool,
+    /// Require explicit user approval before each `bash` tool call.
+    #[serde(default = "default_require_approval")]
+    pub require_bash_approval: bool,
+    /// Legacy single approval switch. Migrated in [`AppSettings::normalize`] and no longer saved.
+    #[serde(default, skip_serializing)]
+    pub require_approval: Option<bool>,
     /// Persisted width of the main app/sidebar split.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
@@ -68,6 +74,11 @@ pub struct AppSettings {
     /// Persisted width of the right git panel.
     #[serde(default = "default_git_width")]
     pub git_width: f32,
+    /// Max width of the chat message/composer column. Wider than the sidebar/git panel
+    /// split above, this lets the transcript use more of a large screen (or the space
+    /// freed by hiding side panels) instead of staying pinned to a fixed column.
+    #[serde(default = "default_chat_column_max_width")]
+    pub chat_column_max_width: f32,
     /// Active color theme id (see [`crate::theme`]: `dark`, `light`, `midnight`, or
     /// `custom:<name>`). Falls back to the default theme if unknown.
     #[serde(default = "default_theme_id")]
@@ -101,6 +112,47 @@ pub struct AppSettings {
     /// The cwd workspace is always present at runtime even if missing here.
     #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
+    /// Local voice dictation (see [`crate::voice_engine`]).
+    #[serde(default)]
+    pub dictation: DictationSettings,
+}
+
+/// Settings for local speech-to-text dictation. The whisper model itself is loaded lazily
+/// by [`crate::voice_engine::VoiceManager`] — nothing here causes a model to load; this
+/// just records what the user picked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DictationSettings {
+    /// Master on/off switch. When false the mic button doesn't appear in the composer and
+    /// no model is ever loaded.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Catalog id (see [`crate::voice_models::VOICE_MODEL_CATALOG`]) of the downloaded model
+    /// to use, if any has been selected.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Keep the whisper model resident in memory after a transcription instead of unloading
+    /// it immediately. Off by default: the user asked for dictation to cost no memory when
+    /// not actively in use.
+    #[serde(default)]
+    pub keep_loaded: bool,
+    /// Whisper language hint (e.g. `"en"`, `"ro"`), or `"auto"` to let whisper detect it.
+    #[serde(default = "default_dictation_language")]
+    pub language: String,
+}
+
+fn default_dictation_language() -> String {
+    "auto".to_string()
+}
+
+impl Default for DictationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model_id: None,
+            keep_loaded: false,
+            language: default_dictation_language(),
+        }
+    }
 }
 
 /// One persisted sidebar workspace: its root folder and whether its chat list is folded.
@@ -163,6 +215,10 @@ fn default_git_width() -> f32 {
     360.0
 }
 
+fn default_chat_column_max_width() -> f32 {
+    crate::theme::CHAT_COLUMN_MAX_DEFAULT
+}
+
 /// Clamp bounds for the bottom terminal panel height.
 pub const TERMINAL_H_MIN: f32 = 96.0;
 pub const TERMINAL_H_MAX: f32 = 900.0;
@@ -197,12 +253,15 @@ impl Default for AppSettings {
             tools_enabled: default_tools_enabled(),
             web_search_backend: WebSearchBackend::default(),
             searxng_url: default_searxng_url(),
-            require_approval: default_require_approval(),
+            require_write_edit_approval: default_require_approval(),
+            require_bash_approval: default_require_approval(),
+            require_approval: None,
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),
             terminal_open: false,
             git_open: false,
             git_width: default_git_width(),
+            chat_column_max_width: default_chat_column_max_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
             max_tool_rounds: default_max_tool_rounds(),
@@ -212,6 +271,7 @@ impl Default for AppSettings {
             commit_msg_model_id: String::new(),
             commit_msg_system_prompt: default_commit_msg_system_prompt(),
             workspaces: Vec::new(),
+            dictation: DictationSettings::default(),
         }
     }
 }
@@ -407,7 +467,9 @@ impl AppSettings {
             | LlmProviderKind::CustomAnthropic
             | LlmProviderKind::OpenCodeGo
             | LlmProviderKind::LmStudio
-            | LlmProviderKind::Ollama => String::new(),
+            | LlmProviderKind::Ollama
+            | LlmProviderKind::LocalHf
+            | LlmProviderKind::ClaudeCodeAcp => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;
         cfg.openrouter_title = old.openrouter_title;
@@ -445,6 +507,13 @@ impl AppSettings {
             self.terminal_height = default_terminal_height();
         }
         self.terminal_height = self.terminal_height.clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
+        if !self.chat_column_max_width.is_finite() || self.chat_column_max_width <= 0.0 {
+            self.chat_column_max_width = default_chat_column_max_width();
+        }
+        self.chat_column_max_width = self.chat_column_max_width.clamp(
+            crate::theme::CHAT_COLUMN_WIDTH_MIN,
+            crate::theme::CHAT_COLUMN_WIDTH_MAX,
+        );
         // Every provider kind gets an entry (files written by older versions, or with
         // kinds added since, may miss some), and the `#[serde(skip)]`ped `provider` field
         // is re-stamped from the map key it was deserialized under.
@@ -467,6 +536,10 @@ impl AppSettings {
             ) {
                 cfg.effort.clear();
             }
+        }
+        if let Some(legacy_require_approval) = self.require_approval.take() {
+            self.require_write_edit_approval = legacy_require_approval;
+            self.require_bash_approval = legacy_require_approval;
         }
         if self.context_window_default == 0 {
             self.context_window_default = default_context_window();
@@ -570,7 +643,12 @@ impl AppSettings {
         LlmProviderKind::ALL
             .into_iter()
             .filter(|&kind| match kind {
-                LlmProviderKind::LmStudio | LlmProviderKind::Ollama => true,
+                LlmProviderKind::LmStudio | LlmProviderKind::Ollama | LlmProviderKind::LocalHf => {
+                    true
+                }
+                // Claude Code handles its own auth (subscription login or ANTHROPIC_API_KEY),
+                // so it's always offered; the subprocess reports a clear error if not logged in.
+                LlmProviderKind::ClaudeCodeAcp => true,
                 LlmProviderKind::AzureOpenAi => true,
                 LlmProviderKind::CustomAnthropic => {
                     has_profile_key(kind)

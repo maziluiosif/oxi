@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Claude Code (ACP) provider: drive Claude Code as an external agent over the Agent Client Protocol. oxi launches the `claude-code-acp` adapter (default `npx @zed-industries/claude-code-acp`) as a per-session subprocess, streams its thinking/text/tool-call updates into the normal chat UI, routes permission requests through the existing approval gate, and services the agent's file reads/writes. Auth uses Claude Code's own login (or an optional `ANTHROPIC_API_KEY`). Selecting the provider auto-starts the agent in the background (only while it's the active provider) and populates the model dropdown from the agent's advertised models. Defaults to the maintained `@agentclientprotocol/claude-agent-acp` adapter (latest models: Sonnet 5, Opus 4.8, …); the chosen model is applied via the `ANTHROPIC_MODEL` env var (alias like `sonnet`/`opus` or a full id like `claude-sonnet-5`), and changing it relaunches the agent.
+
 ## [0.13.1] - 2026-07-07
 
 ### Fixed

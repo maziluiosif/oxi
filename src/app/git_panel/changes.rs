@@ -3,7 +3,8 @@
 
 use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{
-    self, Align, Color32, CornerRadius, FontId, Layout, RichText, ScrollArea, Sense, Ui,
+    self, Align, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, ScrollArea, Sense,
+    Stroke, Ui,
 };
 
 use crate::git::{GitEntry, GitOp};
@@ -28,6 +29,17 @@ impl OxiApp {
                     .color(c_text())
                     .strong(),
             );
+            if self.conv.git.busy {
+                ui.add(egui::Spinner::new().size(12.0).color(c_text_muted()));
+                let op = self
+                    .conv
+                    .git
+                    .last_op
+                    .clone()
+                    .unwrap_or_else(|| "working".to_string());
+                ui.label(RichText::new(op).size(FS_TINY).color(c_text_muted()))
+                    .on_hover_text("Git operation in progress");
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false)
                     .on_hover_text("Refresh")
@@ -35,12 +47,6 @@ impl OxiApp {
                 {
                     self.ensure_git_channels();
                     let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
-                }
-                if crate::ui::chrome::icon_button_plain(ui, ICON_CHEVRON_RIGHT, 22.0, false)
-                    .on_hover_text("Hide git panel")
-                    .clicked()
-                {
-                    self.toggle_git_panel();
                 }
             });
         });
@@ -134,6 +140,8 @@ impl OxiApp {
     }
 
     pub(super) fn render_git_changes(&mut self, ui: &mut Ui) {
+        self.render_discard_all_prompt(ui.ctx());
+
         // Commit composer
         ui.label(
             RichText::new("Message")
@@ -198,41 +206,6 @@ impl OxiApp {
                 self.conv.commit_gen_pending = true;
                 self.request(GitOp::CollectCommitDiff);
             }
-            let has_unstaged = !self.conv.git.unstaged.is_empty();
-            if ui
-                .add_enabled(
-                    has_unstaged,
-                    crate::ui::chrome::ghost_button_widget("Stage all", false),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
-            {
-                let paths: Vec<String> = self
-                    .conv
-                    .git
-                    .unstaged
-                    .iter()
-                    .map(|e| e.path.clone())
-                    .collect();
-                self.request(GitOp::Stage(paths));
-            }
-            if ui
-                .add_enabled(
-                    !staged_empty,
-                    crate::ui::chrome::ghost_button_widget("Unstage all", false),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
-            {
-                let paths: Vec<String> = self
-                    .conv
-                    .git
-                    .staged
-                    .iter()
-                    .map(|e| e.path.clone())
-                    .collect();
-                self.request(GitOp::Unstage(paths));
-            }
         });
 
         if let Some(err) = self.conv.commit_gen_error.clone() {
@@ -260,7 +233,7 @@ impl OxiApp {
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 if !staged.is_empty() {
-                    self.render_section(ui, "Staged Changes", &staged, true);
+                    self.render_section(ui, "Staged", &staged, true);
                     ui.add_space(6.0);
                 }
                 if !unstaged.is_empty() {
@@ -286,12 +259,7 @@ impl OxiApp {
     }
 
     fn render_section(&mut self, ui: &mut Ui, title: &str, entries: &[GitEntry], staged: bool) {
-        ui.label(
-            RichText::new(title.to_uppercase())
-                .size(FS_TINY)
-                .color(c_text_faint())
-                .strong(),
-        );
+        self.render_section_header(ui, title, entries, staged);
         ui.add_space(2.0);
         let total = entries.len();
         for (i, entry) in entries.iter().enumerate() {
@@ -299,6 +267,124 @@ impl OxiApp {
                 self.render_change_row(ui, entry, staged, i, total);
             });
         }
+    }
+
+    fn render_section_header(
+        &mut self,
+        ui: &mut Ui,
+        title: &str,
+        entries: &[GitEntry],
+        staged: bool,
+    ) {
+        let full_w = ui.available_width();
+        ui.allocate_ui_with_layout(
+            egui::vec2(full_w, 20.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.label(
+                    RichText::new(title.to_uppercase())
+                        .size(FS_TINY)
+                        .color(c_text_faint())
+                        .strong(),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if staged {
+                        if crate::ui::chrome::icon_button_inline(
+                            ui,
+                            ICON_CLOSE,
+                            FS_TINY,
+                            c_text_faint(),
+                        )
+                        .on_hover_text("Unstage all")
+                        .clicked()
+                        {
+                            let paths: Vec<String> =
+                                entries.iter().map(|e| e.path.clone()).collect();
+                            self.request(GitOp::Unstage(paths));
+                        }
+                    } else {
+                        if crate::ui::chrome::icon_button_inline(
+                            ui,
+                            ICON_TRASH,
+                            FS_TINY,
+                            c_text_faint(),
+                        )
+                        .on_hover_text("Discard all changes")
+                        .clicked()
+                        {
+                            self.conv.git_discard_all_prompt =
+                                Some(entries.iter().map(|e| e.path.clone()).collect());
+                        }
+                        if crate::ui::chrome::icon_button_inline(
+                            ui,
+                            ICON_PLUS,
+                            FS_TINY,
+                            c_text_faint(),
+                        )
+                        .on_hover_text("Stage all")
+                        .clicked()
+                        {
+                            let paths: Vec<String> =
+                                entries.iter().map(|e| e.path.clone()).collect();
+                            self.request(GitOp::Stage(paths));
+                        }
+                    }
+                });
+            },
+        );
+    }
+
+    fn render_discard_all_prompt(&mut self, ctx: &egui::Context) {
+        let Some(paths) = self.conv.git_discard_all_prompt.clone() else {
+            return;
+        };
+
+        egui::Area::new(egui::Id::new("git_discard_all_prompt"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(c_bg_elevated())
+                    .stroke(Stroke::new(1.0, c_border()))
+                    .corner_radius(RADIUS_CHIP)
+                    .inner_margin(Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.set_width(300.0);
+                        ui.label(
+                            RichText::new("Discard all changes?")
+                                .size(FS_SMALL)
+                                .color(c_text())
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "This will permanently discard changes in {} file{}.",
+                                paths.len(),
+                                if paths.len() == 1 { "" } else { "s" }
+                            ))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                        );
+                        ui.add_space(2.0);
+                        ui.label(
+                            RichText::new("This action cannot be undone.")
+                                .size(FS_TINY)
+                                .color(crate::theme::c_error_fg()),
+                        );
+                        ui.add_space(10.0);
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if crate::ui::chrome::ghost_button(ui, "Discard all", true).clicked() {
+                                self.request(GitOp::Discard(paths.clone()));
+                                self.conv.git_discard_all_prompt = None;
+                            }
+                            if crate::ui::chrome::ghost_button(ui, "Cancel", false).clicked() {
+                                self.conv.git_discard_all_prompt = None;
+                            }
+                        });
+                    });
+            });
     }
 
     fn render_change_row(
@@ -457,9 +543,10 @@ impl OxiApp {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.request(GitOp::ClearDiff);
             self.conv.diff_view_open = false;
+            self.conv.focus_chat_input_next_frame = true;
         }
 
-        let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+        let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
         let pad = ((column_center_w - col_w) * 0.5).max(0.0);
 
         // Header bar: title + metadata on the left, close button on the right,
@@ -488,6 +575,7 @@ impl OxiApp {
                         {
                             self.request(GitOp::ClearDiff);
                             self.conv.diff_view_open = false;
+                            self.conv.focus_chat_input_next_frame = true;
                         }
                     });
                 },

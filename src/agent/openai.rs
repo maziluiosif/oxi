@@ -476,7 +476,7 @@ fn read_openai_usage(v: &Value, usage: &mut TokenUsage) {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use crate::agent::approval::{ApprovalDecision, ApprovalGate};
+    use crate::agent::approval::{ApprovalDecision, ApprovalGate, ApprovalPolicy};
     use crate::agent::loop_ctx::LoopCtx;
     use crate::agent::tools::ToolEnv;
     use crate::settings::{ALL_TOOL_NAMES, WebSearchBackend};
@@ -565,7 +565,13 @@ mod integration_tests {
         approval_tx.send(ApprovalDecision::Approve).unwrap();
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut gate = ApprovalGate::new(true, approval_rx);
+        let mut gate = ApprovalGate::new(
+            ApprovalPolicy {
+                write_edit: true,
+                bash: true,
+            },
+            approval_rx,
+        );
         let env = ToolEnv {
             enabled: vec![true; ALL_TOOL_NAMES.len()],
             web_search_url: String::new(),
@@ -645,7 +651,13 @@ mod integration_tests {
         approval_tx.send(ApprovalDecision::Deny).unwrap();
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut gate = ApprovalGate::new(true, approval_rx);
+        let mut gate = ApprovalGate::new(
+            ApprovalPolicy {
+                write_edit: true,
+                bash: true,
+            },
+            approval_rx,
+        );
         let env = ToolEnv {
             enabled: vec![true; ALL_TOOL_NAMES.len()],
             web_search_url: String::new(),

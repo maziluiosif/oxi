@@ -78,7 +78,7 @@ impl OxiApp {
     }
 
     pub(crate) fn render_chat_header(&mut self, ui: &mut Ui, column_center_w: f32) {
-        let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+        let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
         let pad = ((column_center_w - col_w) * 0.5).max(0.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -116,30 +116,6 @@ impl OxiApp {
                             {
                                 self.new_chat();
                             }
-                            let term_on = self.conv.terminal_open;
-                            if crate::ui::chrome::icon_button_framed(
-                                ui,
-                                ICON_TERMINAL,
-                                egui::vec2(34.0, 28.0),
-                                term_on,
-                            )
-                            .on_hover_text("Toggle terminal panel")
-                            .clicked()
-                            {
-                                self.toggle_terminal();
-                            }
-                            let git_on = self.conv.git_open;
-                            if crate::ui::chrome::icon_button_framed(
-                                ui,
-                                ICON_GIT,
-                                egui::vec2(34.0, 28.0),
-                                git_on,
-                            )
-                            .on_hover_text("Toggle source-control (git) panel")
-                            .clicked()
-                            {
-                                self.toggle_git_panel();
-                            }
                             self.render_header_status_chip(ui);
                         },
                     );
@@ -151,19 +127,6 @@ impl OxiApp {
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            if !self.conv.sidebar_open
-                                && crate::ui::chrome::icon_button_framed(
-                                    ui,
-                                    ICON_MENU,
-                                    egui::vec2(30.0, 28.0),
-                                    false,
-                                )
-                                .on_hover_text("Show sidebar")
-                                .clicked()
-                            {
-                                self.conv.sidebar_open = true;
-                            }
-
                             let workspace =
                                 workspace_sidebar_label(&self.active_workspace().root_path);
                             let session_title =
@@ -321,7 +284,7 @@ impl OxiApp {
                 if crate::ui::chrome::ghost_button_icon(ui, ICON_SETTINGS, "Open settings", false)
                     .clicked()
                 {
-                    self.conv.settings_open = true;
+                    self.open_settings_page();
                 }
             });
 
@@ -436,7 +399,7 @@ impl OxiApp {
             .show(ui, |ui| {
                 let viewport_w = ui.max_rect().width();
                 ui.set_max_width(viewport_w);
-                let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+                let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
                 let pad = ((column_center_w - col_w) * 0.5).max(0.0);
 
                 ui.horizontal(|ui| {

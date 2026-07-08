@@ -16,41 +16,36 @@ impl OxiApp {
     pub(crate) fn render_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
-        // Top row: app title + collapse button
+        // Search row + add-workspace button.
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(
-                RichText::new("oxi")
-                    .size(FS_H3)
-                    .color(crate::theme::c_accent())
-                    .strong(),
+            ui.set_height(24.0);
+
+            let add_w = 22.0;
+            let search_w = (ui.available_width() - add_w - ui.spacing().item_spacing.x).max(48.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(search_w, 24.0),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_width(search_w);
+                    sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
+                },
             );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if crate::ui::chrome::icon_button_plain(ui, ICON_CHEVRON_LEFT, 22.0, false)
-                    .on_hover_text("Hide sidebar")
-                    .clicked()
-                {
-                    self.conv.sidebar_open = false;
-                }
-                if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, 22.0, false)
-                    .on_hover_text(
-                        "Add a project folder. Each workspace has its own chats; \
-                         tools run with that folder as cwd.",
-                    )
-                    .clicked()
-                {
-                    self.open_workspace_folder();
-                }
-            });
+
+            if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, add_w, false)
+                .on_hover_text(
+                    "Add a project folder. Each workspace has its own chats; \
+                     tools run with that folder as cwd.",
+                )
+                .clicked()
+            {
+                self.open_workspace_folder();
+            }
         });
 
         ui.add_space(8.0);
 
-        sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
-
-        ui.add_space(8.0);
-
-        let scroll_h = (ui.available_height() - 38.0).max(48.0);
+        let scroll_h = ui.available_height().max(48.0);
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
             .max_height(scroll_h)
@@ -60,28 +55,6 @@ impl OxiApp {
                 self.render_sidebar_session_list(ui);
             });
 
-        ui.add_space(8.0);
-        // Settings footer row: same rounded pill styling
-        let settings_resp = crate::ui::chrome::row_button_icon(
-            ui,
-            ICON_SETTINGS,
-            "Settings",
-            egui::vec2(ui.available_width(), 30.0),
-        );
-        // Quiet accent dot on the row while a newer release is available.
-        let settings_resp = if self.update_available().is_some() {
-            let dot = egui::pos2(
-                settings_resp.rect.right() - 10.0,
-                settings_resp.rect.center().y,
-            );
-            ui.painter().circle_filled(dot, 3.0, c_accent());
-            settings_resp.on_hover_text("Open settings — update available")
-        } else {
-            settings_resp.on_hover_text("Open settings")
-        };
-        if settings_resp.clicked() {
-            self.conv.settings_open = true;
-        }
         ui.expand_to_include_rect(ui.max_rect());
     }
 
@@ -245,7 +218,7 @@ impl OxiApp {
                             }
                             response.context_menu(|ui| {
                                 if wi == self.conv.active_workspace
-                                    && n_sessions > 1
+                                    && !running
                                     && ui.button("Delete chat").clicked()
                                 {
                                     self.delete_session(si);
@@ -257,8 +230,7 @@ impl OxiApp {
                             // trash button interacted below overlaps this rect and
                             // would otherwise steal hover from the row response,
                             // flickering show/hide every other frame.
-                            let can_delete =
-                                wi == self.conv.active_workspace && n_sessions > 1 && !running;
+                            let can_delete = wi == self.conv.active_workspace && !running;
                             let show_trash = can_delete && ui.rect_contains_pointer(rect);
                             self.render_session_row_inner(
                                 ui, rect, wi, si, running, selected, title, show_trash,
@@ -625,7 +597,7 @@ impl OxiApp {
             self.run_state_mut(self.active_session_key()).stream_error =
                 Some(format!("Save settings: {e}"));
         }
-        let col = if sep.hovered() || sep.dragged() {
+        let col = if sep.dragged() {
             c_accent()
         } else {
             c_border_subtle()
@@ -661,7 +633,7 @@ impl OxiApp {
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        let col = if sep.hovered() || sep.dragged() {
+        let col = if sep.dragged() {
             c_accent()
         } else {
             crate::theme::c_border_subtle()
