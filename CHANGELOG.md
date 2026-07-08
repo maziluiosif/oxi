@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-07-07
+
+### Fixed
+- Windows: prevent console windows from flashing during headless git and shell tool operations
+- Windows: split secrets blob across credential entries to work around CRED_MAX_CREDENTIAL_BLOB_SIZE limit, fixing ChatGPT sign-in persistence
+
+
 ## [0.13.0] - 2026-07-07
 
 ### Added
@@ -320,7 +327,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/maziluiosif/oxi/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/maziluiosif/oxi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/maziluiosif/oxi/compare/v0.11.4...v0.12.0
 [0.11.4]: https://github.com/maziluiosif/oxi/compare/v0.11.3...v0.11.4
