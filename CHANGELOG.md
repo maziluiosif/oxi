@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-08
+
+### Added
+- Voice support for audio input and transformation
+- Custom width setting for chat window
+- Status bar to UI
+- Separate approval policies for bash and write/edit tools
+- Claude ACP (Anthropic Claude Provider) support
+- SSH tunneling support for Hugging Face remote models
+
+### Changed
+- Settings window layout and behavior improvements
+- Microphone icon repositioned to the right
+- Git sidebar UI/UX cleanup
+- Chat composer focus restored after navigation and panel closes
+- Git panel content preserved during busy refresh to reduce flicker
+- Reduced eframe features to avoid unused adwaita dependencies
+
+### Removed
+- Autosave from settings
+- Orange border on hover
+
+### Fixed
+- Allow deleting the last chat with blank replacement session
+- SSH tunneling for Hugging Face on Mac Mini
+
+
 ### Added
 - Claude Code (ACP) provider: drive Claude Code as an external agent over the Agent Client Protocol. oxi launches the `claude-code-acp` adapter (default `npx @zed-industries/claude-code-acp`) as a per-session subprocess, streams its thinking/text/tool-call updates into the normal chat UI, routes permission requests through the existing approval gate, and services the agent's file reads/writes. Auth uses Claude Code's own login (or an optional `ANTHROPIC_API_KEY`). Selecting the provider auto-starts the agent in the background (only while it's the active provider) and populates the model dropdown from the agent's advertised models. Defaults to the maintained `@agentclientprotocol/claude-agent-acp` adapter (latest models: Sonnet 5, Opus 4.8, …); the chosen model is applied via the `ANTHROPIC_MODEL` env var (alias like `sonnet`/`opus` or a full id like `claude-sonnet-5`), and changing it relaunches the agent.
 
@@ -330,7 +357,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/maziluiosif/oxi/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/maziluiosif/oxi/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/maziluiosif/oxi/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/maziluiosif/oxi/compare/v0.11.4...v0.12.0
