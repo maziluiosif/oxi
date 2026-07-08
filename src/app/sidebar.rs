@@ -625,7 +625,7 @@ impl OxiApp {
             self.run_state_mut(self.active_session_key()).stream_error =
                 Some(format!("Save settings: {e}"));
         }
-        let col = if sep.hovered() || sep.dragged() {
+        let col = if sep.dragged() {
             c_accent()
         } else {
             c_border_subtle()
@@ -661,7 +661,7 @@ impl OxiApp {
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        let col = if sep.hovered() || sep.dragged() {
+        let col = if sep.dragged() {
             c_accent()
         } else {
             crate::theme::c_border_subtle()

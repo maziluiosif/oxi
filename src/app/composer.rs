@@ -107,7 +107,7 @@ impl OxiApp {
             ui.vertical(|ui| {
                 let composer_w = CHAT_COLUMN_MAX.min(column_center_w);
                 ui.set_width(composer_w);
-                Frame::new()
+                let composer_card = Frame::new()
                     .fill(c_bg_elevated())
                     .stroke(Stroke::new(1.0, card_border))
                     .corner_radius(crate::theme::RADIUS_PANEL)
@@ -170,6 +170,21 @@ impl OxiApp {
                             self.render_controls_row(ui, can_send, composer_focused);
                         });
                     });
+
+                // Clicking anywhere inside the composer card should focus the text input, not just
+                // the TextEdit's own line-height rect. This makes the lower controls/empty area of
+                // the orange-focused border behave like one large chat input surface. We request
+                // focus without consuming the click, so buttons/combos inside the card keep their
+                // normal behavior.
+                let clicked_inside_card = ui.ctx().input(|i| {
+                    i.pointer.primary_clicked()
+                        && i.pointer
+                            .interact_pos()
+                            .is_some_and(|pos| composer_card.response.rect.contains(pos))
+                });
+                if clicked_inside_card {
+                    ui.ctx().memory_mut(|m| m.request_focus(input_id));
+                }
             });
             if pad > 0.0 {
                 ui.add_space(pad);
