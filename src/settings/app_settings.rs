@@ -572,7 +572,9 @@ impl AppSettings {
         LlmProviderKind::ALL
             .into_iter()
             .filter(|&kind| match kind {
-                LlmProviderKind::LmStudio | LlmProviderKind::Ollama | LlmProviderKind::LocalHf => true,
+                LlmProviderKind::LmStudio | LlmProviderKind::Ollama | LlmProviderKind::LocalHf => {
+                    true
+                }
                 // Claude Code handles its own auth (subscription login or ANTHROPIC_API_KEY),
                 // so it's always offered; the subprocess reports a clear error if not logged in.
                 LlmProviderKind::ClaudeCodeAcp => true,

@@ -1,10 +1,10 @@
 //! Grouped application state.
 
 use std::collections::HashMap;
+use std::process::Child;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::process::Child;
 use std::time::Instant;
 
 use serde_json::Value;

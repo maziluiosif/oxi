@@ -12,11 +12,21 @@ fn sh_quote(s: &str) -> String {
 
 fn runtime_url_for(os: &str, arch: &str) -> Result<&'static str, String> {
     match (os, arch) {
-        ("darwin", "arm64") | ("darwin", "aarch64") => Ok("https://github.com/ggml-org/llama.cpp/releases/download/b9910/llama-b9910-bin-macos-arm64.tar.gz"),
-        ("darwin", "x86_64") => Ok("https://github.com/ggml-org/llama.cpp/releases/download/b9910/llama-b9910-bin-macos-x64.tar.gz"),
-        ("linux", "x86_64") | ("linux", "amd64") => Ok("https://github.com/ggml-org/llama.cpp/releases/download/b9910/llama-b9910-bin-ubuntu-x64.tar.gz"),
-        ("linux", "aarch64") | ("linux", "arm64") => Ok("https://github.com/ggml-org/llama.cpp/releases/download/b9910/llama-b9910-bin-ubuntu-arm64.tar.gz"),
-        _ => Err(format!("No llama.cpp runtime mapping for remote {os}/{arch}")),
+        ("darwin", "arm64") | ("darwin", "aarch64") => Ok(
+            "https://github.com/ggml-org/llama.cpp/releases/download/b9910/llama-b9910-bin-macos-arm64.tar.gz",
+        ),
+        ("darwin", "x86_64") => Ok(
+            "https://github.com/ggml-org/llama.cpp/releases/download/b9910/llama-b9910-bin-macos-x64.tar.gz",
+        ),
+        ("linux", "x86_64") | ("linux", "amd64") => Ok(
+            "https://github.com/ggml-org/llama.cpp/releases/download/b9910/llama-b9910-bin-ubuntu-x64.tar.gz",
+        ),
+        ("linux", "aarch64") | ("linux", "arm64") => Ok(
+            "https://github.com/ggml-org/llama.cpp/releases/download/b9910/llama-b9910-bin-ubuntu-arm64.tar.gz",
+        ),
+        _ => Err(format!(
+            "No llama.cpp runtime mapping for remote {os}/{arch}"
+        )),
     }
 }
 
@@ -35,7 +45,12 @@ async fn exec_ok(cfg: &SshConfig, password: &str, command: &str) -> Result<Strin
 }
 
 pub async fn install_runtime(cfg: &SshConfig, password: &str) -> Result<String, String> {
-    let probe = exec_ok(cfg, password, "printf '%s %s' \"$(uname -s | tr '[:upper:]' '[:lower:]')\" \"$(uname -m)\"").await?;
+    let probe = exec_ok(
+        cfg,
+        password,
+        "printf '%s %s' \"$(uname -s | tr '[:upper:]' '[:lower:]')\" \"$(uname -m)\"",
+    )
+    .await?;
     let mut parts = probe.split_whitespace();
     let os = parts.next().unwrap_or_default();
     let arch = parts.next().unwrap_or_default();
@@ -84,10 +99,17 @@ printf '%s/llama-server' "$rt"
         base = REMOTE_BASE,
         url = sh_quote(url),
     );
-    exec_ok(cfg, password, &cmd).await.map(|s| s.trim().to_string())
+    exec_ok(cfg, password, &cmd)
+        .await
+        .map(|s| s.trim().to_string())
 }
 
-pub async fn download_model(cfg: &SshConfig, password: &str, repo: &str, filename: &str) -> Result<DownloadedModel, String> {
+pub async fn download_model(
+    cfg: &SshConfig,
+    password: &str,
+    repo: &str,
+    filename: &str,
+) -> Result<DownloadedModel, String> {
     let id = format!("{repo}/{filename}");
     let safe_repo = repo.replace(['/', '\\', ':'], "__");
     let base_name = std::path::Path::new(filename)
@@ -122,7 +144,10 @@ printf '%s\n%s' "$out" "$bytes"
     let out = exec_ok(cfg, password, &cmd).await?;
     let mut lines = out.lines();
     let path = lines.next().unwrap_or_default().to_string();
-    let bytes = lines.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let bytes = lines
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
     Ok(DownloadedModel {
         id,
         repo: repo.to_string(),
@@ -142,7 +167,11 @@ pub async fn start_model(
     gpu_layers: i32,
 ) -> Result<String, String> {
     let port = cfg.remote_runtime_port;
-    let ngl = if gpu_layers != 0 { format!(" -ngl {}", gpu_layers) } else { String::new() };
+    let ngl = if gpu_layers != 0 {
+        format!(" -ngl {}", gpu_layers)
+    } else {
+        String::new()
+    };
     let safe_repo = repo.replace(['/', '\\', ':'], "__");
     let base_name = std::path::Path::new(filename)
         .file_name()
@@ -225,7 +254,9 @@ exit 1
         ctx = context,
         ngl = ngl,
     );
-    exec_ok(cfg, password, &cmd).await.map(|s| s.trim().to_string())
+    exec_ok(cfg, password, &cmd)
+        .await
+        .map(|s| s.trim().to_string())
 }
 
 pub async fn stop_model(cfg: &SshConfig, password: &str) -> Result<String, String> {
@@ -243,10 +274,15 @@ fi
 "#,
         base = REMOTE_BASE,
     );
-    exec_ok(cfg, password, &cmd).await.map(|s| s.trim().to_string())
+    exec_ok(cfg, password, &cmd)
+        .await
+        .map(|s| s.trim().to_string())
 }
 
 pub fn password_for_localhf() -> String {
     let creds = compute::load_ssh_credentials();
-    creds.get(crate::settings::LlmProviderKind::LocalHf.slug()).unwrap_or_default().to_string()
+    creds
+        .get(crate::settings::LlmProviderKind::LocalHf.slug())
+        .unwrap_or_default()
+        .to_string()
 }

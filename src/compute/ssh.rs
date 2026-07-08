@@ -42,7 +42,11 @@ impl client::Handler for HostKeyVerifier {
     }
 }
 
-pub async fn exec(config: &SshConfig, password: &str, command: &str) -> Result<RemoteOutput, TunnelError> {
+pub async fn exec(
+    config: &SshConfig,
+    password: &str,
+    command: &str,
+) -> Result<RemoteOutput, TunnelError> {
     if config.host.trim().is_empty() {
         return Err(TunnelError::Other("SSH host is empty".to_string()));
     }
@@ -69,10 +73,16 @@ pub async fn exec(config: &SshConfig, password: &str, command: &str) -> Result<R
                     observed: observed_fp,
                 });
             }
-            return Err(TunnelError::Other(format!("SSH connect to {addr} failed: {e}")));
+            return Err(TunnelError::Other(format!(
+                "SSH connect to {addr} failed: {e}"
+            )));
         }
     };
-    let host_key_fingerprint = observed.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
+    let host_key_fingerprint = observed
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .unwrap_or_default();
     let auth = session
         .authenticate_password(&config.user, password)
         .await

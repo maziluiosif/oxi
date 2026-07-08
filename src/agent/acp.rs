@@ -387,7 +387,9 @@ async fn spawn_conn(
 /// while the older `@zed-industries/claude-code-acp` used `models.availableModels`.
 fn parse_available_models(res: &Value) -> Vec<String> {
     if let Some(opts) = res.get("configOptions").and_then(|c| c.as_array())
-        && let Some(model_opt) = opts.iter().find(|o| o.get("id").and_then(|v| v.as_str()) == Some("model"))
+        && let Some(model_opt) = opts
+            .iter()
+            .find(|o| o.get("id").and_then(|v| v.as_str()) == Some("model"))
         && let Some(values) = model_opt.get("options").and_then(|o| o.as_array())
     {
         let ids: Vec<String> = values
@@ -738,11 +740,12 @@ async fn handle_agent_request(
         "session/request_permission" => {
             let forwarded = {
                 let ctx = prompt_ctx.lock().await;
-                ctx.as_ref()
-                    .map(|c| c.perm_tx.send(PermReq {
+                ctx.as_ref().map(|c| {
+                    c.perm_tx.send(PermReq {
                         id: id.clone(),
                         params,
-                    }))
+                    })
+                })
             };
             // No active prompt (or the prompt task is gone): cancel the request so the agent
             // doesn't block forever.
@@ -750,7 +753,15 @@ async fn handle_agent_request(
                 reply_ok(stdin, id, json!({ "outcome": { "outcome": "cancelled" } })).await;
             }
         }
-        _ => reply_err(stdin, id, -32601, &format!("method not supported: {method}")).await,
+        _ => {
+            reply_err(
+                stdin,
+                id,
+                -32601,
+                &format!("method not supported: {method}"),
+            )
+            .await
+        }
     }
 }
 
@@ -759,8 +770,7 @@ fn fs_read_text(params: &Value) -> Result<String, String> {
         .get("path")
         .and_then(|p| p.as_str())
         .ok_or("fs/read_text_file: missing path")?;
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("read {path} failed: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("read {path} failed: {e}"))?;
     let line = params.get("line").and_then(|v| v.as_u64());
     let limit = params.get("limit").and_then(|v| v.as_u64());
     if line.is_none() && limit.is_none() {
@@ -980,10 +990,18 @@ mod tests {
             &tx,
         );
         let evs = drain(&rx);
-        assert!(matches!(&evs[0], AgentEvent::ToolStart { name, tool_call_id, .. }
-            if name == "read" && tool_call_id == "c1"));
+        assert!(
+            matches!(&evs[0], AgentEvent::ToolStart { name, tool_call_id, .. }
+            if name == "read" && tool_call_id == "c1")
+        );
         assert!(matches!(&evs[1], AgentEvent::ToolOutput { text, .. } if text == "file body"));
-        assert!(matches!(&evs[2], AgentEvent::ToolEnd { is_error: Some(false), .. }));
+        assert!(matches!(
+            &evs[2],
+            AgentEvent::ToolEnd {
+                is_error: Some(false),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -994,8 +1012,10 @@ mod tests {
             &tx,
         );
         let evs = drain(&rx);
-        assert!(matches!(&evs[0], AgentEvent::ToolEnd { is_error: Some(true), tool_call_id, .. }
-            if tool_call_id == "c2"));
+        assert!(
+            matches!(&evs[0], AgentEvent::ToolEnd { is_error: Some(true), tool_call_id, .. }
+            if tool_call_id == "c2")
+        );
     }
 
     #[test]
@@ -1104,7 +1124,10 @@ mod tests {
                 ]}
             ]
         });
-        assert_eq!(parse_available_models(&res), vec!["default", "sonnet", "opus"]);
+        assert_eq!(
+            parse_available_models(&res),
+            vec!["default", "sonnet", "opus"]
+        );
     }
 
     #[test]

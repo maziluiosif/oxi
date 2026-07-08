@@ -245,7 +245,7 @@ impl OxiApp {
                             }
                             response.context_menu(|ui| {
                                 if wi == self.conv.active_workspace
-                                    && n_sessions > 1
+                                    && !running
                                     && ui.button("Delete chat").clicked()
                                 {
                                     self.delete_session(si);
@@ -257,8 +257,7 @@ impl OxiApp {
                             // trash button interacted below overlaps this rect and
                             // would otherwise steal hover from the row response,
                             // flickering show/hide every other frame.
-                            let can_delete =
-                                wi == self.conv.active_workspace && n_sessions > 1 && !running;
+                            let can_delete = wi == self.conv.active_workspace && !running;
                             let show_trash = can_delete && ui.rect_contains_pointer(rect);
                             self.render_session_row_inner(
                                 ui, rect, wi, si, running, selected, title, show_trash,
