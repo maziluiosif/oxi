@@ -284,7 +284,7 @@ impl OxiApp {
                 if crate::ui::chrome::ghost_button_icon(ui, ICON_SETTINGS, "Open settings", false)
                     .clicked()
                 {
-                    self.conv.settings_open = true;
+                    self.open_settings_page();
                 }
             });
 

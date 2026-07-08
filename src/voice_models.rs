@@ -161,7 +161,10 @@ pub async fn download_model(
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let target = dir.join(entry.filename);
     let tmp = target.with_extension("download");
-    let url = format!("https://huggingface.co/{HF_REPO}/resolve/main/{}", entry.filename);
+    let url = format!(
+        "https://huggingface.co/{HF_REPO}/resolve/main/{}",
+        entry.filename
+    );
     let res = client
         .get(url)
         .send()

@@ -35,6 +35,16 @@ pub enum SettingsTab {
     About,
 }
 
+/// Action to continue after the user resolves an unsaved-settings exit prompt.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SettingsExitAction {
+    BackToChat,
+    ToggleSidebar,
+    ToggleTerminal,
+    ToggleGitChanges,
+    ToggleGitBranches,
+}
+
 /// One project root and its chat tabs.
 pub struct Workspace {
     pub root_path: String,
@@ -226,6 +236,9 @@ pub struct ConversationState {
     pub terminal_open: bool,
     pub terminal_height: f32,
     pub settings: AppSettings,
+    /// Snapshot captured when Settings opens. Used to detect dirty state and restore on Cancel.
+    pub settings_original: Option<AppSettings>,
+    pub settings_exit_prompt: Option<SettingsExitAction>,
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
     pub settings_provider_tab: LlmProviderKind,

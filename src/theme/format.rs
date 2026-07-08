@@ -58,7 +58,13 @@ pub fn animated_status_label(ui: &mut Ui, label: &str, size: f32) {
 /// indicator for spots too small for [`animated_status_label`] (e.g. inside a round icon
 /// button). Caller is responsible for requesting repaints while this is visible; the dots
 /// only animate as often as the surrounding UI redraws.
-pub fn paint_three_dots(painter: &Painter, center: Pos2, time: f64, color: Color32, dot_radius: f32) {
+pub fn paint_three_dots(
+    painter: &Painter,
+    center: Pos2,
+    time: f64,
+    color: Color32,
+    dot_radius: f32,
+) {
     let spacing = dot_radius * 3.0;
     for i in 0..3 {
         let phase = time * 3.2 - i as f64 * 0.5;

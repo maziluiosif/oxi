@@ -9,7 +9,7 @@ use crate::theme::*;
 use crate::ui::chrome::{
     card_frame, field_label, ghost_button, settings_caption, settings_section_title,
 };
-use crate::voice_models::{self, VoiceModelCatalogEntry, VoiceModelMsg, VOICE_MODEL_CATALOG};
+use crate::voice_models::{self, VOICE_MODEL_CATALOG, VoiceModelCatalogEntry, VoiceModelMsg};
 
 use super::super::OxiApp;
 
@@ -154,7 +154,11 @@ impl OxiApp {
         }
     }
 
-    fn spawn_voice_download(&mut self, ctx: &egui::Context, entry: &'static VoiceModelCatalogEntry) {
+    fn spawn_voice_download(
+        &mut self,
+        ctx: &egui::Context,
+        entry: &'static VoiceModelCatalogEntry,
+    ) {
         self.conv.voice_ui.downloading_id = Some(entry.id.to_string());
         self.conv.voice_ui.download_progress = None;
         self.conv.voice_ui.download_error = None;

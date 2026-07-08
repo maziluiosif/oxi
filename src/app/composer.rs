@@ -309,12 +309,9 @@ impl OxiApp {
         let rounding = CornerRadius::same((MIC_DIAM * 0.5) as u8);
 
         if transcribing {
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(MIC_DIAM, MIC_DIAM),
-                Sense::hover(),
-            );
-            ui.painter()
-                .rect_filled(rect, rounding, c_bg_elevated_2());
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(MIC_DIAM, MIC_DIAM), Sense::hover());
+            ui.painter().rect_filled(rect, rounding, c_bg_elevated_2());
             ui.painter().rect_stroke(
                 rect,
                 rounding,
@@ -366,7 +363,7 @@ impl OxiApp {
 
     fn toggle_dictation(&mut self) {
         let Some(model_path) = self.active_voice_model_path() else {
-            self.conv.settings_open = true;
+            self.open_settings_page();
             self.conv.settings_tab = super::state::SettingsTab::Voice;
             return;
         };
@@ -376,7 +373,8 @@ impl OxiApp {
             self.conv.voice_ui.error = None;
             let keep_loaded = self.conv.settings.dictation.keep_loaded;
             let language = self.conv.settings.dictation.language.clone();
-            self.voice.stop_and_transcribe(model_path, keep_loaded, language);
+            self.voice
+                .stop_and_transcribe(model_path, keep_loaded, language);
         } else {
             self.conv.voice_ui.error = None;
             self.conv.voice_ui.recording = true;

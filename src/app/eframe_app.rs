@@ -30,16 +30,14 @@ impl eframe::App for OxiApp {
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
             })
         });
-        if self.any_waiting_response() || any_assistant_streaming || self.conv.voice_ui.transcribing {
+        if self.any_waiting_response() || any_assistant_streaming || self.conv.voice_ui.transcribing
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        crate::theme::set_chat_column_max_width(
-            ui.ctx(),
-            self.conv.settings.chat_column_max_width,
-        );
+        crate::theme::set_chat_column_max_width(ui.ctx(), self.conv.settings.chat_column_max_width);
         ui.ctx().layer_painter(LayerId::background()).rect_filled(
             ui.ctx().content_rect(),
             0,

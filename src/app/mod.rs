@@ -112,6 +112,8 @@ impl OxiApp {
                 terminal_open: settings.terminal_open,
                 terminal_height: settings.terminal_height,
                 settings,
+                settings_original: None,
+                settings_exit_prompt: None,
                 settings_open: false,
                 settings_tab: state::SettingsTab::default(),
                 settings_provider_tab: crate::settings::LlmProviderKind::OpenAi,

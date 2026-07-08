@@ -102,7 +102,7 @@ fn run(rx: mpsc::Receiver<VoiceCmd>, result_tx: mpsc::Sender<VoiceMsg>) {
             } => {
                 let Some(active) = recording.take() else {
                     let _ = result_tx.send(VoiceMsg::TranscriptionDone(Err(
-                        "not recording".to_string(),
+                        "not recording".to_string()
                     )));
                     continue;
                 };
@@ -122,10 +122,9 @@ fn run(rx: mpsc::Receiver<VoiceCmd>, result_tx: mpsc::Sender<VoiceMsg>) {
                     ) {
                         Ok(ctx) => loaded = Some((model_path.clone(), ctx)),
                         Err(e) => {
-                            let _ = result_tx
-                                .send(VoiceMsg::TranscriptionDone(Err(format!(
-                                    "failed to load voice model: {e}"
-                                ))));
+                            let _ = result_tx.send(VoiceMsg::TranscriptionDone(Err(format!(
+                                "failed to load voice model: {e}"
+                            ))));
                             continue;
                         }
                     }
@@ -191,10 +190,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
                 &config,
                 move |data: &[u16], _| {
                     if let Ok(mut buf) = samples.lock() {
-                        buf.extend(
-                            data.iter()
-                                .map(|&s| (s as f32 - 32768.0) / 32768.0),
-                        );
+                        buf.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
                     }
                 },
                 err_fn,

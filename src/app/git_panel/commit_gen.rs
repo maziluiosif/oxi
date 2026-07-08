@@ -9,7 +9,7 @@ use super::super::OxiApp;
 
 impl OxiApp {
     pub(crate) fn toggle_git_panel_tab(&mut self, tab: super::GitTab) {
-        self.conv.settings_open = false;
+        self.close_settings_page();
 
         if self.conv.git_open && self.conv.git_tab == tab {
             self.conv.git_open = false;
@@ -35,7 +35,6 @@ impl OxiApp {
         let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
         self.conv.focus_chat_input_next_frame = true;
     }
-
 
     pub(crate) fn bind_git_ctx(&mut self, ctx: &egui::Context) {
         self.conv.git_ctx = ctx.clone();

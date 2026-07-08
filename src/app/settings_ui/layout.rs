@@ -2,21 +2,112 @@
 //! small pill/chip widgets shared across the other settings submodules.
 
 use eframe::egui::{
-    self, Align, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, ScrollArea,
-    Stroke, Ui,
+    self, Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Stroke, Ui,
 };
 
 use crate::theme::*;
-use crate::ui::chrome::{settings_caption, settings_nav_row};
+use crate::ui::chrome::{ghost_button, primary_button, settings_caption, settings_nav_row};
 
 use super::super::OxiApp;
-use super::super::state::SettingsTab;
+use super::super::state::{SettingsExitAction, SettingsTab};
 
 const SETTINGS_CONTENT_MAX: f32 = 820.0;
 
 impl OxiApp {
+    pub(crate) fn open_settings_page(&mut self) {
+        if self.conv.settings_original.is_none() {
+            self.conv.settings_original = Some(self.conv.settings.clone());
+        }
+        self.conv.settings_open = true;
+    }
+
+    fn settings_dirty(&self) -> bool {
+        self.conv
+            .settings_original
+            .as_ref()
+            .is_some_and(|original| original != &self.conv.settings)
+    }
+
+    fn continue_after_settings_exit(&mut self, action: SettingsExitAction) {
+        match action {
+            SettingsExitAction::BackToChat => {
+                self.conv.focus_chat_input_next_frame = true;
+            }
+            SettingsExitAction::ToggleSidebar => {
+                self.conv.sidebar_open = !self.conv.sidebar_open;
+                self.conv.focus_chat_input_next_frame = true;
+            }
+            SettingsExitAction::ToggleTerminal => self.toggle_terminal(),
+            SettingsExitAction::ToggleGitChanges => {
+                self.toggle_git_panel_tab(crate::app::git_panel::GitTab::Changes)
+            }
+            SettingsExitAction::ToggleGitBranches => {
+                self.toggle_git_panel_tab(crate::app::git_panel::GitTab::Branches)
+            }
+        }
+    }
+
+    pub(crate) fn request_settings_exit(&mut self, action: SettingsExitAction) {
+        if self.conv.settings_open && self.settings_dirty() {
+            self.conv.settings_exit_prompt = Some(action);
+        } else {
+            self.close_settings_page();
+            self.continue_after_settings_exit(action);
+        }
+    }
+
+    pub(crate) fn close_settings_page(&mut self) {
+        self.conv.settings_original = None;
+        self.conv.settings_exit_prompt = None;
+        self.conv.settings_open = false;
+        self.conv.focus_chat_input_next_frame = true;
+    }
+
+    pub(crate) fn save_settings_page(&mut self) {
+        if let Err(e) = self.conv.settings.save() {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
+            return;
+        }
+        self.conv.settings_original = Some(self.conv.settings.clone());
+        self.conv.settings_exit_prompt = None;
+        self.conv.settings_open = false;
+        self.conv.focus_chat_input_next_frame = true;
+    }
+
+    fn save_settings_and_continue(&mut self, action: SettingsExitAction) {
+        if let Err(e) = self.conv.settings.save() {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Save settings: {e}"));
+            return;
+        }
+        self.conv.settings_original = Some(self.conv.settings.clone());
+        self.close_settings_page();
+        self.continue_after_settings_exit(action);
+    }
+
+    pub(crate) fn cancel_settings_page(&mut self) {
+        if let Some(original) = self.conv.settings_original.take() {
+            self.conv.settings = original;
+        }
+        self.conv.settings_exit_prompt = None;
+        self.conv.settings_open = false;
+        self.conv.focus_chat_input_next_frame = true;
+    }
+
+    fn discard_settings_and_continue(&mut self, action: SettingsExitAction) {
+        if let Some(original) = self.conv.settings_original.take() {
+            self.conv.settings = original;
+        }
+        self.conv.settings_exit_prompt = None;
+        self.conv.settings_open = false;
+        self.continue_after_settings_exit(action);
+    }
+
     pub(crate) fn render_settings_page(&mut self, ui: &mut Ui) {
-        let settings_before = self.conv.settings.clone();
+        if self.conv.settings_original.is_none() {
+            self.conv.settings_original = Some(self.conv.settings.clone());
+        }
         const SIDEBAR_W_MIN: f32 = 180.0;
         const SIDEBAR_W_MAX: f32 = 320.0;
         let full_h = ui.available_height();
@@ -89,12 +180,52 @@ impl OxiApp {
             );
         });
 
-        if self.conv.settings != settings_before
-            && let Err(e) = self.conv.settings.save()
-        {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some(format!("Save settings: {e}"));
-        }
+        self.render_unsaved_settings_exit_prompt(ui.ctx());
+    }
+
+    fn render_unsaved_settings_exit_prompt(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.conv.settings_exit_prompt else {
+            return;
+        };
+
+        egui::Area::new(egui::Id::new("unsaved_settings_exit_prompt"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                Frame::new()
+                    .fill(c_bg_elevated())
+                    .stroke(Stroke::new(1.0, c_border()))
+                    .corner_radius(RADIUS_CHIP)
+                    .inner_margin(Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.set_width(280.0);
+                        ui.label(
+                            RichText::new("Unsaved changes")
+                                .size(FS_SMALL)
+                                .color(c_text())
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("Save changes before leaving Settings?")
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
+                        );
+                        ui.add_space(10.0);
+
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if primary_button(ui, "Save").clicked() {
+                                self.save_settings_and_continue(action);
+                            }
+                            if ghost_button(ui, "Discard", true).clicked() {
+                                self.discard_settings_and_continue(action);
+                            }
+                            if ghost_button(ui, "Stay", false).clicked() {
+                                self.conv.settings_exit_prompt = None;
+                            }
+                        });
+                    });
+            });
     }
 
     fn render_settings_header(&mut self, ui: &mut Ui) {
@@ -120,6 +251,23 @@ impl OxiApp {
                             .size(FS_SMALL)
                             .color(c_text_muted()),
                     );
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if primary_button(ui, "Save").clicked() {
+                            self.save_settings_page();
+                        }
+                        let dirty = self.settings_dirty();
+                        if ghost_button(ui, "Cancel", false).clicked() {
+                            self.cancel_settings_page();
+                        }
+                        if dirty {
+                            ui.label(
+                                RichText::new("Unsaved changes")
+                                    .size(FS_TINY)
+                                    .color(c_text_muted()),
+                            );
+                        }
+                    });
                 });
             });
         ui.painter().hline(
@@ -167,19 +315,6 @@ impl OxiApp {
                 .color(c_text_faint())
                 .monospace(),
             );
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(ICON_CHECK_CIRCLE)
-                        .font(FontId::new(FS_TINY, icon_font()))
-                        .color(c_success()),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new("Auto-saved")
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
-                );
-            });
             ui.add_space(2.0);
         });
     }

@@ -37,19 +37,26 @@ impl OxiApp {
                         })
                         .clicked()
                     {
-                        self.conv.settings_open = false;
-                        self.conv.sidebar_open = !sidebar_on;
-                        self.conv.focus_chat_input_next_frame = true;
+                        self.request_settings_exit(
+                            crate::app::state::SettingsExitAction::ToggleSidebar,
+                        );
                     }
 
                     let settings_on = self.conv.settings_open;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, settings_on)
-                        .on_hover_text(if settings_on { "Back to chat" } else { "Open settings" })
+                        .on_hover_text(if settings_on {
+                            "Back to chat"
+                        } else {
+                            "Open settings"
+                        })
                         .clicked()
                     {
-                        self.conv.settings_open = !settings_on;
                         if settings_on {
-                            self.conv.focus_chat_input_next_frame = true;
+                            self.request_settings_exit(
+                                crate::app::state::SettingsExitAction::BackToChat,
+                            );
+                        } else {
+                            self.open_settings_page();
                         }
                     }
 
@@ -59,23 +66,37 @@ impl OxiApp {
                             .on_hover_text("Toggle terminal panel")
                             .clicked()
                         {
-                            self.conv.settings_open = false;
-                            self.toggle_terminal();
+                            self.request_settings_exit(
+                                crate::app::state::SettingsExitAction::ToggleTerminal,
+                            );
                         }
-                        let branches_on = self.conv.git_open && self.conv.git_tab == GitTab::Branches;
+                        let branches_on =
+                            self.conv.git_open && self.conv.git_tab == GitTab::Branches;
                         if crate::ui::chrome::icon_button_plain(ui, ICON_BRANCH, 20.0, branches_on)
-                            .on_hover_text(if branches_on { "Hide git panel" } else { "Open git branches" })
+                            .on_hover_text(if branches_on {
+                                "Hide git panel"
+                            } else {
+                                "Open git branches"
+                            })
                             .clicked()
                         {
-                            self.toggle_git_panel_tab(GitTab::Branches);
+                            self.request_settings_exit(
+                                crate::app::state::SettingsExitAction::ToggleGitBranches,
+                            );
                         }
 
                         let changes_on = self.conv.git_open && self.conv.git_tab == GitTab::Changes;
                         if crate::ui::chrome::icon_button_plain(ui, ICON_GIT, 20.0, changes_on)
-                            .on_hover_text(if changes_on { "Hide git panel" } else { "Open git changes" })
+                            .on_hover_text(if changes_on {
+                                "Hide git panel"
+                            } else {
+                                "Open git changes"
+                            })
                             .clicked()
                         {
-                            self.toggle_git_panel_tab(GitTab::Changes);
+                            self.request_settings_exit(
+                                crate::app::state::SettingsExitAction::ToggleGitChanges,
+                            );
                         }
 
                         if self.conv.git.repo {
