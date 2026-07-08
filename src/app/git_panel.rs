@@ -84,24 +84,6 @@ impl OxiApp {
                     ui.add_space(6.0);
                 }
 
-                if self.conv.git.busy {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new().size(12.0).color(c_text_muted()));
-                        ui.label(
-                            RichText::new(
-                                self.conv
-                                    .git
-                                    .last_op
-                                    .clone()
-                                    .unwrap_or_else(|| "working".to_string()),
-                            )
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                        );
-                    });
-                    ui.add_space(4.0);
-                }
-
                 match self.conv.git_tab {
                     GitTab::Changes => self.render_git_changes(ui),
                     GitTab::Branches => self.render_git_branches(ui),

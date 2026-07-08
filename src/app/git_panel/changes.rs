@@ -28,6 +28,17 @@ impl OxiApp {
                     .color(c_text())
                     .strong(),
             );
+            if self.conv.git.busy {
+                ui.add(egui::Spinner::new().size(12.0).color(c_text_muted()));
+                let op = self
+                    .conv
+                    .git
+                    .last_op
+                    .clone()
+                    .unwrap_or_else(|| "working".to_string());
+                ui.label(RichText::new(op).size(FS_TINY).color(c_text_muted()))
+                    .on_hover_text("Git operation in progress");
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false)
                     .on_hover_text("Refresh")
@@ -457,6 +468,7 @@ impl OxiApp {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.request(GitOp::ClearDiff);
             self.conv.diff_view_open = false;
+            self.conv.focus_chat_input_next_frame = true;
         }
 
         let col_w = column_center_w.min(CHAT_COLUMN_MAX);
@@ -488,6 +500,7 @@ impl OxiApp {
                         {
                             self.request(GitOp::ClearDiff);
                             self.conv.diff_view_open = false;
+                            self.conv.focus_chat_input_next_frame = true;
                         }
                     });
                 },

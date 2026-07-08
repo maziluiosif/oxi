@@ -19,6 +19,9 @@ impl OxiApp {
             // Ensure the worker exists and request an initial snapshot.
             self.ensure_git_channels();
             let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+            self.conv.focus_chat_input_next_frame = true;
+        } else {
+            self.conv.focus_chat_input_next_frame = true;
         }
     }
 

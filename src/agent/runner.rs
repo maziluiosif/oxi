@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
 use crate::agent::anthropic::run_anthropic_loop;
-use crate::agent::approval::{ApprovalDecision, ApprovalGate};
+use crate::agent::approval::{ApprovalDecision, ApprovalGate, ApprovalPolicy};
 use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
 use crate::agent::history::{
@@ -187,7 +187,10 @@ pub fn spawn_agent_run(
                     &chat_for_history,
                     &tx,
                     approval_rx,
-                    settings.require_approval,
+                    ApprovalPolicy {
+                        write_edit: settings.require_write_edit_approval,
+                        bash: settings.require_bash_approval,
+                    },
                     &cancel,
                 )
                 .await;
@@ -242,7 +245,13 @@ pub fn spawn_agent_run(
                 }
             };
             let mut oauth = load_oauth_store();
-            let mut gate = ApprovalGate::new(settings.require_approval, approval_rx);
+            let mut gate = ApprovalGate::new(
+                ApprovalPolicy {
+                    write_edit: settings.require_write_edit_approval,
+                    bash: settings.require_bash_approval,
+                },
+                approval_rx,
+            );
 
             let r = match cfg.provider {
                 LlmProviderKind::GptCodex => {
@@ -580,7 +589,7 @@ async fn run_acp_turn(
     chat_for_history: &[ChatMessage],
     tx: &Sender<AgentEvent>,
     approval_rx: Receiver<ApprovalDecision>,
-    approval_enabled: bool,
+    approval_policy: ApprovalPolicy,
     cancel: &Arc<AtomicBool>,
 ) {
     let last_user = chat_for_history
@@ -617,7 +626,7 @@ async fn run_acp_turn(
         images,
         event_tx: tx.clone(),
         approval_rx,
-        approval_enabled,
+        approval_policy,
         cancel: cancel.clone(),
     };
 

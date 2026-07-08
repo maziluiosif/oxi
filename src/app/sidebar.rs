@@ -31,6 +31,7 @@ impl OxiApp {
                     .clicked()
                 {
                     self.conv.sidebar_open = false;
+                    self.conv.focus_chat_input_next_frame = true;
                 }
                 if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, 22.0, false)
                     .on_hover_text(

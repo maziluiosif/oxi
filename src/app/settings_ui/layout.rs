@@ -126,6 +126,7 @@ impl OxiApp {
                             .clicked()
                         {
                             self.conv.settings_open = false;
+                            self.conv.focus_chat_input_next_frame = true;
                         }
                     });
                 });
@@ -152,6 +153,7 @@ impl OxiApp {
         .clicked()
         {
             self.conv.settings_open = false;
+            self.conv.focus_chat_input_next_frame = true;
         }
 
         ui.add_space(18.0);

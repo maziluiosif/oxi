@@ -31,7 +31,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
-use super::approval::ApprovalDecision;
+use super::approval::{ApprovalDecision, ApprovalPolicy};
 use super::events::AgentEvent;
 
 /// ACP protocol major version we speak.
@@ -65,8 +65,8 @@ pub struct AcpPrompt {
     pub event_tx: StdSender<AgentEvent>,
     /// Back-channel carrying the user's approval decisions.
     pub approval_rx: StdReceiver<ApprovalDecision>,
-    /// When false, permission requests are auto-approved (mirrors `settings.require_approval`).
-    pub approval_enabled: bool,
+    /// Which permission requests should be routed through oxi's approval UI.
+    pub approval_policy: ApprovalPolicy,
     /// Cooperative cancellation for the turn.
     pub cancel: Arc<AtomicBool>,
 }
@@ -428,7 +428,7 @@ async fn run_prompt(
         images,
         event_tx,
         mut approval_rx,
-        approval_enabled,
+        approval_policy,
         cancel,
         ..
     } = req;
@@ -472,7 +472,7 @@ async fn run_prompt(
                         &handles.stdin,
                         event_tx.clone(),
                         &mut approval_rx,
-                        approval_enabled,
+                        approval_policy,
                         &cancel,
                         &mut auto_approve,
                         pr,
@@ -502,7 +502,7 @@ async fn handle_permission(
     stdin: &Arc<AsyncMutex<ChildStdin>>,
     event_tx: StdSender<AgentEvent>,
     approval_rx: &mut StdReceiver<ApprovalDecision>,
-    approval_enabled: bool,
+    approval_policy: ApprovalPolicy,
     cancel: &Arc<AtomicBool>,
     auto_approve: &mut bool,
     pr: PermReq,
@@ -510,7 +510,7 @@ async fn handle_permission(
     let (name, args) = permission_name_args(&pr.params["toolCall"]);
     let options = pr.params["options"].as_array().cloned().unwrap_or_default();
 
-    let decision = if !approval_enabled || *auto_approve {
+    let decision = if *auto_approve || !approval_policy.requires_approval(&name) {
         Some(ApprovalDecision::Approve)
     } else {
         let _ = event_tx.send(AgentEvent::ApprovalRequest { name, args });
@@ -1093,7 +1093,7 @@ mod tests {
             images: Vec::new(),
             event_tx: ev_tx,
             approval_rx: appr_rx,
-            approval_enabled: false,
+            approval_policy: ApprovalPolicy::disabled(),
             cancel,
         };
         let rt = tokio::runtime::Runtime::new().unwrap();

@@ -12,7 +12,7 @@ keywords = ["gui", "llm", "coding-agent", "egui", "chat"]
 categories = ["development-tools", "gui"]
 
 [dependencies]
-eframe = "0.35"
+eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "wayland", "wgpu", "x11"] }
 egui = "0.35"
 egui_extras = { version = "0.35", features = ["all_loaders"] }
 serde = { version = "1.0", features = ["derive"] }

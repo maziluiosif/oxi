@@ -110,6 +110,7 @@ impl OxiApp {
         }
 
         self.conv.scroll_to_bottom_once = true;
+        self.conv.focus_chat_input_next_frame = true;
         if let Some(state) = self.flow.sessions.get_mut(&self.active_session_key()) {
             state.stream_error = None;
         }

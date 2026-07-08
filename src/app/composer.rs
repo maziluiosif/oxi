@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use eframe::egui::{
     self, Button, Color32, ComboBox, CornerRadius, Frame, Id, Image, Margin, Order, Pos2, RichText,
-    Sense, Stroke, TextEdit, TextureHandle, Ui,
+    Sense, Stroke, TextEdit, TextureHandle, Ui, text::CCursor, text::CCursorRange,
 };
 
 use crate::agent::context_char_budget_from_tokens;
@@ -122,7 +122,7 @@ impl OxiApp {
                         // === Text area ===
                         // desired_rows(1) keeps it compact; it grows naturally
                         // as the user types (both newlines and soft-wrap).
-                        let te_output = TextEdit::multiline(&mut self.conv.input)
+                        let mut te_output = TextEdit::multiline(&mut self.conv.input)
                             .id(input_id)
                             .hint_text(
                                 RichText::new("Message oxi…")
@@ -133,6 +133,18 @@ impl OxiApp {
                             .desired_rows(1)
                             .frame(egui::Frame::NONE)
                             .show(ui);
+                        if self.conv.focus_chat_input_next_frame {
+                            // Navigation should put the caret at the end of any existing draft,
+                            // not at egui's default/start position.
+                            let end = CCursor::new(self.conv.input.chars().count());
+                            te_output
+                                .state
+                                .cursor
+                                .set_char_range(Some(CCursorRange::one(end)));
+                            te_output.state.store(ui.ctx(), input_id);
+                            te_output.response.request_focus();
+                            self.conv.focus_chat_input_next_frame = false;
+                        }
 
                         let galley_h = te_output.galley.rect.height();
                         self.conv.composer_measured_text_h = galley_h;

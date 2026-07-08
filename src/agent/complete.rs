@@ -100,7 +100,10 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
     ];
     let cancel = Arc::new(AtomicBool::new(false));
     let (_approval_tx, approval_rx) = mpsc::channel();
-    let mut gate = ApprovalGate::new(false, approval_rx);
+    let mut gate = ApprovalGate::new(
+        crate::agent::approval::ApprovalPolicy::disabled(),
+        approval_rx,
+    );
     let max_rounds = 1;
 
     // Bridge agent events into completion deltas.

@@ -1,4 +1,4 @@
-//! User approval gate for mutating tools (`bash` / `write` / `edit`).
+//! User approval gate for shell (`bash`) and filesystem-changing (`write` / `edit`) tools.
 //!
 //! When approval is enabled, the agent thread sends [`AgentEvent::ApprovalRequest`] and blocks
 //! until the UI returns an [`ApprovalDecision`] over a back-channel. Read-only tools
@@ -23,22 +23,41 @@ pub enum ApprovalDecision {
     Deny,
 }
 
-/// Tools that mutate the workspace or run shell commands and therefore need explicit approval.
-pub fn tool_requires_approval(name: &str) -> bool {
-    matches!(name, "bash" | "write" | "edit")
+/// Approval switches for tool categories that can mutate the workspace or run shell commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovalPolicy {
+    pub write_edit: bool,
+    pub bash: bool,
+}
+
+impl ApprovalPolicy {
+    pub fn disabled() -> Self {
+        Self {
+            write_edit: false,
+            bash: false,
+        }
+    }
+
+    pub fn requires_approval(self, name: &str) -> bool {
+        match name {
+            "bash" => self.bash,
+            "write" | "edit" => self.write_edit,
+            _ => false,
+        }
+    }
 }
 
 /// Mediates user approval for mutating tool calls within a single agent run.
 pub struct ApprovalGate {
-    enabled: bool,
+    policy: ApprovalPolicy,
     auto_approve: bool,
     rx: Receiver<ApprovalDecision>,
 }
 
 impl ApprovalGate {
-    pub fn new(enabled: bool, rx: Receiver<ApprovalDecision>) -> Self {
+    pub fn new(policy: ApprovalPolicy, rx: Receiver<ApprovalDecision>) -> Self {
         Self {
-            enabled,
+            policy,
             auto_approve: false,
             rx,
         }
@@ -54,7 +73,7 @@ impl ApprovalGate {
         name: &str,
         args: &Value,
     ) -> Result<(), String> {
-        if !self.enabled || self.auto_approve || !tool_requires_approval(name) {
+        if self.auto_approve || !self.policy.requires_approval(name) {
             return Ok(());
         }
         let _ = tx.send(AgentEvent::ApprovalRequest {
@@ -96,21 +115,33 @@ mod tests {
     #[test]
     fn readonly_tools_never_require_approval() {
         for t in ["read", "grep", "find", "ls"] {
-            assert!(!tool_requires_approval(t));
+            assert!(
+                !ApprovalPolicy {
+                    write_edit: true,
+                    bash: true,
+                }
+                .requires_approval(t)
+            );
         }
     }
 
     #[test]
     fn mutating_tools_require_approval() {
         for t in ["bash", "write", "edit"] {
-            assert!(tool_requires_approval(t));
+            assert!(
+                ApprovalPolicy {
+                    write_edit: true,
+                    bash: true,
+                }
+                .requires_approval(t)
+            );
         }
     }
 
     #[test]
     fn disabled_gate_always_proceeds() {
         let (_dtx, drx) = channel();
-        let mut gate = ApprovalGate::new(false, drx);
+        let mut gate = ApprovalGate::new(ApprovalPolicy::disabled(), drx);
         let (etx, cancel, args) = ctx();
         assert!(gate.request(&etx, &cancel, "bash", &args).is_ok());
     }
@@ -118,7 +149,13 @@ mod tests {
     #[test]
     fn readonly_tool_bypasses_enabled_gate() {
         let (_dtx, drx) = channel();
-        let mut gate = ApprovalGate::new(true, drx);
+        let mut gate = ApprovalGate::new(
+            ApprovalPolicy {
+                write_edit: true,
+                bash: true,
+            },
+            drx,
+        );
         let (etx, cancel, args) = ctx();
         // No decision is ever sent; a read tool must not block.
         assert!(gate.request(&etx, &cancel, "read", &args).is_ok());
@@ -127,7 +164,13 @@ mod tests {
     #[test]
     fn approve_rest_auto_approves_subsequent_calls() {
         let (dtx, drx) = channel();
-        let mut gate = ApprovalGate::new(true, drx);
+        let mut gate = ApprovalGate::new(
+            ApprovalPolicy {
+                write_edit: true,
+                bash: true,
+            },
+            drx,
+        );
         let (etx, cancel, args) = ctx();
         dtx.send(ApprovalDecision::ApproveRest).unwrap();
         assert!(gate.request(&etx, &cancel, "bash", &args).is_ok());
@@ -138,7 +181,13 @@ mod tests {
     #[test]
     fn deny_returns_error() {
         let (dtx, drx) = channel();
-        let mut gate = ApprovalGate::new(true, drx);
+        let mut gate = ApprovalGate::new(
+            ApprovalPolicy {
+                write_edit: true,
+                bash: true,
+            },
+            drx,
+        );
         let (etx, cancel, args) = ctx();
         dtx.send(ApprovalDecision::Deny).unwrap();
         assert!(gate.request(&etx, &cancel, "bash", &args).is_err());
@@ -147,7 +196,13 @@ mod tests {
     #[test]
     fn cancel_while_waiting_returns_error() {
         let (_dtx, drx) = channel();
-        let mut gate = ApprovalGate::new(true, drx);
+        let mut gate = ApprovalGate::new(
+            ApprovalPolicy {
+                write_edit: true,
+                bash: true,
+            },
+            drx,
+        );
         let (etx, _erx) = channel();
         let cancel = Arc::new(AtomicBool::new(true)); // already cancelled
         let args = serde_json::json!({});

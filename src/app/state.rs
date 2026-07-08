@@ -197,6 +197,8 @@ pub struct ConversationState {
     pub input_history: Vec<String>,
     pub input_history_index: Option<usize>,
     pub input_history_draft: String,
+    /// Set when navigation should hand keyboard focus back to the chat composer.
+    pub focus_chat_input_next_frame: bool,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
     /// Bottom terminal panel visibility and height (persisted in settings).

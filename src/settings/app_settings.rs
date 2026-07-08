@@ -50,9 +50,15 @@ pub struct AppSettings {
     /// than falling back to another provider.
     #[serde(default = "default_searxng_url")]
     pub searxng_url: String,
-    /// Require explicit user approval before each mutating tool (`bash` / `write` / `edit`).
+    /// Require explicit user approval before each filesystem-changing tool (`write` / `edit`).
     #[serde(default = "default_require_approval")]
-    pub require_approval: bool,
+    pub require_write_edit_approval: bool,
+    /// Require explicit user approval before each `bash` tool call.
+    #[serde(default = "default_require_approval")]
+    pub require_bash_approval: bool,
+    /// Legacy single approval switch. Migrated in [`AppSettings::normalize`] and no longer saved.
+    #[serde(default, skip_serializing)]
+    pub require_approval: Option<bool>,
     /// Persisted width of the main app/sidebar split.
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
@@ -197,7 +203,9 @@ impl Default for AppSettings {
             tools_enabled: default_tools_enabled(),
             web_search_backend: WebSearchBackend::default(),
             searxng_url: default_searxng_url(),
-            require_approval: default_require_approval(),
+            require_write_edit_approval: default_require_approval(),
+            require_bash_approval: default_require_approval(),
+            require_approval: None,
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),
             terminal_open: false,
@@ -469,6 +477,10 @@ impl AppSettings {
             ) {
                 cfg.effort.clear();
             }
+        }
+        if let Some(legacy_require_approval) = self.require_approval.take() {
+            self.require_write_edit_approval = legacy_require_approval;
+            self.require_bash_approval = legacy_require_approval;
         }
         if self.context_window_default == 0 {
             self.context_window_default = default_context_window();

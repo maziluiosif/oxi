@@ -99,6 +99,7 @@ impl OxiApp {
                 input_history: Vec::new(),
                 input_history_index: None,
                 input_history_draft: String::new(),
+                focus_chat_input_next_frame: true,
                 sidebar_open: true,
                 sidebar_width: settings.sidebar_width,
                 terminal_open: settings.terminal_open,
@@ -300,6 +301,7 @@ impl OxiApp {
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
         self.conv.scroll_to_bottom_once = true;
+        self.conv.focus_chat_input_next_frame = true;
         self.ensure_active_session_loaded();
         self.refresh_git_cwd();
     }
@@ -316,6 +318,7 @@ impl OxiApp {
             && session_idx == self.conv.workspaces[workspace_idx].active
         {
             self.ensure_active_session_loaded();
+            self.conv.focus_chat_input_next_frame = true;
             return;
         }
         let workspace_changed = workspace_idx != self.conv.active_workspace;
@@ -323,6 +326,7 @@ impl OxiApp {
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
         self.conv.scroll_to_bottom_once = true;
+        self.conv.focus_chat_input_next_frame = true;
         self.ensure_active_session_loaded();
         if workspace_changed {
             self.refresh_git_cwd();

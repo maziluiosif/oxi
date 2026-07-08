@@ -100,20 +100,35 @@ impl OxiApp {
             ui.add_space(10.0);
             hairline(ui);
             ui.add_space(8.0);
-            let mut require_approval = self.conv.settings.require_approval;
+            let mut require_write_edit_approval = self.conv.settings.require_write_edit_approval;
             if ui
                 .checkbox(
-                    &mut require_approval,
-                    RichText::new("Ask before running bash / write / edit")
+                    &mut require_write_edit_approval,
+                    RichText::new("Ask before write / edit")
                         .size(FS_SMALL)
                         .color(c_text()),
                 )
                 .on_hover_text(
-                    "When on, the agent pauses for your approval before each mutating tool call.",
+                    "When on, the agent pauses for your approval before each write/edit tool call.",
                 )
                 .changed()
             {
-                self.conv.settings.require_approval = require_approval;
+                self.conv.settings.require_write_edit_approval = require_write_edit_approval;
+            }
+            let mut require_bash_approval = self.conv.settings.require_bash_approval;
+            if ui
+                .checkbox(
+                    &mut require_bash_approval,
+                    RichText::new("Ask before bash")
+                        .size(FS_SMALL)
+                        .color(c_text()),
+                )
+                .on_hover_text(
+                    "When on, the agent pauses for your approval before each bash tool call.",
+                )
+                .changed()
+            {
+                self.conv.settings.require_bash_approval = require_bash_approval;
             }
             ui.add_space(10.0);
             hairline(ui);

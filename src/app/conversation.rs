@@ -162,6 +162,7 @@ impl OxiApp {
                                 .clicked()
                             {
                                 self.conv.sidebar_open = true;
+                                self.conv.focus_chat_input_next_frame = true;
                             }
 
                             let workspace =
