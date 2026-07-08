@@ -112,6 +112,12 @@ pub struct AppSettings {
     /// The cwd workspace is always present at runtime even if missing here.
     #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
+    /// Last active workspace root path, used to reopen the conversation the user last had open.
+    #[serde(default)]
+    pub last_active_workspace_root_path: Option<String>,
+    /// Last active chat file inside the active workspace, if the chat has been saved to disk.
+    #[serde(default)]
+    pub last_active_session_file: Option<String>,
     /// Local voice dictation (see [`crate::voice_engine`]).
     #[serde(default)]
     pub dictation: DictationSettings,
@@ -271,6 +277,8 @@ impl Default for AppSettings {
             commit_msg_model_id: String::new(),
             commit_msg_system_prompt: default_commit_msg_system_prompt(),
             workspaces: Vec::new(),
+            last_active_workspace_root_path: None,
+            last_active_session_file: None,
             dictation: DictationSettings::default(),
         }
     }
@@ -553,6 +561,17 @@ impl AppSettings {
         self.workspaces.retain(|w| {
             std::path::Path::new(&w.root_path).is_dir() && seen.insert(w.root_path.clone())
         });
+        if let Some(root) = self.last_active_workspace_root_path.as_deref()
+            && !std::path::Path::new(root).is_dir()
+        {
+            self.last_active_workspace_root_path = None;
+            self.last_active_session_file = None;
+        }
+        if let Some(file) = self.last_active_session_file.as_deref()
+            && !std::path::Path::new(file).is_file()
+        {
+            self.last_active_session_file = None;
+        }
     }
 
     pub fn save(&self) -> Result<(), String> {
