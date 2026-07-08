@@ -63,9 +63,20 @@ find "$rt/extract" -type f \( -name 'llama-server' -o -name 'llama-server.exe' -
 rm -rf "$rt/extract" "$archive"
 chmod +x "$rt/llama-server" 2>/dev/null || true
 cd "$rt"
-for f in *.dylib *.so.*; do
-  [ -e "$f" ] || continue
-  short=$(printf '%s\n' "$f" | sed -E 's/(lib[^.]+(\-[^.]+)*\.(0|1|2|3|4|5|6|7|8|9)+).*/\1.dylib/; s/(lib[^.]+(\-[^.]+)*\.so\.[0-9]+).*/\1/')
+find . -maxdepth 1 -type f -name '*.dylib' -print | while IFS= read -r p; do
+  f=${{p#./}}
+  stem=${{f%.dylib}}
+  prefix=${{stem%%.*}}
+  rest=${{stem#*.}}
+  major=${{rest%%.*}}
+  [ "$stem" != "$rest" ] || continue
+  case "$major" in ''|*[!0-9]*) continue ;; esac
+  short="$prefix.$major.dylib"
+  [ "$short" = "$f" ] || ln -sf "$f" "$short"
+done
+find . -maxdepth 1 -type f -name '*.so.*' -print | while IFS= read -r p; do
+  f=${{p#./}}
+  short=$(printf '%s\n' "$f" | sed -E 's/^(.*\.so\.[0-9]+)\..*$/\1/')
   [ "$short" = "$f" ] || ln -sf "$f" "$short"
 done
 printf '%s/llama-server' "$rt"
@@ -121,31 +132,95 @@ printf '%s\n%s' "$out" "$bytes"
     })
 }
 
-pub async fn start_model(cfg: &SshConfig, password: &str, model_path: &str, context: usize, gpu_layers: i32) -> Result<String, String> {
+pub async fn start_model(
+    cfg: &SshConfig,
+    password: &str,
+    model_path: &str,
+    repo: &str,
+    filename: &str,
+    context: usize,
+    gpu_layers: i32,
+) -> Result<String, String> {
     let port = cfg.remote_runtime_port;
     let ngl = if gpu_layers != 0 { format!(" -ngl {}", gpu_layers) } else { String::new() };
+    let safe_repo = repo.replace(['/', '\\', ':'], "__");
+    let base_name = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(filename);
     let cmd = format!(
         r#"set -eu
 base={base}
 rt="$base/runtime"
 log="$rt/llama-server.log"
 pid="$rt/llama-server.pid"
+model={model}
+if [ ! -f "$model" ]; then
+  candidate="$base/models/{safe_repo}/{base_name}"
+  if [ -f "$candidate" ]; then
+    model="$candidate"
+  else
+    echo "Model file not found on remote host." >&2
+    echo "Tried saved path: $model" >&2
+    echo "Tried remote download path: $candidate" >&2
+    echo "Download the model while Local HF is set to Remote SSH, then press Play again." >&2
+    exit 1
+  fi
+fi
 if [ -f "$pid" ] && kill -0 "$(cat "$pid")" 2>/dev/null; then
   kill "$(cat "$pid")" 2>/dev/null || true
   sleep 1
 fi
 cd "$rt"
+# Self-heal macOS/Linux runtime library aliases in case the runtime was installed
+# by an older oxi build. llama-server's LC_LOAD_DYLIB may ask for e.g.
+# libllama-common.0.dylib while the archive contains libllama-common.0.0.9910.dylib.
+find . -maxdepth 1 -type f -name '*.dylib' -print | while IFS= read -r p; do
+  f=${{p#./}}
+  stem=${{f%.dylib}}
+  prefix=${{stem%%.*}}
+  rest=${{stem#*.}}
+  major=${{rest%%.*}}
+  [ "$stem" != "$rest" ] || continue
+  case "$major" in ''|*[!0-9]*) continue ;; esac
+  short="$prefix.$major.dylib"
+  [ "$short" = "$f" ] || ln -sf "$f" "$short"
+done
+find . -maxdepth 1 -type f -name '*.so.*' -print | while IFS= read -r p; do
+  f=${{p#./}}
+  short=$(printf '%s\n' "$f" | sed -E 's/^(.*\.so\.[0-9]+)\..*$/\1/')
+  [ "$short" = "$f" ] || ln -sf "$f" "$short"
+done
 : > "$log"
-(DYLD_LIBRARY_PATH="$rt:${{DYLD_LIBRARY_PATH:-}}" LD_LIBRARY_PATH="$rt:${{LD_LIBRARY_PATH:-}}" PATH="$rt:$PATH" nohup "$rt/llama-server" -m {model} --host 127.0.0.1 --port {port} -c {ctx}{ngl} >> "$log" 2>&1 & echo $! > "$pid")
-sleep 1
-if ! kill -0 "$(cat "$pid")" 2>/dev/null; then
-  tail -n 80 "$log" >&2 || true
-  exit 1
-fi
-printf 'Remote llama-server starting on 127.0.0.1:%s. Log: %s' {port} "$log"
+(DYLD_LIBRARY_PATH="$rt:${{DYLD_LIBRARY_PATH:-}}" LD_LIBRARY_PATH="$rt:${{LD_LIBRARY_PATH:-}}" PATH="$rt:$PATH" nohup "$rt/llama-server" -m "$model" --host 127.0.0.1 --port {port} -c {ctx}{ngl} >> "$log" 2>&1 & echo $! > "$pid")
+# Wait until llama-server is actually reachable. Starting the process can succeed while
+# the port is not open yet (or it can fail a few seconds later while loading the model).
+# Returning early makes the SSH tunnel probe fail with "ConnectFailed".
+i=0
+while [ "$i" -lt 90 ]; do
+  if ! kill -0 "$(cat "$pid")" 2>/dev/null; then
+    tail -n 120 "$log" >&2 || true
+    exit 1
+  fi
+  if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 {port} >/dev/null 2>&1; then
+    printf 'Remote llama-server ready on 127.0.0.1:%s. Log: %s' {port} "$log"
+    exit 0
+  fi
+  if command -v curl >/dev/null 2>&1 && curl -sS --max-time 1 -o /dev/null "http://127.0.0.1:{port}/health" >/dev/null 2>&1; then
+    printf 'Remote llama-server ready on 127.0.0.1:%s. Log: %s' {port} "$log"
+    exit 0
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+echo "llama-server started but did not open 127.0.0.1:{port} within 90s" >&2
+tail -n 120 "$log" >&2 || true
+exit 1
 "#,
         base = REMOTE_BASE,
         model = sh_quote(model_path),
+        safe_repo = sh_quote(&safe_repo),
+        base_name = sh_quote(base_name),
         port = port,
         ctx = context,
         ngl = ngl,

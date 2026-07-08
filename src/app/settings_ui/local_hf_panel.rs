@@ -376,7 +376,7 @@ impl OxiApp {
         let err_model = m.clone();
         let work_ctx = ctx.clone();
         spawn_async_task(move |err| { let _ = err_tx.send(LocalModelMsg::RemoteStartDone { model: err_model.clone(), result: Err(err) }); err_ctx.request_repaint(); }, move |rt| {
-            let r = rt.block_on(crate::local_models_remote::start_model(&cfg, &password, &m.path, context, gpu_layers));
+            let r = rt.block_on(crate::local_models_remote::start_model(&cfg, &password, &m.path, &m.repo, &m.filename, context, gpu_layers));
             let _ = tx.send(LocalModelMsg::RemoteStartDone { model: m, result: r });
             work_ctx.request_repaint();
         });
