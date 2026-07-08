@@ -36,6 +36,10 @@ impl eframe::App for OxiApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        crate::theme::set_chat_column_max_width(
+            ui.ctx(),
+            self.conv.settings.chat_column_max_width,
+        );
         ui.ctx().layer_painter(LayerId::background()).rect_filled(
             ui.ctx().content_rect(),
             0,

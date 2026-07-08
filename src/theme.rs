@@ -14,10 +14,36 @@ pub use format::*;
 pub use palette::*;
 pub use style::*;
 
-use eframe::egui::{self, Ui};
+use eframe::egui::{self, Id, Ui};
 
-/// Max width for message/composer column (left-aligned; extra space stays on the right).
-pub const CHAT_COLUMN_MAX: f32 = 720.0;
+/// Default max width for message/composer column (left-aligned; extra space stays on the
+/// right). The user can widen this via the "Chat width" slider in Appearance settings; see
+/// [`chat_column_max_width`].
+pub const CHAT_COLUMN_MAX_DEFAULT: f32 = 720.0;
+
+/// Slider bounds for the user-configurable chat column width (see
+/// [`crate::settings::AppSettings::chat_column_max_width`]).
+pub const CHAT_COLUMN_WIDTH_MIN: f32 = 480.0;
+pub const CHAT_COLUMN_WIDTH_MAX: f32 = 1400.0;
+
+fn chat_column_max_width_id() -> Id {
+    Id::new("oxi_chat_column_max_width")
+}
+
+/// Publishes the configured chat column width for this frame. Called once per frame from
+/// the top-level `App::ui` (which has the live [`AppSettings`](crate::settings::AppSettings)),
+/// so every downstream renderer — including free functions like [`content_wrap_width`] that
+/// only see a `&Ui` — can read the current value via [`chat_column_max_width`].
+pub fn set_chat_column_max_width(ctx: &egui::Context, width: f32) {
+    ctx.data_mut(|d| d.insert_temp(chat_column_max_width_id(), width));
+}
+
+/// Current max width for the message/composer column. Falls back to
+/// [`CHAT_COLUMN_MAX_DEFAULT`] if [`set_chat_column_max_width`] hasn't run yet this frame.
+pub fn chat_column_max_width(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp(chat_column_max_width_id()))
+        .unwrap_or(CHAT_COLUMN_MAX_DEFAULT)
+}
 
 /// Shared corner radii — every rounded surface should use one of these tokens.
 pub const RADIUS_ROW: u8 = 5;
@@ -42,12 +68,13 @@ pub fn chat_column_center_width(available: f32, style: &egui::Style) -> f32 {
 
 /// Wrap width for transcript text (thinking, markdown, tool bodies). `available_width()` alone can
 /// exceed the visible column inside [`egui::CollapsingHeader`] and similar; clamp to the current
-/// [`Ui::max_rect`] and [`CHAT_COLUMN_MAX`] so [`eframe::egui::text::LayoutJob`] wrap and frames
+/// [`Ui::max_rect`] and [`chat_column_max_width`] so [`eframe::egui::text::LayoutJob`] wrap and frames
 /// stay inside the chat.
 pub fn content_wrap_width(ui: &Ui) -> f32 {
+    let max_w = chat_column_max_width(ui.ctx());
     let avail = ui.available_width();
     if !avail.is_finite() || avail <= 0.0 {
-        return CHAT_COLUMN_MAX.max(48.0);
+        return max_w.max(48.0);
     }
     let rect_w = ui.max_rect().width();
     let bounded = if rect_w.is_finite() && rect_w > 1.0 {
@@ -55,7 +82,7 @@ pub fn content_wrap_width(ui: &Ui) -> f32 {
     } else {
         avail
     };
-    bounded.clamp(48.0, CHAT_COLUMN_MAX)
+    bounded.clamp(48.0, max_w)
 }
 
 pub const MAX_IMAGE_ATTACHMENT_BYTES: usize = 6 * 1024 * 1024;

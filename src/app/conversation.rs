@@ -78,7 +78,7 @@ impl OxiApp {
     }
 
     pub(crate) fn render_chat_header(&mut self, ui: &mut Ui, column_center_w: f32) {
-        let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+        let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
         let pad = ((column_center_w - col_w) * 0.5).max(0.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -437,7 +437,7 @@ impl OxiApp {
             .show(ui, |ui| {
                 let viewport_w = ui.max_rect().width();
                 ui.set_max_width(viewport_w);
-                let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+                let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
                 let pad = ((column_center_w - col_w) * 0.5).max(0.0);
 
                 ui.horizontal(|ui| {

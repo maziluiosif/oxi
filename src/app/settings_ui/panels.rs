@@ -494,6 +494,21 @@ impl OxiApp {
                     }
                 }
             });
+
+            ui.add_space(12.0);
+            settings_caption(ui, "Chat width");
+            ui.add(
+                egui::Slider::new(
+                    &mut self.conv.settings.chat_column_max_width,
+                    CHAT_COLUMN_WIDTH_MIN..=CHAT_COLUMN_WIDTH_MAX,
+                )
+                .suffix("px"),
+            );
+            ui.label(
+                RichText::new("Max width of the message column. Raise it to fill a wide screen or the space freed by hiding the sidebar/git panel.")
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
+            );
         });
         ui.add_space(10.0);
         ui.label(

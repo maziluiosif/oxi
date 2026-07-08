@@ -471,7 +471,7 @@ impl OxiApp {
             self.conv.focus_chat_input_next_frame = true;
         }
 
-        let col_w = column_center_w.min(CHAT_COLUMN_MAX);
+        let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
         let pad = ((column_center_w - col_w) * 0.5).max(0.0);
 
         // Header bar: title + metadata on the left, close button on the right,

@@ -74,6 +74,11 @@ pub struct AppSettings {
     /// Persisted width of the right git panel.
     #[serde(default = "default_git_width")]
     pub git_width: f32,
+    /// Max width of the chat message/composer column. Wider than the sidebar/git panel
+    /// split above, this lets the transcript use more of a large screen (or the space
+    /// freed by hiding side panels) instead of staying pinned to a fixed column.
+    #[serde(default = "default_chat_column_max_width")]
+    pub chat_column_max_width: f32,
     /// Active color theme id (see [`crate::theme`]: `dark`, `light`, `midnight`, or
     /// `custom:<name>`). Falls back to the default theme if unknown.
     #[serde(default = "default_theme_id")]
@@ -210,6 +215,10 @@ fn default_git_width() -> f32 {
     360.0
 }
 
+fn default_chat_column_max_width() -> f32 {
+    crate::theme::CHAT_COLUMN_MAX_DEFAULT
+}
+
 /// Clamp bounds for the bottom terminal panel height.
 pub const TERMINAL_H_MIN: f32 = 96.0;
 pub const TERMINAL_H_MAX: f32 = 900.0;
@@ -252,6 +261,7 @@ impl Default for AppSettings {
             terminal_open: false,
             git_open: false,
             git_width: default_git_width(),
+            chat_column_max_width: default_chat_column_max_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
             max_tool_rounds: default_max_tool_rounds(),
@@ -497,6 +507,13 @@ impl AppSettings {
             self.terminal_height = default_terminal_height();
         }
         self.terminal_height = self.terminal_height.clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
+        if !self.chat_column_max_width.is_finite() || self.chat_column_max_width <= 0.0 {
+            self.chat_column_max_width = default_chat_column_max_width();
+        }
+        self.chat_column_max_width = self.chat_column_max_width.clamp(
+            crate::theme::CHAT_COLUMN_WIDTH_MIN,
+            crate::theme::CHAT_COLUMN_WIDTH_MAX,
+        );
         // Every provider kind gets an entry (files written by older versions, or with
         // kinds added since, may miss some), and the `#[serde(skip)]`ped `provider` field
         // is re-stamped from the map key it was deserialized under.

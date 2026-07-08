@@ -88,7 +88,8 @@ fn quiet_combo_icon(
 
 impl OxiApp {
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
-        let pad = ((column_center_w - CHAT_COLUMN_MAX.min(column_center_w)) * 0.5).max(0.0);
+        let chat_column_max = crate::theme::chat_column_max_width(ui.ctx());
+        let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
         let can_send = !self.conv.input.trim().is_empty() || !self.conv.pending_images.is_empty();
 
         // Focus state persists in egui memory across frames, so reading it here (before
@@ -107,7 +108,7 @@ impl OxiApp {
                 ui.add_space(pad);
             }
             ui.vertical(|ui| {
-                let composer_w = CHAT_COLUMN_MAX.min(column_center_w);
+                let composer_w = chat_column_max.min(column_center_w);
                 ui.set_width(composer_w);
                 let composer_card = Frame::new()
                     .fill(c_bg_elevated())
