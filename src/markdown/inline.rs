@@ -241,9 +241,7 @@ pub(super) fn render_inline_until(
                 ));
                 ui.add_space(2.0);
             }
-            Event::Start(Tag::Image {
-                dest_url, title: _, ..
-            }) => {
+            Event::Start(Tag::Image { dest_url, .. }) => {
                 if !job.text.is_empty() {
                     selectable_job(ui, std::mem::take(&mut job));
                     set_job_wrap(&mut job, wrap_w);

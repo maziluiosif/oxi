@@ -111,7 +111,7 @@ impl OxiApp {
                     if settings_text_field_width(ui, &mut value, &hint, 160.0).changed() {
                         let parsed = value.trim().parse::<usize>().ok();
                         self.conv.settings.provider_mut(kind).context_window =
-                            parsed.and_then(|n| if n > 0 { Some(n) } else { None });
+                            parsed.filter(|&n| n > 0);
                     }
                     if crate::ui::chrome::ghost_button(ui, "Auto", false)
                         .on_hover_text("Resolve context window from the model catalog")
