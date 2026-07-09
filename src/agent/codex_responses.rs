@@ -592,8 +592,16 @@ pub async fn run_codex_responses_loop(
             let is_readonly = |name: &str| {
                 matches!(
                     name,
-                    "read" | "grep" | "find" | "ls" | "web_search" | "web_fetch"
-                )
+                    "read"
+                        | "grep"
+                        | "find"
+                        | "ls"
+                        | "codebase_search"
+                        | "git_status"
+                        | "git_diff"
+                        | "web_search"
+                        | "web_fetch"
+                ) || name.starts_with("mcp_")
             };
             struct ToolCallP {
                 id: String,
@@ -653,7 +661,7 @@ pub async fn run_codex_responses_loop(
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
                             is_error: Some(is_err),
-                            full_output_path: None,
+                            full_output_path: result.full_output_path,
                             diff: result.diff,
                         });
                         messages.push(json!({
@@ -675,6 +683,7 @@ pub async fn run_codex_responses_loop(
                             output: reason,
                             is_error: true,
                             diff: None,
+                            full_output_path: None,
                         },
                     };
                     let text = result.output.clone();
@@ -687,7 +696,7 @@ pub async fn run_codex_responses_loop(
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
                         is_error: Some(is_err),
-                        full_output_path: None,
+                        full_output_path: result.full_output_path,
                         diff: result.diff,
                     });
                     messages.push(json!({

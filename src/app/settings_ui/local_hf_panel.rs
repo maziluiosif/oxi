@@ -25,7 +25,30 @@ impl OxiApp {
         );
 
         // ── Runtime ────────────────────────────────────────────────────────
-        ui.add_space(12.0);
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let runtime_ok = !self.conv.local_models.runtime_path.trim().is_empty()
+                || local_models::installed_runtime_path().is_some();
+            let has_model = !self.conv.local_models.downloaded.is_empty();
+            let running = self.conv.local_models.running_model_id.is_some();
+            let steps = [
+                ("1 Runtime", runtime_ok),
+                ("2 Model", has_model),
+                ("3 Running", running),
+            ];
+            for (i, (label, done)) in steps.iter().enumerate() {
+                if i > 0 {
+                    ui.label(RichText::new("→").size(FS_TINY).color(c_text_faint()));
+                }
+                ui.label(
+                    RichText::new(*label)
+                        .size(FS_TINY)
+                        .color(if *done { c_accent() } else { c_text_muted() })
+                        .strong(),
+                );
+            }
+        });
+        ui.add_space(8.0);
         card_frame().show(ui, |ui| {
             settings_card_header(
                 ui,
@@ -114,6 +137,7 @@ impl OxiApp {
                         && let Ok(p) = port.parse::<u16>()
                     {
                         self.conv.local_models.runtime_port = p;
+                        self.conv.settings.local_hf.runtime_port = p;
                     }
                 });
                 ui.add_space(12.0);
@@ -123,7 +147,9 @@ impl OxiApp {
                     if settings_text_field_width(ui, &mut ctx, "8192", 100.0).changed()
                         && let Ok(n) = ctx.parse::<usize>()
                     {
-                        self.conv.local_models.context_size = n.max(512);
+                        let n = n.max(512);
+                        self.conv.local_models.context_size = n;
+                        self.conv.settings.local_hf.context_size = n;
                     }
                 });
                 ui.add_space(12.0);
@@ -134,6 +160,7 @@ impl OxiApp {
                         && let Ok(n) = ngl.parse::<i32>()
                     {
                         self.conv.local_models.gpu_layers = n;
+                        self.conv.settings.local_hf.gpu_layers = n;
                     }
                 });
             });
@@ -880,17 +907,5 @@ impl OxiApp {
                 Some(format!("Stopped {} on port {}", rt.model_id, rt.port));
         }
         self.conv.local_models.running_model_id = None;
-    }
-}
-
-fn fmt_bytes(n: u64) -> String {
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    if n as f64 >= GB {
-        format!("{:.2} GB", n as f64 / GB)
-    } else if n as f64 >= MB {
-        format!("{:.1} MB", n as f64 / MB)
-    } else {
-        format!("{} B", n)
     }
 }

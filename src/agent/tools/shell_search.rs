@@ -123,6 +123,29 @@ pub(crate) fn validate_bash_command(cmd: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Remove credentials and agent-hostile variables from a child shell environment.
+fn sanitize_bash_env(cmd: &mut Command) {
+    const STRIP: &[&str] = &[
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AZURE_CLIENT_SECRET",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "NPM_TOKEN",
+        "HF_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "SSH_AUTH_SOCK",
+    ];
+    for key in STRIP {
+        cmd.env_remove(key);
+    }
+    // Keep the child rooted: do not inherit a custom CDPATH that could redirect relative paths.
+    cmd.env_remove("CDPATH");
+}
+
 pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<String, String> {
     let cmd = args
         .get("command")
@@ -137,14 +160,15 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<Strin
         .clamp(0.1, cap);
     let start = Instant::now();
     let mut child = if cfg!(unix) {
-        Command::new("/bin/sh")
-            .arg("-c")
+        let mut c = Command::new("/bin/sh");
+        c.arg("-c")
             .arg(cmd)
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| e.to_string())?
+            .stderr(std::process::Stdio::piped());
+        // Strip inherited secrets / agent-hostile env from the child shell.
+        sanitize_bash_env(&mut c);
+        c.spawn().map_err(|e| e.to_string())?
     } else {
         {
             let mut c = Command::new("cmd");
@@ -152,6 +176,7 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<Strin
                 .current_dir(cwd)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
+            sanitize_bash_env(&mut c);
             // No console on a Windows GUI process: without CREATE_NO_WINDOW every shell
             // tool call would flash a `cmd` window. Keep the child headless.
             #[cfg(windows)]
@@ -313,6 +338,156 @@ pub(crate) fn tool_find(cwd: &Path, args: &Value) -> Result<String, String> {
         }
     }
     Ok(truncate_out(out))
+}
+
+/// Ranked keyword search over workspace text files for natural-language queries.
+pub(crate) fn tool_codebase_search(cwd: &Path, args: &Value) -> Result<String, String> {
+    let query = args
+        .get("query")
+        .and_then(|x| x.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| err("missing query"))?;
+    let base = args
+        .get("path")
+        .and_then(|x| x.as_str())
+        .map(|p| resolve_under_cwd(cwd, p))
+        .transpose()?
+        .unwrap_or_else(|| cwd.to_path_buf());
+    let limit = args
+        .get("limit")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(12)
+        .clamp(1, 40) as usize;
+
+    let terms: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| t.len() >= 2)
+        .collect();
+    if terms.is_empty() {
+        return Err(err("query has no usable keywords"));
+    }
+
+    let mut hits: Vec<(i32, String)> = Vec::new();
+    for entry in WalkDir::new(&base)
+        .into_iter()
+        .filter_entry(|e| !should_skip_search_entry(e))
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if !is_reasonably_small_text_file(path) {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(path) else {
+            continue;
+        };
+        let lower = contents.to_lowercase();
+        let path_lower = path.to_string_lossy().to_lowercase();
+        let mut score = 0i32;
+        for term in &terms {
+            if path_lower.contains(term) {
+                score += 8;
+            }
+            let count = lower.matches(term.as_str()).count() as i32;
+            score += count.min(20);
+        }
+        if score <= 0 {
+            continue;
+        }
+        let rel = path.strip_prefix(cwd).unwrap_or(path);
+        let mut snippet = String::new();
+        for (i, line) in contents.lines().enumerate() {
+            let ll = line.to_lowercase();
+            if terms.iter().any(|t| ll.contains(t)) {
+                snippet = format!("L{}: {}", i + 1, line.trim());
+                break;
+            }
+        }
+        hits.push((
+            score,
+            if snippet.is_empty() {
+                format!("{score}\t{}", rel.display())
+            } else {
+                format!("{score}\t{}\n  {snippet}", rel.display())
+            },
+        ));
+    }
+    hits.sort_by_key(|b| std::cmp::Reverse(b.0));
+    hits.truncate(limit);
+    if hits.is_empty() {
+        return Ok(format!("No matches for {query:?}"));
+    }
+    let mut out = format!(
+        "codebase_search results for {query:?} (top {}):\n\n",
+        hits.len()
+    );
+    for (_, line) in hits {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    Ok(truncate_out(out))
+}
+
+pub(crate) fn tool_git_status(cwd: &Path, _args: &Value) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["status", "--short", "--branch"])
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("git status failed: {e}"))?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.stderr.is_empty() {
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    if text.trim().is_empty() {
+        text = "(clean working tree)".into();
+    }
+    if !output.status.success() {
+        return Err(truncate_out(text));
+    }
+    Ok(truncate_out(text))
+}
+
+pub(crate) fn tool_git_diff(cwd: &Path, args: &Value) -> Result<String, String> {
+    let staged = args
+        .get("staged")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let path = args.get("path").and_then(|v| v.as_str());
+    let revision = args.get("revision").and_then(|v| v.as_str());
+    let mut cmd = Command::new("git");
+    cmd.arg("diff");
+    if staged {
+        cmd.arg("--cached");
+    }
+    if let Some(rev) = revision {
+        cmd.arg(rev);
+    }
+    if let Some(p) = path {
+        let _ = resolve_under_cwd(cwd, p)?;
+        cmd.args(["--", p]);
+    }
+    let output = cmd
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("git diff failed: {e}"))?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.stderr.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
+    if text.trim().is_empty() {
+        text = "(no diff)".into();
+    }
+    if !output.status.success() {
+        return Err(truncate_out(text));
+    }
+    Ok(truncate_out(text))
 }
 
 pub(crate) fn tool_ls(cwd: &Path, args: &Value) -> Result<String, String> {

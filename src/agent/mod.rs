@@ -8,6 +8,7 @@ pub mod complete;
 pub mod events;
 mod history;
 mod loop_ctx;
+pub mod mcp;
 pub mod models;
 mod net;
 mod openai;

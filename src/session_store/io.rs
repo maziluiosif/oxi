@@ -11,11 +11,22 @@ use super::dedupe::dedupe_trailing_duplicate_messages;
 use super::format::{chat_message_to_json_entries, session_file_stem_or_generated};
 use super::paths::session_file_path;
 
+#[cfg(test)]
 pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
+    let (messages, _wire) = load_session_messages_with_wire(session_file)?;
+    Some(messages)
+}
+
+/// Loaded chat messages plus optional provider wire history `(fingerprint, messages)`.
+type SessionMessagesWithWire = (Vec<ChatMessage>, Option<(u64, Vec<Value>)>);
+
+/// Load chat messages plus any persisted provider wire history.
+pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMessagesWithWire> {
     let file = File::open(session_file).ok()?;
     let reader = BufReader::new(file);
     let mut saw_header = false;
     let mut messages = Vec::new();
+    let mut wire: Option<(u64, Vec<Value>)> = None;
 
     for line in reader.lines().map_while(Result::ok) {
         let trimmed = line.trim();
@@ -32,10 +43,22 @@ pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
             saw_header = true;
             continue;
         }
-        if value.get("type").and_then(Value::as_str) == Some("message")
-            && let Some(message) = value.get("message")
-        {
-            messages.push(message.clone());
+        match value.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                if let Some(message) = value.get("message") {
+                    messages.push(message.clone());
+                }
+            }
+            Some("wire_history") => {
+                let fingerprint = value
+                    .get("fingerprint")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if let Some(Value::Array(arr)) = value.get("messages") {
+                    wire = Some((fingerprint, arr.clone()));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -43,9 +66,10 @@ pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
         return None;
     }
 
-    Some(hydrate::messages_from_get_messages(&json!({
+    let chat = hydrate::messages_from_get_messages(&json!({
         "messages": messages,
-    })))
+    }));
+    Some((chat, wire))
 }
 
 pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(), String> {
@@ -99,6 +123,22 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
             )
             .map_err(|e| e.to_string())?;
         }
+    }
+
+    if let Some(wire) = session.wire_history.as_ref()
+        && !wire.is_empty()
+    {
+        writeln!(
+            file,
+            "{}",
+            serde_json::to_string(&json!({
+                "type": "wire_history",
+                "fingerprint": session.wire_fingerprint,
+                "messages": wire,
+            }))
+            .map_err(|e| e.to_string())?
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     file.sync_all().map_err(|e| e.to_string())?;

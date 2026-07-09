@@ -7,6 +7,19 @@ use eframe::egui::{Color32, FontId, Label, Painter, Pos2, Ui};
 
 use super::palette::{c_accent, c_text_muted};
 
+/// Human-readable byte size (B / MB / GB).
+pub fn fmt_bytes(n: u64) -> String {
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    if n as f64 >= GB {
+        format!("{:.2} GB", n as f64 / GB)
+    } else if n as f64 >= MB {
+        format!("{:.1} MB", n as f64 / MB)
+    } else {
+        format!("{n} B")
+    }
+}
+
 pub fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {
     let mix = t.clamp(0.0, 1.0);
     let lerp = |a: u8, b: u8| -> u8 {

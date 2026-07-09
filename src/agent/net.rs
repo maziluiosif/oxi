@@ -24,6 +24,43 @@ fn is_retryable_status(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504 | 529)
 }
 
+/// Turn an HTTP status + body into a short, actionable error for the chat UI.
+pub(super) fn format_http_error(status: reqwest::StatusCode, body: &str) -> String {
+    let code = status.as_u16();
+    let snippet = body.trim();
+    let snippet = if snippet.len() > 280 {
+        let cut = snippet
+            .char_indices()
+            .take_while(|(i, _)| *i < 280)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(280);
+        format!("{}…", &snippet[..cut])
+    } else {
+        snippet.to_string()
+    };
+    let hint = match code {
+        401 | 403 => " Check your API key / OAuth sign-in in Settings → Providers.",
+        404 => " Check the base URL and model id.",
+        408 => " The request timed out — try again.",
+        429 => " Rate limited — wait a moment and retry.",
+        500 | 502 | 503 | 504 | 529 => " Provider is temporarily unavailable — retry shortly.",
+        _ => {
+            let lower = snippet.to_lowercase();
+            if lower.contains("context") || (lower.contains("maximum") && lower.contains("token")) {
+                " Context may be too large — try /compact or start a new chat."
+            } else {
+                ""
+            }
+        }
+    };
+    if snippet.is_empty() {
+        format!("HTTP {code}.{hint}")
+    } else {
+        format!("HTTP {code}: {snippet}{hint}")
+    }
+}
+
 /// `Retry-After` in seconds if the server sent one (capped at 60s).
 fn retry_after(res: &reqwest::Response) -> Option<Duration> {
     let secs = res
@@ -83,12 +120,12 @@ pub(super) async fn send_with_retry(
                 let status = res.status();
                 let wait = retry_after(&res);
                 let body = res.text().await.unwrap_or_default();
-                (format!("HTTP {}: {}", status, body), wait)
+                (format_http_error(status, &body), wait)
             }
             Ok(res) => {
                 let status = res.status();
                 let body = res.text().await.unwrap_or_default();
-                return Err(format!("HTTP {}: {}", status, body));
+                return Err(format_http_error(status, &body));
             }
             Err(e) => (e.to_string(), None),
         };
@@ -132,6 +169,19 @@ mod tests {
         assert!(backoff_delay(3) >= Duration::from_millis(4000));
         // Attempts beyond the cap keep the max base (16s) instead of overflowing.
         assert!(backoff_delay(30) < Duration::from_secs(17));
+    }
+
+    #[test]
+    fn format_http_error_adds_auth_hint() {
+        let msg = format_http_error(reqwest::StatusCode::UNAUTHORIZED, "invalid_api_key");
+        assert!(msg.contains("401"));
+        assert!(msg.contains("API key"));
+    }
+
+    #[test]
+    fn format_http_error_adds_rate_limit_hint() {
+        let msg = format_http_error(reqwest::StatusCode::TOO_MANY_REQUESTS, "slow down");
+        assert!(msg.contains("Rate limited"));
     }
 
     #[tokio::test]

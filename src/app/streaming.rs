@@ -105,7 +105,10 @@ impl OxiApp {
             run.stream_error = None;
         }
 
-        self.materialize_prompt(key, &text, &user_attachments);
+        // Expand @path mentions into attached file/folder context for the agent.
+        let cwd = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
+        let expanded = super::mentions::expand_at_mentions(&text, &cwd);
+        self.materialize_prompt(key, &expanded, &user_attachments);
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
         if let Err(e) =
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))

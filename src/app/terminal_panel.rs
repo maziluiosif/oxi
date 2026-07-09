@@ -145,7 +145,7 @@ impl OxiApp {
     }
 
     /// Persist settings, surfacing any error on the active session.
-    fn save_settings_quietly(&mut self) {
+    pub(crate) fn save_settings_quietly(&mut self) {
         if let Err(e) = self.conv.settings.save() {
             self.run_state_mut(self.active_session_key()).stream_error =
                 Some(format!("Save settings: {e}"));

@@ -50,7 +50,7 @@ impl OxiApp {
         self.conv.settings_open = true;
     }
 
-    fn settings_dirty(&self) -> bool {
+    pub(crate) fn settings_dirty(&self) -> bool {
         self.conv
             .settings_original
             .as_ref()
@@ -115,22 +115,34 @@ impl OxiApp {
         self.continue_after_settings_exit(action);
     }
 
-    pub(crate) fn cancel_settings_page(&mut self) {
+    pub(crate) fn cancel_settings_page(&mut self, ctx: &egui::Context) {
         if let Some(original) = self.conv.settings_original.take() {
             self.conv.settings = original;
         }
+        self.reapply_appearance(ctx);
         self.conv.settings_exit_prompt = None;
         self.conv.settings_open = false;
         self.conv.focus_chat_input_next_frame = true;
     }
 
-    fn discard_settings_and_continue(&mut self, action: SettingsExitAction) {
+    fn discard_settings_and_continue(&mut self, ctx: &egui::Context, action: SettingsExitAction) {
         if let Some(original) = self.conv.settings_original.take() {
             self.conv.settings = original;
         }
+        self.reapply_appearance(ctx);
         self.conv.settings_exit_prompt = None;
         self.conv.settings_open = false;
         self.continue_after_settings_exit(action);
+    }
+
+    /// Re-apply theme + zoom after Cancel/Discard restores the settings snapshot.
+    fn reapply_appearance(&mut self, ctx: &egui::Context) {
+        crate::theme::apply_theme(ctx, &self.conv.settings.theme_id);
+        ctx.set_zoom_factor(self.conv.settings.ui_density.zoom_factor());
+        // Keep Local HF UI fields in sync with restored settings.
+        self.conv.local_models.runtime_port = self.conv.settings.local_hf.runtime_port;
+        self.conv.local_models.context_size = self.conv.settings.local_hf.context_size;
+        self.conv.local_models.gpu_layers = self.conv.settings.local_hf.gpu_layers;
     }
 
     pub(crate) fn render_settings_page(&mut self, ui: &mut Ui) {
@@ -145,7 +157,11 @@ impl OxiApp {
             ui.set_min_height(full_h);
             ui.spacing_mut().item_spacing.x = 0.0;
 
-            let w = self.conv.sidebar_width.clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
+            // Independent of the chat sidebar width so resizing chat doesn't affect Settings.
+            let w = self
+                .conv
+                .settings_sidebar_width
+                .clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
             ui.allocate_ui_with_layout(
                 egui::vec2(w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
@@ -263,7 +279,7 @@ impl OxiApp {
                                 self.save_settings_and_continue(action);
                             }
                             if ghost_button(ui, "Discard", true).clicked() {
-                                self.discard_settings_and_continue(action);
+                                self.discard_settings_and_continue(ctx, action);
                             }
                             if ghost_button(ui, "Stay", false).clicked() {
                                 self.conv.settings_exit_prompt = None;
@@ -327,7 +343,7 @@ impl OxiApp {
                             .on_hover_text("Discard unsaved changes and return to chat")
                             .clicked()
                         {
-                            self.cancel_settings_page();
+                            self.cancel_settings_page(ui.ctx());
                         }
                         if dirty {
                             ui.label(

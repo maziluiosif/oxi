@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::agent::AgentEvent;
 use crate::oauth::OAuthUiMsg;
+use crate::session_store;
 
 use super::{OxiApp, PendingApproval, SessionKey};
 
@@ -253,7 +254,16 @@ impl OxiApp {
                 }
             }
             AgentEvent::WireHistory(history) => {
-                self.run_state_mut(key).wire_history = Some(history);
+                self.run_state_mut(key).wire_history = Some(history.clone());
+                let fingerprint = self.run_state(key).map(|r| r.wire_fingerprint).unwrap_or(0);
+                {
+                    let sess = self.session_mut_by_key(key);
+                    sess.wire_history = Some(history);
+                    sess.wire_fingerprint = fingerprint;
+                }
+                let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
+                let _ =
+                    session_store::save_session_messages(&root_path, self.session_mut_by_key(key));
             }
             AgentEvent::ProviderDone => {}
             AgentEvent::AgentEnd => {

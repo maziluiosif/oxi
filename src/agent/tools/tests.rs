@@ -25,6 +25,7 @@ fn all_enabled() -> ToolEnv {
         web_search_url: "https://search.invalid".to_string(),
         web_search_backend: WebSearchBackend::default(),
         bash_timeout_cap_secs: 300,
+        mcp: None,
     }
 }
 

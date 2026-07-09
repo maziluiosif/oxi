@@ -235,15 +235,3 @@ impl OxiApp {
         }
     }
 }
-
-fn fmt_bytes(n: u64) -> String {
-    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
-    const MB: f64 = 1024.0 * 1024.0;
-    if n as f64 >= GB {
-        format!("{:.2} GB", n as f64 / GB)
-    } else if n as f64 >= MB {
-        format!("{:.1} MB", n as f64 / MB)
-    } else {
-        format!("{n} B")
-    }
-}

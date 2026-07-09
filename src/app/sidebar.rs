@@ -199,8 +199,23 @@ impl OxiApp {
                 let Some(session) = self.conv.workspaces[wi].sessions.get(si) else {
                     return;
                 };
-                if !q.is_empty() && !session.title.to_lowercase().contains(&q) {
-                    continue;
+                if !q.is_empty() {
+                    let title_hit = session.title.to_lowercase().contains(&q);
+                    let msg_hit = session.messages.iter().any(|m| {
+                        m.text.to_lowercase().contains(&q)
+                            || m.blocks.iter().any(|b| match b {
+                                crate::model::AssistantBlock::Answer(t)
+                                | crate::model::AssistantBlock::Thinking(t) => {
+                                    t.to_lowercase().contains(&q)
+                                }
+                                crate::model::AssistantBlock::Tool { output, .. } => {
+                                    output.to_lowercase().contains(&q)
+                                }
+                            })
+                    });
+                    if !title_hit && !msg_hit {
+                        continue;
+                    }
                 }
                 visible_sessions += 1;
                 let row_title = sidebar_session_title_display(&session.title);
@@ -211,6 +226,7 @@ impl OxiApp {
                         ui.push_id((wi, si), |ui| {
                             let selected = wi == self.conv.active_workspace && si == active_si;
                             let running = self.session_row_is_running(wi, si);
+                            let has_error = !running && self.session_row_has_error(wi, si);
                             let title = row_title.clone();
                             const ROW_INNER_H: f32 = 22.0;
                             const ROW_VMARGIN: f32 = 4.0;
@@ -231,72 +247,104 @@ impl OxiApp {
                                 Color32::TRANSPARENT
                             };
                             ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
-                            if response.clicked() {
-                                self.select_session_in_workspace(wi, si);
-                            }
-                            response.context_menu(|ui| {
-                                if wi == self.conv.active_workspace
-                                    && !running
-                                    && ui.button("Delete chat").clicked()
-                                {
-                                    self.delete_session(si);
+                            if self.conv.renaming_session == Some((wi, si)) {
+                                let edit = egui::TextEdit::singleline(&mut self.conv.rename_draft)
+                                    .font(egui::TextStyle::Small)
+                                    .desired_width(rect.width() - 8.0);
+                                let resp = ui.put(rect.shrink2(egui::vec2(4.0, 2.0)), edit);
+                                resp.request_focus();
+                                let enter = resp.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                if enter {
+                                    let draft = self.conv.rename_draft.clone();
+                                    self.rename_session(si, draft);
+                                    self.conv.renaming_session = None;
                                     sidebar_changed = true;
+                                } else if escape || (resp.lost_focus() && !enter) {
+                                    self.conv.renaming_session = None;
                                 }
-                            });
-                            // Hover-only delete button, mirroring the context-menu action.
-                            // `rect_contains_pointer`, not `response.hovered()`: the
-                            // trash button interacted below overlaps this rect and
-                            // would otherwise steal hover from the row response,
-                            // flickering show/hide every other frame.
-                            let can_delete = wi == self.conv.active_workspace && !running;
-                            let show_trash = can_delete && ui.rect_contains_pointer(rect);
-                            self.render_session_row_inner(
-                                ui, rect, wi, si, running, selected, title, show_trash,
-                            );
+                            } else {
+                                if response.clicked() {
+                                    self.select_session_in_workspace(wi, si);
+                                }
+                                response.context_menu(|ui| {
+                                    if wi == self.conv.active_workspace && !running {
+                                        if ui.button("Rename chat").clicked() {
+                                            self.conv.renaming_session = Some((wi, si));
+                                            self.conv.rename_draft =
+                                                self.conv.workspaces[wi].sessions[si].title.clone();
+                                        }
+                                        if ui.button("Export as Markdown…").clicked() {
+                                            self.select_session_in_workspace(wi, si);
+                                            self.export_active_session_markdown();
+                                        }
+                                        if ui.button("Delete chat").clicked() {
+                                            self.delete_session(si);
+                                            sidebar_changed = true;
+                                        }
+                                    }
+                                });
+                                // Hover-only delete button, mirroring the context-menu action.
+                                // `rect_contains_pointer`, not `response.hovered()`: the
+                                // trash button interacted below overlaps this rect and
+                                // would otherwise steal hover from the row response,
+                                // flickering show/hide every other frame.
+                                let can_delete = wi == self.conv.active_workspace && !running;
+                                let show_trash = can_delete && ui.rect_contains_pointer(rect);
+                                self.render_session_row_inner(
+                                    ui, rect, wi, si, running, has_error, selected, title,
+                                    show_trash,
+                                );
 
-                            if show_trash {
-                                // Flush against the same right edge the time label
-                                // sits at, so it swaps in instead of crowding it.
-                                const TIME_W: f32 = 34.0;
-                                let trash_rect = egui::Rect::from_min_max(
-                                    egui::pos2(rect.right() - 3.0 - TIME_W, rect.top() + 2.0),
-                                    egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
-                                );
-                                // Backing fill keeps the icon legible over long titles.
-                                ui.painter().rect_filled(
-                                    trash_rect,
-                                    CornerRadius::same(7),
-                                    if selected {
-                                        c_row_active()
-                                    } else {
-                                        c_row_hover()
-                                    },
-                                );
-                                // Painted + interacted in place, never allocated: a
-                                // hover-only widget that allocates nudges the layout
-                                // every time it appears.
-                                let trash_resp = ui
-                                    .interact(trash_rect, ui.id().with("row_trash"), Sense::click())
-                                    .on_hover_text("Delete chat");
-                                ui.painter().text(
-                                    trash_rect.center(),
-                                    egui::Align2::CENTER_CENTER,
-                                    ICON_TRASH,
-                                    FontId::new(FS_TINY, icon_font()),
+                                if show_trash {
+                                    // Flush against the same right edge the time label
+                                    // sits at, so it swaps in instead of crowding it.
+                                    const TIME_W: f32 = 34.0;
+                                    let trash_rect = egui::Rect::from_min_max(
+                                        egui::pos2(rect.right() - 3.0 - TIME_W, rect.top() + 2.0),
+                                        egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
+                                    );
+                                    // Backing fill keeps the icon legible over long titles.
+                                    ui.painter().rect_filled(
+                                        trash_rect,
+                                        CornerRadius::same(7),
+                                        if selected {
+                                            c_row_active()
+                                        } else {
+                                            c_row_hover()
+                                        },
+                                    );
+                                    // Painted + interacted in place, never allocated: a
+                                    // hover-only widget that allocates nudges the layout
+                                    // every time it appears.
+                                    let trash_resp = ui
+                                        .interact(
+                                            trash_rect,
+                                            ui.id().with("row_trash"),
+                                            Sense::click(),
+                                        )
+                                        .on_hover_text("Delete chat");
+                                    ui.painter().text(
+                                        trash_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        ICON_TRASH,
+                                        FontId::new(FS_TINY, icon_font()),
+                                        if trash_resp.hovered() {
+                                            c_accent()
+                                        } else {
+                                            c_text_faint()
+                                        },
+                                    );
                                     if trash_resp.hovered() {
-                                        c_accent()
-                                    } else {
-                                        c_text_faint()
-                                    },
-                                );
-                                if trash_resp.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    if trash_resp.clicked() {
+                                        self.delete_session(si);
+                                        sidebar_changed = true;
+                                    }
                                 }
-                                if trash_resp.clicked() {
-                                    self.delete_session(si);
-                                    sidebar_changed = true;
-                                }
-                            }
+                            } // end else not renaming
                         });
                     });
                 });
@@ -327,6 +375,7 @@ impl OxiApp {
         wi: usize,
         si: usize,
         running: bool,
+        has_error: bool,
         selected: bool,
         title: String,
         hide_time: bool,
@@ -363,7 +412,13 @@ impl OxiApp {
                 + spin_reserve
                 + sx * if running { 4.0 } else { 3.0 };
             let title_w = (ui.available_width() - fixed).max(24.0);
-            let bullet_col = if selected { c_accent() } else { c_text_muted() };
+            let bullet_col = if has_error {
+                c_danger()
+            } else if selected {
+                c_accent()
+            } else {
+                c_text_muted()
+            };
 
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = sx;
@@ -372,9 +427,14 @@ impl OxiApp {
                         egui::vec2(lead_w, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
-                            // Dot only on the active chat — a bullet on every row is noise.
-                            if selected {
-                                ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                            if selected || has_error {
+                                let resp =
+                                    ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                                if has_error {
+                                    resp.on_hover_text(
+                                        "This chat has an error — open it to see details",
+                                    );
+                                }
                             }
                         },
                     );

@@ -354,6 +354,14 @@ impl OxiApp {
         if mic.clicked() {
             self.toggle_dictation();
         }
+        if let Some(err) = self.conv.voice_ui.error.as_ref() {
+            ui.label(
+                RichText::new(format!("Dictation: {err}"))
+                    .size(FS_TINY)
+                    .color(c_danger()),
+            )
+            .on_hover_text(err);
+        }
     }
 
     /// Path of the downloaded model selected in Settings → Voice, if any.
@@ -552,6 +560,7 @@ impl OxiApp {
                         let selected = active_provider == *kind;
                         if ui.selectable_label(selected, kind.label()).clicked() && !selected {
                             self.conv.settings.active_provider = *kind;
+                            self.save_settings_quietly();
                             // Refresh the model list for the newly active provider so the
                             // model dropdown offers the full catalog; the config keeps
                             // whatever model id it last had selected in the meantime.
@@ -600,6 +609,7 @@ impl OxiApp {
                     for m in &items {
                         if ui.selectable_label(m == &current, m.clone()).clicked() {
                             self.conv.settings.provider_mut(kind).model_id = m.clone();
+                            self.save_settings_quietly();
                         }
                     }
                 });

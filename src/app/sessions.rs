@@ -6,6 +6,7 @@ use std::process::Command;
 use eframe::egui;
 
 use super::state::Workspace;
+use crate::session_store;
 use crate::theme::{MAX_IMAGE_ATTACHMENT_BYTES, MAX_PENDING_IMAGES};
 
 use super::OxiApp;
@@ -248,6 +249,81 @@ impl OxiApp {
                 .unwrap_or("image/png");
             self.conv.pending_images.push((mime.to_string(), bytes));
             self.run_state_mut(self.active_session_key()).stream_error = None;
+        }
+    }
+
+    pub(crate) fn rename_session(&mut self, idx: usize, new_title: String) {
+        let title = new_title.trim().to_string();
+        if title.is_empty() || idx >= self.active_workspace().sessions.len() {
+            return;
+        }
+        let key = self.session_key(self.conv.active_workspace, idx);
+        if self
+            .run_state(key)
+            .is_some_and(|state| state.waiting_response)
+        {
+            return;
+        }
+        self.active_workspace_mut().sessions[idx].title = title;
+        let root_path = self.active_workspace().root_path.clone();
+        if let Err(e) = session_store::save_session_messages(
+            &root_path,
+            &mut self.active_workspace_mut().sessions[idx],
+        ) {
+            self.run_state_mut(self.active_session_key()).stream_error =
+                Some(format!("Rename chat: {e}"));
+        }
+    }
+
+    /// Export the active session as Markdown to a user-chosen path.
+    pub(crate) fn export_active_session_markdown(&mut self) {
+        let session = self.active_session();
+        let title = session.title.clone();
+        let mut md = format!("# {}\n\n", title);
+        for msg in &session.messages {
+            match msg.role {
+                crate::model::MsgRole::User => {
+                    md.push_str("## User\n\n");
+                    if !msg.text.is_empty() {
+                        md.push_str(&msg.text);
+                        md.push_str("\n\n");
+                    }
+                }
+                crate::model::MsgRole::Assistant => {
+                    md.push_str("## Assistant\n\n");
+                    for block in &msg.blocks {
+                        match block {
+                            crate::model::AssistantBlock::Thinking(t) if !t.trim().is_empty() => {
+                                md.push_str("<details><summary>Thinking</summary>\n\n");
+                                md.push_str(t);
+                                md.push_str("\n\n</details>\n\n");
+                            }
+                            crate::model::AssistantBlock::Answer(t) if !t.trim().is_empty() => {
+                                md.push_str(t);
+                                md.push_str("\n\n");
+                            }
+                            crate::model::AssistantBlock::Tool { name, output, .. } => {
+                                md.push_str(&format!("### Tool: {name}\n\n```\n{output}\n```\n\n"));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        let suggested = format!("{}.md", title.replace(['/', '\\', ':'], "-"));
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&suggested)
+            .add_filter("Markdown", &["md"])
+            .save_file()
+        {
+            match std::fs::write(&path, md) {
+                Ok(()) => {}
+                Err(e) => {
+                    self.run_state_mut(self.active_session_key()).stream_error =
+                        Some(format!("Export failed: {e}"));
+                }
+            }
         }
     }
 

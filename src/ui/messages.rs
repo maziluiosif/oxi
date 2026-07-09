@@ -343,7 +343,17 @@ fn render_activity_range(
                 if let AssistantBlock::Answer(text) = &blocks[gi]
                     && !text.trim().is_empty()
                 {
-                    markdown::render_markdown(ui, text);
+                    let response = ui
+                        .vertical(|ui| {
+                            markdown::render_markdown(ui, text);
+                        })
+                        .response;
+                    let copy_text = text.clone();
+                    response.context_menu(|ui| {
+                        if ui.button("Copy message").clicked() {
+                            ui.ctx().copy_text(copy_text);
+                        }
+                    });
                 }
             }
             AssistantBlockGroup::ExploringTools {
@@ -549,7 +559,19 @@ pub fn render_assistant_blocks(
         if let AssistantBlock::Answer(text) = block
             && (!text.trim().is_empty() || streaming)
         {
-            markdown::render_markdown(ui, text);
+            let response = ui
+                .vertical(|ui| {
+                    markdown::render_markdown(ui, text);
+                })
+                .response;
+            if !text.trim().is_empty() {
+                let copy_text = text.clone();
+                response.context_menu(|ui| {
+                    if ui.button("Copy message").clicked() {
+                        ui.ctx().copy_text(copy_text);
+                    }
+                });
+            }
         }
     }
 }

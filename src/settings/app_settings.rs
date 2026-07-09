@@ -12,7 +12,7 @@ use super::provider::{
     ComputeLocation, LlmProviderKind, ProviderConfig, ProviderProfile, UiDensity, WebSearchBackend,
 };
 
-pub const ALL_TOOL_NAMES: [&str; 9] = [
+pub const ALL_TOOL_NAMES: [&str; 12] = [
     "read",
     "write",
     "edit",
@@ -20,6 +20,9 @@ pub const ALL_TOOL_NAMES: [&str; 9] = [
     "grep",
     "find",
     "ls",
+    "codebase_search",
+    "git_status",
+    "git_diff",
     "web_search",
     "web_fetch",
 ];
@@ -39,6 +42,9 @@ pub struct AppSettings {
     /// Include root-level `AGENTS.md` project instructions in the agent system prompt when present.
     #[serde(default = "default_include_agents_md")]
     pub include_agents_md: bool,
+    /// Include `.oxi/rules/` and `.cursor/rules/` markdown files in the agent system prompt.
+    #[serde(default = "default_include_oxi_rules")]
+    pub include_oxi_rules: bool,
     /// One flag per entry in [`ALL_TOOL_NAMES`]. Stored as a `Vec` so older settings files
     /// with fewer tools still deserialize; [`AppSettings::normalize`] resizes it to the
     /// current tool count, enabling any newly-added tools by default.
@@ -124,6 +130,73 @@ pub struct AppSettings {
     /// Local voice dictation (see [`crate::voice_engine`]).
     #[serde(default)]
     pub dictation: DictationSettings,
+    /// Local HF (`llama-server`) runtime tuning: port, context size, GPU layers.
+    #[serde(default)]
+    pub local_hf: LocalHfSettings,
+    /// MCP servers to spawn (stdio). Tools appear as `mcp_<server>_<tool>`.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// One MCP server entry (stdio transport).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Short id used in tool names (e.g. `filesystem`).
+    pub name: String,
+    /// Executable to spawn (e.g. `npx`).
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_mcp_enabled")]
+    pub enabled: bool,
+}
+
+fn default_mcp_enabled() -> bool {
+    true
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            command: String::new(),
+            args: Vec::new(),
+            enabled: true,
+        }
+    }
+}
+
+/// Persisted Local HF runtime parameters (port / context / GPU offload).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocalHfSettings {
+    #[serde(default = "default_local_hf_port")]
+    pub runtime_port: u16,
+    #[serde(default = "default_local_hf_context")]
+    pub context_size: usize,
+    #[serde(default = "default_local_hf_gpu_layers")]
+    pub gpu_layers: i32,
+}
+
+fn default_local_hf_port() -> u16 {
+    18080
+}
+
+fn default_local_hf_context() -> usize {
+    32768
+}
+
+fn default_local_hf_gpu_layers() -> i32 {
+    999
+}
+
+impl Default for LocalHfSettings {
+    fn default() -> Self {
+        Self {
+            runtime_port: default_local_hf_port(),
+            context_size: default_local_hf_context(),
+            gpu_layers: default_local_hf_gpu_layers(),
+        }
+    }
 }
 
 /// Settings for local speech-to-text dictation. The whisper model itself is loaded lazily
@@ -232,6 +305,10 @@ fn default_include_agents_md() -> bool {
     true
 }
 
+fn default_include_oxi_rules() -> bool {
+    true
+}
+
 /// Clamp bounds for the bottom terminal panel height.
 pub const TERMINAL_H_MIN: f32 = 96.0;
 pub const TERMINAL_H_MAX: f32 = 900.0;
@@ -264,6 +341,7 @@ impl Default for AppSettings {
             providers,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
             include_agents_md: default_include_agents_md(),
+            include_oxi_rules: default_include_oxi_rules(),
             tools_enabled: default_tools_enabled(),
             web_search_backend: WebSearchBackend::default(),
             searxng_url: default_searxng_url(),
@@ -288,6 +366,8 @@ impl Default for AppSettings {
             last_active_workspace_root_path: None,
             last_active_session_file: None,
             dictation: DictationSettings::default(),
+            local_hf: LocalHfSettings::default(),
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -564,6 +644,12 @@ impl AppSettings {
             self.bash_timeout_cap_secs = default_bash_timeout_cap_secs();
         }
         self.bash_timeout_cap_secs = self.bash_timeout_cap_secs.clamp(5, 3600);
+        if self.local_hf.runtime_port == 0 {
+            self.local_hf.runtime_port = default_local_hf_port();
+        }
+        if self.local_hf.context_size == 0 {
+            self.local_hf.context_size = default_local_hf_context();
+        }
         // Workspaces: drop entries whose folder vanished, dedupe by path.
         let mut seen = std::collections::HashSet::new();
         self.workspaces.retain(|w| {
@@ -943,8 +1029,11 @@ mod tests {
 
     #[test]
     fn all_tool_names_has_expected_tools() {
-        assert_eq!(ALL_TOOL_NAMES.len(), 9);
+        assert_eq!(ALL_TOOL_NAMES.len(), 12);
         assert!(ALL_TOOL_NAMES.contains(&"bash"));
+        assert!(ALL_TOOL_NAMES.contains(&"codebase_search"));
+        assert!(ALL_TOOL_NAMES.contains(&"git_status"));
+        assert!(ALL_TOOL_NAMES.contains(&"git_diff"));
         assert!(ALL_TOOL_NAMES.contains(&"web_search"));
         assert!(ALL_TOOL_NAMES.contains(&"web_fetch"));
     }

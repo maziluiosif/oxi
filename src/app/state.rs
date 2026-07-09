@@ -220,6 +220,9 @@ pub struct ConversationState {
     pub active_workspace: usize,
     pub input: String,
     pub sidebar_search: String,
+    /// When set, the sidebar shows an inline rename field for `(workspace_idx, session_idx)`.
+    pub renaming_session: Option<(usize, usize)>,
+    pub rename_draft: String,
     pub chat_scroll_id: egui::Id,
     pub pending_images: Vec<(String, Vec<u8>)>,
     pub scroll_to_bottom_once: bool,
@@ -235,6 +238,8 @@ pub struct ConversationState {
     pub focus_terminal_next_frame: bool,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
+    /// Settings page left-nav width (independent of the chat sidebar).
+    pub settings_sidebar_width: f32,
     /// Bottom terminal panel visibility and height (persisted in settings).
     pub terminal_open: bool,
     pub terminal_height: f32,

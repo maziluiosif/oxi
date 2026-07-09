@@ -236,8 +236,16 @@ async fn run_chat_loop_at(
             let is_readonly = |name: &str| {
                 matches!(
                     name,
-                    "read" | "grep" | "find" | "ls" | "web_search" | "web_fetch"
-                )
+                    "read"
+                        | "grep"
+                        | "find"
+                        | "ls"
+                        | "codebase_search"
+                        | "git_status"
+                        | "git_diff"
+                        | "web_search"
+                        | "web_fetch"
+                ) || name.starts_with("mcp_")
             };
 
             // Split into consecutive groups: each group is either all-readonly (parallel) or a single mutating call.
@@ -303,7 +311,7 @@ async fn run_chat_loop_at(
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
                             is_error: Some(is_err),
-                            full_output_path: None,
+                            full_output_path: result.full_output_path,
                             diff: result.diff,
                         });
                         messages.push(json!({
@@ -326,6 +334,7 @@ async fn run_chat_loop_at(
                             output: reason,
                             is_error: true,
                             diff: None,
+                            full_output_path: None,
                         },
                     };
                     let text = result.output.clone();
@@ -338,7 +347,7 @@ async fn run_chat_loop_at(
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
                         is_error: Some(is_err),
-                        full_output_path: None,
+                        full_output_path: result.full_output_path,
                         diff: result.diff,
                     });
                     messages.push(json!({
@@ -657,6 +666,7 @@ mod integration_tests {
             web_search_url: String::new(),
             web_search_backend: WebSearchBackend::default(),
             bash_timeout_cap_secs: 300,
+            mcp: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -743,6 +753,7 @@ mod integration_tests {
             web_search_url: String::new(),
             web_search_backend: WebSearchBackend::default(),
             bash_timeout_cap_secs: 300,
+            mcp: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({

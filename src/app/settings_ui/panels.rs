@@ -39,9 +39,10 @@ const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
 
 /// Tool chips grouped by intent so the Agent panel is scannable.
 const TOOL_GROUPS: &[(&str, &[&str])] = &[
-    ("Read", &["read", "grep", "find", "ls"]),
+    ("Read", &["read", "grep", "find", "ls", "codebase_search"]),
     ("Write", &["write", "edit"]),
     ("Shell", &["bash"]),
+    ("Git", &["git_status", "git_diff"]),
     ("Web", &["web_search", "web_fetch"]),
 ];
 
@@ -198,6 +199,43 @@ impl OxiApp {
                         }
                     }
                 });
+            }
+        });
+
+        // ── MCP servers ────────────────────────────────────────────────────
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                "MCP servers",
+                Some("Stdio MCP servers. Tools appear as mcp_<name>_<tool> in the agent."),
+            );
+            let mut remove_idx: Option<usize> = None;
+            let n = self.conv.settings.mcp_servers.len();
+            for i in 0..n {
+                let server = &mut self.conv.settings.mcp_servers[i];
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut server.enabled, "");
+                    settings_text_field_width(ui, &mut server.name, "name", 100.0);
+                    settings_text_field_width(ui, &mut server.command, "command", 120.0);
+                    let mut args = server.args.join(" ");
+                    if settings_text_field_width(ui, &mut args, "args…", 180.0).changed() {
+                        server.args = args.split_whitespace().map(str::to_string).collect();
+                    }
+                    if ghost_button(ui, "Remove", true).clicked() {
+                        remove_idx = Some(i);
+                    }
+                });
+                ui.add_space(4.0);
+            }
+            if let Some(i) = remove_idx {
+                self.conv.settings.mcp_servers.remove(i);
+            }
+            if ghost_button(ui, "Add MCP server", false).clicked() {
+                self.conv
+                    .settings
+                    .mcp_servers
+                    .push(crate::settings::McpServerConfig::default());
             }
         });
 
@@ -377,6 +415,21 @@ impl OxiApp {
                 .changed()
             {
                 self.conv.settings.include_agents_md = include_agents_md;
+            }
+            let mut include_oxi_rules = self.conv.settings.include_oxi_rules;
+            if ui
+                .checkbox(
+                    &mut include_oxi_rules,
+                    RichText::new("Include .oxi/rules and .cursor/rules")
+                        .size(FS_SMALL)
+                        .color(c_text()),
+                )
+                .on_hover_text(
+                    "When on, oxi appends markdown rules from .oxi/rules/ and .cursor/rules/ to the agent system prompt.",
+                )
+                .changed()
+            {
+                self.conv.settings.include_oxi_rules = include_oxi_rules;
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {

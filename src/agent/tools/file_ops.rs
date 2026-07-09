@@ -33,6 +33,31 @@ pub(crate) fn truncate_out(s: String) -> String {
     }
 }
 
+/// If `s` exceeds the tool-output cap, write the full text to a temp file and return
+/// `(truncated, Some(path))`. Otherwise return `(s, None)`.
+pub(crate) fn maybe_spill_truncated(s: String) -> (String, Option<String>) {
+    if s.len() <= MAX_TOOL_OUTPUT_CHARS {
+        return (s, None);
+    }
+    let path = spill_full_output(&s);
+    (truncate_out(s), path)
+}
+
+fn spill_full_output(s: &str) -> Option<String> {
+    let dir = std::env::temp_dir().join("oxi-tool-output");
+    let _ = fs::create_dir_all(&dir);
+    let name = format!(
+        "tool-{}.txt",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let path = dir.join(name);
+    fs::write(&path, s).ok()?;
+    Some(path.to_string_lossy().into_owned())
+}
+
 /// Produce a minimal-ish unified diff between `before` and `after` text.
 /// Context lines: 3 (standard). Output is capped at 8 000 chars so it stays
 /// lightweight in the UI. Small files use an LCS diff; large files use a
@@ -261,6 +286,7 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
                 output: err("missing path"),
                 is_error: true,
                 diff: None,
+                full_output_path: None,
             };
         }
     };
@@ -271,6 +297,7 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
                 output: err("missing content"),
                 is_error: true,
                 diff: None,
+                full_output_path: None,
             };
         }
     };
@@ -281,6 +308,7 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
                 output: e,
                 is_error: true,
                 diff: None,
+                full_output_path: None,
             };
         }
     };
@@ -293,6 +321,7 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
             output: e.to_string(),
             is_error: true,
             diff: None,
+            full_output_path: None,
         };
     }
     if let Err(e) = fs::write(&abs, content.as_bytes()) {
@@ -300,6 +329,7 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
             output: e.to_string(),
             is_error: true,
             diff: None,
+            full_output_path: None,
         };
     }
     let diff = make_unified_diff(path, &before, content);
@@ -307,6 +337,7 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
         output: format!("Wrote {} bytes to {}", content.len(), abs.display()),
         is_error: false,
         diff: if diff.is_empty() { None } else { Some(diff) },
+        full_output_path: None,
     }
 }
 
@@ -318,6 +349,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
                 output: err("missing path"),
                 is_error: true,
                 diff: None,
+                full_output_path: None,
             };
         }
     };
@@ -328,6 +360,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
                 output: e,
                 is_error: true,
                 diff: None,
+                full_output_path: None,
             };
         }
     };
@@ -338,6 +371,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
                 output: e.to_string(),
                 is_error: true,
                 diff: None,
+                full_output_path: None,
             };
         }
     };
@@ -373,6 +407,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
             output: err("no edits"),
             is_error: true,
             diff: None,
+            full_output_path: None,
         };
     }
     // An empty oldText matches between every char; `str::replace("")` would interleave the
@@ -382,6 +417,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
             output: err("oldText must not be empty"),
             is_error: true,
             diff: None,
+            full_output_path: None,
         };
     }
     for (old, _, replace_all) in &edits {
@@ -392,6 +428,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
                     output: err("oldText not found in file"),
                     is_error: true,
                     diff: None,
+                    full_output_path: None,
                 };
             }
         } else if count != 1 {
@@ -402,6 +439,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
                 )),
                 is_error: true,
                 diff: None,
+                full_output_path: None,
             };
         }
     }
@@ -420,6 +458,7 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
             output: e.to_string(),
             is_error: true,
             diff: None,
+            full_output_path: None,
         };
     }
     let diff = make_unified_diff(path, &before, &content);
@@ -432,5 +471,6 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
         ),
         is_error: false,
         diff: if diff.is_empty() { None } else { Some(diff) },
+        full_output_path: None,
     }
 }

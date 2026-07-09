@@ -16,10 +16,16 @@ pub fn build_system_prompt_for_workspace(settings: &AppSettings, workspace_root:
     } else {
         None
     };
+    let oxi_rules = if settings.include_oxi_rules {
+        read_oxi_rules(workspace_root)
+    } else {
+        None
+    };
     build_system_prompt_with_project_instructions(
         settings,
         workspace_root.to_string_lossy().as_ref(),
         agents_md.as_deref(),
+        oxi_rules.as_deref(),
     )
 }
 
@@ -27,6 +33,7 @@ fn build_system_prompt_with_project_instructions(
     settings: &AppSettings,
     cwd: &str,
     agents_md: Option<&str>,
+    oxi_rules: Option<&str>,
 ) -> String {
     let date = Utc::now().format("%Y-%m-%d");
     let cwd_norm = cwd.replace('\\', "/");
@@ -50,6 +57,10 @@ fn build_system_prompt_with_project_instructions(
         body.push_str("\n\nProject instructions from AGENTS.md:\n");
         body.push_str(contents);
     }
+    if let Some(contents) = oxi_rules.map(str::trim).filter(|s| !s.is_empty()) {
+        body.push_str("\n\nProject rules from .oxi/rules (and .cursor/rules):\n");
+        body.push_str(contents);
+    }
     format!("{body}\n\nCurrent date: {date}\nCurrent working directory: {cwd_norm}")
 }
 
@@ -60,6 +71,53 @@ fn read_agents_md(workspace_root: &Path) -> Option<String> {
         return None;
     }
     std::fs::read_to_string(path).ok()
+}
+
+/// Load markdown rules from `.oxi/rules/` and, if present, `.cursor/rules/`.
+/// Files are concatenated in sorted order, capped at [`AGENTS_MD_MAX_BYTES`] total.
+fn read_oxi_rules(workspace_root: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut total = 0usize;
+    for dir_name in [".oxi/rules", ".cursor/rules"] {
+        let dir = workspace_root.join(dir_name);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut files: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                        e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("mdc")
+                    })
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("rule.md");
+            let chunk = format!("### {dir_name}/{name}\n{}", text.trim());
+            if total + chunk.len() > AGENTS_MD_MAX_BYTES {
+                break;
+            }
+            total += chunk.len();
+            parts.push(chunk);
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
 }
 
 #[cfg(test)]

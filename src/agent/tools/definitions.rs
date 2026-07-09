@@ -129,6 +129,48 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                     }
                 }
             }),
+            "codebase_search" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "codebase_search",
+                    "description": "Search the workspace for code related to a natural-language query. Ranks file paths and matching lines by keyword relevance. Prefer this for 'where is X implemented?' questions; use grep for exact regex.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string", "description": "Natural-language or keyword query" },
+                            "path": { "type": "string", "description": "Optional subdirectory to search under" },
+                            "limit": { "type": "integer", "description": "Max results (1-40, default 12)" }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            }),
+            "git_status" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "git_status",
+                    "description": "Show git status --short for the workspace (staged/unstaged/untracked).",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
+            }),
+            "git_diff" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "git_diff",
+                    "description": "Show a git diff. Defaults to unstaged changes; set staged=true for the index, or pass a commit/ref as revision.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "staged": { "type": "boolean", "description": "If true, show --cached (staged) diff" },
+                            "path": { "type": "string", "description": "Optional path to limit the diff" },
+                            "revision": { "type": "string", "description": "Optional commit/ref to diff against (e.g. HEAD~1)" }
+                        }
+                    }
+                }
+            }),
             "web_search" => serde_json::json!({
                 "type": "function",
                 "function": {

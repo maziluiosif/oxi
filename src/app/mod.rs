@@ -16,6 +16,7 @@ mod conversation;
 mod eframe_app;
 mod git_panel;
 mod input_history;
+mod mentions;
 mod sessions;
 mod settings_ui;
 mod sidebar;
@@ -113,6 +114,8 @@ impl OxiApp {
                 active_workspace,
                 input: String::new(),
                 sidebar_search: String::new(),
+                renaming_session: None,
+                rename_draft: String::new(),
                 chat_scroll_id: egui::Id::new("main_chat_scroll"),
                 pending_images: Vec::new(),
                 scroll_to_bottom_once: true,
@@ -124,9 +127,10 @@ impl OxiApp {
                 focus_terminal_next_frame: false,
                 sidebar_open: true,
                 sidebar_width: settings.sidebar_width,
+                settings_sidebar_width: 220.0,
                 terminal_open: settings.terminal_open,
                 terminal_height: settings.terminal_height,
-                settings,
+                settings: settings.clone(),
                 settings_original: None,
                 settings_exit_prompt: None,
                 settings_open: false,
@@ -158,9 +162,9 @@ impl OxiApp {
                     runtime_path: crate::local_models::installed_runtime_path()
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default(),
-                    runtime_port: 18080,
-                    context_size: 32768,
-                    gpu_layers: 999,
+                    runtime_port: settings.local_hf.runtime_port,
+                    context_size: settings.local_hf.context_size,
+                    gpu_layers: settings.local_hf.gpu_layers,
                     ..Default::default()
                 },
                 local_model_rx: None,
@@ -281,6 +285,16 @@ impl OxiApp {
             .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
     }
 
+    /// True when a non-active session has a stream error the user hasn't seen yet.
+    pub(crate) fn session_row_has_error(&self, workspace_idx: usize, session_idx: usize) -> bool {
+        let key = SessionKey {
+            workspace_idx,
+            session_idx,
+        };
+        self.run_state(key)
+            .is_some_and(|s| s.stream_error.is_some())
+    }
+
     pub(crate) fn active_session_mut(&mut self) -> &mut Session {
         let w = self.conv.active_workspace;
         let a = self.conv.workspaces[w].active;
@@ -337,6 +351,8 @@ impl OxiApp {
         self.ensure_active_session_loaded();
         self.persist_active_session_selection();
         self.refresh_git_cwd();
+        // Respawn the embedded shell so it starts in the new workspace cwd.
+        self.terminal = None;
     }
 
     pub(crate) fn select_session_in_workspace(&mut self, workspace_idx: usize, session_idx: usize) {
@@ -364,6 +380,8 @@ impl OxiApp {
         self.persist_active_session_selection();
         if workspace_changed {
             self.refresh_git_cwd();
+            // Respawn the embedded shell so it starts in the new workspace cwd.
+            self.terminal = None;
         }
     }
 
@@ -377,6 +395,8 @@ impl OxiApp {
             pending_images: Vec::new(),
             modified: std::time::SystemTime::now(),
             chars_per_token: None,
+            wire_history: None,
+            wire_fingerprint: 0,
         }
     }
 
@@ -439,11 +459,20 @@ impl OxiApp {
         };
 
         if let Some(session_file) = session_file
-            && let Some(messages) = session_store::load_session_messages(&session_file)
+            && let Some((messages, wire)) =
+                session_store::load_session_messages_with_wire(&session_file)
         {
             let session = self.session_mut(active);
             session.messages = messages;
             session.messages_loaded = true;
+            if let Some((fingerprint, history)) = wire {
+                session.wire_fingerprint = fingerprint;
+                session.wire_history = Some(history.clone());
+                let run = self.run_state_mut(active_key);
+                run.wire_fingerprint = fingerprint;
+                run.wire_history = Some(history);
+                run.wire_session_file = Some(session_file);
+            }
         }
     }
 
