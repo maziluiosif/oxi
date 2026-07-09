@@ -26,6 +26,96 @@ pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
     ui.add_space(3.0);
 }
 
+/// Framed single-line settings input — matches the sidebar field language so settings
+/// don't fall back to bare egui `TextEdit` chrome.
+pub fn settings_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    settings_text_field_opts(ui, text, hint, false, f32::INFINITY)
+}
+
+/// Like [`settings_text_field`], but with an explicit width (e.g. short numeric fields).
+pub fn settings_text_field_width(
+    ui: &mut Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+) -> Response {
+    settings_text_field_opts(ui, text, hint, false, width)
+}
+
+/// Password variant of [`settings_text_field`].
+pub fn settings_password_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    settings_text_field_opts(ui, text, hint, true, f32::INFINITY)
+}
+
+fn settings_text_field_opts(
+    ui: &mut Ui,
+    text: &mut String,
+    hint: &str,
+    password: bool,
+    width: f32,
+) -> Response {
+    Frame::new()
+        .fill(c_bg_input())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
+        .corner_radius(RADIUS_BUTTON)
+        .inner_margin(Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            let mut edit = TextEdit::singleline(text)
+                .frame(egui::Frame::NONE)
+                .margin(Margin::symmetric(1, 0))
+                .font(FontId::proportional(FS_SMALL))
+                .desired_width(width)
+                .hint_text(hint);
+            if password {
+                edit = edit.password(true);
+            }
+            ui.add(edit)
+        })
+        .inner
+}
+
+/// Framed multiline settings editor (system prompts, etc.).
+pub fn settings_text_area(
+    ui: &mut Ui,
+    text: &mut String,
+    hint: &str,
+    rows: usize,
+) -> Response {
+    Frame::new()
+        .fill(c_bg_input())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
+        .corner_radius(RADIUS_BUTTON)
+        .inner_margin(Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.add(
+                TextEdit::multiline(text)
+                    .frame(egui::Frame::NONE)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(rows)
+                    .hint_text(hint),
+            )
+        })
+        .inner
+}
+
+/// Settings list row: left-aligned identity, right-aligned actions, optional divider.
+/// Callers typically put labels on the left and buttons via `Layout::right_to_left`.
+pub fn settings_list_row(ui: &mut Ui, show_divider: bool, add_contents: impl FnOnce(&mut Ui)) {
+    let available = ui.available_width();
+    ui.horizontal(|ui| {
+        ui.set_min_width(available);
+        ui.set_min_height(28.0);
+        add_contents(ui);
+    });
+    if show_divider {
+        ui.add_space(4.0);
+        hairline(ui);
+        ui.add_space(4.0);
+    } else {
+        ui.add_space(2.0);
+    }
+}
+
 /// Section caption used above groups of settings: small, uppercase, muted.
 pub fn settings_caption(ui: &mut Ui, text: &str) {
     ui.label(
@@ -44,7 +134,22 @@ pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) 
         ui.add_space(2.0);
         ui.label(RichText::new(sub).size(FS_SMALL).color(c_text_muted()));
     }
-    ui.add_space(10.0);
+    ui.add_space(14.0);
+}
+
+/// Card header: caption + optional one-line helper. Returns nothing; just paints.
+pub fn settings_card_header(ui: &mut Ui, title: &str, help: Option<&str>) {
+    ui.label(
+        RichText::new(title)
+            .size(FS_BODY)
+            .color(c_text())
+            .strong(),
+    );
+    if let Some(help) = help {
+        ui.add_space(2.0);
+        ui.label(RichText::new(help).size(FS_TINY).color(c_text_muted()));
+    }
+    ui.add_space(8.0);
 }
 
 /// A card frame used to group related settings. Matches the elevated background + subtle border.
@@ -70,6 +175,18 @@ pub fn field_label(ui: &mut Ui, text: &str) {
     ui.add_space(10.0);
     ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
     ui.add_space(3.0);
+}
+
+/// Like [`field_label`], but without the leading gap (for the first field in a card).
+pub fn field_label_first(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
+    ui.add_space(3.0);
+}
+
+/// Muted helper line under a control (kept short so cards stay scannable).
+pub fn field_hint(ui: &mut Ui, text: &str) {
+    ui.add_space(3.0);
+    ui.label(RichText::new(text).size(FS_TINY).color(c_text_faint()));
 }
 
 /// Horizontal rule that matches the subtle border color.

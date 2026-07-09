@@ -1,161 +1,398 @@
-use eframe::egui::{self, Margin, RichText, TextEdit, Ui};
+use eframe::egui::{self, Align, Layout, RichText, Ui};
 
 use crate::app::LocalRuntimeState;
 use crate::app::task_runner::spawn_async_task;
 use crate::local_models::{self, LocalModelMsg};
 use crate::settings::{ComputeLocation, LlmProviderKind};
 use crate::theme::*;
-use crate::ui::chrome::{field_label, ghost_button, nested_card_frame, settings_caption};
+use crate::ui::chrome::{
+    alert_banner, card_frame, field_hint, field_label, field_label_first, ghost_button,
+    ghost_button_icon, hairline, icon_glyph_rich, primary_button_icon_widget,
+    settings_card_header, settings_list_row, settings_text_field, settings_text_field_width,
+};
 
 use super::super::OxiApp;
+use super::layout::active_pill;
 
 impl OxiApp {
     pub(super) fn render_local_hf_section(&mut self, ui: &mut Ui) {
-        ui.add_space(8.0);
-        nested_card_frame().show(ui, |ui| {
-            let is_remote = matches!(self.conv.settings.provider(LlmProviderKind::LocalHf).location, ComputeLocation::RemoteSsh(_));
-            settings_caption(ui, if is_remote { "HuggingFace models on SSH" } else { "HuggingFace local models" });
-            ui.label(RichText::new(if is_remote { "Search GGUF models on HuggingFace, download them onto the SSH host, then press Play. oxi starts llama-server remotely and tunnels it back for chat." } else { "Search GGUF models on HuggingFace, download them into oxi, then press Play. oxi starts llama-server in the background and makes the model available for chat." }).size(FS_TINY).color(c_text_muted()));
-            ui.add_space(10.0);
+        let is_remote = matches!(
+            self.conv.settings.provider(LlmProviderKind::LocalHf).location,
+            ComputeLocation::RemoteSsh(_)
+        );
 
-            field_label(ui, if is_remote { "Remote runtime" } else { "Local runtime" });
+        // ── Runtime ────────────────────────────────────────────────────────
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                if is_remote {
+                    "Remote runtime"
+                } else {
+                    "Local runtime"
+                },
+                Some(if is_remote {
+                    "Install llama-server on the SSH host, then tune port / context / GPU layers."
+                } else {
+                    "Install llama-server locally, then tune port / context / GPU layers."
+                }),
+            );
+
             ui.horizontal(|ui| {
                 let installed = local_models::installed_runtime_path();
-                let label = if is_remote { "Runtime managed on SSH host" } else if installed.is_some() { "Runtime installed" } else { "Runtime not installed" };
-                ui.label(RichText::new(label).size(FS_TINY).color(if is_remote || installed.is_some() { c_success() } else { c_text_muted() }));
-                let installing = self.conv.local_models.runtime_installing;
-                let button = if is_remote { "Install runtime on SSH" } else { "Install runtime" };
-                if ui.add_enabled(!installing, crate::ui::chrome::primary_button_widget(if installing { "Installing…" } else { button })).clicked() {
-                    if is_remote { self.spawn_remote_runtime_install(ui.ctx()); } else { self.spawn_runtime_install(ui.ctx()); }
-                }
+                let (label, ok) = if is_remote {
+                    ("Runtime managed on SSH host", true)
+                } else if installed.is_some() {
+                    ("Runtime installed", true)
+                } else {
+                    ("Runtime not installed", false)
+                };
+                ui.label(
+                    RichText::new(label)
+                        .size(FS_SMALL)
+                        .color(if ok { c_success() } else { c_text_muted() }),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let installing = self.conv.local_models.runtime_installing;
+                    let button = if is_remote {
+                        "Install on SSH"
+                    } else {
+                        "Install runtime"
+                    };
+                    if ui
+                        .add_enabled(
+                            !installing,
+                            primary_button_icon_widget(
+                                ICON_DOWNLOAD,
+                                if installing { "Installing…" } else { button },
+                            ),
+                        )
+                        .clicked()
+                    {
+                        if is_remote {
+                            self.spawn_remote_runtime_install(ui.ctx());
+                        } else {
+                            self.spawn_runtime_install(ui.ctx());
+                        }
+                    }
+                });
             });
+
             if self.conv.local_models.runtime_installing {
+                ui.add_space(6.0);
                 let text = match self.conv.local_models.runtime_install_progress {
-                    Some((done, Some(total))) if total > 0 => format!("Downloading runtime… {:.1}% ({}/{})", done as f64 * 100.0 / total as f64, fmt_bytes(done), fmt_bytes(total)),
+                    Some((done, Some(total))) if total > 0 => format!(
+                        "Downloading runtime… {:.1}% ({}/{})",
+                        done as f64 * 100.0 / total as f64,
+                        fmt_bytes(done),
+                        fmt_bytes(total)
+                    ),
                     Some((done, _)) => format!("Downloading runtime… {}", fmt_bytes(done)),
                     None => "Downloading runtime…".to_string(),
                 };
                 ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
             }
+
             if !is_remote {
                 field_label(ui, "llama-server path (optional override)");
-                ui.add(TextEdit::singleline(&mut self.conv.local_models.runtime_path)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("empty = bundled runtime, then PATH fallback")
-                    .margin(Margin::symmetric(8, 5)));
+                settings_text_field(
+                    ui,
+                    &mut self.conv.local_models.runtime_path,
+                    "empty = bundled runtime, then PATH fallback",
+                );
             }
-            ui.horizontal(|ui| {
-                field_label(ui, "Port");
-                let mut port = self.conv.local_models.runtime_port.to_string();
-                if ui.add(TextEdit::singleline(&mut port).desired_width(80.0)).changed()
-                    && let Ok(p) = port.parse::<u16>()
-                { self.conv.local_models.runtime_port = p; }
-                field_label(ui, "Context");
-                let mut ctx = self.conv.local_models.context_size.to_string();
-                if ui.add(TextEdit::singleline(&mut ctx).desired_width(90.0)).changed()
-                    && let Ok(n) = ctx.parse::<usize>()
-                { self.conv.local_models.context_size = n.max(512); }
-                field_label(ui, "GPU layers");
-                let mut ngl = self.conv.local_models.gpu_layers.to_string();
-                if ui.add(TextEdit::singleline(&mut ngl).desired_width(70.0)).changed()
-                    && let Ok(n) = ngl.parse::<i32>()
-                { self.conv.local_models.gpu_layers = n; }
-            });
 
-            ui.add_space(12.0);
-            field_label(ui, "Search HuggingFace");
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.add(TextEdit::singleline(&mut self.conv.local_models.search_query)
-                    .desired_width(ui.available_width() - 90.0)
-                    .hint_text("e.g. qwen coder gguf")
-                    .margin(Margin::symmetric(8, 5)));
+                ui.vertical(|ui| {
+                    field_label_first(ui, "Port");
+                    let mut port = self.conv.local_models.runtime_port.to_string();
+                    if settings_text_field_width(ui, &mut port, "8080", 90.0).changed()
+                        && let Ok(p) = port.parse::<u16>()
+                    {
+                        self.conv.local_models.runtime_port = p;
+                    }
+                });
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    field_label_first(ui, "Context");
+                    let mut ctx = self.conv.local_models.context_size.to_string();
+                    if settings_text_field_width(ui, &mut ctx, "8192", 100.0).changed()
+                        && let Ok(n) = ctx.parse::<usize>()
+                    {
+                        self.conv.local_models.context_size = n.max(512);
+                    }
+                });
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    field_label_first(ui, "GPU layers");
+                    let mut ngl = self.conv.local_models.gpu_layers.to_string();
+                    if settings_text_field_width(ui, &mut ngl, "-1", 80.0).changed()
+                        && let Ok(n) = ngl.parse::<i32>()
+                    {
+                        self.conv.local_models.gpu_layers = n;
+                    }
+                });
+            });
+            field_hint(ui, "GPU layers: -1 = all layers on GPU when supported.");
+        });
+
+        // ── Search & download ──────────────────────────────────────────────
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                "Search & download",
+                Some(if is_remote {
+                    "Find a GGUF on HuggingFace, then download it onto the SSH host."
+                } else {
+                    "Find a GGUF on HuggingFace, then download it into oxi."
+                }),
+            );
+
+            field_label_first(ui, "Search HuggingFace");
+            ui.horizontal(|ui| {
                 let busy = self.conv.local_models.search_loading;
-                if ui.add_enabled(!busy, crate::ui::chrome::primary_button_widget(if busy { "Searching…" } else { "Search" })).clicked() {
+                let search_clicked = ui
+                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_enabled(
+                            !busy,
+                            primary_button_icon_widget(
+                                ICON_SEARCH,
+                                if busy { "Searching…" } else { "Search" },
+                            ),
+                        )
+                        .clicked()
+                    })
+                    .inner;
+                settings_text_field(
+                    ui,
+                    &mut self.conv.local_models.search_query,
+                    "e.g. qwen coder gguf",
+                );
+                if search_clicked {
                     self.spawn_hf_search(ui.ctx());
                 }
             });
-            if let Some(e) = &self.conv.local_models.search_error {
-                ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
-            }
-            for hit in self.conv.local_models.search_results.clone().into_iter().take(8) {
-                ui.horizontal(|ui| {
-                    if ghost_button(ui, &hit.model_id, false).clicked() {
-                        self.conv.local_models.selected_repo = hit.model_id.clone();
-                        self.spawn_hf_files(ui.ctx(), hit.model_id);
-                    }
-                    ui.label(RichText::new(format!("↓ {}  ♥ {}", hit.downloads.unwrap_or(0), hit.likes.unwrap_or(0))).size(FS_TINY).color(c_text_faint()));
-                });
+
+            if let Some(e) = self.conv.local_models.search_error.clone() {
+                ui.add_space(6.0);
+                alert_banner(ui, &e, true);
             }
 
-            ui.add_space(10.0);
-            field_label(ui, "Selected repo / GGUF file");
+            let hits: Vec<_> = self
+                .conv
+                .local_models
+                .search_results
+                .iter()
+                .take(8)
+                .cloned()
+                .collect();
+            if !hits.is_empty() {
+                ui.add_space(8.0);
+                let n = hits.len();
+                for (i, hit) in hits.into_iter().enumerate() {
+                    settings_list_row(ui, i + 1 < n, |ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new(&hit.model_id)
+                                    .size(FS_SMALL)
+                                    .color(c_text())
+                                    .strong(),
+                            );
+                            ui.horizontal(|ui| {
+                                ui.label(icon_glyph_rich(ICON_DOWNLOAD, FS_TINY, c_text_faint()));
+                                ui.label(
+                                    RichText::new(format!("{}", hit.downloads.unwrap_or(0)))
+                                        .size(FS_TINY)
+                                        .color(c_text_faint()),
+                                );
+                                ui.add_space(8.0);
+                                ui.label(icon_glyph_rich(ICON_HEART, FS_TINY, c_text_faint()));
+                                ui.label(
+                                    RichText::new(format!("{}", hit.likes.unwrap_or(0)))
+                                        .size(FS_TINY)
+                                        .color(c_text_faint()),
+                                );
+                            });
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ghost_button(ui, "Select", false).clicked() {
+                                self.conv.local_models.selected_repo = hit.model_id.clone();
+                                self.spawn_hf_files(ui.ctx(), hit.model_id);
+                            }
+                        });
+                    });
+                }
+            }
+
+            ui.add_space(8.0);
+            hairline(ui);
+            ui.add_space(8.0);
+
+            field_label_first(ui, "Repo / GGUF file");
             ui.horizontal(|ui| {
-                ui.add(TextEdit::singleline(&mut self.conv.local_models.selected_repo)
-                    .desired_width(ui.available_width() - 120.0)
-                    .hint_text("org/model-GGUF")
-                    .margin(Margin::symmetric(8, 5)));
-                if ui.add_enabled(!self.conv.local_models.files_loading, crate::ui::chrome::ghost_button_widget("Load files", false)).clicked() {
+                let load_clicked = ui
+                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_enabled(
+                            !self.conv.local_models.files_loading,
+                            crate::ui::chrome::ghost_button_widget("Load files", false),
+                        )
+                        .clicked()
+                    })
+                    .inner;
+                settings_text_field(
+                    ui,
+                    &mut self.conv.local_models.selected_repo,
+                    "org/model-GGUF",
+                );
+                if load_clicked {
                     let repo = self.conv.local_models.selected_repo.clone();
                     self.spawn_hf_files(ui.ctx(), repo);
                 }
             });
-            if let Some(e) = &self.conv.local_models.files_error {
-                ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
+
+            if let Some(e) = self.conv.local_models.files_error.clone() {
+                ui.add_space(6.0);
+                alert_banner(ui, &e, true);
             }
+
             if !self.conv.local_models.gguf_files.is_empty() {
-                let current = if self.conv.local_models.selected_file.is_empty() { "choose .gguf".to_string() } else { self.conv.local_models.selected_file.clone() };
+                ui.add_space(6.0);
+                let current = if self.conv.local_models.selected_file.is_empty() {
+                    "choose .gguf".to_string()
+                } else {
+                    self.conv.local_models.selected_file.clone()
+                };
                 egui::ComboBox::from_id_salt("local_hf_file_combo")
                     .selected_text(current)
                     .width(f32::INFINITY)
                     .show_ui(ui, |ui| {
                         for f in self.conv.local_models.gguf_files.clone() {
-                            if ui.selectable_label(self.conv.local_models.selected_file == f, &f).clicked() {
+                            if ui
+                                .selectable_label(self.conv.local_models.selected_file == f, &f)
+                                .clicked()
+                            {
                                 self.conv.local_models.selected_file = f;
                             }
                         }
                     });
-                if ui.add_enabled(!self.conv.local_models.downloading && !self.conv.local_models.selected_file.is_empty(), crate::ui::chrome::primary_button_widget("Download")).clicked() {
-                    if is_remote { self.spawn_remote_hf_download(ui.ctx()); } else { self.spawn_hf_download(ui.ctx()); }
+                ui.add_space(8.0);
+                if ui
+                    .add_enabled(
+                        !self.conv.local_models.downloading
+                            && !self.conv.local_models.selected_file.is_empty(),
+                        primary_button_icon_widget(ICON_DOWNLOAD, "Download"),
+                    )
+                    .clicked()
+                {
+                    if is_remote {
+                        self.spawn_remote_hf_download(ui.ctx());
+                    } else {
+                        self.spawn_hf_download(ui.ctx());
+                    }
                 }
             }
+
             if self.conv.local_models.downloading {
+                ui.add_space(6.0);
                 let mut text = self.conv.local_models.download_label.clone();
                 if let Some((done, total)) = self.conv.local_models.download_progress {
                     text = match total {
-                        Some(t) if t > 0 => format!("Downloading… {:.1}% ({}/{})", done as f64 * 100.0 / t as f64, fmt_bytes(done), fmt_bytes(t)),
+                        Some(t) if t > 0 => format!(
+                            "Downloading… {:.1}% ({}/{})",
+                            done as f64 * 100.0 / t as f64,
+                            fmt_bytes(done),
+                            fmt_bytes(t)
+                        ),
                         _ => format!("Downloading… {}", fmt_bytes(done)),
                     };
                 }
                 ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
             }
+        });
 
-            ui.add_space(14.0);
-            settings_caption(ui, "Downloaded models");
+        // ── Downloaded models ──────────────────────────────────────────────
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                "Downloaded models",
+                Some("Play starts llama-server. Make active points chat at that model."),
+            );
+
             if self.conv.local_models.downloaded.is_empty() {
-                ui.label(RichText::new("No local HF models downloaded yet.").size(FS_TINY).color(c_text_faint()));
+                ui.label(
+                    RichText::new("No models downloaded yet.")
+                        .size(FS_TINY)
+                        .color(c_text_faint()),
+                );
+            } else {
+                let models = self.conv.local_models.downloaded.clone();
+                let n = models.len();
+                for (i, m) in models.into_iter().enumerate() {
+                    let running =
+                        self.conv.local_models.running_model_id.as_deref() == Some(&m.id);
+                    settings_list_row(ui, i + 1 < n, |ui| {
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(&m.id)
+                                        .size(FS_SMALL)
+                                        .color(c_text())
+                                        .strong(),
+                                );
+                                if running {
+                                    ui.add_space(6.0);
+                                    active_pill(ui, "Running");
+                                }
+                            });
+                            ui.label(
+                                RichText::new(fmt_bytes(m.bytes))
+                                    .size(FS_TINY)
+                                    .color(c_text_faint()),
+                            );
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ghost_button_icon(ui, ICON_TRASH, "Delete", true).clicked() {
+                                let _ = local_models::remove_downloaded(&m.id);
+                                self.conv.local_models.downloaded =
+                                    local_models::load_manifest().models;
+                            }
+                            if ghost_button(ui, "Make active", false).clicked() {
+                                self.activate_local_model(&m);
+                            }
+                            if running {
+                                if ghost_button_icon(ui, ICON_STOP, "Stop", true).clicked() {
+                                    if is_remote {
+                                        self.spawn_remote_stop(ui.ctx());
+                                    } else {
+                                        self.stop_local_model();
+                                    }
+                                }
+                            } else if ui
+                                .add(primary_button_icon_widget(ICON_PLAY, "Play"))
+                                .on_hover_text("Start llama-server with this model")
+                                .clicked()
+                            {
+                                if is_remote {
+                                    self.start_remote_model(ui.ctx(), m.clone());
+                                } else {
+                                    self.start_local_model(ui.ctx(), m.clone());
+                                }
+                            }
+                        });
+                    });
+                }
             }
-            for m in self.conv.local_models.downloaded.clone() {
-                ui.horizontal_wrapped(|ui| {
-                    let running = self.conv.local_models.running_model_id.as_deref() == Some(&m.id);
-                    if ui.add(crate::ui::chrome::primary_button_widget(if running { "Running" } else { "▶ Play" })).clicked() {
-                        if is_remote { self.start_remote_model(ui.ctx(), m.clone()); } else { self.start_local_model(ui.ctx(), m.clone()); }
-                    }
-                    if running && ghost_button(ui, "Stop", true).clicked() {
-                        if is_remote { self.spawn_remote_stop(ui.ctx()); } else { self.stop_local_model(); }
-                    }
-                    if ghost_button(ui, "Make active", false).clicked() {
-                        self.activate_local_model(&m);
-                    }
-                    if ghost_button(ui, "Delete", true).clicked() {
-                        let _ = local_models::remove_downloaded(&m.id);
-                        self.conv.local_models.downloaded = local_models::load_manifest().models;
-                    }
-                    ui.label(RichText::new(format!("{} ({})", m.id, fmt_bytes(m.bytes))).size(FS_TINY).color(c_text_muted()));
-                });
-            }
-            if let Some(s) = &self.conv.local_models.runtime_status {
-                ui.add_space(6.0);
-                ui.label(RichText::new(s).size(FS_TINY).color(c_text_muted()));
+
+            if let Some(s) = self.conv.local_models.runtime_status.clone() {
+                ui.add_space(8.0);
+                alert_banner(
+                    ui,
+                    &s,
+                    s.contains("failed") || s.contains("exited") || s.contains("Could not"),
+                );
             }
         });
     }

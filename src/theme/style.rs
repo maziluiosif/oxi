@@ -109,6 +109,12 @@ pub const ICON_WEB_SEARCH: &str = "\u{f070f}";
 pub const ICON_GLOBE: &str = "\u{f0ac}";
 /// Git branch — current-branch line in the source-control panel (`nf-oct-git_branch`).
 pub const ICON_BRANCH: &str = "\u{f418}";
+/// Play triangle — start a local/remote model (`nf-fa-play`).
+pub const ICON_PLAY: &str = "\u{f04b}";
+/// Heart — likes / favorites metadata (`nf-fa-heart`).
+pub const ICON_HEART: &str = "\u{f004}";
+/// Magnifying glass — search fields (`nf-fa-search`).
+pub const ICON_SEARCH: &str = "\u{f002}";
 
 /// Small loading indicator (avoids default large `interact_size` spinners).
 pub fn small_spinner(ui: &mut egui::Ui) {

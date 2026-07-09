@@ -1,76 +1,163 @@
 //! The three top-level settings panels: Models & providers, Agent, and Appearance.
 
-use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
+use eframe::egui::{self, Align, Layout, RichText, Ui};
 
 use crate::settings::{ALL_TOOL_NAMES, LlmProviderKind};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_label, hairline, pill_tab, settings_caption, settings_section_title,
+    card_frame, field_hint, field_label, field_label_first, ghost_button, hairline, pill_tab,
+    settings_card_header, settings_caption, settings_section_title, settings_text_area,
+    settings_text_field, settings_text_field_width,
 };
 
 use super::super::OxiApp;
 use super::layout::tool_chip;
+
+/// Provider groups keep the picker skimmable (10 pills in one row is hard to scan).
+const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
+    (
+        "Local / self-hosted",
+        &[
+            LlmProviderKind::LocalHf,
+            LlmProviderKind::Ollama,
+            LlmProviderKind::LmStudio,
+        ],
+    ),
+    (
+        "Hosted APIs",
+        &[
+            LlmProviderKind::OpenAi,
+            LlmProviderKind::OpenRouter,
+            LlmProviderKind::AzureOpenAi,
+            LlmProviderKind::CustomAnthropic,
+            LlmProviderKind::GptCodex,
+            LlmProviderKind::OpenCodeGo,
+        ],
+    ),
+    ("External agents", &[LlmProviderKind::ClaudeCodeAcp]),
+];
+
+/// Tool chips grouped by intent so the Agent panel is scannable.
+const TOOL_GROUPS: &[(&str, &[&str])] = &[
+    ("Read", &["read", "grep", "find", "ls"]),
+    ("Write", &["write", "edit"]),
+    ("Shell", &["bash"]),
+    ("Web", &["web_search", "web_fetch"]),
+];
 
 impl OxiApp {
     pub(super) fn render_settings_providers_panel(&mut self, ui: &mut Ui) {
         settings_section_title(
             ui,
             "Models & providers",
-            Some("Configure LLM providers, API keys, and the default model."),
+            Some("Pick a backend, configure credentials, then make it active for new chats."),
         );
 
-        // Provider pill bar
-        settings_caption(ui, "Provider");
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            for provider in LlmProviderKind::ALL {
-                let selected = self.conv.settings_provider_tab == provider;
-                if pill_tab(ui, provider.label(), selected) {
-                    self.conv.settings_provider_tab = provider;
-                }
-            }
-        });
-        ui.add_space(16.0);
+        // Active provider summary strip — answers "what am I using?" without hunting pills.
+        {
+            let active = self.conv.settings.active_provider;
+            let model = self.conv.settings.provider(active).model_id.clone();
+            card_frame().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("Currently active")
+                                .size(FS_TINY)
+                                .color(c_text_faint()),
+                        );
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(active.label())
+                                    .size(FS_BODY)
+                                    .color(c_text())
+                                    .strong(),
+                            );
+                            if !model.is_empty() {
+                                ui.label(
+                                    RichText::new(format!("/ {model}"))
+                                        .size(FS_SMALL)
+                                        .color(c_text_muted())
+                                        .monospace(),
+                                );
+                            }
+                        });
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        super::layout::active_pill(ui, "Active");
+                    });
+                });
+            });
+        }
 
-        let provider = self.conv.settings_provider_tab;
-        ui.horizontal(|ui| {
+        ui.add_space(16.0);
+        settings_caption(ui, "Choose provider");
+        ui.add_space(4.0);
+
+        // Grouped pill bars instead of one dense wrapped row of 10 providers.
+        for (group_label, providers) in PROVIDER_GROUPS {
             ui.label(
-                RichText::new(provider.label())
-                    .size(FS_BODY)
-                    .color(c_text())
-                    .strong(),
+                RichText::new(*group_label)
+                    .size(FS_TINY)
+                    .color(c_text_muted()),
             );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let is_active = self.conv.settings.active_provider == provider;
-                if is_active {
-                    super::layout::active_pill(ui, "Active");
-                } else if crate::ui::chrome::ghost_button(ui, "Make active", false)
-                    .on_hover_text("Use this provider for new chats")
-                    .clicked()
-                {
-                    self.conv.settings.active_provider = provider;
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for &provider in *providers {
+                    let selected = self.conv.settings_provider_tab == provider;
+                    if pill_tab(ui, provider.label(), selected) {
+                        self.conv.settings_provider_tab = provider;
+                    }
                 }
             });
-        });
-        ui.add_space(10.0);
-
-        self.render_provider_config(ui, provider);
-        ui.add_space(10.0);
-
-        // Provider OAuth (single section below the config, for clarity)
-        if provider == LlmProviderKind::GptCodex {
-            ui.add_space(6.0);
-            settings_caption(ui, "OAuth");
-            ui.add_space(6.0);
-            self.render_codex_oauth_section(ui);
             ui.add_space(10.0);
         }
 
-        ui.add_space(6.0);
+        let provider = self.conv.settings_provider_tab;
+        card_frame().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(provider.label())
+                        .size(FS_BODY)
+                        .color(c_text())
+                        .strong(),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let is_active = self.conv.settings.active_provider == provider;
+                    if is_active {
+                        super::layout::active_pill(ui, "Active");
+                    } else if crate::ui::chrome::primary_button(ui, "Make active")
+                        .on_hover_text("Use this provider for new chats")
+                        .clicked()
+                    {
+                        self.conv.settings.active_provider = provider;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(provider_blurb(provider))
+                    .size(FS_TINY)
+                    .color(c_text_muted()),
+            );
+        });
+        ui.add_space(12.0);
+
+        self.render_provider_config(ui, provider);
+
+        // Provider OAuth (single section below the config, for clarity)
+        if provider == LlmProviderKind::GptCodex {
+            ui.add_space(12.0);
+            settings_caption(ui, "Sign-in");
+            ui.add_space(6.0);
+            self.render_codex_oauth_section(ui);
+        }
+
+        ui.add_space(10.0);
         ui.label(
             RichText::new(
-                "If the API key is empty, the app falls back to environment variables. \
-                 OAuth still takes precedence where available.",
+                "Empty API key falls back to environment variables. OAuth still takes precedence where available. Keys are stored in the OS keychain, not in settings.json.",
             )
             .size(FS_TINY)
             .color(c_text_faint()),
@@ -78,28 +165,52 @@ impl OxiApp {
     }
 
     pub(super) fn render_settings_agent_panel(&mut self, ui: &mut Ui) {
-        // Tools section
         settings_section_title(
             ui,
-            "Agent",
-            Some("Control which tools the agent can call, approval behavior, and web search."),
+            "Tools & safety",
+            Some("Control which tools the agent can call, when it must ask first, and how web search works."),
         );
-        settings_caption(ui, "Tools");
-        ui.add_space(4.0);
+
+        // ── Tools ──────────────────────────────────────────────────────────
         card_frame().show(ui, |ui| {
-            let n = ALL_TOOL_NAMES.len();
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
-                for (i, name) in ALL_TOOL_NAMES.iter().enumerate().take(n) {
-                    let enabled = self.conv.settings.tools_enabled[i];
-                    if tool_chip(ui, name, enabled).clicked() {
-                        self.conv.settings.tools_enabled[i] = !enabled;
-                    }
+            settings_card_header(
+                ui,
+                "Enabled tools",
+                Some("Click a chip to toggle. Disabled tools are hidden from the model."),
+            );
+            for (gi, (group, names)) in TOOL_GROUPS.iter().enumerate() {
+                if gi > 0 {
+                    ui.add_space(10.0);
                 }
-            });
-            ui.add_space(10.0);
-            hairline(ui);
-            ui.add_space(8.0);
+                ui.label(
+                    RichText::new(*group)
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                );
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
+                    for name in *names {
+                        let Some(i) = ALL_TOOL_NAMES.iter().position(|n| n == name) else {
+                            continue;
+                        };
+                        let enabled = self.conv.settings.tools_enabled[i];
+                        if tool_chip(ui, name, enabled).clicked() {
+                            self.conv.settings.tools_enabled[i] = !enabled;
+                        }
+                    }
+                });
+            }
+        });
+
+        // ── Approvals ──────────────────────────────────────────────────────
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                "Approvals",
+                Some("When on, the agent pauses and asks before each matching tool call."),
+            );
             let mut require_write_edit_approval = self.conv.settings.require_write_edit_approval;
             if ui
                 .checkbox(
@@ -119,9 +230,7 @@ impl OxiApp {
             if ui
                 .checkbox(
                     &mut require_bash_approval,
-                    RichText::new("Ask before bash")
-                        .size(FS_SMALL)
-                        .color(c_text()),
+                    RichText::new("Ask before bash").size(FS_SMALL).color(c_text()),
                 )
                 .on_hover_text(
                     "When on, the agent pauses for your approval before each bash tool call.",
@@ -130,18 +239,28 @@ impl OxiApp {
             {
                 self.conv.settings.require_bash_approval = require_bash_approval;
             }
-            ui.add_space(10.0);
-            hairline(ui);
-            ui.add_space(8.0);
-            field_label(ui, "Max tool calls per run (0 = unlimited)");
-            let mut max_rounds = self.conv.settings.max_tool_rounds.to_string();
-            let resp = ui.add(
-                TextEdit::singleline(&mut max_rounds)
-                    .desired_width(180.0)
-                    .hint_text("0")
-                    .margin(Margin::symmetric(8, 5)),
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "Bash is not sandboxed; the approval prompt is the real safety boundary. Read-only tools never require approval.",
+                )
+                .size(FS_TINY)
+                .color(c_text_faint()),
             );
-            if resp.changed() {
+        });
+
+        // ── Limits ─────────────────────────────────────────────────────────
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                "Limits",
+                Some("Caps that keep a runaway agent loop from going forever."),
+            );
+
+            field_label_first(ui, "Max tool calls per run (0 = unlimited)");
+            let mut max_rounds = self.conv.settings.max_tool_rounds.to_string();
+            if settings_text_field_width(ui, &mut max_rounds, "0", 180.0).changed() {
                 let trimmed = max_rounds.trim();
                 if trimmed.is_empty() {
                     self.conv.settings.max_tool_rounds = 0;
@@ -149,51 +268,33 @@ impl OxiApp {
                     self.conv.settings.max_tool_rounds = n;
                 }
             }
-            ui.label(
-                RichText::new(
-                    "Caps the number of tool-call rounds in a single agent run. 0 disables the cap (unlimited, the default).",
-                )
-                .size(FS_TINY)
-                .color(c_text_muted()),
+            field_hint(
+                ui,
+                "Caps tool-call rounds in a single agent run. 0 disables the cap.",
             );
 
-            ui.add_space(10.0);
-            hairline(ui);
-            ui.add_space(8.0);
             field_label(ui, "Bash timeout cap (seconds)");
             let mut bash_cap = self.conv.settings.bash_timeout_cap_secs.to_string();
-            let resp = ui.add(
-                TextEdit::singleline(&mut bash_cap)
-                    .desired_width(180.0)
-                    .hint_text("300")
-                    .margin(Margin::symmetric(8, 5)),
-            );
-            if resp.changed()
+            if settings_text_field_width(ui, &mut bash_cap, "300", 180.0).changed()
                 && let Ok(n) = bash_cap.trim().parse::<u32>()
                 && n >= 1
             {
                 self.conv.settings.bash_timeout_cap_secs = n.clamp(5, 3600);
             }
-            ui.label(
-                RichText::new(
-                    "Upper bound for a single bash tool call. The model's own timeout argument is clamped to this (5–3600s).",
-                )
-                .size(FS_TINY)
-                .color(c_text_muted()),
+            field_hint(
+                ui,
+                "Upper bound for one bash call (5–3600s). The model's own timeout is clamped to this.",
             );
         });
 
-        // Web search section
-        ui.add_space(16.0);
-        settings_caption(ui, "Web search");
-        ui.add_space(4.0);
+        // ── Web search ─────────────────────────────────────────────────────
+        ui.add_space(12.0);
         card_frame().show(ui, |ui| {
-            ui.label(
-                RichText::new("Search backend (web_search)")
-                    .size(FS_SMALL)
-                    .color(c_text()),
+            settings_card_header(
+                ui,
+                "Web search",
+                Some("Backend used by the web_search tool."),
             );
-            ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let current = self.conv.settings.web_search_backend;
@@ -203,13 +304,12 @@ impl OxiApp {
                     }
                 }
             });
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             match self.conv.settings.web_search_backend {
                 crate::settings::WebSearchBackend::Bing => {
                     ui.label(
                         RichText::new(
-                            "Zero-config. Searches Bing's stable RSS results feed with no API \
-                             key or setup. No fallback is used; if Bing fails, the error is shown.",
+                            "Zero-config. Uses Bing's RSS results feed. No fallback if Bing fails.",
                         )
                         .size(FS_TINY)
                         .color(c_text_muted()),
@@ -218,52 +318,37 @@ impl OxiApp {
                 crate::settings::WebSearchBackend::DuckDuckGo => {
                     ui.label(
                         RichText::new(
-                            "Zero-config. Searches DuckDuckGo's HTML endpoint with no API key \
-                             or setup. May rate-limit under heavy use. Note: DuckDuckGo now \
-                             serves a bot-challenge page, so Bing is recommended instead.",
+                            "Zero-config. DuckDuckGo HTML endpoint — may serve a bot challenge; Bing is usually more reliable.",
                         )
                         .size(FS_TINY)
                         .color(c_text_muted()),
                     );
                 }
                 crate::settings::WebSearchBackend::SearXng => {
-                    ui.label(
-                        RichText::new("SearXNG instance URL")
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                    );
-                    ui.add_space(4.0);
-                    ui.add(
-                        TextEdit::singleline(&mut self.conv.settings.searxng_url)
-                            .hint_text("https://searxng.example.com")
-                            .desired_width(f32::INFINITY),
+                    field_label_first(ui, "SearXNG instance URL");
+                    settings_text_field(
+                        ui,
+                        &mut self.conv.settings.searxng_url,
+                        "https://searxng.example.com",
                     )
                     .on_hover_text(
-                        "Base URL of your SearXNG instance. Its JSON output format must be \
-                         enabled (search.formats: [html, json]). No fallback is used; if this \
-                         URL is missing or invalid, the error is shown.",
+                        "Base URL of your SearXNG instance. JSON output must be enabled (search.formats: [html, json]).",
                     );
-                    ui.add_space(4.0);
                     if self.conv.settings.searxng_url.trim().is_empty() {
+                        ui.add_space(4.0);
                         ui.label(
                             RichText::new(
-                                "No URL set — web_search will report a configuration error until \
-                                 you add one.",
+                                "No URL set — web_search will report a configuration error.",
                             )
                             .size(FS_TINY)
                             .color(c_text_faint()),
                         );
+                    } else {
+                        field_hint(ui, "Requires JSON format enabled on the instance.");
                     }
                 }
             }
         });
-
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("Tip: changes are saved automatically.")
-                .size(FS_TINY)
-                .color(c_text_faint()),
-        );
     }
 
     pub(super) fn render_settings_prompts_panel(&mut self, ui: &mut Ui) {
@@ -274,17 +359,12 @@ impl OxiApp {
         );
 
         // Agent system prompt section
-        settings_caption(ui, "Agent system prompt");
-        ui.add_space(4.0);
         card_frame().show(ui, |ui| {
-            ui.label(
-                RichText::new(
-                    "Single editable prompt. Use {tools_list} to inject the currently enabled tools.",
-                )
-                .size(FS_TINY)
-                .color(c_text_muted()),
+            settings_card_header(
+                ui,
+                "Agent system prompt",
+                Some("Single editable prompt. Use {tools_list} to inject currently enabled tools."),
             );
-            ui.add_space(8.0);
             let mut include_agents_md = self.conv.settings.include_agents_md;
             if ui
                 .checkbox(
@@ -301,32 +381,38 @@ impl OxiApp {
                 self.conv.settings.include_agents_md = include_agents_md;
             }
             ui.add_space(8.0);
-            ui.add(
-                TextEdit::multiline(&mut self.conv.settings.system_prompt)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(20)
-                    .margin(Margin::symmetric(8, 6))
-                    .hint_text(crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT),
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ghost_button(ui, "Reset to default", false)
+                        .on_hover_text("Replace with the built-in agent system prompt")
+                        .clicked()
+                    {
+                        self.conv.settings.system_prompt =
+                            crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string();
+                    }
+                });
+            });
+            settings_text_area(
+                ui,
+                &mut self.conv.settings.system_prompt,
+                crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT,
+                20,
             );
         });
 
         // Commit-message generator section
         ui.add_space(16.0);
-        settings_caption(ui, "Commit message generator");
-        ui.add_space(4.0);
         card_frame().show(ui, |ui| {
-            ui.label(
-                RichText::new(
-                    "The Generate button in the git panel drafts a commit message from \
-                     the staged diff. Pick which provider and model it uses and its own \
-                     system prompt, kept separate from the agent prompt above.",
-                )
-                .size(FS_TINY)
-                .color(c_text_muted()),
+            settings_card_header(
+                ui,
+                "Commit message generator",
+                Some(
+                    "The Generate button in the git panel drafts a commit message from the staged diff. Uses its own provider/model and prompt, separate from the agent.",
+                ),
             );
 
-            ui.add_space(8.0);
             settings_caption(ui, "Provider");
+            ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let current = self.conv.settings.commit_msg_provider;
@@ -334,47 +420,61 @@ impl OxiApp {
                     self.conv.settings.commit_msg_provider = None;
                     self.conv.settings.commit_msg_model_id.clear();
                 }
-                for kind in LlmProviderKind::ALL {
-                    if pill_tab(ui, kind.label(), current == Some(kind)) && current != Some(kind) {
-                        self.conv.settings.commit_msg_provider = Some(kind);
-                    }
-                }
             });
-            if let Some(kind) = self.conv.settings.commit_msg_provider {
-                ui.add_space(6.0);
-                field_label(ui, "Model (empty = provider's selected model)");
-                let hint = self.conv.settings.provider(kind).model_id.clone();
-                ui.add(
-                    TextEdit::singleline(&mut self.conv.settings.commit_msg_model_id)
-                        .desired_width(320.0)
-                        .hint_text(hint)
-                        .margin(Margin::symmetric(8, 5)),
-                );
+            ui.add_space(8.0);
+            for (group_label, providers) in PROVIDER_GROUPS {
                 ui.label(
-                    RichText::new("Tip: choose a cheap/fast model for commit messages (for example claude-haiku-4-5 or a small local coder model).")
+                    RichText::new(*group_label)
                         .size(FS_TINY)
                         .color(c_text_muted()),
+                );
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let current = self.conv.settings.commit_msg_provider;
+                    for &kind in *providers {
+                        if pill_tab(ui, kind.label(), current == Some(kind))
+                            && current != Some(kind)
+                        {
+                            self.conv.settings.commit_msg_provider = Some(kind);
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+            }
+            if let Some(kind) = self.conv.settings.commit_msg_provider {
+                field_label(ui, "Model (empty = provider's selected model)");
+                let hint = self.conv.settings.provider(kind).model_id.clone();
+                settings_text_field_width(
+                    ui,
+                    &mut self.conv.settings.commit_msg_model_id,
+                    &hint,
+                    320.0,
+                );
+                field_hint(
+                    ui,
+                    "Tip: choose a cheap/fast model for commit messages (e.g. claude-haiku-4-5 or a small local coder).",
                 );
             }
 
             ui.add_space(10.0);
-            settings_caption(ui, "System prompt");
+            ui.horizontal(|ui| {
+                settings_caption(ui, "System prompt");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ghost_button(ui, "Reset to default", false).clicked() {
+                        self.conv.settings.commit_msg_system_prompt =
+                            crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT.to_string();
+                    }
+                });
+            });
             ui.add_space(4.0);
-            ui.add(
-                TextEdit::multiline(&mut self.conv.settings.commit_msg_system_prompt)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(8)
-                    .margin(Margin::symmetric(8, 6))
-                    .hint_text(crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT),
+            settings_text_area(
+                ui,
+                &mut self.conv.settings.commit_msg_system_prompt,
+                crate::settings::DEFAULT_COMMIT_MSG_SYSTEM_PROMPT,
+                8,
             );
         });
-
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("Tip: changes are saved automatically.")
-                .size(FS_TINY)
-                .color(c_text_faint()),
-        );
     }
 
     pub(super) fn render_settings_about_panel(&mut self, ui: &mut Ui) {
@@ -482,12 +582,12 @@ impl OxiApp {
         settings_section_title(
             ui,
             "Appearance",
-            Some("Switch the color theme. Built-in themes plus any custom themes found on disk."),
+            Some("Theme, text size, and chat column width."),
         );
         card_frame().show(ui, |ui| {
             let themes = crate::theme::available_themes();
             let current = self.conv.settings.theme_id.clone();
-            settings_caption(ui, "Theme");
+            settings_card_header(ui, "Theme", Some("Built-in themes plus any custom JSON themes."));
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 for t in &themes {
@@ -498,9 +598,11 @@ impl OxiApp {
                 }
             });
 
+            ui.add_space(14.0);
+            hairline(ui);
             ui.add_space(12.0);
             let current_density = self.conv.settings.ui_density;
-            settings_caption(ui, "Text size");
+            settings_card_header(ui, "Text size", Some("Scales the whole UI (density / zoom)."));
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 for d in crate::settings::UiDensity::ALL {
@@ -511,8 +613,14 @@ impl OxiApp {
                 }
             });
 
+            ui.add_space(14.0);
+            hairline(ui);
             ui.add_space(12.0);
-            settings_caption(ui, "Chat width");
+            settings_card_header(
+                ui,
+                "Chat width",
+                Some("Max width of the message column on wide screens."),
+            );
             ui.add(
                 egui::Slider::new(
                     &mut self.conv.settings.chat_column_max_width,
@@ -520,10 +628,9 @@ impl OxiApp {
                 )
                 .suffix("px"),
             );
-            ui.label(
-                RichText::new("Max width of the message column. Raise it to fill a wide screen or the space freed by hiding the sidebar/git panel.")
-                    .size(FS_TINY)
-                    .color(c_text_faint()),
+            field_hint(
+                ui,
+                "Raise it when the sidebar or git panel is hidden.",
             );
         });
         ui.add_space(10.0);
@@ -535,5 +642,30 @@ impl OxiApp {
             .size(FS_TINY)
             .color(c_text_faint()),
         );
+    }
+}
+
+fn provider_blurb(kind: LlmProviderKind) -> &'static str {
+    match kind {
+        LlmProviderKind::LocalHf => {
+            "Download GGUF models from HuggingFace and run them via oxi-managed llama-server."
+        }
+        LlmProviderKind::Ollama => {
+            "Talk to a local or LAN Ollama server (OpenAI-compatible /v1 API)."
+        }
+        LlmProviderKind::LmStudio => {
+            "Talk to a local or LAN LM Studio server (OpenAI-compatible)."
+        }
+        LlmProviderKind::OpenAi => "OpenAI Chat Completions API.",
+        LlmProviderKind::OpenRouter => "OpenRouter multi-model router.",
+        LlmProviderKind::AzureOpenAi => "Azure OpenAI deployment endpoint.",
+        LlmProviderKind::CustomAnthropic => "Any Anthropic Messages-compatible endpoint.",
+        LlmProviderKind::GptCodex => {
+            "ChatGPT / Codex via OAuth or OpenAI API-key fallback."
+        }
+        LlmProviderKind::OpenCodeGo => "OpenCode Go subscription endpoint.",
+        LlmProviderKind::ClaudeCodeAcp => {
+            "Drive Claude Code as an external agent over the Agent Client Protocol."
+        }
     }
 }

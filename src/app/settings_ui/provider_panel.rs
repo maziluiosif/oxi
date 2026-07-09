@@ -2,7 +2,7 @@
 //! compute target (with SSH password storage and "Test connection"), Codex OAuth sign-in,
 //! and background model-list fetching.
 
-use eframe::egui::{self, Align, Layout, Margin, RichText, TextEdit, Ui};
+use eframe::egui::{self, Align, Layout, RichText, Ui};
 
 use crate::oauth::{
     OAuthUiMsg, clear_codex, ensure_codex_access_token, load_oauth_store, save_oauth_store,
@@ -10,7 +10,9 @@ use crate::oauth::{
 use crate::settings::{ComputeLocation, LlmProviderKind, ProviderConfig, SshConfig};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_label, ghost_button, nested_card_frame, pill_tab, settings_caption,
+    alert_banner, card_frame, field_hint, field_label, field_label_first, ghost_button,
+    nested_card_frame, pill_tab, settings_caption, settings_card_header, settings_password_field,
+    settings_text_field, settings_text_field_width,
 };
 
 use super::super::task_runner::spawn_async_task;
@@ -19,15 +21,24 @@ use super::layout::{active_pill, inactive_pill};
 
 impl OxiApp {
     pub(super) fn render_provider_config(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
+        // ── Model ──────────────────────────────────────────────────────────
         card_frame().show(ui, |ui| {
-            // Model id ─ with dropdown of models fetched from the provider's /v1/models.
-            field_label(ui, "Model id");
+            settings_card_header(ui, "Model", Some("Primary model id and context window for this provider."));
+
+            field_label_first(ui, "Model id");
             let have = self
                 .conv
                 .fetched_models
                 .get(&kind)
                 .is_some_and(|f| !f.models.is_empty());
             ui.horizontal(|ui| {
+                let refresh = ui
+                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
+                            .on_hover_text("Load available models from provider")
+                            .clicked()
+                    })
+                    .inner;
                 if have {
                     let fetched = self
                         .conv
@@ -43,7 +54,7 @@ impl OxiApp {
                     };
                     egui::ComboBox::from_id_salt(("model_combo", kind.slug()))
                         .selected_text(label)
-                        .width(ui.available_width() - 30.0)
+                        .width(ui.available_width())
                         .show_ui(ui, |ui| {
                             if !current.is_empty() && fetched.iter().all(|x| x != &current) {
                                 let _ = ui.selectable_label(false, format!("{current} (custom)"));
@@ -55,24 +66,21 @@ impl OxiApp {
                             }
                         });
                 } else {
-                    ui.add(
-                        TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).model_id)
-                            .desired_width(ui.available_width() - 30.0)
-                            .hint_text("e.g. gpt-4o-mini or kimi-k2.7-code")
-                            .margin(Margin::symmetric(8, 5)),
+                    settings_text_field(
+                        ui,
+                        &mut self.conv.settings.provider_mut(kind).model_id,
+                        "e.g. gpt-4o-mini or kimi-k2.7-code",
                     );
                 }
-                if crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
-                    .on_hover_text("Load available models from provider")
-                    .clicked()
-                {
+                if refresh {
                     self.spawn_model_fetch(ui.ctx(), kind);
                 }
             });
             // Status line for the model fetch.
             if let Some(f) = self.conv.fetched_models.get(&kind) {
-                if let Some(e) = &f.error {
-                    ui.label(RichText::new(e).size(FS_TINY).color(c_danger()));
+                if let Some(e) = f.error.clone() {
+                    ui.add_space(4.0);
+                    alert_banner(ui, &e, true);
                 } else if f.loading {
                     ui.label(
                         RichText::new("Loading models…")
@@ -87,6 +95,7 @@ impl OxiApp {
                     );
                 }
             }
+
             // Context window (auto from catalog; editable override).
             {
                 let cw = self.conv.settings.provider(kind).context_window;
@@ -98,13 +107,8 @@ impl OxiApp {
                 field_label(ui, "Context window (tokens, 0 = auto)");
                 ui.horizontal(|ui| {
                     let mut value = cw.unwrap_or(0).to_string();
-                    let resp = ui.add(
-                        TextEdit::singleline(&mut value)
-                            .desired_width(160.0)
-                            .hint_text(format!("auto ({resolved})"))
-                            .margin(Margin::symmetric(8, 5)),
-                    );
-                    if resp.changed() {
+                    let hint = format!("auto ({resolved})");
+                    if settings_text_field_width(ui, &mut value, &hint, 160.0).changed() {
                         let parsed = value.trim().parse::<usize>().ok();
                         self.conv.settings.provider_mut(kind).context_window =
                             parsed.and_then(|n| if n > 0 { Some(n) } else { None });
@@ -135,7 +139,14 @@ impl OxiApp {
                     kind,
                     LlmProviderKind::OpenAi | LlmProviderKind::GptCodex | LlmProviderKind::AzureOpenAi
                 );
-                field_label(ui, if is_gpt { "Thinking / reasoning level" } else { "Claude effort (4.6+ adaptive thinking)" });
+                field_label(
+                    ui,
+                    if is_gpt {
+                        "Thinking / reasoning level"
+                    } else {
+                        "Claude effort (4.6+ adaptive thinking)"
+                    },
+                );
                 let current = self.conv.settings.provider(kind).effort.clone();
                 let values: &[(&str, &str)] = if is_gpt {
                     &[("", "default"), ("low", "low"), ("medium", "medium"), ("high", "high")]
@@ -164,113 +175,110 @@ impl OxiApp {
                             }
                         }
                     });
-                ui.label(
-                    RichText::new(if is_gpt {
+                field_hint(
+                    ui,
+                    if is_gpt {
                         "Sent as reasoning_effort for GPT reasoning models (gpt-5/o-series) and as reasoning.effort for ChatGPT Codex."
                     } else {
                         "Sent as output_config.effort only for Claude 4.6+ adaptive-thinking models."
-                    })
-                    .size(FS_TINY)
-                    .color(c_text_muted()),
+                    },
                 );
             }
+        });
+
+        // ── Connection ─────────────────────────────────────────────────────
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                "Connection",
+                Some("Endpoint and credentials. Secrets stay in the OS keychain."),
+            );
 
             if kind == LlmProviderKind::ClaudeCodeAcp {
                 // ACP launches a subprocess instead of hitting an HTTP endpoint.
-                field_label(ui, "Agent command");
-                ui.add(
-                    TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).acp_command)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(ProviderConfig::DEFAULT_ACP_COMMAND)
-                        .margin(Margin::symmetric(8, 5)),
+                field_label_first(ui, "Agent command");
+                settings_text_field(
+                    ui,
+                    &mut self.conv.settings.provider_mut(kind).acp_command,
+                    ProviderConfig::DEFAULT_ACP_COMMAND,
                 );
-                ui.label(
-                    RichText::new(
-                        "Run through your shell. Requires the Claude Code ACP adapter (default: \
-                         npx @agentclientprotocol/claude-agent-acp). The model above is applied \
-                         via ANTHROPIC_MODEL (alias like `sonnet`/`opus` or a full id like \
-                         `claude-sonnet-5`); changing it restarts the agent.",
-                    )
-                    .size(FS_TINY)
-                    .color(c_text_faint()),
+                field_hint(
+                    ui,
+                    "Shell command for the Claude Code ACP adapter (default: npx @agentclientprotocol/claude-agent-acp). Model is applied via ANTHROPIC_MODEL; changing it restarts the agent.",
                 );
             } else {
-                // Base URL
-                field_label(ui, "Base URL (optional)");
-                ui.add(
-                    TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).base_url)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(kind.default_base_url())
-                        .margin(Margin::symmetric(8, 5)),
+                field_label_first(ui, "Base URL (optional)");
+                settings_text_field(
+                    ui,
+                    &mut self.conv.settings.provider_mut(kind).base_url,
+                    kind.default_base_url(),
                 );
             }
 
-            // API key
             field_label(ui, "API key / token");
-            ui.add(
-                TextEdit::singleline(&mut self.conv.settings.provider_mut(kind).api_key)
-                    .password(true)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(match kind {
-                        LlmProviderKind::OpenAi => "OpenAI API key",
-                        LlmProviderKind::OpenRouter => "OpenRouter API key",
-                        LlmProviderKind::AzureOpenAi => "Azure API key (or AZURE_OPENAI_API_KEY)",
-                        LlmProviderKind::CustomAnthropic => "Anthropic-compatible API key",
-                        LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
-                        LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
-                        LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
-                        LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
-                        LlmProviderKind::LocalHf => "Optional (llama-server usually ignores it)",
-                        LlmProviderKind::ClaudeCodeAcp => {
-                            "Optional ANTHROPIC_API_KEY (else Claude Code's own login is used)"
-                        }
-                    })
-                    .margin(Margin::symmetric(8, 5)),
+            let key_hint = match kind {
+                LlmProviderKind::OpenAi => "OpenAI API key",
+                LlmProviderKind::OpenRouter => "OpenRouter API key",
+                LlmProviderKind::AzureOpenAi => "Azure API key (or AZURE_OPENAI_API_KEY)",
+                LlmProviderKind::CustomAnthropic => "Anthropic-compatible API key",
+                LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
+                LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
+                LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
+                LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
+                LlmProviderKind::LocalHf => "Optional (llama-server usually ignores it)",
+                LlmProviderKind::ClaudeCodeAcp => {
+                    "Optional ANTHROPIC_API_KEY (else Claude Code's own login is used)"
+                }
+            };
+            settings_password_field(
+                ui,
+                &mut self.conv.settings.provider_mut(kind).api_key,
+                key_hint,
             );
 
             if kind == LlmProviderKind::OpenRouter {
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 nested_card_frame().show(ui, |ui| {
                     settings_caption(ui, "Optional OpenRouter headers");
-                    ui.add(
-                        TextEdit::singleline(
-                            &mut self
-                                .conv
-                                .settings
-                                .provider_mut(kind)
-                                .openrouter_http_referer,
-                        )
-                        .desired_width(f32::INFINITY)
-                        .hint_text("HTTP-Referer")
-                        .margin(Margin::symmetric(8, 5)),
+                    settings_text_field(
+                        ui,
+                        &mut self
+                            .conv
+                            .settings
+                            .provider_mut(kind)
+                            .openrouter_http_referer,
+                        "HTTP-Referer",
                     );
                     ui.add_space(4.0);
-                    ui.add(
-                        TextEdit::singleline(
-                            &mut self.conv.settings.provider_mut(kind).openrouter_title,
-                        )
-                        .desired_width(f32::INFINITY)
-                        .hint_text("X-Title")
-                        .margin(Margin::symmetric(8, 5)),
+                    settings_text_field(
+                        ui,
+                        &mut self.conv.settings.provider_mut(kind).openrouter_title,
+                        "X-Title",
                     );
                 });
             }
-
-            if kind == LlmProviderKind::LocalHf {
-                self.render_compute_target_section(ui, kind);
-                self.render_local_hf_section(ui);
-            } else if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
-                self.render_compute_target_section(ui, kind);
-            }
         });
+
+        // ── Compute target / Local HF ──────────────────────────────────────
+        if kind == LlmProviderKind::LocalHf {
+            self.render_compute_target_section(ui, kind);
+            self.render_local_hf_section(ui);
+        } else if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
+            self.render_compute_target_section(ui, kind);
+        }
     }
 
     /// "Local" vs "Remote (SSH)" compute target, shown only for self-hosted runtimes
-    /// (LM Studio / Ollama) where running on another host over SSH is meaningful.
+    /// (LM Studio / Ollama / Local HF) where running on another host over SSH is meaningful.
     fn render_compute_target_section(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
-        ui.add_space(8.0);
-        nested_card_frame().show(ui, |ui| {
-            settings_caption(ui, "Compute target");
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                "Compute target",
+                Some("Where the model runtime listens: this machine, or another host via SSH tunnel."),
+            );
             let is_remote = matches!(
                 self.conv.settings.provider(kind).location,
                 ComputeLocation::RemoteSsh(_)
@@ -298,9 +306,7 @@ impl OxiApp {
                         if kind == LlmProviderKind::LocalHf {
                             "Runs the oxi-managed HF model on another host over SSH. oxi can install llama-server, download GGUF files, start/stop the runtime, and tunnel chat to it."
                         } else {
-                            "Runs the model on another host (e.g. a machine on your LAN) reached over SSH. \
-                             The runtime must be listening on 127.0.0.1 on that host; oxi \
-                             forwards a local port to it."
+                            "Runs the model on another host (e.g. a machine on your LAN) over SSH. The runtime must listen on 127.0.0.1 there; oxi forwards a local port to it."
                         },
                     )
                     .size(FS_TINY)
@@ -310,55 +316,40 @@ impl OxiApp {
 
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        field_label(ui, "SSH host");
-                        ui.add(
-                            TextEdit::singleline(&mut cfg.host)
-                                .desired_width(200.0)
-                                .hint_text("192.168.1.10 or myhost.local")
-                                .margin(Margin::symmetric(8, 5)),
+                        field_label_first(ui, "SSH host");
+                        settings_text_field_width(
+                            ui,
+                            &mut cfg.host,
+                            "192.168.1.10 or myhost.local",
+                            220.0,
                         );
                     });
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
-                        field_label(ui, "SSH port");
+                        field_label_first(ui, "SSH port");
                         let mut port_str = cfg.port.to_string();
-                        if ui
-                            .add(
-                                TextEdit::singleline(&mut port_str)
-                                    .desired_width(70.0)
-                                    .margin(Margin::symmetric(8, 5)),
-                            )
-                            .changed()
-                            && let Ok(p) = port_str.trim().parse::<u16>() {
-                                cfg.port = p;
-                            }
+                        if settings_text_field_width(ui, &mut port_str, "22", 80.0).changed()
+                            && let Ok(p) = port_str.trim().parse::<u16>()
+                        {
+                            cfg.port = p;
+                        }
                     });
                 });
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        field_label(ui, "SSH user");
-                        ui.add(
-                            TextEdit::singleline(&mut cfg.user)
-                                .desired_width(200.0)
-                                .hint_text("e.g. ioan")
-                                .margin(Margin::symmetric(8, 5)),
-                        );
+                        field_label_first(ui, "SSH user");
+                        settings_text_field_width(ui, &mut cfg.user, "e.g. ioan", 220.0);
                     });
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
-                        field_label(ui, "Remote runtime port");
+                        field_label_first(ui, "Remote runtime port");
                         let mut rport_str = cfg.remote_runtime_port.to_string();
-                        if ui
-                            .add(
-                                TextEdit::singleline(&mut rport_str)
-                                    .desired_width(70.0)
-                                    .margin(Margin::symmetric(8, 5)),
-                            )
-                            .changed()
-                            && let Ok(p) = rport_str.trim().parse::<u16>() {
-                                cfg.remote_runtime_port = p;
-                            }
+                        if settings_text_field_width(ui, &mut rport_str, "11434", 80.0).changed()
+                            && let Ok(p) = rport_str.trim().parse::<u16>()
+                        {
+                            cfg.remote_runtime_port = p;
+                        }
                     });
                 });
             }
@@ -380,25 +371,18 @@ impl OxiApp {
                 creds.get(kind.slug()).unwrap_or_default().to_string()
             });
 
-        ui.add_space(8.0);
-        nested_card_frame().show(ui, |ui| {
-            field_label(ui, "SSH password");
+        ui.add_space(12.0);
+        card_frame().show(ui, |ui| {
+            settings_card_header(
+                ui,
+                "SSH credentials",
+                Some("Password is stored in the OS keychain, never in settings.json."),
+            );
+            field_label_first(ui, "SSH password");
             let changed = {
                 let pw = self.conv.ssh_password_drafts.get_mut(&kind).unwrap();
-                ui.add(
-                    TextEdit::singleline(pw)
-                        .password(true)
-                        .desired_width(240.0)
-                        .hint_text("SSH password")
-                        .margin(Margin::symmetric(8, 5)),
-                )
-                .changed()
+                settings_password_field(ui, pw, "SSH password").changed()
             };
-            ui.label(
-                RichText::new("Stored in the OS keychain, never in settings.json.")
-                    .size(FS_TINY)
-                    .color(c_text_faint()),
-            );
             if changed {
                 let pw = self
                     .conv
@@ -426,7 +410,7 @@ impl OxiApp {
                 .and_then(|c| c.pinned_host_key.clone());
             let mut rerun_test = false;
             let mut accept_key: Option<String> = None;
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 if ghost_button(ui, "Test connection", false).clicked() {
                     rerun_test = true;
                 }
@@ -438,40 +422,37 @@ impl OxiApp {
                                 .size(FS_TINY)
                                 .color(c_text_muted()),
                         );
-                    } else if let Some(result) = &status.result {
-                        match result {
-                            Ok(port) => {
-                                ui.label(
-                                    RichText::new(format!("Connected (local tunnel port {port})"))
-                                        .size(FS_TINY)
-                                        .color(c_accent()),
-                                );
-                            }
-                            Err(crate::compute::TunnelError::HostKeyMismatch {
-                                pinned,
-                                observed,
-                            }) => {
-                                ui.label(
-                                    RichText::new(format!(
-                                        "Host key changed! Pinned {pinned}, server now presents \
-                                         {observed}. Accept only if you know the host was rebuilt.",
-                                    ))
-                                    .size(FS_TINY)
-                                    .color(c_danger()),
-                                );
-                                if ghost_button(ui, "Accept new key", false).clicked() {
-                                    accept_key = Some(observed.clone());
-                                }
-                            }
-                            Err(e) => {
-                                ui.label(
-                                    RichText::new(e.to_string()).size(FS_TINY).color(c_danger()),
-                                );
-                            }
-                        }
+                    } else if let Some(Ok(port)) = &status.result {
+                        ui.label(
+                            RichText::new(format!("Connected (local tunnel port {port})"))
+                                .size(FS_TINY)
+                                .color(c_accent()),
+                        );
                     }
                 }
             });
+            if let Some(status) = &status
+                && let Some(Err(err)) = &status.result
+            {
+                ui.add_space(6.0);
+                match err {
+                    crate::compute::TunnelError::HostKeyMismatch { pinned, observed } => {
+                        alert_banner(
+                            ui,
+                            &format!(
+                                "Host key changed! Pinned {pinned}, server now presents \
+                                 {observed}. Accept only if you know the host was rebuilt.",
+                            ),
+                            true,
+                        );
+                        ui.add_space(6.0);
+                        if ghost_button(ui, "Accept new key", false).clicked() {
+                            accept_key = Some(observed.clone());
+                        }
+                    }
+                    e => alert_banner(ui, &e.to_string(), true),
+                }
+            }
             if let Some(fp) = &pinned {
                 let short = fp.get(..23).unwrap_or(fp.as_str());
                 ui.label(
