@@ -17,7 +17,6 @@ use crate::agent::history::{
 };
 use crate::agent::loop_ctx::LoopCtx;
 use crate::agent::openai::{run_azure_chat_loop, run_chat_loop};
-use crate::agent::prompt::build_system_prompt;
 use crate::agent::tools::{ToolEnv, tool_definitions_json};
 use crate::model::ChatMessage;
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
@@ -197,7 +196,8 @@ pub fn spawn_agent_run(
                 return;
             }
 
-            let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
+            let system =
+                crate::agent::prompt::build_system_prompt_for_workspace(&settings, cwd_ref);
             let context_tokens = cfg.effective_context_window(settings.context_window_default);
             let context_budget = crate::agent::history::context_char_budget_from_tokens(
                 context_tokens,

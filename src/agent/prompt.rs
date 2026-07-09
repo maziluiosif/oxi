@@ -1,12 +1,33 @@
 //! System prompt construction (aligned with pi `buildSystemPrompt` subset).
 
+use std::path::Path;
+
 use chrono::Utc;
 
 use crate::settings::{ALL_TOOL_NAMES, AppSettings};
 
 pub const DEFAULT_AGENT_SYSTEM_PROMPT: &str = "You are an expert coding assistant. You help users by reading files, running shell commands, searching the codebase, and editing or writing files.\n\nAvailable tools (use only these when enabled): {tools_list}\n\nGuidelines:\n- Prefer reading files before editing.\n- Keep shell commands safe and relevant to the project.\n- When editing, ensure old text matches exactly.\n- Do not guess about project-specific implementation details when tools are available.\n- Verify claims by reading the relevant source files before answering.\n- Prefer evidence from the codebase over assumptions.";
 
-pub fn build_system_prompt(settings: &AppSettings, cwd: &str) -> String {
+const AGENTS_MD_MAX_BYTES: usize = 64 * 1024;
+
+pub fn build_system_prompt_for_workspace(settings: &AppSettings, workspace_root: &Path) -> String {
+    let agents_md = if settings.include_agents_md {
+        read_agents_md(workspace_root)
+    } else {
+        None
+    };
+    build_system_prompt_with_project_instructions(
+        settings,
+        workspace_root.to_string_lossy().as_ref(),
+        agents_md.as_deref(),
+    )
+}
+
+fn build_system_prompt_with_project_instructions(
+    settings: &AppSettings,
+    cwd: &str,
+    agents_md: Option<&str>,
+) -> String {
     let date = Utc::now().format("%Y-%m-%d");
     let cwd_norm = cwd.replace('\\', "/");
     let tools: Vec<&str> = ALL_TOOL_NAMES
@@ -24,6 +45,64 @@ pub fn build_system_prompt(settings: &AppSettings, cwd: &str) -> String {
         template
     };
 
-    let body = template.replace("{tools_list}", &tools_list);
+    let mut body = template.replace("{tools_list}", &tools_list);
+    if let Some(contents) = agents_md.map(str::trim).filter(|s| !s.is_empty()) {
+        body.push_str("\n\nProject instructions from AGENTS.md:\n");
+        body.push_str(contents);
+    }
     format!("{body}\n\nCurrent date: {date}\nCurrent working directory: {cwd_norm}")
+}
+
+fn read_agents_md(workspace_root: &Path) -> Option<String> {
+    let path = workspace_root.join("AGENTS.md");
+    let metadata = std::fs::metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.len() as usize > AGENTS_MD_MAX_BYTES {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn includes_agents_md_when_enabled() {
+        let root = unique_temp_dir("agents-md-enabled");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "Run tests with cargo test.\n").unwrap();
+
+        let prompt = build_system_prompt_for_workspace(&AppSettings::default(), &root);
+
+        assert!(prompt.contains("Project instructions from AGENTS.md:"));
+        assert!(prompt.contains("Run tests with cargo test."));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skips_agents_md_when_disabled() {
+        let root = unique_temp_dir("agents-md-disabled");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "Do not include me.\n").unwrap();
+        let settings = AppSettings {
+            include_agents_md: false,
+            ..Default::default()
+        };
+
+        let prompt = build_system_prompt_for_workspace(&settings, &root);
+
+        assert!(!prompt.contains("Project instructions from AGENTS.md:"));
+        assert!(!prompt.contains("Do not include me."));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "oxi-{name}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
 }

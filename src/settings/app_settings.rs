@@ -36,6 +36,9 @@ pub struct AppSettings {
     pub providers: BTreeMap<LlmProviderKind, ProviderConfig>,
     /// Single editable system prompt template.
     pub system_prompt: String,
+    /// Include root-level `AGENTS.md` project instructions in the agent system prompt when present.
+    #[serde(default = "default_include_agents_md")]
+    pub include_agents_md: bool,
     /// One flag per entry in [`ALL_TOOL_NAMES`]. Stored as a `Vec` so older settings files
     /// with fewer tools still deserialize; [`AppSettings::normalize`] resizes it to the
     /// current tool count, enabling any newly-added tools by default.
@@ -225,6 +228,10 @@ fn default_chat_column_max_width() -> f32 {
     crate::theme::CHAT_COLUMN_MAX_DEFAULT
 }
 
+fn default_include_agents_md() -> bool {
+    true
+}
+
 /// Clamp bounds for the bottom terminal panel height.
 pub const TERMINAL_H_MIN: f32 = 96.0;
 pub const TERMINAL_H_MAX: f32 = 900.0;
@@ -256,6 +263,7 @@ impl Default for AppSettings {
             active_provider: LlmProviderKind::OpenAi,
             providers,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
+            include_agents_md: default_include_agents_md(),
             tools_enabled: default_tools_enabled(),
             web_search_backend: WebSearchBackend::default(),
             searxng_url: default_searxng_url(),

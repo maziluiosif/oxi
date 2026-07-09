@@ -351,8 +351,11 @@ Supported placeholder:
 
 At runtime, the prompt builder also appends:
 
+- root-level `AGENTS.md` project instructions, when present and enabled in Settings
 - current date
 - current working directory
+
+`AGENTS.md` loading is intentionally simple: oxi reads only `<workspace>/AGENTS.md`, caps it at 64 KiB, and labels it clearly as project instructions in the system prompt.
 
 There is also a separate editable system prompt for AI commit-message generation.
 

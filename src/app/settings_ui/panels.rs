@@ -284,7 +284,23 @@ impl OxiApp {
                 .size(FS_TINY)
                 .color(c_text_muted()),
             );
-            ui.add_space(4.0);
+            ui.add_space(8.0);
+            let mut include_agents_md = self.conv.settings.include_agents_md;
+            if ui
+                .checkbox(
+                    &mut include_agents_md,
+                    RichText::new("Include workspace AGENTS.md")
+                        .size(FS_SMALL)
+                        .color(c_text()),
+                )
+                .on_hover_text(
+                    "When on, oxi appends root-level AGENTS.md project instructions to the agent system prompt.",
+                )
+                .changed()
+            {
+                self.conv.settings.include_agents_md = include_agents_md;
+            }
+            ui.add_space(8.0);
             ui.add(
                 TextEdit::multiline(&mut self.conv.settings.system_prompt)
                     .desired_width(f32::INFINITY)

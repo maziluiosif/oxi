@@ -341,8 +341,7 @@ impl OxiApp {
             s.messages[..s.messages.len() - 1].to_vec()
         };
         let settings = self.conv.settings.clone();
-        let system =
-            crate::agent::prompt::build_system_prompt(&settings, cwd.to_string_lossy().as_ref());
+        let system = crate::agent::prompt::build_system_prompt_for_workspace(&settings, &cwd);
         let tools = crate::agent::tools::tool_definitions_json(
             &settings.tools_enabled,
             settings.bash_timeout_cap_secs,

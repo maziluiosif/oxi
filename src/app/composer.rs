@@ -497,9 +497,10 @@ impl OxiApp {
     /// Estimated size (chars) of what a run for `key` sends: system prompt + tool definitions
     /// + all persisted messages. Excludes unsent composer input.
     pub(crate) fn estimated_session_context_chars(&self, key: SessionKey) -> usize {
-        let root = self.conv.workspaces[key.workspace_idx].root_path.as_str();
+        let root = std::path::Path::new(self.conv.workspaces[key.workspace_idx].root_path.as_str());
         let system_chars =
-            crate::agent::prompt::build_system_prompt(&self.conv.settings, root).len();
+            crate::agent::prompt::build_system_prompt_for_workspace(&self.conv.settings, root)
+                .len();
         let messages_chars = self
             .session_by_key(key)
             .messages
