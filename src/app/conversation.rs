@@ -99,10 +99,9 @@ impl OxiApp {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             if ui
                                 .add_sized(
-                                    [120.0, 28.0],
-                                    Button::new(crate::ui::chrome::icon_label_job(
+                                    [28.0, 28.0],
+                                    Button::new(crate::ui::chrome::icon_glyph_rich(
                                         ICON_PLUS,
-                                        "New",
                                         FS_SMALL,
                                         crate::theme::c_on_accent(),
                                     ))
@@ -142,7 +141,7 @@ impl OxiApp {
                                     )
                                     .truncate(),
                                 );
-                                let provider = self.conv.settings.active_config().subtitle();
+                                let provider = self.conv.settings.active_config().provider.label();
                                 ui.add(
                                     Label::new(
                                         RichText::new(format!("{workspace} · {provider}"))
@@ -176,11 +175,11 @@ impl OxiApp {
                 err.to_string(),
             )
         } else if self.active_waiting_response() {
-            let mut detail = self
+            let elapsed = self
                 .active_run_state()
                 .and_then(|s| s.stream_started_at)
-                .map(|t| format!(" · {}", format_stream_elapsed(t.elapsed())))
-                .unwrap_or_default();
+                .map(|t| format_stream_elapsed(t.elapsed()));
+            let mut hover = "Agent is working".to_string();
             if let Some(usage) = self.active_run_state().map(|s| {
                 if s.turn_usage.is_zero() {
                     s.last_turn_usage
@@ -189,32 +188,21 @@ impl OxiApp {
                 }
             }) && !usage.is_zero()
             {
-                detail.push_str(&format!(" · {}", format_token_usage(usage)));
+                hover = format!("{hover} · {}", format_token_usage(usage));
             }
-            (
-                format!("Running{detail}"),
-                c_accent(),
-                "Agent is working".to_string(),
-            )
+            let label = match elapsed {
+                Some(e) => format!("Running · {e}"),
+                None => "Running".to_string(),
+            };
+            (label, c_accent(), hover)
         } else {
-            let mut detail = String::new();
+            let mut hover = "Ready to send".to_string();
             if let Some(usage) = self.active_run_state().map(|s| s.last_turn_usage)
                 && !usage.is_zero()
             {
-                detail.push_str(&format!(" · {}", format_token_usage(usage)));
+                hover = format!("Ready · last run: {}", format_token_usage(usage));
             }
-            (
-                format!("Ready{detail}"),
-                crate::theme::c_success(),
-                if detail.is_empty() {
-                    "Ready to send".to_string()
-                } else {
-                    format!(
-                        "Ready to send · last run: {}",
-                        detail.trim_start_matches(" · ")
-                    )
-                },
-            )
+            ("Ready".to_string(), crate::theme::c_success(), hover)
         };
 
         // Hand-painted at the same 28px height as the neighboring header buttons —
@@ -251,12 +239,14 @@ impl OxiApp {
     }
 
     pub(crate) fn render_empty_state(&mut self, ui: &mut Ui) {
-        ui.add_space(44.0);
-        ui.set_max_width(520.0);
+        let col_w = content_wrap_width(ui);
+        let compact = col_w < 560.0;
+        ui.add_space(if compact { 20.0 } else { 44.0 });
+        ui.set_max_width(col_w.min(520.0));
         ui.vertical(|ui| {
             ui.label(
                 RichText::new("What should oxi help with?")
-                    .size(FS_H1)
+                    .size(if compact { FS_H2 } else { FS_H1 })
                     .color(c_text())
                     .strong(),
             );
@@ -268,7 +258,7 @@ impl OxiApp {
                 .size(FS_BODY)
                 .color(c_text_muted()),
             );
-            ui.add_space(18.0);
+            ui.add_space(if compact { 12.0 } else { 18.0 });
 
             ui.horizontal_wrapped(|ui| {
                 if crate::ui::chrome::ghost_button_icon(
@@ -288,7 +278,7 @@ impl OxiApp {
                 }
             });
 
-            ui.add_space(20.0);
+            ui.add_space(if compact { 12.0 } else { 20.0 });
             ui.label(
                 RichText::new("Try one of these")
                     .size(FS_TINY)
@@ -302,7 +292,8 @@ impl OxiApp {
                 "Explain how this project is structured",
                 "Run the tests and fix the first failing issue",
             ];
-            for prompt in prompts {
+            let shown = if compact { &prompts[..2] } else { &prompts[..] };
+            for prompt in shown {
                 let response = Frame::new()
                     .fill(c_bg_input())
                     .stroke(Stroke::new(1.0, c_border_subtle()))
@@ -318,7 +309,7 @@ impl OxiApp {
                                     .color(c_accent()),
                             );
                             ui.add_space(5.0);
-                            ui.label(RichText::new(prompt).size(FS_SMALL).color(c_text()));
+                            ui.label(RichText::new(*prompt).size(FS_SMALL).color(c_text()));
                         });
                     })
                     .response
@@ -376,8 +367,13 @@ impl OxiApp {
             has_selection || (primary_down && dragged_far)
         };
 
+        // Hold stick-to-bottom a few frames after the turn ends so the "Working…" →
+        // "Worked…" collapse reclamps the scroll offset in the same pass (avoids the
+        // one-frame jump up then down when stick turns off at the same time as the fold).
+        let hold_stick = self.conv.stick_bottom_hold_frames > 0;
         let stick_bottom = !user_has_selection
             && (force_scroll_bottom
+                || hold_stick
                 || self.active_waiting_response()
                 || self.conv.workspaces[wi].sessions[si]
                     .messages
@@ -506,6 +502,10 @@ impl OxiApp {
 
         if self.conv.scroll_to_bottom_once {
             self.conv.scroll_to_bottom_once = false;
+        }
+        if self.conv.stick_bottom_hold_frames > 0 {
+            self.conv.stick_bottom_hold_frames -= 1;
+            ui.ctx().request_repaint();
         }
     }
 }

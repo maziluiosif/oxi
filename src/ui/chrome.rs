@@ -75,12 +75,7 @@ fn settings_text_field_opts(
 }
 
 /// Framed multiline settings editor (system prompts, etc.).
-pub fn settings_text_area(
-    ui: &mut Ui,
-    text: &mut String,
-    hint: &str,
-    rows: usize,
-) -> Response {
+pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Response {
     Frame::new()
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
@@ -139,12 +134,7 @@ pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) 
 
 /// Card header: caption + optional one-line helper. Returns nothing; just paints.
 pub fn settings_card_header(ui: &mut Ui, title: &str, help: Option<&str>) {
-    ui.label(
-        RichText::new(title)
-            .size(FS_BODY)
-            .color(c_text())
-            .strong(),
-    );
+    ui.label(RichText::new(title).size(FS_BODY).color(c_text()).strong());
     if let Some(help) = help {
         ui.add_space(2.0);
         ui.label(RichText::new(help).size(FS_TINY).color(c_text_muted()));

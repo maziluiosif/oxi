@@ -223,6 +223,9 @@ pub struct ConversationState {
     pub chat_scroll_id: egui::Id,
     pub pending_images: Vec<(String, Vec<u8>)>,
     pub scroll_to_bottom_once: bool,
+    /// Keep transcript `stick_to_bottom` for a few frames after a turn ends so the
+    /// "Working…" → "Worked…" collapse reclamps scroll without a one-frame jump.
+    pub stick_bottom_hold_frames: u8,
     pub input_history: Vec<String>,
     pub input_history_index: Option<usize>,
     pub input_history_draft: String,

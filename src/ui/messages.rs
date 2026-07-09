@@ -28,7 +28,7 @@ use crate::model::{
 use crate::theme::*;
 use crate::ui::preview_expand::expand_persist_id;
 
-use thinking::{render_thinking_group_block, thinking_group_is_live};
+use thinking::{render_thinking_group_block_opts, thinking_group_is_live};
 use tool_pill::{ExploredClusterCtx, render_explored_cluster, render_single_tool_block};
 
 fn user_image_texture(
@@ -144,16 +144,18 @@ pub fn render_message(
     }
 
     if msg.role == MsgRole::User {
+        // Right-aligned chat bubble (capped width) so user turns read as chat, not a document.
+        let bubble_w = (col_w * 0.78).clamp(220.0, col_w);
         let response = ui
-            .vertical(|ui| {
-                ui.set_width(col_w);
+            .with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                ui.set_max_width(col_w);
                 Frame::new()
                     .fill(c_user_bubble())
-                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .corner_radius(CornerRadius::same(10))
+                    .stroke(Stroke::new(1.0, c_user_bubble_border()))
+                    .corner_radius(CornerRadius::same(12))
                     .inner_margin(Margin::symmetric(12, 9))
                     .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
+                        ui.set_max_width(bubble_w);
                         if !msg.text.is_empty() {
                             ui.add(
                                 Label::new(
@@ -175,7 +177,15 @@ pub fn render_message(
                     });
             })
             .response;
-        ui.add_space(8.0);
+        if !msg.text.is_empty() {
+            let text = msg.text.clone();
+            response.context_menu(|ui| {
+                if ui.button("Copy message").clicked() {
+                    ui.ctx().copy_text(text);
+                }
+            });
+        }
+        ui.add_space(10.0);
         return response;
     }
 
@@ -319,7 +329,14 @@ fn render_activity_range(
                     global.last().copied().unwrap_or(global[0]) + 1,
                     streaming,
                 );
-                render_thinking_group_block(ui, msg_idx, global[0], combined, thinking_live);
+                render_thinking_group_block_opts(
+                    ui,
+                    msg_idx,
+                    global[0],
+                    combined,
+                    thinking_live,
+                    true,
+                );
             }
             AssistantBlockGroup::Answer(i) => {
                 let gi = start + i;
@@ -386,9 +403,20 @@ fn render_activity_summary(
             None => "Working".to_string(),
         }
     } else {
-        match worked_duration {
+        let base = match worked_duration {
             Some(d) => format!("Worked for {}", format_worked_duration(d)),
             None => "Worked".to_string(),
+        };
+        let tool_n = blocks[..worked_end]
+            .iter()
+            .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
+            .count();
+        if tool_n == 0 {
+            base
+        } else if tool_n == 1 {
+            format!("{base} · 1 tool")
+        } else {
+            format!("{base} · {tool_n} tools")
         }
     };
 

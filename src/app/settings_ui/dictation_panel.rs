@@ -37,7 +37,9 @@ impl OxiApp {
             if ui
                 .checkbox(
                     &mut enabled,
-                    RichText::new("Enable dictation").size(FS_SMALL).color(c_text()),
+                    RichText::new("Enable dictation")
+                        .size(FS_SMALL)
+                        .color(c_text()),
                 )
                 .changed()
             {
@@ -119,7 +121,8 @@ impl OxiApp {
                         if let Some(m) = &downloaded {
                             if ghost_button_icon(ui, ICON_TRASH, "Delete", true).clicked() {
                                 let _ = voice_models::remove_downloaded(&m.id);
-                                self.conv.voice_ui.downloaded = voice_models::load_manifest().models;
+                                self.conv.voice_ui.downloaded =
+                                    voice_models::load_manifest().models;
                                 if is_active {
                                     self.conv.settings.dictation.model_id = None;
                                 }

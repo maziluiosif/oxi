@@ -6,7 +6,7 @@ use crate::settings::{ALL_TOOL_NAMES, LlmProviderKind};
 use crate::theme::*;
 use crate::ui::chrome::{
     card_frame, field_hint, field_label, field_label_first, ghost_button, hairline, pill_tab,
-    settings_card_header, settings_caption, settings_section_title, settings_text_area,
+    settings_caption, settings_card_header, settings_section_title, settings_text_area,
     settings_text_field, settings_text_field_width,
 };
 
@@ -168,7 +168,9 @@ impl OxiApp {
         settings_section_title(
             ui,
             "Tools & safety",
-            Some("Control which tools the agent can call, when it must ask first, and how web search works."),
+            Some(
+                "Control which tools the agent can call, when it must ask first, and how web search works.",
+            ),
         );
 
         // ── Tools ──────────────────────────────────────────────────────────
@@ -182,11 +184,7 @@ impl OxiApp {
                 if gi > 0 {
                     ui.add_space(10.0);
                 }
-                ui.label(
-                    RichText::new(*group)
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
-                );
+                ui.label(RichText::new(*group).size(FS_TINY).color(c_text_muted()));
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
@@ -587,7 +585,11 @@ impl OxiApp {
         card_frame().show(ui, |ui| {
             let themes = crate::theme::available_themes();
             let current = self.conv.settings.theme_id.clone();
-            settings_card_header(ui, "Theme", Some("Built-in themes plus any custom JSON themes."));
+            settings_card_header(
+                ui,
+                "Theme",
+                Some("Built-in themes plus any custom JSON themes."),
+            );
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 for t in &themes {
@@ -602,7 +604,11 @@ impl OxiApp {
             hairline(ui);
             ui.add_space(12.0);
             let current_density = self.conv.settings.ui_density;
-            settings_card_header(ui, "Text size", Some("Scales the whole UI (density / zoom)."));
+            settings_card_header(
+                ui,
+                "Text size",
+                Some("Scales the whole UI (density / zoom)."),
+            );
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 for d in crate::settings::UiDensity::ALL {
@@ -628,10 +634,7 @@ impl OxiApp {
                 )
                 .suffix("px"),
             );
-            field_hint(
-                ui,
-                "Raise it when the sidebar or git panel is hidden.",
-            );
+            field_hint(ui, "Raise it when the sidebar or git panel is hidden.");
         });
         ui.add_space(10.0);
         ui.label(
@@ -653,16 +656,12 @@ fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         LlmProviderKind::Ollama => {
             "Talk to a local or LAN Ollama server (OpenAI-compatible /v1 API)."
         }
-        LlmProviderKind::LmStudio => {
-            "Talk to a local or LAN LM Studio server (OpenAI-compatible)."
-        }
+        LlmProviderKind::LmStudio => "Talk to a local or LAN LM Studio server (OpenAI-compatible).",
         LlmProviderKind::OpenAi => "OpenAI Chat Completions API.",
         LlmProviderKind::OpenRouter => "OpenRouter multi-model router.",
         LlmProviderKind::AzureOpenAi => "Azure OpenAI deployment endpoint.",
         LlmProviderKind::CustomAnthropic => "Any Anthropic Messages-compatible endpoint.",
-        LlmProviderKind::GptCodex => {
-            "ChatGPT / Codex via OAuth or OpenAI API-key fallback."
-        }
+        LlmProviderKind::GptCodex => "ChatGPT / Codex via OAuth or OpenAI API-key fallback.",
         LlmProviderKind::OpenCodeGo => "OpenCode Go subscription endpoint.",
         LlmProviderKind::ClaudeCodeAcp => {
             "Drive Claude Code as an external agent over the Agent Client Protocol."

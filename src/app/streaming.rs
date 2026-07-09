@@ -219,7 +219,8 @@ impl OxiApp {
 
     /// Drop the partial text/thinking of the round being retried after a mid-stream
     /// failure, so the regenerated round is not shown twice. Tool blocks from
-    /// completed rounds are kept.
+    /// completed rounds are kept; in-flight tools (early `ToolStart` before args
+    /// finished / execution began) are dropped so they don't linger as ghost pills.
     pub(crate) fn reset_streaming_tail(&mut self, key: SessionKey) {
         let Some(m) = self.last_assistant_mut(key) else {
             return;
@@ -229,7 +230,11 @@ impl OxiApp {
         }
         while matches!(
             m.blocks.last(),
-            Some(AssistantBlock::Answer(_) | AssistantBlock::Thinking(_))
+            Some(
+                AssistantBlock::Answer(_)
+                    | AssistantBlock::Thinking(_)
+                    | AssistantBlock::Tool { is_error: None, .. }
+            )
         ) {
             m.blocks.pop();
         }
@@ -256,26 +261,42 @@ impl OxiApp {
             return;
         };
         let id = tool_call_id.unwrap_or("").to_string();
-        if !id.is_empty() {
-            let dup = m
-                .blocks
-                .iter()
-                .any(|b| matches!(b, AssistantBlock::Tool { tool_call_id: tid, .. } if tid == &id));
-            if dup {
-                return;
-            }
-        } else if let Some(AssistantBlock::Tool {
-            name: n, output, ..
-        }) = m.blocks.last()
-            && n == name
-            && output.is_empty()
-        {
-            return;
-        }
         let args_summary = args.map(|a| {
             let s = a.to_string();
             s.chars().take(800).collect::<String>()
         });
+        // Providers may emit an early ToolStart (name+id, args still streaming) and a
+        // second ToolStart with full args right before execution. Update the existing
+        // block's summary instead of creating a duplicate pill.
+        if !id.is_empty() {
+            for b in m.blocks.iter_mut().rev() {
+                if let AssistantBlock::Tool {
+                    tool_call_id: tid,
+                    args_summary: existing,
+                    ..
+                } = b
+                    && tid == &id
+                {
+                    if args_summary.is_some() {
+                        *existing = args_summary;
+                    }
+                    return;
+                }
+            }
+        } else if let Some(AssistantBlock::Tool {
+            name: n,
+            output,
+            args_summary: existing,
+            ..
+        }) = m.blocks.last_mut()
+            && n == name
+            && output.is_empty()
+        {
+            if args_summary.is_some() {
+                *existing = args_summary;
+            }
+            return;
+        }
         m.blocks.push(AssistantBlock::Tool {
             tool_call_id: id,
             name: name.to_string(),
@@ -407,6 +428,9 @@ impl OxiApp {
             .find(|m| m.role == MsgRole::Assistant)
         {
             last.finish_streaming();
+        }
+        if key == self.active_session_key() {
+            self.conv.stick_bottom_hold_frames = 3;
         }
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
         if let Err(e) =

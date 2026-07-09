@@ -81,7 +81,7 @@ impl Palette {
         text_muted: rgb(0x8b, 0x8f, 0x99),
         text_faint: rgb(0x6b, 0x6d, 0x78),
         sidebar_section: rgb(0x6d, 0x71, 0x7b),
-        user_bubble: rgb(0x1c, 0x1e, 0x22),
+        user_bubble: rgb(0x22, 0x24, 0x2a),
         row_active: rgb(0x21, 0x24, 0x2a),
         row_hover: rgb(0x18, 0x1a, 0x1e),
         success: rgb(0x4a, 0xc8, 0x8c),
@@ -123,7 +123,7 @@ impl Palette {
         text_muted: rgb(0x5f, 0x63, 0x6b),
         text_faint: rgb(0x8b, 0x8f, 0x99),
         sidebar_section: rgb(0x80, 0x84, 0x8e),
-        user_bubble: rgb(0xee, 0xf0, 0xf3),
+        user_bubble: rgb(0xe8, 0xea, 0xef),
         row_active: rgb(0xe3, 0xe6, 0xec),
         row_hover: rgb(0xec, 0xec, 0xf0),
         success: rgb(0x2f, 0x9e, 0x6f),
@@ -164,7 +164,7 @@ impl Palette {
         text_muted: rgb(0x8b, 0x8f, 0x99),
         text_faint: rgb(0x6b, 0x6d, 0x78),
         sidebar_section: rgb(0x6d, 0x71, 0x7b),
-        user_bubble: rgb(0x0e, 0x0e, 0x11),
+        user_bubble: rgb(0x14, 0x14, 0x18),
         row_active: rgb(0x17, 0x18, 0x1d),
         row_hover: rgb(0x10, 0x10, 0x13),
         success: rgb(0x4a, 0xc8, 0x8c),
@@ -376,6 +376,12 @@ pub fn c_pill_selected_border() -> Color32 {
 pub fn c_composer_focus_border() -> Color32 {
     let p = active_palette();
     surface_tint(p.border, p.accent, 115)
+}
+
+/// Soft accent border for user chat bubbles so they separate from the transcript.
+pub fn c_user_bubble_border() -> Color32 {
+    let p = active_palette();
+    surface_tint(p.border, p.accent, 70)
 }
 
 // ── Tool pill palettes (single source of truth for the transcript tool pills + edit blocks) ──

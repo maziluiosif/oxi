@@ -152,7 +152,7 @@ impl OxiApp {
                         let galley_h = te_output.galley.rect.height();
                         self.conv.composer_measured_text_h = galley_h;
 
-                        // Enter → send, Shift+Enter → newline
+                        // Enter → send, Shift+Enter → newline; ↑/↓ → input history.
                         let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                         let shift_held = ui.input(|i| i.modifiers.shift);
                         if te_output.response.has_focus() && enter_pressed && !shift_held {
@@ -164,6 +164,9 @@ impl OxiApp {
                             if can_send_now {
                                 self.send_message();
                             }
+                        }
+                        if te_output.response.has_focus() {
+                            self.handle_composer_history_keys(ui, &te_output.response);
                         }
 
                         ui.add_space(COMPOSER_GAP);
@@ -199,6 +202,7 @@ impl OxiApp {
     /// `[+]  [model ▾]                                  [↑]`
     fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool, composer_focused: bool) {
         ui.spacing_mut().item_spacing.x = 6.0;
+        let narrow = ui.available_width() < 520.0;
 
         // ── Left: round attach button ──────────────────────────────────────
         let attach = crate::ui::chrome::icon_button_core(
@@ -221,8 +225,8 @@ impl OxiApp {
             self.pick_image_attachment();
         }
 
-        // ── Left: minimal model selector (plain text + chevron) ────────────
-        self.render_model_selector(ui);
+        // ── Left: provider + model (compact widths when the chat column is squeezed) ──
+        self.render_model_selector(ui, narrow);
 
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -278,21 +282,23 @@ impl OxiApp {
             }
 
             self.render_context_indicator(ui);
-            ui.add_space(8.0);
 
-            // Quiet keyboard hint, faded in only while the input has focus.
-            let hint_t = ui.ctx().animate_bool_with_time(
-                Id::new("composer_hint_anim"),
-                composer_focused,
-                0.15,
-            );
-            if hint_t > 0.0 {
+            // Quiet keyboard hint — skip on narrow columns where it just crowds the row.
+            if !narrow {
                 ui.add_space(8.0);
-                ui.label(
-                    RichText::new("Shift+Enter for newline")
-                        .size(FS_TINY)
-                        .color(c_text_faint().gamma_multiply(hint_t)),
+                let hint_t = ui.ctx().animate_bool_with_time(
+                    Id::new("composer_hint_anim"),
+                    composer_focused,
+                    0.15,
                 );
+                if hint_t > 0.0 {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Shift+Enter for newline")
+                            .size(FS_TINY)
+                            .color(c_text_faint().gamma_multiply(hint_t)),
+                    );
+                }
             }
         });
     }
@@ -525,11 +531,12 @@ impl OxiApp {
 
     /// Two borderless dropdowns styled as quiet text with a chevron: provider (only
     /// providers the user has actually configured), then model within that provider's
-    /// config.
-    fn render_model_selector(&mut self, ui: &mut Ui) {
+    /// config. `narrow` shrinks combo widths when the chat column is squeezed.
+    fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool) {
         let oauth = crate::oauth::load_oauth_store();
         let configured = self.conv.settings.configured_provider_kinds(&oauth);
         let active_provider = self.conv.settings.active_provider;
+        let combo_w = if narrow { 110.0 } else { 150.0 };
 
         ui.scope(|ui| {
             quiet_combo_style(ui);
@@ -538,8 +545,8 @@ impl OxiApp {
             let resp = ComboBox::from_id_salt("provider_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
-                .width(150.0)
-                .height(300.0) // matching height
+                .width(combo_w)
+                .height(300.0)
                 .show_ui(ui, |ui| {
                     for kind in &configured {
                         let selected = active_provider == *kind;
@@ -579,14 +586,16 @@ impl OxiApp {
 
             let label = if current.is_empty() {
                 "(custom)".to_string()
+            } else if narrow && current.len() > 18 {
+                format!("{}…", &current[..16])
             } else {
                 current.clone()
             };
             let resp = ComboBox::from_id_salt("active_model_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
-                .width(150.0)
-                .height(300.0) // Set explicit high height for the dropdown popup
+                .width(combo_w)
+                .height(300.0)
                 .show_ui(ui, |ui| {
                     for m in &items {
                         if ui.selectable_label(m == &current, m.clone()).clicked() {
@@ -595,7 +604,8 @@ impl OxiApp {
                     }
                 });
             resp.response
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(&current);
         });
     }
 

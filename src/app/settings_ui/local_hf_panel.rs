@@ -7,8 +7,8 @@ use crate::settings::{ComputeLocation, LlmProviderKind};
 use crate::theme::*;
 use crate::ui::chrome::{
     alert_banner, card_frame, field_hint, field_label, field_label_first, ghost_button,
-    ghost_button_icon, hairline, icon_glyph_rich, primary_button_icon_widget,
-    settings_card_header, settings_list_row, settings_text_field, settings_text_field_width,
+    ghost_button_icon, hairline, icon_glyph_rich, primary_button_icon_widget, settings_card_header,
+    settings_list_row, settings_text_field, settings_text_field_width,
 };
 
 use super::super::OxiApp;
@@ -17,7 +17,10 @@ use super::layout::active_pill;
 impl OxiApp {
     pub(super) fn render_local_hf_section(&mut self, ui: &mut Ui) {
         let is_remote = matches!(
-            self.conv.settings.provider(LlmProviderKind::LocalHf).location,
+            self.conv
+                .settings
+                .provider(LlmProviderKind::LocalHf)
+                .location,
             ComputeLocation::RemoteSsh(_)
         );
 
@@ -47,11 +50,11 @@ impl OxiApp {
                 } else {
                     ("Runtime not installed", false)
                 };
-                ui.label(
-                    RichText::new(label)
-                        .size(FS_SMALL)
-                        .color(if ok { c_success() } else { c_text_muted() }),
-                );
+                ui.label(RichText::new(label).size(FS_SMALL).color(if ok {
+                    c_success()
+                } else {
+                    c_text_muted()
+                }));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let installing = self.conv.local_models.runtime_installing;
                     let button = if is_remote {
@@ -331,16 +334,12 @@ impl OxiApp {
                 let models = self.conv.local_models.downloaded.clone();
                 let n = models.len();
                 for (i, m) in models.into_iter().enumerate() {
-                    let running =
-                        self.conv.local_models.running_model_id.as_deref() == Some(&m.id);
+                    let running = self.conv.local_models.running_model_id.as_deref() == Some(&m.id);
                     settings_list_row(ui, i + 1 < n, |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new(&m.id)
-                                        .size(FS_SMALL)
-                                        .color(c_text())
-                                        .strong(),
+                                    RichText::new(&m.id).size(FS_SMALL).color(c_text()).strong(),
                                 );
                                 if running {
                                     ui.add_space(6.0);

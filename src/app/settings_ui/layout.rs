@@ -30,11 +30,7 @@ const SETTINGS_NAV: &[SettingsNavGroup] = &[
     },
     SettingsNavGroup {
         caption: "Agent",
-        items: &[(
-            SettingsTab::Agent,
-            ICON_AGENT,
-            "Tools & safety",
-        )],
+        items: &[(SettingsTab::Agent, ICON_AGENT, "Tools & safety")],
     },
     SettingsNavGroup {
         caption: "App",
@@ -228,8 +224,7 @@ impl OxiApp {
             .fixed_pos(screen.min)
             .interactable(true)
             .show(ctx, |ui| {
-                let (rect, response) =
-                    ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
                 ui.painter()
                     .rect_filled(rect, 0.0, Color32::from_black_alpha(140));
                 // Clicking the dimmed backdrop dismisses (Stay).

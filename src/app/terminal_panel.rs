@@ -38,8 +38,8 @@ impl OxiApp {
             .exact_size(height)
             .frame(
                 Frame::new()
-                    .fill(c_bg_sidebar())
-                    .stroke(Stroke::new(1.0, c_border_subtle())),
+                    .fill(c_bg_elevated())
+                    .stroke(Stroke::new(1.0, c_border())),
             )
             .show(ui, |ui| {
                 self.render_terminal_resize_handle(ui);

@@ -25,6 +25,9 @@ struct ToolUseAccum {
     id: String,
     name: String,
     input_json: String,
+    /// Whether we already emitted an early [`AgentEvent::ToolStart`] for this call
+    /// while `input_json` was still streaming (so the UI can show a running pill immediately).
+    started: bool,
 }
 
 /// Convert OpenAI-style tool defs to Anthropic `tools` array.
@@ -595,6 +598,16 @@ fn parse_anthropic_event(
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
+                // Anthropic provides name+id at block start — emit ToolStart immediately so
+                // the UI shows a running pill while `partial_json` arguments still stream in.
+                if !entry.started && !entry.id.is_empty() && !entry.name.is_empty() {
+                    entry.started = true;
+                    let _ = tx.send(AgentEvent::ToolStart {
+                        name: entry.name.clone(),
+                        tool_call_id: entry.id.clone(),
+                        args: None,
+                    });
+                }
             }
         }
         "message_start" => {

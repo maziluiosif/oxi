@@ -116,6 +116,7 @@ impl OxiApp {
                 chat_scroll_id: egui::Id::new("main_chat_scroll"),
                 pending_images: Vec::new(),
                 scroll_to_bottom_once: true,
+                stick_bottom_hold_frames: 0,
                 input_history: Vec::new(),
                 input_history_index: None,
                 input_history_draft: String::new(),

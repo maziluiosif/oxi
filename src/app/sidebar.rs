@@ -45,7 +45,8 @@ impl OxiApp {
 
         ui.add_space(8.0);
 
-        let scroll_h = ui.available_height().max(48.0);
+        const FOOTER_H: f32 = 36.0;
+        let scroll_h = (ui.available_height() - FOOTER_H).max(48.0);
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
             .max_height(scroll_h)
@@ -54,6 +55,23 @@ impl OxiApp {
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
+
+        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            ui.add_space(4.0);
+            if crate::ui::chrome::flat_button_icon(
+                ui,
+                ICON_SETTINGS,
+                "Settings",
+                FS_SMALL,
+                egui::vec2(ui.available_width(), 28.0),
+                c_text_muted(),
+            )
+            .on_hover_text("Open settings")
+            .clicked()
+            {
+                self.open_settings_page();
+            }
+        });
 
         ui.expand_to_include_rect(ui.max_rect());
     }
@@ -484,14 +502,19 @@ impl OxiApp {
                             self.render_chat_header(ui, column_center_w);
                             ui.add_space(HEADER_GAP);
 
-                            if show_diff {
-                                // Diff viewer replaces the chat transcript + composer.
-                                let diff_h =
-                                    (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), diff_h),
-                                    egui::Layout::top_down(egui::Align::Min),
-                                    |ui| {
+                            // Floating composer always stays available — even over a diff —
+                            // so you can discuss the change without leaving the view.
+                            const COMPOSER_GAP: f32 = 8.0;
+                            let composer_overlay_h =
+                                (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
+                            let conversation_h =
+                                (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                            let chat_rect = ui.max_rect();
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), conversation_h),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    if show_diff {
                                         if let Some((title, diff_text)) = self.conv.git.diff.clone()
                                         {
                                             self.render_diff_view(
@@ -501,45 +524,38 @@ impl OxiApp {
                                                 column_center_w,
                                             );
                                         }
-                                    },
-                                );
-                            } else {
-                                // Floating composer: the transcript uses the full remaining height,
-                                // while the input is painted as an overlay pinned to the bottom of the
-                                // chat column. The transcript adds matching tail padding internally so
-                                // bottom content can still be scrolled into view.
-                                const COMPOSER_GAP: f32 = 8.0;
-                                let composer_overlay_h =
-                                    (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
-                                let conversation_h =
-                                    (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                                let chat_rect = ui.max_rect();
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), conversation_h),
-                                    egui::Layout::top_down(egui::Align::Min),
-                                    |ui| {
+                                    } else {
                                         self.render_conversation(
                                             ui,
                                             column_center_w,
                                             conversation_h,
                                             composer_overlay_h,
                                         );
-                                    },
-                                );
+                                    }
+                                },
+                            );
 
-                                let composer_h = self.conv.composer_measured_full_h.max(80.0);
-                                let composer_top = chat_rect.bottom() - composer_h;
-                                let composer_rect = egui::Rect::from_min_size(
-                                    egui::pos2(chat_rect.left(), composer_top),
-                                    egui::vec2(chat_rect.width(), composer_h),
-                                );
-                                ui.scope_builder(
-                                    egui::UiBuilder::new().max_rect(composer_rect),
-                                    |ui| {
-                                        self.render_composer(ui, column_center_w);
-                                    },
-                                );
-                            }
+                            // Soft scrim so transcript text doesn't compete with the input.
+                            let composer_h = self.conv.composer_measured_full_h.max(80.0);
+                            let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
+                            let scrim_top = chat_rect.bottom() - scrim_h;
+                            let scrim_rect = egui::Rect::from_min_max(
+                                egui::pos2(chat_rect.left(), scrim_top),
+                                egui::pos2(chat_rect.right(), chat_rect.bottom()),
+                            );
+                            paint_composer_scrim(ui, scrim_rect);
+
+                            let composer_top = chat_rect.bottom() - composer_h;
+                            let composer_rect = egui::Rect::from_min_size(
+                                egui::pos2(chat_rect.left(), composer_top),
+                                egui::vec2(chat_rect.width(), composer_h),
+                            );
+                            ui.scope_builder(
+                                egui::UiBuilder::new().max_rect(composer_rect),
+                                |ui| {
+                                    self.render_composer(ui, column_center_w);
+                                },
+                            );
                         });
                     ui.expand_to_include_rect(ui.max_rect());
                 },
@@ -640,5 +656,31 @@ impl OxiApp {
         };
         ui.painter()
             .vline(boundary_x, sep_rect.y_range(), Stroke::new(1.0, col));
+    }
+}
+
+/// Soft vertical fade behind the floating composer so transcript text doesn't compete
+/// with the input card.
+fn paint_composer_scrim(ui: &mut Ui, rect: egui::Rect) {
+    if rect.height() < 4.0 {
+        return;
+    }
+    let base = c_bg_main();
+    let steps = 12usize;
+    let step_h = rect.height() / steps as f32;
+    for i in 0..steps {
+        let t = (i as f32 + 0.5) / steps as f32;
+        // Ease-in: transparent at the top, opaque near the composer.
+        let alpha = (t * t * 220.0) as u8;
+        let y0 = rect.top() + i as f32 * step_h;
+        let band = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), y0),
+            egui::pos2(rect.right(), y0 + step_h + 0.5),
+        );
+        ui.painter().rect_filled(
+            band,
+            0.0,
+            Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha),
+        );
     }
 }
