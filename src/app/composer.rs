@@ -203,6 +203,7 @@ impl OxiApp {
     fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool, composer_focused: bool) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let narrow = ui.available_width() < 520.0;
+        let compact = ui.available_width() < 410.0;
 
         // ── Left: round attach button ──────────────────────────────────────
         let attach = crate::ui::chrome::icon_button_core(
@@ -226,7 +227,7 @@ impl OxiApp {
         }
 
         // ── Left: provider + model (compact widths when the chat column is squeezed) ──
-        self.render_model_selector(ui, narrow);
+        self.render_model_selector(ui, narrow, compact);
 
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -283,7 +284,9 @@ impl OxiApp {
 
             self.render_context_indicator(ui);
 
-            // Quiet keyboard hint — skip on narrow columns where it just crowds the row.
+            // Keep the primary keyboard action discoverable while the composer has focus.
+            // On smaller windows the compact version retains the information without pushing
+            // controls out of the row.
             if !narrow {
                 ui.add_space(8.0);
                 let hint_t = ui.ctx().animate_bool_with_time(
@@ -294,11 +297,17 @@ impl OxiApp {
                 if hint_t > 0.0 {
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new("Shift+Enter for newline")
+                        RichText::new("Enter to send · Shift+Enter for newline")
                             .size(FS_TINY)
                             .color(c_text_faint().gamma_multiply(hint_t)),
                     );
                 }
+            } else if composer_focused && !compact {
+                ui.label(
+                    RichText::new("Enter sends")
+                        .size(FS_TINY)
+                        .color(c_text_faint()),
+                );
             }
         });
     }
@@ -539,17 +548,29 @@ impl OxiApp {
 
     /// Two borderless dropdowns styled as quiet text with a chevron: provider (only
     /// providers the user has actually configured), then model within that provider's
-    /// config. `narrow` shrinks combo widths when the chat column is squeezed.
-    fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool) {
+    /// config. `narrow` and `compact` shrink the controls before they can crowd out
+    /// the attachment/send actions on small desktop windows.
+    fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool, compact: bool) {
         let oauth = crate::oauth::load_oauth_store();
         let configured = self.conv.settings.configured_provider_kinds(&oauth);
         let active_provider = self.conv.settings.active_provider;
-        let combo_w = if narrow { 110.0 } else { 150.0 };
+        let combo_w = if compact {
+            76.0
+        } else if narrow {
+            110.0
+        } else {
+            150.0
+        };
 
         ui.scope(|ui| {
             quiet_combo_style(ui);
 
-            let label = active_provider.label().to_string();
+            let provider_label = active_provider.label();
+            let label = if compact {
+                truncate_label(provider_label, 9)
+            } else {
+                provider_label.to_string()
+            };
             let resp = ComboBox::from_id_salt("provider_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
@@ -595,8 +616,8 @@ impl OxiApp {
 
             let label = if current.is_empty() {
                 "(custom)".to_string()
-            } else if narrow && current.len() > 18 {
-                format!("{}…", &current[..16])
+            } else if narrow {
+                truncate_label(&current, if compact { 9 } else { 18 })
             } else {
                 current.clone()
             };
@@ -693,6 +714,18 @@ impl OxiApp {
     }
 }
 
+/// Truncate by characters, not bytes: provider/model identifiers may contain non-ASCII text.
+/// The old byte slicing was able to panic for a valid custom model name on a narrow window.
+fn truncate_label(text: &str, max_chars: usize) -> String {
+    let mut chars = text.chars();
+    let prefix: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
 fn paint_arc(ui: &Ui, center: Pos2, radius: f32, start: f32, sweep: f32, stroke: Stroke) {
     if sweep <= 0.0 {
         return;
@@ -759,5 +792,16 @@ fn estimate_message_chars(m: &ChatMessage) -> usize {
                 }
             })
             .sum(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_label;
+
+    #[test]
+    fn truncate_label_respects_unicode_boundaries() {
+        assert_eq!(truncate_label("mødel-α", 5), "mødel…");
+        assert_eq!(truncate_label("short", 8), "short");
     }
 }

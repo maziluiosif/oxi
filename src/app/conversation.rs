@@ -325,6 +325,9 @@ impl OxiApp {
                 }
                 if response.clicked() {
                     self.conv.input = prompt.to_string();
+                    // A suggestion is a starting point, not a terminal action: put the caret
+                    // directly in the composer so the user can tailor it immediately.
+                    self.conv.focus_chat_input_next_frame = true;
                 }
                 ui.add_space(5.0);
             }

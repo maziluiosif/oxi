@@ -22,7 +22,16 @@ impl OxiApp {
             ui.set_height(24.0);
 
             let add_w = 22.0;
-            let search_w = (ui.available_width() - add_w - ui.spacing().item_spacing.x).max(48.0);
+            let clear_w = if self.conv.sidebar_search.is_empty() {
+                0.0
+            } else {
+                22.0
+            };
+            let search_w = (ui.available_width()
+                - add_w
+                - clear_w
+                - ui.spacing().item_spacing.x * if clear_w > 0.0 { 2.0 } else { 1.0 })
+            .max(48.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(search_w, 24.0),
                 Layout::left_to_right(Align::Center),
@@ -31,6 +40,14 @@ impl OxiApp {
                     sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
                 },
             );
+
+            if clear_w > 0.0
+                && crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, clear_w, false)
+                    .on_hover_text("Clear chat search")
+                    .clicked()
+            {
+                self.conv.sidebar_search.clear();
+            }
 
             if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, add_w, false)
                 .on_hover_text(
@@ -361,6 +378,11 @@ impl OxiApp {
                         "No chats found"
                     };
                     ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
+                    if !q.is_empty()
+                        && crate::ui::chrome::ghost_button(ui, "Clear", false).clicked()
+                    {
+                        self.conv.sidebar_search.clear();
+                    }
                 });
                 ui.add_space(4.0);
             }
