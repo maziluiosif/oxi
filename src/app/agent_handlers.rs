@@ -163,6 +163,12 @@ impl OxiApp {
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Worker ended without a terminal message (normal after CodexDone;
+                    // abnormal mid-flow) — make sure the UI doesn't stay silent.
+                    if self.conv.oauth_busy {
+                        self.conv.oauth_last_message =
+                            Some("Sign-in was interrupted — try again.".to_string());
+                    }
                     self.conv.oauth_busy = false;
                     break;
                 }
@@ -172,10 +178,12 @@ impl OxiApp {
     }
 
     fn apply_agent_event(&mut self, key: SessionKey, ev: AgentEvent) {
+        // Any event other than another retry means the stream is flowing again.
+        if !matches!(ev, AgentEvent::StreamRetry { .. }) {
+            self.run_state_mut(key).stream_retrying = None;
+        }
         match ev {
-            AgentEvent::AgentStart => {
-                self.run_state_mut(key).agent_ack = true;
-            }
+            AgentEvent::AgentStart => {}
             AgentEvent::TextStart => {
                 self.on_text_block_start(key);
             }
@@ -233,6 +241,8 @@ impl OxiApp {
             }
             AgentEvent::StreamRetry { attempt, reason } => {
                 eprintln!("[oxi] stream retry (attempt {attempt}): {reason}");
+                self.run_state_mut(key).stream_retrying =
+                    Some(format!("Connection lost (attempt {attempt}): {reason}"));
                 self.reset_streaming_tail(key);
             }
             AgentEvent::AssistantMessageDone => {}

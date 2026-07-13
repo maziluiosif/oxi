@@ -39,7 +39,7 @@ impl OxiApp {
         Frame::new()
             .fill(crate::theme::c_info_bg())
             .stroke(Stroke::new(1.0, c_accent()))
-            .corner_radius(CornerRadius::same(6))
+            .corner_radius(CornerRadius::same(RADIUS_BUTTON))
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -107,7 +107,7 @@ impl OxiApp {
                                     ))
                                     .fill(c_accent())
                                     .stroke(Stroke::NONE)
-                                    .corner_radius(8.0),
+                                    .corner_radius(RADIUS_CHIP),
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .on_hover_text("Start a new chat in this workspace")
@@ -173,6 +173,15 @@ impl OxiApp {
                 "Error".to_string(),
                 crate::theme::c_danger(),
                 err.to_string(),
+            )
+        } else if let Some(reason) = self
+            .active_run_state()
+            .and_then(|s| s.stream_retrying.clone())
+        {
+            (
+                "Reconnecting…".to_string(),
+                crate::theme::c_warning_fg(),
+                reason,
             )
         } else if self.active_waiting_response() {
             let elapsed = self
@@ -297,7 +306,7 @@ impl OxiApp {
                 let response = Frame::new()
                     .fill(c_bg_input())
                     .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .corner_radius(CornerRadius::same(9))
+                    .corner_radius(CornerRadius::same(RADIUS_CHIP))
                     .inner_margin(Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -318,7 +327,7 @@ impl OxiApp {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     ui.painter().rect_stroke(
                         response.rect,
-                        CornerRadius::same(9),
+                        CornerRadius::same(RADIUS_CHIP),
                         Stroke::new(1.0, crate::theme::c_pill_selected_border()),
                         egui::StrokeKind::Middle,
                     );
@@ -344,7 +353,6 @@ impl OxiApp {
         let transcript_h = scroll_budget.max(40.0);
         let wi = self.conv.active_workspace;
         let si = self.conv.workspaces[wi].active;
-        let agent_ack = self.active_agent_ack();
 
         let scroll_outer_w = ui.available_width();
         let force_scroll_bottom = self.conv.scroll_to_bottom_once;
@@ -383,7 +391,7 @@ impl OxiApp {
                     .last()
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming));
 
-        ScrollArea::vertical()
+        let scroll_output = ScrollArea::vertical()
             .max_width(scroll_outer_w)
             .id_salt(self.conv.chat_scroll_id)
             .max_height(transcript_h)
@@ -456,14 +464,9 @@ impl OxiApp {
                                     {
                                         mi += 1;
                                     }
-                                    render_assistant_message_run(
-                                        ui,
-                                        start,
-                                        &messages[start..mi],
-                                        agent_ack,
-                                    );
+                                    render_assistant_message_run(ui, start, &messages[start..mi]);
                                 } else {
-                                    render_message(ui, mi, msg, agent_ack);
+                                    render_message(ui, mi, msg);
                                     mi += 1;
                                 }
                             }
@@ -503,7 +506,50 @@ impl OxiApp {
                 }
             });
 
-        if self.conv.scroll_to_bottom_once {
+        // Floating "scroll to bottom" jump button when the user has scrolled up —
+        // especially useful while streaming keeps appending below the viewport.
+        let max_offset =
+            (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
+        let from_bottom = max_offset - scroll_output.state.offset.y;
+        if from_bottom > 80.0 {
+            const BTN: f32 = 30.0;
+            let pos = egui::pos2(
+                scroll_output.inner_rect.center().x - BTN * 0.5,
+                scroll_output.inner_rect.bottom() - bottom_overlay_h.max(0.0) - BTN - 10.0,
+            );
+            let mut jump = false;
+            egui::Area::new(ui.id().with("scroll_to_bottom_btn"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos)
+                .show(ui.ctx(), |ui| {
+                    let look = crate::ui::chrome::IconButtonLook {
+                        fill: c_bg_elevated_2(),
+                        hover_fill: crate::theme::c_row_hover(),
+                        stroke: c_border(),
+                        hover_stroke: c_border(),
+                        rounding: CornerRadius::same((BTN * 0.5) as u8),
+                        glyph: c_text_muted(),
+                    };
+                    let resp = crate::ui::chrome::icon_button_core(
+                        ui,
+                        ICON_ANGLE_DOWN,
+                        egui::vec2(BTN, BTN),
+                        FS_SMALL,
+                        false,
+                        &look,
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    jump = resp.clicked();
+                });
+            if jump {
+                self.conv.scroll_to_bottom_once = true;
+                ui.ctx().request_repaint();
+            }
+        }
+
+        // Only clear the flag consumed this frame — the jump button above may have just
+        // re-armed it for the next frame.
+        if force_scroll_bottom && self.conv.scroll_to_bottom_once {
             self.conv.scroll_to_bottom_once = false;
         }
         if self.conv.stick_bottom_hold_frames > 0 {

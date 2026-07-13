@@ -15,9 +15,9 @@ use crate::ui::preview_expand::{
 };
 
 use super::thinking::{render_thinking_group_block, thinking_group_is_live};
-use super::tool_format::{
-    diff_counts, diff_wrapped_job, mono_output_job, tool_icon, tool_summary_text,
-};
+use crate::ui::diff::diff_layout_job;
+
+use super::tool_format::{diff_counts, mono_output_job, tool_icon, tool_summary_text};
 use super::{is_edit_like_tool, selectable_layout_job};
 
 const BLOCK_PREVIEW_LINES: usize = 10;
@@ -40,7 +40,7 @@ fn render_static_preview_job_panel(
     let frame = Frame::new()
         .fill(panel_fill)
         .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(RADIUS_CHIP))
         .inner_margin(Margin::symmetric(8, 5))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -57,8 +57,8 @@ fn render_static_preview_job_panel(
     }
 }
 
-/// Randează un singur tool call ca un chip compact Cursor-style:
-/// [ icon  ToolName  arg_scurt ]  cu o linie de output on-hover/expand.
+/// Render a single tool call as a compact Cursor-style chip:
+/// [ icon  ToolName  short_arg ]  with one line of output on hover/expand.
 pub(super) fn render_tool_pill(
     ui: &mut Ui,
     msg_idx: usize,
@@ -145,7 +145,7 @@ pub(super) fn render_tool_pill(
     let frame = Frame::new()
         .fill(pill_bg)
         .stroke(Stroke::new(1.0, pill_border))
-        .corner_radius(CornerRadius::same(7))
+        .corner_radius(CornerRadius::same(RADIUS_BUTTON))
         .inner_margin(Margin::symmetric(10, 5))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -161,7 +161,8 @@ pub(super) fn render_tool_pill(
                         .size(FS_SMALL)
                         .color(name_color),
                 );
-                ui.add(
+                let avail = ui.available_width();
+                let summary_resp = ui.add(
                     Label::new(
                         RichText::new(summary.as_str())
                             .size(FS_SMALL)
@@ -170,6 +171,15 @@ pub(super) fn render_tool_pill(
                     )
                     .truncate(),
                 );
+                let full_w = ui.fonts_mut(|f| {
+                    f.layout_no_wrap(summary.clone(), FontId::monospace(FS_SMALL), summary_color)
+                        .rect
+                        .width()
+                });
+                if full_w > avail {
+                    summary_resp
+                        .on_hover_text(RichText::new(summary.as_str()).size(FS_TINY).monospace());
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if can_expand {
                         ui.add(
@@ -218,8 +228,8 @@ pub(super) fn render_tool_pill(
             render_static_preview_job_panel(
                 ui,
                 crate::theme::c_tool_diff_bg(),
-                diff_wrapped_job(&preview, bubble_w),
-                |inner| diff_wrapped_job(diff_text, inner),
+                diff_layout_job(&preview, bubble_w),
+                |inner| diff_layout_job(diff_text, inner),
                 detail_id,
                 overflow,
             );
@@ -360,7 +370,7 @@ fn render_edit_tool_block(
     Frame::new()
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::new(1.0, outer_border))
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(RADIUS_CHIP))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
 
@@ -368,13 +378,13 @@ fn render_edit_tool_block(
                 .fill(header_bg)
                 .corner_radius(if is_open && has_diff {
                     eframe::egui::CornerRadius {
-                        nw: 8,
-                        ne: 8,
+                        nw: RADIUS_CHIP,
+                        ne: RADIUS_CHIP,
                         sw: 0,
                         se: 0,
                     }
                 } else {
-                    CornerRadius::same(8)
+                    CornerRadius::same(RADIUS_CHIP)
                 })
                 .inner_margin(Margin::symmetric(12, 8))
                 .show(ui, |ui| {
@@ -466,8 +476,8 @@ fn render_edit_tool_block(
                         render_static_preview_job_panel(
                             ui,
                             diff_bg,
-                            diff_wrapped_job(&preview, bubble_w),
-                            |inner| diff_wrapped_job(diff_text, inner),
+                            diff_layout_job(&preview, bubble_w),
+                            |inner| diff_layout_job(diff_text, inner),
                             expand_persist_id(Id::new((msg_idx, block_idx, "edit_diff"))),
                             overflow,
                         );
@@ -559,17 +569,16 @@ fn render_explored_tool_list(
     start: usize,
     end: usize,
     streaming: bool,
-    expanded: bool,
 ) {
     // Collect only Tool indices (not Thinking/Answer) to count for the scroll window.
     let tool_count = blocks[start..end]
         .iter()
         .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
         .count();
-    // While streaming and cluster is not manually expanded: tool *pills* use a fixed-height
-    // ScrollArea stuck to the bottom. Thinking and markdown answers stay **outside** that strip
-    // so they are never clipped or skipped.
-    let needs_scroll = streaming && !expanded && tool_count > MAX_VISIBLE_STREAMING_TOOL_PILLS;
+    // While streaming: tool *pills* use a fixed-height ScrollArea stuck to the bottom, so a
+    // long tool flood doesn't grow the transcript unbounded. Thinking and markdown answers
+    // stay **outside** that strip so they are never clipped or skipped.
+    let needs_scroll = streaming && tool_count > MAX_VISIBLE_STREAMING_TOOL_PILLS;
 
     let last_tool_idx = blocks[start..end]
         .iter()
@@ -660,6 +669,6 @@ pub(super) fn render_explored_cluster(ui: &mut Ui, ctx: ExploredClusterCtx<'_>) 
         streaming,
     } = ctx;
 
-    render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming, true);
+    render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming);
     ui.add_space(4.0);
 }

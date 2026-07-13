@@ -47,6 +47,7 @@ impl OxiApp {
         if self.conv.settings_original.is_none() {
             self.conv.settings_original = Some(self.conv.settings.clone());
         }
+        self.conv.settings_save_error = None;
         self.conv.settings_open = true;
     }
 
@@ -93,11 +94,14 @@ impl OxiApp {
     }
 
     pub(crate) fn save_settings_page(&mut self) {
+        // Failures stay on the Settings page (inline banner) — routing them to the
+        // chat's stream-error banner hid them from the view the user is looking at.
         if let Err(e) = self.conv.settings.save() {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some(format!("Save settings: {e}"));
+            self.conv.settings_save_error = Some(format!("Could not save settings: {e}"));
+            self.conv.settings_exit_prompt = None;
             return;
         }
+        self.conv.settings_save_error = None;
         self.conv.settings_original = Some(self.conv.settings.clone());
         self.conv.settings_exit_prompt = None;
         self.conv.settings_open = false;
@@ -106,23 +110,14 @@ impl OxiApp {
 
     fn save_settings_and_continue(&mut self, action: SettingsExitAction) {
         if let Err(e) = self.conv.settings.save() {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some(format!("Save settings: {e}"));
+            self.conv.settings_save_error = Some(format!("Could not save settings: {e}"));
+            self.conv.settings_exit_prompt = None;
             return;
         }
+        self.conv.settings_save_error = None;
         self.conv.settings_original = Some(self.conv.settings.clone());
         self.close_settings_page();
         self.continue_after_settings_exit(action);
-    }
-
-    pub(crate) fn cancel_settings_page(&mut self, ctx: &egui::Context) {
-        if let Some(original) = self.conv.settings_original.take() {
-            self.conv.settings = original;
-        }
-        self.reapply_appearance(ctx);
-        self.conv.settings_exit_prompt = None;
-        self.conv.settings_open = false;
-        self.conv.focus_chat_input_next_frame = true;
     }
 
     fn discard_settings_and_continue(&mut self, ctx: &egui::Context, action: SettingsExitAction) {
@@ -197,6 +192,19 @@ impl OxiApp {
                 |ui| {
                     Frame::new().fill(c_bg_main()).show(ui, |ui| {
                         self.render_settings_header(ui);
+                        if let Some(err) = self.conv.settings_save_error.clone() {
+                            Frame::new()
+                                .inner_margin(Margin {
+                                    left: 36,
+                                    right: 26,
+                                    top: 10,
+                                    bottom: 0,
+                                })
+                                .show(ui, |ui| {
+                                    ui.set_max_width(SETTINGS_CONTENT_MAX);
+                                    crate::ui::chrome::alert_banner(ui, &err, true);
+                                });
+                        }
                         ScrollArea::vertical()
                             .id_salt("settings_page_scroll")
                             .auto_shrink([false, false])
@@ -234,20 +242,11 @@ impl OxiApp {
         };
 
         // Dim the page so the dialog reads as a modal, not a floating card.
-        let screen = ctx.content_rect();
-        egui::Area::new(egui::Id::new("unsaved_settings_exit_backdrop"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(screen.min)
-            .interactable(true)
-            .show(ctx, |ui| {
-                let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
-                ui.painter()
-                    .rect_filled(rect, 0.0, Color32::from_black_alpha(140));
-                // Clicking the dimmed backdrop dismisses (Stay).
-                if response.clicked() {
-                    self.conv.settings_exit_prompt = None;
-                }
-            });
+        // Clicking the dimmed backdrop dismisses (Stay); Escape is handled by the
+        // global shortcut handler so it doesn't race the prompt being opened.
+        if crate::ui::chrome::modal_backdrop(ctx, "unsaved_settings_exit_backdrop") {
+            self.conv.settings_exit_prompt = None;
+        }
 
         egui::Area::new(egui::Id::new("unsaved_settings_exit_prompt"))
             .order(egui::Order::Foreground)
@@ -259,7 +258,7 @@ impl OxiApp {
                     .corner_radius(RADIUS_CHIP)
                     .inner_margin(Margin::same(16))
                     .show(ui, |ui| {
-                        ui.set_width(300.0);
+                        ui.set_width(crate::ui::chrome::MODAL_W);
                         ui.label(
                             RichText::new("Unsaved changes")
                                 .size(FS_BODY)
@@ -275,18 +274,25 @@ impl OxiApp {
                         ui.add_space(14.0);
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if primary_button(ui, "Save").clicked() {
+                            if primary_button(ui, "Save").on_hover_text("Enter").clicked() {
                                 self.save_settings_and_continue(action);
                             }
                             if ghost_button(ui, "Discard", true).clicked() {
                                 self.discard_settings_and_continue(ctx, action);
                             }
-                            if ghost_button(ui, "Stay", false).clicked() {
+                            if ghost_button(ui, "Stay", false)
+                                .on_hover_text("Esc")
+                                .clicked()
+                            {
                                 self.conv.settings_exit_prompt = None;
                             }
                         });
                     });
             });
+
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.save_settings_and_continue(action);
+        }
     }
 
     fn settings_tab_label(tab: SettingsTab) -> &'static str {
@@ -340,10 +346,15 @@ impl OxiApp {
                             self.save_settings_page();
                         }
                         if ghost_button(ui, "Cancel", false)
-                            .on_hover_text("Discard unsaved changes and return to chat")
+                            .on_hover_text(
+                                "Return to chat (asks before discarding unsaved changes)",
+                            )
                             .clicked()
                         {
-                            self.cancel_settings_page(ui.ctx());
+                            // Same guarded flow as every other exit: with unsaved
+                            // changes this opens the Save/Discard/Stay prompt instead
+                            // of silently dropping them.
+                            self.request_settings_exit(SettingsExitAction::BackToChat);
                         }
                         if dirty {
                             ui.label(

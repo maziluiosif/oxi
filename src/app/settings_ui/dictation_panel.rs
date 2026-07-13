@@ -120,12 +120,11 @@ impl OxiApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if let Some(m) = &downloaded {
                             if ghost_button_icon(ui, ICON_TRASH, "Delete", true).clicked() {
-                                let _ = voice_models::remove_downloaded(&m.id);
-                                self.conv.voice_ui.downloaded =
-                                    voice_models::load_manifest().models;
-                                if is_active {
-                                    self.conv.settings.dictation.model_id = None;
-                                }
+                                self.request_confirm(
+                                    crate::app::state::ConfirmAction::DeleteVoiceModel {
+                                        id: m.id.clone(),
+                                    },
+                                );
                             }
                             if !is_active && ghost_button(ui, "Make active", false).clicked() {
                                 self.conv.settings.dictation.model_id = Some(m.id.clone());

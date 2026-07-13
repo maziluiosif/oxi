@@ -46,9 +46,15 @@ pub fn chat_column_max_width(ctx: &egui::Context) -> f32 {
 }
 
 /// Shared corner radii — every rounded surface should use one of these tokens.
-pub const RADIUS_ROW: u8 = 5;
+/// List rows (sidebar chats, settings nav, git changes).
+pub const RADIUS_ROW: u8 = 6;
+/// Buttons, inputs, small inline banners.
 pub const RADIUS_BUTTON: u8 = 7;
+/// Chips, pills, toolbar icons, nested panels.
 pub const RADIUS_CHIP: u8 = 8;
+/// Cards and bubbles (settings cards, user bubbles, code blocks' outer frame).
+pub const RADIUS_CARD: u8 = 10;
+/// Large floating surfaces (composer card).
 pub const RADIUS_PANEL: u8 = 14;
 
 /// Draggable strip between sidebar and chat (must match `render_main_area`).

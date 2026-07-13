@@ -104,8 +104,6 @@ impl ThemeSpec {
                 "text_faint" => p.text_faint = c,
                 "sidebar_section" => p.sidebar_section = c,
                 "user_bubble" => p.user_bubble = c,
-                "row_active" => p.row_active = c,
-                "row_hover" => p.row_hover = c,
                 "success" => p.success = c,
                 "danger" => p.danger = c,
                 "diff_add_fg" => p.diff_add_fg = c,

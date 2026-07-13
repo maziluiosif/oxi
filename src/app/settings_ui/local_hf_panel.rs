@@ -381,9 +381,11 @@ impl OxiApp {
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ghost_button_icon(ui, ICON_TRASH, "Delete", true).clicked() {
-                                let _ = local_models::remove_downloaded(&m.id);
-                                self.conv.local_models.downloaded =
-                                    local_models::load_manifest().models;
+                                self.request_confirm(
+                                    crate::app::state::ConfirmAction::DeleteLocalModel {
+                                        id: m.id.clone(),
+                                    },
+                                );
                             }
                             if ghost_button(ui, "Make active", false).clicked() {
                                 self.activate_local_model(&m);

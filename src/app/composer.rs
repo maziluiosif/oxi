@@ -86,7 +86,40 @@ fn quiet_combo_icon(
     );
 }
 
+/// How long a composer notice stays visible.
+const COMPOSER_NOTICE_SECS: f32 = 5.0;
+
 impl OxiApp {
+    /// Raise a short-lived inline notice under the composer (blocked send, rejected
+    /// attachment, …). Replaces any previous notice.
+    pub(crate) fn notify_composer(&mut self, msg: impl Into<String>) {
+        self.conv.composer_notice = Some((msg.into(), std::time::Instant::now()));
+    }
+
+    /// Small warning line inside the composer card; auto-expires.
+    fn render_composer_notice(&mut self, ui: &mut Ui) {
+        let Some((msg, raised_at)) = self.conv.composer_notice.clone() else {
+            return;
+        };
+        if raised_at.elapsed().as_secs_f32() > COMPOSER_NOTICE_SECS {
+            self.conv.composer_notice = None;
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(
+                RichText::new(ICON_INFO)
+                    .font(egui::FontId::new(FS_TINY, icon_font()))
+                    .color(c_warning_fg()),
+            );
+            ui.label(RichText::new(msg).size(FS_TINY).color(c_warning_fg()));
+        });
+        ui.add_space(COMPOSER_GAP);
+        // Keep frames coming so the notice disappears on time.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(250));
+    }
+
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
         let chat_column_max = crate::theme::chat_column_max_width(ui.ctx());
         let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
@@ -116,6 +149,9 @@ impl OxiApp {
                     .corner_radius(crate::theme::RADIUS_PANEL)
                     .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN as i8))
                     .show(ui, |ui| {
+                        // === Transient notice (blocked send, rejected attachment, …) ===
+                        self.render_composer_notice(ui);
+
                         // === Attachment thumbnails (above the text, like Cursor) ===
                         if !self.conv.pending_images.is_empty() {
                             self.render_attachment_thumbnails(ui);
@@ -153,9 +189,15 @@ impl OxiApp {
                         self.conv.composer_measured_text_h = galley_h;
 
                         // Enter → send, Shift+Enter → newline; ↑/↓ → input history.
+                        // Suppressed while the confirm modal is up: Enter there means
+                        // "confirm", not "send".
                         let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                         let shift_held = ui.input(|i| i.modifiers.shift);
-                        if te_output.response.has_focus() && enter_pressed && !shift_held {
+                        if te_output.response.has_focus()
+                            && enter_pressed
+                            && !shift_held
+                            && !self.confirm_prompt_open()
+                        {
                             while self.conv.input.ends_with('\n') {
                                 self.conv.input.pop();
                             }
@@ -696,7 +738,7 @@ impl OxiApp {
                                 hover_fill: c_bg_main(),
                                 stroke: c_border(),
                                 hover_stroke: c_border(),
-                                rounding: CornerRadius::same(8),
+                                rounding: CornerRadius::same(RADIUS_CHIP),
                                 glyph: c_text(),
                             },
                         )

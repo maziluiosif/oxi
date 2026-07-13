@@ -25,7 +25,7 @@ fn render_raw_block(ui: &mut Ui, wrap_w: f32, label: &str, body: &str) {
         Frame::new()
             .fill(c_md_code_block_bg())
             .stroke(Stroke::new(1.0, c_border()))
-            .corner_radius(CornerRadius::same(8))
+            .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP))
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -88,16 +88,23 @@ pub(super) fn render_heading(
     set_job_wrap(&mut job, wrap_w);
 
     let mut bold = 0u32;
+    let mut italic = 0u32;
+    // Headings are already rendered strong, so bold only nests on top of that;
+    // emphasis inside a heading still slants the glyphs.
+    let heading_fmt = |bold: u32, italic: u32| {
+        let mut f = fmt_body(size, if bold > 0 { bold } else { 1 });
+        f.italics = italic > 0;
+        f
+    };
     while let Some(ev) = it.next() {
         match ev {
             Event::End(TagEnd::Heading(_)) => break,
-            Event::Start(Tag::Strong) | Event::Start(Tag::Emphasis) => bold += 1,
-            Event::End(TagEnd::Strong) | Event::End(TagEnd::Emphasis) => {
-                bold = bold.saturating_sub(1);
-            }
+            Event::Start(Tag::Strong) => bold += 1,
+            Event::End(TagEnd::Strong) => bold = bold.saturating_sub(1),
+            Event::Start(Tag::Emphasis) => italic += 1,
+            Event::End(TagEnd::Emphasis) => italic = italic.saturating_sub(1),
             Event::Text(t) => {
-                let strong = if bold > 0 { bold } else { 1 };
-                job.append(t.as_ref(), 0.0, fmt_body(size, strong));
+                job.append(t.as_ref(), 0.0, heading_fmt(bold, italic));
             }
             Event::Code(c) => {
                 // Match the heading's proportional font and size so inline code shares its
@@ -107,16 +114,13 @@ pub(super) fn render_heading(
                 job.append(c.as_ref(), 0.0, f);
             }
             Event::SoftBreak => {
-                let strong = if bold > 0 { bold } else { 1 };
-                job.append(" ", 0.0, fmt_body(size, strong));
+                job.append(" ", 0.0, heading_fmt(bold, italic));
             }
             Event::HardBreak => {
-                let strong = if bold > 0 { bold } else { 1 };
-                job.append("\n", 0.0, fmt_body(size, strong));
+                job.append("\n", 0.0, heading_fmt(bold, italic));
             }
             Event::Html(t) | Event::InlineHtml(t) => {
-                let strong = if bold > 0 { bold } else { 1 };
-                job.append(t.as_ref(), 0.0, fmt_body(size, strong));
+                job.append(t.as_ref(), 0.0, heading_fmt(bold, italic));
             }
             Event::Start(tag) => {
                 consume_until_end(it, tag.to_end());
@@ -148,7 +152,7 @@ pub(super) fn render_blockquote(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_
     allocate_full_width_block(ui, wrap_w, |ui| {
         Frame::new()
             .fill(c_md_code_block_bg())
-            .corner_radius(CornerRadius::same(8))
+            .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP))
             .stroke(Stroke::new(1.0, c_md_code_block_border()))
             .inner_margin(Margin::same(0))
             .show(ui, |ui| {
@@ -233,7 +237,7 @@ pub(super) fn render_fenced_block(
         let frame = Frame::new()
             .fill(c_md_code_block_bg())
             .stroke(Stroke::new(1.0, c_md_code_block_border()))
-            .corner_radius(CornerRadius::same(9))
+            .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP))
             .inner_margin(Margin::same(0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -241,8 +245,8 @@ pub(super) fn render_fenced_block(
                 Frame::new()
                     .fill(c_md_code_block_header_bg())
                     .corner_radius(egui::CornerRadius {
-                        nw: 9,
-                        ne: 9,
+                        nw: crate::theme::RADIUS_CHIP,
+                        ne: crate::theme::RADIUS_CHIP,
                         sw: 0,
                         se: 0,
                     })
@@ -258,15 +262,16 @@ pub(super) fn render_fenced_block(
                                     .color(c_text_muted())
                                     .family(FontFamily::Monospace),
                             );
-                            if overflows && !is_expanded(ui, persist_id) {
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                crate::ui::chrome::copy_chip(ui, persist_id.with("copy"), &buf);
+                                if overflows && !is_expanded(ui, persist_id) {
                                     ui.label(
                                         RichText::new("click to expand")
                                             .size(SZ_TINY)
                                             .color(c_text_faint()),
                                     );
-                                });
-                            }
+                                }
+                            });
                         });
                     });
 
@@ -275,8 +280,8 @@ pub(super) fn render_fenced_block(
                     .corner_radius(egui::CornerRadius {
                         nw: 0,
                         ne: 0,
-                        sw: 9,
-                        se: 9,
+                        sw: crate::theme::RADIUS_CHIP,
+                        se: crate::theme::RADIUS_CHIP,
                     })
                     .inner_margin(Margin::symmetric(11, 9))
                     .show(ui, |ui| {
@@ -294,10 +299,14 @@ pub(super) fn render_fenced_block(
                             inner,
                         );
                         selectable_job(ui, job);
-                    });
+                    })
+                    .response
+                    .rect
             });
         if overflows {
-            clickable_expand_overlay(ui, frame.response.rect, persist_id);
+            // Only the body toggles expansion — the header hosts the copy button, and a
+            // raw-pointer overlay over it would also fire on that click.
+            clickable_expand_overlay(ui, frame.inner, persist_id);
         }
     });
     ui.add_space(8.0);

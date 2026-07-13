@@ -67,6 +67,9 @@ impl eframe::App for OxiApp {
                     self.render_main_area(ui);
                 }
             });
+
+        // Shared destructive-action confirmation modal, on top of everything.
+        self.render_confirm_prompt(ui.ctx());
     }
 }
 
@@ -99,10 +102,18 @@ impl OxiApp {
             self.send_abort();
         }
         // Escape: leave settings, or hand focus back to the composer. Skip when the
-        // terminal panel is open so Escape stays available to the PTY.
-        if escape && !self.conv.terminal_open {
+        // terminal panel is showing so Escape stays available to the PTY (the terminal
+        // is hidden while Settings is open, so Escape works there regardless). Escape
+        // for the shared confirm modal is handled by the modal itself.
+        if escape
+            && (!self.conv.terminal_open || self.conv.settings_open)
+            && !self.confirm_prompt_open()
+        {
             if self.conv.settings_open {
-                if self.settings_dirty() {
+                if self.conv.settings_exit_prompt.is_some() {
+                    // Modal already up: Escape means "Stay".
+                    self.conv.settings_exit_prompt = None;
+                } else if self.settings_dirty() {
                     self.request_settings_exit(super::state::SettingsExitAction::BackToChat);
                 } else {
                     self.close_settings_page();

@@ -167,8 +167,7 @@ impl OxiApp {
 
     pub(crate) fn pick_image_attachment(&mut self) {
         if self.conv.pending_images.len() >= MAX_PENDING_IMAGES {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some(format!("At most {MAX_PENDING_IMAGES} images per message"));
+            self.notify_composer(format!("At most {MAX_PENDING_IMAGES} images per message"));
             return;
         }
         let Some(path) = rfd::FileDialog::new()
@@ -178,12 +177,11 @@ impl OxiApp {
             return;
         };
         let Ok(bytes) = std::fs::read(&path) else {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some("Failed to read image file".to_string());
+            self.notify_composer("Failed to read image file");
             return;
         };
         if bytes.len() > MAX_IMAGE_ATTACHMENT_BYTES {
-            self.run_state_mut(self.active_session_key()).stream_error = Some(format!(
+            self.notify_composer(format!(
                 "Image too large (max {} MB)",
                 MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024)
             ));
@@ -216,15 +214,17 @@ impl OxiApp {
         }
         for file in dropped {
             if self.conv.pending_images.len() >= MAX_PENDING_IMAGES {
-                self.run_state_mut(self.active_session_key()).stream_error =
-                    Some(format!("At most {MAX_PENDING_IMAGES} images per message"));
+                self.notify_composer(format!("At most {MAX_PENDING_IMAGES} images per message"));
                 break;
             }
             let bytes: Vec<u8> = match (&file.bytes, &file.path) {
                 (Some(b), _) => b.to_vec(),
                 (_, Some(path)) => match std::fs::read(path) {
                     Ok(b) => b,
-                    Err(_) => continue,
+                    Err(e) => {
+                        self.notify_composer(format!("Could not read dropped file: {e}"));
+                        continue;
+                    }
                 },
                 _ => continue,
             };
@@ -232,13 +232,14 @@ impl OxiApp {
                 continue;
             }
             if bytes.len() > MAX_IMAGE_ATTACHMENT_BYTES {
-                self.run_state_mut(self.active_session_key()).stream_error = Some(format!(
+                self.notify_composer(format!(
                     "Image too large (max {} MB)",
                     MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024)
                 ));
                 continue;
             }
             if image::load_from_memory(&bytes).is_err() {
+                self.notify_composer("Only PNG, JPEG, GIF, or WebP images can be attached.");
                 continue;
             }
             let mime = file
@@ -248,7 +249,7 @@ impl OxiApp {
                 .or_else(|| image::guess_format(&bytes).ok().map(mime_from_image_format))
                 .unwrap_or("image/png");
             self.conv.pending_images.push((mime.to_string(), bytes));
-            self.run_state_mut(self.active_session_key()).stream_error = None;
+            self.conv.composer_notice = None;
         }
     }
 

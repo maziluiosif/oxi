@@ -37,7 +37,12 @@ impl InlineDensity {
     }
 }
 
-pub(super) fn inline_text_format(size: f32, strong: u32, density: InlineDensity) -> TextFormat {
+pub(super) fn inline_text_format(
+    size: f32,
+    strong: u32,
+    italic: bool,
+    density: InlineDensity,
+) -> TextFormat {
     let color = if strong > 0 {
         c_text_strong()
     } else {
@@ -45,6 +50,7 @@ pub(super) fn inline_text_format(size: f32, strong: u32, density: InlineDensity)
     };
     let lh = density.line_height(size);
     let mut f = TextFormat::simple(FontId::proportional(size), color);
+    f.italics = italic;
     f.line_height = Some(lh);
     f.valign = Align::Center;
     f
@@ -116,7 +122,7 @@ pub(super) fn render_markdown_inline_image(
     };
     let mut img = img
         .max_width(max_w)
-        .corner_radius(CornerRadius::same(6))
+        .corner_radius(CornerRadius::same(crate::theme::RADIUS_BUTTON))
         .show_loading_spinner(true);
     if compact {
         img = img.max_height(120.0);
@@ -175,6 +181,7 @@ pub(super) fn render_inline_until(
     set_job_wrap(&mut job, wrap_w);
 
     let mut bold = 0u32;
+    let mut italic = 0u32;
     let mut strike = 0u32;
     while let Some(ev) = it.next() {
         match (&ev, end) {
@@ -183,14 +190,14 @@ pub(super) fn render_inline_until(
             _ => {}
         }
         match ev {
-            Event::Start(Tag::Strong) | Event::Start(Tag::Emphasis) => bold += 1,
-            Event::End(TagEnd::Strong) | Event::End(TagEnd::Emphasis) => {
-                bold = bold.saturating_sub(1);
-            }
+            Event::Start(Tag::Strong) => bold += 1,
+            Event::End(TagEnd::Strong) => bold = bold.saturating_sub(1),
+            Event::Start(Tag::Emphasis) => italic += 1,
+            Event::End(TagEnd::Emphasis) => italic = italic.saturating_sub(1),
             Event::Start(Tag::Strikethrough) => strike += 1,
             Event::End(TagEnd::Strikethrough) => strike = strike.saturating_sub(1),
             Event::Text(t) => {
-                let mut tf = inline_text_format(SZ_BODY, bold, density);
+                let mut tf = inline_text_format(SZ_BODY, bold, italic > 0, density);
                 if strike > 0 {
                     tf.strikethrough = Stroke::new(1.0, c_text());
                 }
@@ -200,10 +207,18 @@ pub(super) fn render_inline_until(
                 job.append(c.as_ref(), 0.0, inline_code_format(density));
             }
             Event::SoftBreak => {
-                job.append(" ", 0.0, inline_text_format(SZ_BODY, bold, density));
+                job.append(
+                    " ",
+                    0.0,
+                    inline_text_format(SZ_BODY, bold, italic > 0, density),
+                );
             }
             Event::HardBreak => {
-                job.append("\n", 0.0, inline_text_format(SZ_BODY, bold, density));
+                job.append(
+                    "\n",
+                    0.0,
+                    inline_text_format(SZ_BODY, bold, italic > 0, density),
+                );
             }
             Event::Start(Tag::Link {
                 link_type: _,
@@ -270,11 +285,19 @@ pub(super) fn render_inline_until(
             }
             Event::FootnoteReference(t) => {
                 let s = format!("[^{}]", t);
-                job.append(&s, 0.0, inline_text_format(SZ_BODY, bold, density));
+                job.append(
+                    &s,
+                    0.0,
+                    inline_text_format(SZ_BODY, bold, italic > 0, density),
+                );
             }
             Event::TaskListMarker(done) => {
                 let mark = if done { "☑ " } else { "☐ " };
-                job.append(mark, 0.0, inline_text_format(SZ_BODY, bold, density));
+                job.append(
+                    mark,
+                    0.0,
+                    inline_text_format(SZ_BODY, bold, italic > 0, density),
+                );
             }
             Event::InlineMath(t) | Event::DisplayMath(t) => {
                 job.append(t.as_ref(), 0.0, inline_code_format(density));

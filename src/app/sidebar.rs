@@ -121,7 +121,7 @@ impl OxiApp {
             if row_hovered {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 ui.painter()
-                    .rect_filled(rect, CornerRadius::same(6), c_row_hover());
+                    .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
             }
             // Leading glyph: folder open/closed at rest, fold chevron on hover.
             let glyph = match (row_hovered, folded) {
@@ -193,10 +193,13 @@ impl OxiApp {
             }
             // The cwd workspace (index 0) is always present, so it gets no delete option.
             if wi != 0 {
+                let ws_running = (0..n_sessions).any(|si| self.session_row_is_running(wi, si));
                 response.context_menu(|ui| {
-                    if ui.button("Delete workspace").clicked() {
-                        self.delete_workspace(wi);
-                        sidebar_changed = true;
+                    let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
+                    if ws_running {
+                        resp.on_disabled_hover_text("A chat in this workspace is still running");
+                    } else if resp.clicked() {
+                        self.request_confirm(super::state::ConfirmAction::DeleteWorkspace { wi });
                     }
                 });
             }
@@ -263,7 +266,8 @@ impl OxiApp {
                             } else {
                                 Color32::TRANSPARENT
                             };
-                            ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+                            ui.painter()
+                                .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
                             if self.conv.renaming_session == Some((wi, si)) {
                                 let edit = egui::TextEdit::singleline(&mut self.conv.rename_draft)
                                     .font(egui::TextStyle::Small)
@@ -297,8 +301,12 @@ impl OxiApp {
                                             self.export_active_session_markdown();
                                         }
                                         if ui.button("Delete chat").clicked() {
-                                            self.delete_session(si);
-                                            sidebar_changed = true;
+                                            self.request_confirm(
+                                                super::state::ConfirmAction::DeleteSession {
+                                                    wi,
+                                                    si,
+                                                },
+                                            );
                                         }
                                     }
                                 });
@@ -325,7 +333,7 @@ impl OxiApp {
                                     // Backing fill keeps the icon legible over long titles.
                                     ui.painter().rect_filled(
                                         trash_rect,
-                                        CornerRadius::same(7),
+                                        CornerRadius::same(RADIUS_ROW),
                                         if selected {
                                             c_row_active()
                                         } else {
@@ -357,8 +365,9 @@ impl OxiApp {
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                     }
                                     if trash_resp.clicked() {
-                                        self.delete_session(si);
-                                        sidebar_changed = true;
+                                        self.request_confirm(
+                                            super::state::ConfirmAction::DeleteSession { wi, si },
+                                        );
                                     }
                                 }
                             } // end else not renaming
@@ -478,7 +487,7 @@ impl OxiApp {
                     |ui| {
                         use eframe::egui::Label;
                         let title_color = if selected { c_text() } else { c_text_muted() };
-                        ui.add(
+                        let resp = ui.add(
                             Label::new(
                                 RichText::new(title.as_str())
                                     .size(FS_SMALL)
@@ -487,6 +496,18 @@ impl OxiApp {
                             .truncate()
                             .halign(Align::LEFT),
                         );
+                        let full_w = ui.fonts_mut(|f| {
+                            f.layout_no_wrap(
+                                title.clone(),
+                                FontId::proportional(FS_SMALL),
+                                title_color,
+                            )
+                            .rect
+                            .width()
+                        });
+                        if full_w > title_w {
+                            resp.on_hover_text(title.as_str());
+                        }
                     },
                 );
             });

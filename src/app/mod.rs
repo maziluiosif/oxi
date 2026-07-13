@@ -11,6 +11,7 @@ use crate::settings::AppSettings;
 mod agent_handlers;
 mod compaction;
 mod composer;
+mod confirm;
 mod connection;
 mod conversation;
 mod eframe_app;
@@ -123,6 +124,7 @@ impl OxiApp {
                 input_history: Vec::new(),
                 input_history_index: None,
                 input_history_draft: String::new(),
+                composer_notice: None,
                 focus_chat_input_next_frame: true,
                 focus_terminal_next_frame: false,
                 sidebar_open: true,
@@ -133,6 +135,7 @@ impl OxiApp {
                 settings: settings.clone(),
                 settings_original: None,
                 settings_exit_prompt: None,
+                settings_save_error: None,
                 settings_open: false,
                 settings_tab: state::SettingsTab::default(),
                 settings_provider_tab: crate::settings::LlmProviderKind::OpenAi,
@@ -148,10 +151,11 @@ impl OxiApp {
                 git: crate::git::GitState::default(),
                 git_commit_message: String::new(),
                 git_new_branch: String::new(),
-                git_discard_all_prompt: None,
+                confirm_prompt: None,
                 commit_gen_pending: false,
                 commit_gen_rx: None,
                 commit_gen_error: None,
+                commit_gen_stash: None,
                 git_tx: None,
                 git_rx: None,
                 git_ctx: eframe::egui::Context::default(),
@@ -226,10 +230,6 @@ impl OxiApp {
             .sessions
             .values()
             .any(|state| state.waiting_response)
-    }
-
-    pub(crate) fn active_agent_ack(&self) -> bool {
-        self.active_run_state().is_some_and(|state| state.agent_ack)
     }
 
     pub(crate) fn active_stream_error(&self) -> Option<&str> {

@@ -107,12 +107,7 @@ fn has_visible_assistant_content(blocks: &[AssistantBlock], streaming: bool) -> 
     })
 }
 
-pub fn render_message(
-    ui: &mut Ui,
-    msg_idx: usize,
-    msg: &ChatMessage,
-    agent_ack: bool,
-) -> egui::Response {
+pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::Response {
     let col_w = content_wrap_width(ui);
 
     if msg.role == MsgRole::User && msg.is_summary {
@@ -122,7 +117,7 @@ pub fn render_message(
                 Frame::new()
                     .fill(c_bg_elevated_2())
                     .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .corner_radius(CornerRadius::same(10))
+                    .corner_radius(CornerRadius::same(RADIUS_CARD))
                     .inner_margin(Margin::symmetric(12, 9))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -152,7 +147,7 @@ pub fn render_message(
                 Frame::new()
                     .fill(c_user_bubble())
                     .stroke(Stroke::new(1.0, c_user_bubble_border()))
-                    .corner_radius(CornerRadius::same(12))
+                    .corner_radius(CornerRadius::same(RADIUS_CARD))
                     .inner_margin(Margin::symmetric(12, 9))
                     .show(ui, |ui| {
                         ui.set_max_width(bubble_w);
@@ -178,19 +173,18 @@ pub fn render_message(
             })
             .response;
         if !msg.text.is_empty() {
-            let text = msg.text.clone();
-            response.context_menu(|ui| {
-                if ui.button("Copy message").clicked() {
-                    ui.ctx().copy_text(text);
-                }
-            });
+            crate::ui::chrome::copy_message_context_menu(
+                &response,
+                egui::Id::new(("copy_user_msg", msg_idx)),
+                &msg.text,
+            );
         }
         ui.add_space(10.0);
         return response;
     }
 
     ui.vertical(|ui| {
-        render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), agent_ack);
+        render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg));
     })
     .response
 }
@@ -211,7 +205,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                         }
                         // Wrap in a subtle rounded frame
                         Frame::new()
-                            .corner_radius(CornerRadius::same(8))
+                            .corner_radius(CornerRadius::same(RADIUS_CHIP))
                             .stroke(Stroke::new(1.0, c_border()))
                             .show(ui, |ui| {
                                 ui.add(Image::new((tex.id(), sz)));
@@ -220,7 +214,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                         // Fallback badge when texture loading fails
                         Frame::new()
                             .fill(c_bg_elevated_2())
-                            .corner_radius(CornerRadius::same(6))
+                            .corner_radius(CornerRadius::same(RADIUS_BUTTON))
                             .inner_margin(Margin::symmetric(8, 4))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
@@ -242,12 +236,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
     });
 }
 
-pub fn render_assistant_message_run(
-    ui: &mut Ui,
-    msg_idx: usize,
-    messages: &[ChatMessage],
-    agent_ack: bool,
-) {
+pub fn render_assistant_message_run(ui: &mut Ui, msg_idx: usize, messages: &[ChatMessage]) {
     let col_w = content_wrap_width(ui);
     let mut blocks = Vec::new();
     let mut streaming = false;
@@ -269,15 +258,7 @@ pub fn render_assistant_message_run(
 
     ui.vertical(|ui| {
         ui.set_width(col_w);
-        render_assistant_blocks(
-            ui,
-            msg_idx,
-            &blocks,
-            streaming,
-            agent_ack,
-            started_at,
-            worked_duration,
-        );
+        render_assistant_blocks(ui, msg_idx, &blocks, streaming, started_at, worked_duration);
     });
     ui.add_space(8.0);
 }
@@ -348,12 +329,11 @@ fn render_activity_range(
                             markdown::render_markdown(ui, text);
                         })
                         .response;
-                    let copy_text = text.clone();
-                    response.context_menu(|ui| {
-                        if ui.button("Copy message").clicked() {
-                            ui.ctx().copy_text(copy_text);
-                        }
-                    });
+                    crate::ui::chrome::copy_message_context_menu(
+                        &response,
+                        egui::Id::new(("copy_answer", msg_idx, gi)),
+                        text,
+                    );
                 }
             }
             AssistantBlockGroup::ExploringTools {
@@ -497,7 +477,6 @@ pub fn render_assistant_blocks(
     msg_idx: usize,
     blocks: &[AssistantBlock],
     streaming: bool,
-    _agent_ack: bool,
     started_at: Option<std::time::Instant>,
     worked_duration: Option<std::time::Duration>,
 ) {
@@ -555,7 +534,7 @@ pub fn render_assistant_blocks(
         ui.add_space(2.0);
     }
 
-    for block in &blocks[worked_end..] {
+    for (i, block) in blocks[worked_end..].iter().enumerate() {
         if let AssistantBlock::Answer(text) = block
             && (!text.trim().is_empty() || streaming)
         {
@@ -565,12 +544,11 @@ pub fn render_assistant_blocks(
                 })
                 .response;
             if !text.trim().is_empty() {
-                let copy_text = text.clone();
-                response.context_menu(|ui| {
-                    if ui.button("Copy message").clicked() {
-                        ui.ctx().copy_text(copy_text);
-                    }
-                });
+                crate::ui::chrome::copy_message_context_menu(
+                    &response,
+                    egui::Id::new(("copy_trailing_answer", msg_idx, worked_end + i)),
+                    text,
+                );
             }
         }
     }

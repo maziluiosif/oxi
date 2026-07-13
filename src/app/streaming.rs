@@ -47,10 +47,14 @@ impl OxiApp {
             .run_state(key)
             .is_some_and(|state| state.waiting_response)
         {
+            self.notify_composer(
+                "A response is still streaming — stop it or wait for it to finish.",
+            );
             return;
         }
         // Don't send into a session whose history is mid-compaction.
         if self.compaction_active_for(key) {
+            self.notify_composer("Context is being compacted — try again in a moment.");
             return;
         }
 
@@ -69,6 +73,10 @@ impl OxiApp {
             {
                 let images = std::mem::take(&mut self.conv.pending_images);
                 self.conv.input.clear();
+                self.notify_composer(
+                    "Context is almost full — compacting first; your message will be sent \
+                     automatically.",
+                );
                 self.start_compaction(key, Some(super::compaction::QueuedSend { text, images }));
                 return;
             }
@@ -100,7 +108,6 @@ impl OxiApp {
 
         {
             let run = self.run_state_mut(key);
-            run.agent_ack = false;
             run.begin_waiting_response();
             run.stream_error = None;
         }
@@ -129,7 +136,6 @@ impl OxiApp {
             }
             let run = self.run_state_mut(key);
             run.end_waiting_response();
-            run.agent_ack = false;
         }
     }
 
@@ -456,7 +462,6 @@ impl OxiApp {
         }
         run.wire_session_file = session_file;
         run.end_waiting_response();
-        run.agent_ack = false;
         run.cancel_agent = None;
         run.agent_rx = None;
         run.approval_tx = None;

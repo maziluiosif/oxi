@@ -36,8 +36,6 @@ pub struct Palette {
     pub text_faint: Color32,
     pub sidebar_section: Color32,
     pub user_bubble: Color32,
-    pub row_active: Color32,
-    pub row_hover: Color32,
     pub success: Color32,
     pub danger: Color32,
     pub diff_add_fg: Color32,
@@ -82,8 +80,6 @@ impl Palette {
         text_faint: rgb(0x6b, 0x6d, 0x78),
         sidebar_section: rgb(0x6d, 0x71, 0x7b),
         user_bubble: rgb(0x22, 0x24, 0x2a),
-        row_active: rgb(0x21, 0x24, 0x2a),
-        row_hover: rgb(0x18, 0x1a, 0x1e),
         success: rgb(0x4a, 0xc8, 0x8c),
         danger: rgb(0xe0, 0x6c, 0x6c),
         diff_add_fg: rgb(0x99, 0xc7, 0x94),
@@ -124,8 +120,6 @@ impl Palette {
         text_faint: rgb(0x8b, 0x8f, 0x99),
         sidebar_section: rgb(0x80, 0x84, 0x8e),
         user_bubble: rgb(0xe8, 0xea, 0xef),
-        row_active: rgb(0xe3, 0xe6, 0xec),
-        row_hover: rgb(0xec, 0xec, 0xf0),
         success: rgb(0x2f, 0x9e, 0x6f),
         danger: rgb(0xc0, 0x39, 0x2b),
         diff_add_fg: rgb(0x1a, 0x7f, 0x37),
@@ -165,8 +159,6 @@ impl Palette {
         text_faint: rgb(0x6b, 0x6d, 0x78),
         sidebar_section: rgb(0x6d, 0x71, 0x7b),
         user_bubble: rgb(0x14, 0x14, 0x18),
-        row_active: rgb(0x17, 0x18, 0x1d),
-        row_hover: rgb(0x10, 0x10, 0x13),
         success: rgb(0x4a, 0xc8, 0x8c),
         danger: rgb(0xe0, 0x6c, 0x6c),
         diff_add_fg: rgb(0x99, 0xc7, 0x94),
@@ -327,6 +319,16 @@ pub fn c_warning_stroke() -> Color32 {
 /// Info / approval card background — a faint accent tint.
 pub fn c_info_bg() -> Color32 {
     tint_on_panels(c_accent(), 30)
+}
+
+/// Dimmed backdrop behind modal dialogs. Lighter on light themes so the page still
+/// reads through instead of going near-black.
+pub fn c_modal_backdrop() -> Color32 {
+    if active_palette().dark_base {
+        Color32::from_black_alpha(140)
+    } else {
+        Color32::from_black_alpha(80)
+    }
 }
 
 /// Left rail on thinking blocks — accent sunk toward the panel so it reads as a

@@ -44,6 +44,14 @@ impl OxiApp {
             .auto_shrink([false, true])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
+                if branches.is_empty() {
+                    ui.label(
+                        RichText::new("No branches yet — create one above.")
+                            .size(FS_SMALL)
+                            .color(c_text_muted()),
+                    );
+                    return;
+                }
                 for (i, b) in branches.iter().enumerate() {
                     ui.push_id(("branch", i), |ui| {
                         let is_current = b == &current;

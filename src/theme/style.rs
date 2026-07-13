@@ -59,6 +59,8 @@ pub const ICON_INFO: &str = "\u{f05a}";
 pub const ICON_CLOSE: &str = "\u{f00d}";
 /// Affirmative / done (commit button, tool enable check) — nf-fa-check.
 pub const ICON_CHECK: &str = "\u{f00c}";
+/// Copy to clipboard (code block header) — nf-fa-copy.
+pub const ICON_COPY: &str = "\u{f0c5}";
 /// Gear / cog — settings entry points and the empty-state settings button (`nf-fa-gear`).
 pub const ICON_SETTINGS: &str = "\u{f013}";
 /// Plus — "new" / "add" actions (new chat, add profile) (`nf-fa-plus`).
@@ -187,13 +189,14 @@ pub fn setup_style(ctx: &egui::Context) {
     visuals.extreme_bg_color = p.bg_input;
     visuals.faint_bg_color = p.faint_bg;
     visuals.override_text_color = Some(p.text);
-    visuals.window_corner_radius = egui::CornerRadius::same(10);
-    visuals.menu_corner_radius = egui::CornerRadius::same(8);
-    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(6);
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(6);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(6);
-    visuals.widgets.open.corner_radius = egui::CornerRadius::same(6);
+    visuals.window_corner_radius = egui::CornerRadius::same(crate::theme::RADIUS_CARD);
+    visuals.menu_corner_radius = egui::CornerRadius::same(crate::theme::RADIUS_CHIP);
+    let widget_radius = egui::CornerRadius::same(crate::theme::RADIUS_ROW);
+    visuals.widgets.noninteractive.corner_radius = widget_radius;
+    visuals.widgets.inactive.corner_radius = widget_radius;
+    visuals.widgets.hovered.corner_radius = widget_radius;
+    visuals.widgets.active.corner_radius = widget_radius;
+    visuals.widgets.open.corner_radius = widget_radius;
     // Side panel separator, indentation guides — match app chrome.
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border_subtle);
     visuals.widgets.noninteractive.bg_fill = p.bg_elevated;

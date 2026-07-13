@@ -131,8 +131,7 @@ pub fn render_markdown(ui: &mut Ui, src: &str) {
                 });
             }
             Event::Start(Tag::Table(alignments)) => {
-                let cols = alignments.len().max(1);
-                render_table(ui, wrap_w, cols, &mut it);
+                render_table(ui, wrap_w, &alignments, &mut it);
             }
             Event::Text(t) => {
                 let mut job = LayoutJob::default();
