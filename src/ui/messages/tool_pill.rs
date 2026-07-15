@@ -1,11 +1,10 @@
 //! Tool-call rendering: the compact pill (icon + summary + expand-on-click detail),
 //! the full-detail block for write/edit-like tools, and the "explored" cluster that
-//! groups a run of read/grep/find pills under a capped, bottom-stuck scroll strip.
+//! caps a live run of read/grep/find pills to its newest entries.
 
-use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{
-    self, Color32, CornerRadius, FontId, Frame, Id, Label, Margin, RichText, ScrollArea, Stroke, Ui,
+    self, Color32, CornerRadius, FontId, Frame, Id, Label, Margin, RichText, Stroke, Ui,
 };
 
 use crate::model::{AssistantBlock, concat_thinking_blocks};
@@ -22,10 +21,8 @@ use super::{is_edit_like_tool, selectable_layout_job};
 
 const BLOCK_PREVIEW_LINES: usize = 10;
 const EDIT_PREVIEW_LINES: usize = 10;
-/// Max tool pills visible in the scroll window while streaming (last N are shown, oldest scroll away).
+/// Max tool pills shown while streaming (the oldest entries are hidden).
 const MAX_VISIBLE_STREAMING_TOOL_PILLS: usize = 5;
-/// Pill height used to size the scroll window: inner_margin(3px top+bottom) + FS_SMALL text ≈ 24px.
-const TOOL_PILL_HEIGHT: f32 = 24.0;
 /// Vertical gap between consecutive pills.
 const TOOL_PILL_GAP: f32 = 3.0;
 
@@ -493,16 +490,15 @@ fn render_edit_tool_block(
 struct ExploredToolPillCtx<'a> {
     msg_idx: usize,
     blocks: &'a [AssistantBlock],
-    needs_scroll: bool,
+    capped: bool,
     hidden_before: &'a mut usize,
     visible_start: usize,
     last_tool_idx: Option<usize>,
     streaming: bool,
 }
 
-/// Renders a consecutive run of tool block indices. When `needs_scroll`, only a fixed number of
-/// pills are visible (oldest hidden); thinking/prose must **not** live inside this region — the
-/// caller keeps those blocks outside the [`ScrollArea`].
+/// Renders a consecutive run of tool block indices. When capped, only the newest pills are
+/// visible; thinking/prose are handled separately and are never hidden.
 fn render_explored_tool_pill_run(
     ui: &mut Ui,
     tool_run: &[usize],
@@ -513,9 +509,8 @@ fn render_explored_tool_pill_run(
     }
 
     // While the live explored cluster is capped to the last N tool pills, older tool batches can
-    // become fully hidden. In that case, do not allocate the fixed-height scroll region at all,
-    // otherwise we leave large blank gaps between thinking blocks during streaming.
-    let visible_run: &[usize] = if ctx.needs_scroll {
+    // become fully hidden. Skip those batches instead of leaving blank gaps between thinking blocks.
+    let visible_run: &[usize] = if ctx.capped {
         let hidden_in_this_run = ctx
             .visible_start
             .saturating_sub(*ctx.hidden_before)
@@ -535,30 +530,17 @@ fn render_explored_tool_pill_run(
     let last_tool_idx = ctx.last_tool_idx;
     let streaming = ctx.streaming;
 
-    // While the streaming strip is capped to a fixed-height scroll region, an expanded pill
-    // would overflow it — pills become expandable once the run leaves the capped strip.
-    let expandable = !ctx.needs_scroll;
-    let render_pills = |ui: &mut Ui| {
-        for &ti in visible_run {
-            let block = &blocks[ti];
-            let is_last = Some(ti) == last_tool_idx;
-            render_tool_pill(ui, msg_idx, ti, block, streaming, is_last, expandable);
-            ui.add_space(TOOL_PILL_GAP);
-        }
-    };
-
-    if ctx.needs_scroll {
-        let scroll_h = (TOOL_PILL_HEIGHT + TOOL_PILL_GAP) * MAX_VISIBLE_STREAMING_TOOL_PILLS as f32;
-        ScrollArea::vertical()
-            .id_salt((msg_idx, visible_run[0], "tool_pill_scroll"))
-            .auto_shrink([false, false])
-            .max_height(scroll_h)
-            .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
-            .stick_to_bottom(true)
-            .scroll_source(egui::containers::scroll_area::ScrollSource::NONE)
-            .show(ui, render_pills);
-    } else {
-        render_pills(ui);
+    // `visible_run` is already trimmed to the last N tools above, so a nested ScrollArea buys
+    // us nothing here. More importantly, egui clamps a nested ScrollArea to the outer transcript's
+    // remaining viewport rect. Direct layout lets each pill reserve its real height and prevents
+    // the first tool run after a collapsing Thinking block from being clipped/painted underneath it.
+    // Keep details folded while trimming is active so a single expanded output cannot defeat the cap.
+    let expandable = !ctx.capped;
+    for &ti in visible_run {
+        let block = &blocks[ti];
+        let is_last = Some(ti) == last_tool_idx;
+        render_tool_pill(ui, msg_idx, ti, block, streaming, is_last, expandable);
+        ui.add_space(TOOL_PILL_GAP);
     }
 }
 
@@ -570,15 +552,14 @@ fn render_explored_tool_list(
     end: usize,
     streaming: bool,
 ) {
-    // Collect only Tool indices (not Thinking/Answer) to count for the scroll window.
+    // Collect only Tool indices (not Thinking/Answer) for the live display cap.
     let tool_count = blocks[start..end]
         .iter()
         .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
         .count();
-    // While streaming: tool *pills* use a fixed-height ScrollArea stuck to the bottom, so a
-    // long tool flood doesn't grow the transcript unbounded. Thinking and markdown answers
-    // stay **outside** that strip so they are never clipped or skipped.
-    let needs_scroll = streaming && tool_count > MAX_VISIBLE_STREAMING_TOOL_PILLS;
+    // While streaming, retain only the last N tool pills so a long tool flood doesn't grow the
+    // transcript unbounded. Thinking and markdown answers stay outside that trimmed set.
+    let capped = streaming && tool_count > MAX_VISIBLE_STREAMING_TOOL_PILLS;
 
     let last_tool_idx = blocks[start..end]
         .iter()
@@ -627,7 +608,7 @@ fn render_explored_tool_list(
                 let mut pill_ctx = ExploredToolPillCtx {
                     msg_idx,
                     blocks,
-                    needs_scroll,
+                    capped,
                     hidden_before: &mut hidden_before,
                     visible_start,
                     last_tool_idx,
@@ -638,7 +619,7 @@ fn render_explored_tool_list(
         }
     }
 
-    if needs_scroll {
+    if capped {
         let hidden = tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
         if hidden > 0 {
             ui.add_space(2.0);

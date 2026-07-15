@@ -95,8 +95,7 @@ pub struct AppSettings {
     /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
     #[serde(default)]
     pub ui_density: UiDensity,
-    /// Interface (proportional) font id — see [`crate::theme::ui_font_options`]. `"default"`
-    /// is the bundled font; other ids load a system font at runtime.
+    /// Interface font id — `"default"` is bundled; `system:<family>` selects an installed font.
     #[serde(default = "default_font_id")]
     pub ui_font: String,
     /// Code (monospace) font id — see [`crate::theme::mono_font_options`].
@@ -646,8 +645,25 @@ impl AppSettings {
                 cfg.effort.clear();
             }
         }
-        // Reset unknown font ids (e.g. a removed option) to the bundled default so the
-        // picker always has a valid selection highlighted.
+        // Migrate ids from the former hard-coded picker to runtime family ids. Missing fonts
+        // then fall back to the bundled defaults, keeping settings portable between machines.
+        self.ui_font = match self.ui_font.as_str() {
+            "helvetica" => "system:Helvetica".to_string(),
+            "helvetica_neue" => "system:Helvetica Neue".to_string(),
+            "arial" => "system:Arial".to_string(),
+            "georgia" => "system:Georgia".to_string(),
+            // The old "System" entry was an OS-dependent alias rather than a font family.
+            "system" => default_font_id(),
+            _ => self.ui_font.clone(),
+        };
+        self.mono_font = match self.mono_font.as_str() {
+            "sf_mono" => "system:SF Mono".to_string(),
+            "menlo" => "system:Menlo".to_string(),
+            "monaco" => "system:Monaco".to_string(),
+            "courier" => "system:Courier New".to_string(),
+            "dejavu_mono" => "system:DejaVu Sans Mono".to_string(),
+            _ => self.mono_font.clone(),
+        };
         if !crate::theme::ui_font_is_known(&self.ui_font) {
             self.ui_font = default_font_id();
         }

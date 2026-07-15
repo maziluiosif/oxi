@@ -1,7 +1,8 @@
 //! Type scale, icon glyphs, font loading, and building egui `Style`/`Visuals` from the
 //! active palette.
 
-use std::sync::RwLock;
+use std::collections::BTreeMap;
+use std::sync::{OnceLock, RwLock};
 
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
 
@@ -133,139 +134,85 @@ pub fn small_spinner(ui: &mut egui::Ui) {
 
 // ─── System fonts (user-selectable in Appearance settings) ──────────────────────
 //
-// The app ships with bundled Noto Sans (proportional) and Ubuntu Mono (monospace). The
-// user can instead pick a font installed on the OS. Each option lists candidate files
-// (path + face index) tried in order; the first that reads is loaded at runtime. If none
-// load, the bundled font is kept — so an option that references a missing file just falls
-// back silently rather than breaking text. `default` (empty candidates) means "bundled".
+// Font families are discovered once at runtime instead of being tied to a hard-coded list of
+// OS paths. The bundled fonts remain available as "Default" and as glyph fallbacks.
 
-/// One selectable font: stable `id`, display `name`, and OS font files to try.
+/// One selectable font family. System ids are prefixed so they cannot collide with `default`.
+#[derive(Clone, Debug)]
 pub struct FontOption {
-    pub id: &'static str,
-    pub name: &'static str,
-    /// `(path, face index)` pairs. First that reads wins. Empty ⇒ use the bundled font.
-    candidates: &'static [(&'static str, u32)],
+    pub id: String,
+    pub name: String,
 }
 
-/// Proportional (interface) font choices. `default` is the bundled Noto Sans.
-static UI_FONTS: &[FontOption] = &[
-    FontOption {
-        id: "default",
-        name: "Default",
-        candidates: &[],
-    },
-    FontOption {
-        id: "system",
-        name: "System",
-        candidates: &[
-            ("/System/Library/Fonts/SFNS.ttf", 0),
-            ("C:\\Windows\\Fonts\\segoeui.ttf", 0),
-            ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
-            ("/usr/share/fonts/TTF/DejaVuSans.ttf", 0),
-        ],
-    },
-    FontOption {
-        id: "helvetica",
-        name: "Helvetica",
-        candidates: &[("/System/Library/Fonts/Helvetica.ttc", 0)],
-    },
-    FontOption {
-        id: "helvetica_neue",
-        name: "Helvetica Neue",
-        candidates: &[("/System/Library/Fonts/HelveticaNeue.ttc", 0)],
-    },
-    FontOption {
-        id: "arial",
-        name: "Arial",
-        candidates: &[
-            ("/System/Library/Fonts/Supplemental/Arial.ttf", 0),
-            ("C:\\Windows\\Fonts\\arial.ttf", 0),
-        ],
-    },
-    FontOption {
-        id: "georgia",
-        name: "Georgia",
-        candidates: &[
-            ("/System/Library/Fonts/Supplemental/Georgia.ttf", 0),
-            ("C:\\Windows\\Fonts\\georgia.ttf", 0),
-        ],
-    },
-];
-
-/// Monospace (code) font choices. `default` is the bundled Ubuntu Mono.
-static MONO_FONTS: &[FontOption] = &[
-    FontOption {
-        id: "default",
-        name: "Default",
-        candidates: &[],
-    },
-    FontOption {
-        id: "sf_mono",
-        name: "SF Mono",
-        candidates: &[("/System/Library/Fonts/SFNSMono.ttf", 0)],
-    },
-    FontOption {
-        id: "menlo",
-        name: "Menlo",
-        candidates: &[("/System/Library/Fonts/Menlo.ttc", 0)],
-    },
-    FontOption {
-        id: "monaco",
-        name: "Monaco",
-        candidates: &[("/System/Library/Fonts/Monaco.ttf", 0)],
-    },
-    FontOption {
-        id: "courier",
-        name: "Courier New",
-        candidates: &[
-            ("/System/Library/Fonts/Supplemental/Courier New.ttf", 0),
-            ("C:\\Windows\\Fonts\\cour.ttf", 0),
-        ],
-    },
-    FontOption {
-        id: "dejavu_mono",
-        name: "DejaVu Sans Mono",
-        candidates: &[
-            ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 0),
-            ("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 0),
-        ],
-    },
-];
-
-impl FontOption {
-    /// `true` if this option is usable on this machine — the bundled default always is;
-    /// a system option is only offered when at least one candidate file exists.
-    fn available(&self) -> bool {
-        self.candidates.is_empty()
-            || self
-                .candidates
-                .iter()
-                .any(|(p, _)| std::path::Path::new(p).exists())
-    }
+struct SystemFontCatalog {
+    db: fontdb::Database,
+    all: Vec<FontOption>,
+    monospace: Vec<FontOption>,
 }
 
-fn lookup_font(options: &'static [FontOption], id: &str) -> Option<&'static FontOption> {
-    options.iter().find(|o| o.id == id)
+static SYSTEM_FONTS: OnceLock<SystemFontCatalog> = OnceLock::new();
+
+fn system_fonts() -> &'static SystemFontCatalog {
+    SYSTEM_FONTS.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+
+        // Key by a case-folded name to collapse localized/duplicate faces while preserving the
+        // font's own display spelling. Hidden/internal families are not useful in a picker.
+        let mut families: BTreeMap<String, (String, bool)> = BTreeMap::new();
+        for face in db.faces() {
+            let Some((name, _)) = face.families.first() else {
+                continue;
+            };
+            if name.trim().is_empty() || name.starts_with('.') {
+                continue;
+            }
+            let entry = families
+                .entry(name.to_lowercase())
+                .or_insert_with(|| (name.clone(), false));
+            entry.1 |= face.monospaced;
+        }
+
+        let default = FontOption {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+        };
+        let mut all = vec![default.clone()];
+        let mut monospace = vec![default];
+        for (_, (name, is_monospace)) in families {
+            let option = FontOption {
+                id: format!("system:{name}"),
+                name,
+            };
+            if is_monospace {
+                monospace.push(option.clone());
+            }
+            all.push(option);
+        }
+        SystemFontCatalog { db, all, monospace }
+    })
 }
 
-/// Available proportional (interface) fonts on this machine, in display order.
-pub fn ui_font_options() -> Vec<&'static FontOption> {
-    UI_FONTS.iter().filter(|o| o.available()).collect()
+/// All installed font families, plus the bundled Noto Sans default.
+pub fn ui_font_options() -> &'static [FontOption] {
+    &system_fonts().all
 }
 
-/// Available monospace (code) fonts on this machine, in display order.
-pub fn mono_font_options() -> Vec<&'static FontOption> {
-    MONO_FONTS.iter().filter(|o| o.available()).collect()
+/// Installed families reported as fixed-width, plus the bundled Ubuntu Mono default.
+pub fn mono_font_options() -> &'static [FontOption] {
+    &system_fonts().monospace
 }
 
-/// `true` if `id` is a recognized proportional-font id (regardless of availability).
 pub fn ui_font_is_known(id: &str) -> bool {
-    UI_FONTS.iter().any(|o| o.id == id)
+    ui_font_options().iter().any(|o| o.id == id)
 }
 
-/// `true` if `id` is a recognized monospace-font id (regardless of availability).
 pub fn mono_font_is_known(id: &str) -> bool {
-    MONO_FONTS.iter().any(|o| o.id == id)
+    mono_font_options().iter().any(|o| o.id == id)
+}
+
+fn selected_family(id: &str) -> Option<&str> {
+    id.strip_prefix("system:")
 }
 
 /// The user's selected interface + code fonts, resolved by [`install_fonts`].
@@ -303,17 +250,19 @@ fn active_fonts() -> FontSelection {
         .unwrap_or_default()
 }
 
-/// Read the first readable candidate file for `opt` and register it under `key`, returning
-/// the family key on success. `None` (unreadable / bundled default) leaves fonts untouched.
-fn install_system_font(
-    fonts: &mut FontDefinitions,
-    key: &str,
-    opt: &FontOption,
-) -> Option<String> {
-    let (bytes, index) = opt
-        .candidates
-        .iter()
-        .find_map(|(path, index)| std::fs::read(path).ok().map(|b| (b, *index)))?;
+/// Find the best normal face for a discovered family and register it with egui.
+fn install_system_font(fonts: &mut FontDefinitions, key: &str, family: &str) -> Option<String> {
+    let catalog = system_fonts();
+    let family_query = [fontdb::Family::Name(family)];
+    let id = catalog.db.query(&fontdb::Query {
+        families: &family_query,
+        weight: fontdb::Weight::NORMAL,
+        stretch: fontdb::Stretch::Normal,
+        style: fontdb::Style::Normal,
+    })?;
+    let (bytes, index) = catalog
+        .db
+        .with_face_data(id, |data, index| (data.to_vec(), index))?;
     let mut data = FontData::from_owned(bytes);
     data.index = index;
     fonts
@@ -348,12 +297,10 @@ fn install_fonts(ctx: &egui::Context) {
     // Optional user-selected system fonts, loaded from disk. A missing/unreadable file
     // yields `None` and the bundled font is used instead.
     let sel = active_fonts();
-    let sys_ui = lookup_font(UI_FONTS, &sel.ui)
-        .filter(|o| !o.candidates.is_empty())
-        .and_then(|o| install_system_font(&mut fonts, "sys_ui", o));
-    let sys_mono = lookup_font(MONO_FONTS, &sel.mono)
-        .filter(|o| !o.candidates.is_empty())
-        .and_then(|o| install_system_font(&mut fonts, "sys_mono", o));
+    let sys_ui = selected_family(&sel.ui)
+        .and_then(|family| install_system_font(&mut fonts, "sys_ui", family));
+    let sys_mono = selected_family(&sel.mono)
+        .and_then(|family| install_system_font(&mut fonts, "sys_mono", family));
 
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     proportional.insert(0, "noto_sans".to_string());

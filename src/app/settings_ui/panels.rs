@@ -673,29 +673,86 @@ impl OxiApp {
             );
             settings_caption(ui, "Interface");
             ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let current = self.conv.settings.ui_font.clone();
-                for opt in crate::theme::ui_font_options() {
-                    if pill_tab(ui, opt.name, current == opt.id) && current != opt.id {
-                        self.conv.settings.ui_font = opt.id.to_string();
-                        self.apply_font_selection(ui.ctx());
+            let current = self.conv.settings.ui_font.clone();
+            let current_name = crate::theme::ui_font_options()
+                .iter()
+                .find(|opt| opt.id == current)
+                .map(|opt| opt.name.as_str())
+                .unwrap_or("Default");
+            let mut selected = None;
+            egui::ComboBox::from_id_salt("interface_font_combo")
+                .selected_text(current_name)
+                .width(320.0)
+                .height(360.0)
+                .show_ui(ui, |ui| {
+                    let search_id = egui::Id::new("interface_font_search");
+                    let mut search = ui
+                        .ctx()
+                        .data(|data| data.get_temp::<String>(search_id))
+                        .unwrap_or_default();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut search)
+                            .hint_text("Search fonts…")
+                            .desired_width(290.0),
+                    );
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(search_id, search.clone()));
+                    ui.separator();
+                    let needle = search.trim().to_lowercase();
+                    for opt in crate::theme::ui_font_options().iter().filter(|opt| {
+                        needle.is_empty() || opt.name.to_lowercase().contains(&needle)
+                    }) {
+                        if ui.selectable_label(opt.id == current, &opt.name).clicked() {
+                            selected = Some(opt.id.clone());
+                        }
                     }
-                }
-            });
+                });
+            if let Some(id) = selected.filter(|id| id != &current) {
+                self.conv.settings.ui_font = id;
+                self.apply_font_selection(ui.ctx());
+            }
+
             ui.add_space(8.0);
             settings_caption(ui, "Code / monospace");
             ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let current = self.conv.settings.mono_font.clone();
-                for opt in crate::theme::mono_font_options() {
-                    if pill_tab(ui, opt.name, current == opt.id) && current != opt.id {
-                        self.conv.settings.mono_font = opt.id.to_string();
-                        self.apply_font_selection(ui.ctx());
+            let current = self.conv.settings.mono_font.clone();
+            let current_name = crate::theme::mono_font_options()
+                .iter()
+                .find(|opt| opt.id == current)
+                .map(|opt| opt.name.as_str())
+                .unwrap_or("Default");
+            let mut selected = None;
+            egui::ComboBox::from_id_salt("monospace_font_combo")
+                .selected_text(current_name)
+                .width(320.0)
+                .height(360.0)
+                .show_ui(ui, |ui| {
+                    let search_id = egui::Id::new("monospace_font_search");
+                    let mut search = ui
+                        .ctx()
+                        .data(|data| data.get_temp::<String>(search_id))
+                        .unwrap_or_default();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut search)
+                            .hint_text("Search fonts…")
+                            .desired_width(290.0),
+                    );
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(search_id, search.clone()));
+                    ui.separator();
+                    let needle = search.trim().to_lowercase();
+                    for opt in crate::theme::mono_font_options().iter().filter(|opt| {
+                        needle.is_empty() || opt.name.to_lowercase().contains(&needle)
+                    }) {
+                        if ui.selectable_label(opt.id == current, &opt.name).clicked() {
+                            selected = Some(opt.id.clone());
+                        }
                     }
-                }
-            });
+                });
+            if let Some(id) = selected.filter(|id| id != &current) {
+                self.conv.settings.mono_font = id;
+                self.apply_font_selection(ui.ctx());
+            }
 
             ui.add_space(14.0);
             hairline(ui);

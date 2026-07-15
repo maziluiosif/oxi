@@ -386,12 +386,13 @@ impl OxiApp {
         } else {
             (c_bg_input(), c_border_subtle(), c_text_muted(), "Dictate")
         };
-        let mic = crate::ui::chrome::icon_button_core(
+        let mic = crate::ui::chrome::icon_button_core_with_hover(
             ui,
             ICON_MIC,
             egui::vec2(MIC_DIAM, MIC_DIAM),
             14.0,
             false,
+            !recording,
             &crate::ui::chrome::IconButtonLook {
                 fill,
                 hover_fill: c_row_hover(),

@@ -29,6 +29,7 @@ bytes = "1"
 regex = "1"
 glob = "0.3"
 walkdir = "2"
+fontdb = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 dirs = "6"
 sha2 = "0.11"

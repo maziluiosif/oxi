@@ -255,7 +255,9 @@ impl OxiApp {
                                 egui::vec2(row_w, row_outer_h),
                                 Sense::click(),
                             );
-                            let hovered = response.hovered();
+                            // Keep the row hovered while the pointer is over an
+                            // overlapping action such as the hover-only trash button.
+                            let hovered = ui.rect_contains_pointer(rect);
                             if hovered {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }

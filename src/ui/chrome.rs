@@ -429,8 +429,24 @@ pub fn icon_button_core(
     active: bool,
     look: &IconButtonLook,
 ) -> Response {
+    icon_button_core_with_hover(ui, icon, size, glyph_size, active, true, look)
+}
+
+/// Variant of [`icon_button_core`] that can keep its resting visuals while hovered. The button
+/// remains clickable and keeps the pointer cursor, which is useful for strongly colored active
+/// states where replacing the active fill or glyph would make the state appear to switch off.
+#[allow(clippy::too_many_arguments)]
+pub fn icon_button_core_with_hover(
+    ui: &mut Ui,
+    icon: &str,
+    size: egui::Vec2,
+    glyph_size: f32,
+    active: bool,
+    show_hover_visuals: bool,
+    look: &IconButtonLook,
+) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = response.hovered();
+    let hovered = show_hover_visuals && response.hovered();
     let fill = if hovered { look.hover_fill } else { look.fill };
     let stroke = if hovered {
         look.hover_stroke
@@ -459,7 +475,7 @@ pub fn icon_button_core(
             look.glyph
         },
     );
-    if hovered {
+    if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     response
