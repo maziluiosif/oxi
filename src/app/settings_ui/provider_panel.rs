@@ -31,50 +31,52 @@ impl OxiApp {
                 .fetched_models
                 .get(&kind)
                 .is_some_and(|f| !f.models.is_empty());
+            // Refresh button pinned to the right edge; the model field/combo fills the
+            // rest of the row on the left. Laying the whole row out right-to-left keeps
+            // the field flush-left instead of leaving it stranded on the right.
             ui.horizontal(|ui| {
-                let refresh = ui
-                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
-                            .on_hover_text("Load available models from provider")
-                            .clicked()
-                    })
-                    .inner;
-                if have {
-                    let fetched = self
-                        .conv
-                        .fetched_models
-                        .get(&kind)
-                        .map(|f| f.models.clone())
-                        .unwrap_or_default();
-                    let current = self.conv.settings.provider(kind).model_id.clone();
-                    let label = if current.is_empty() {
-                        "(custom)".to_string()
-                    } else {
-                        current.clone()
-                    };
-                    egui::ComboBox::from_id_salt(("model_combo", kind.slug()))
-                        .selected_text(label)
-                        .width(ui.available_width())
-                        .show_ui(ui, |ui| {
-                            if !current.is_empty() && fetched.iter().all(|x| x != &current) {
-                                let _ = ui.selectable_label(false, format!("{current} (custom)"));
-                            }
-                            for m in &fetched {
-                                if ui.selectable_label(*m == current, m.clone()).clicked() {
-                                    self.conv.settings.provider_mut(kind).model_id = m.clone();
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let refresh = crate::ui::chrome::icon_button(ui, ICON_REFRESH, 26.0, false)
+                        .on_hover_text("Load available models from provider")
+                        .clicked();
+                    if have {
+                        let fetched = self
+                            .conv
+                            .fetched_models
+                            .get(&kind)
+                            .map(|f| f.models.clone())
+                            .unwrap_or_default();
+                        let current = self.conv.settings.provider(kind).model_id.clone();
+                        let label = if current.is_empty() {
+                            "(custom)".to_string()
+                        } else {
+                            current.clone()
+                        };
+                        egui::ComboBox::from_id_salt(("model_combo", kind.slug()))
+                            .selected_text(label)
+                            .width(ui.available_width())
+                            .show_ui(ui, |ui| {
+                                if !current.is_empty() && fetched.iter().all(|x| x != &current) {
+                                    let _ =
+                                        ui.selectable_label(false, format!("{current} (custom)"));
                                 }
-                            }
-                        });
-                } else {
-                    settings_text_field(
-                        ui,
-                        &mut self.conv.settings.provider_mut(kind).model_id,
-                        "e.g. gpt-4o-mini or kimi-k2.7-code",
-                    );
-                }
-                if refresh {
-                    self.spawn_model_fetch(ui.ctx(), kind);
-                }
+                                for m in &fetched {
+                                    if ui.selectable_label(*m == current, m.clone()).clicked() {
+                                        self.conv.settings.provider_mut(kind).model_id = m.clone();
+                                    }
+                                }
+                            });
+                    } else {
+                        settings_text_field(
+                            ui,
+                            &mut self.conv.settings.provider_mut(kind).model_id,
+                            "e.g. gpt-4o-mini or kimi-k2.7-code",
+                        );
+                    }
+                    if refresh {
+                        self.spawn_model_fetch(ui.ctx(), kind);
+                    }
+                });
             });
             // Status line for the model fetch.
             if let Some(f) = self.conv.fetched_models.get(&kind) {

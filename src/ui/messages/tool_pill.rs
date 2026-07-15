@@ -107,7 +107,7 @@ pub(super) fn render_tool_pill(
         crate::theme::c_tool_pill_border()
     };
     let icon_color = if has_error {
-        c_diff_del_fg()
+        crate::theme::c_tool_error_fg()
     } else {
         c_text_faint()
     };
@@ -396,7 +396,7 @@ fn render_edit_tool_block(
                             RichText::new(tool_icon(name))
                                 .font(FontId::new(FS_SMALL + 0.5, icon_font()))
                                 .color(if has_error {
-                                    c_diff_del_fg()
+                                    crate::theme::c_tool_error_fg()
                                 } else {
                                     c_text_faint()
                                 }),

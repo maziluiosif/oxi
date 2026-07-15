@@ -629,6 +629,16 @@ impl OxiApp {
         });
     }
 
+    /// Register the current font choice and rebuild egui's font atlas so the change shows
+    /// immediately (theme stays as-is).
+    fn apply_font_selection(&self, ctx: &egui::Context) {
+        crate::theme::set_active_fonts(crate::theme::FontSelection {
+            ui: self.conv.settings.ui_font.clone(),
+            mono: self.conv.settings.mono_font.clone(),
+        });
+        crate::theme::setup_style(ctx);
+    }
+
     pub(super) fn render_settings_appearance_panel(&mut self, ui: &mut Ui) {
         settings_section_title(
             ui,
@@ -649,6 +659,40 @@ impl OxiApp {
                     if pill_tab(ui, &t.name, t.id == current) && t.id != current {
                         self.conv.settings.theme_id = t.id.clone();
                         crate::theme::apply_theme(ui.ctx(), &t.id);
+                    }
+                }
+            });
+
+            ui.add_space(14.0);
+            hairline(ui);
+            ui.add_space(12.0);
+            settings_card_header(
+                ui,
+                "Font",
+                Some("Interface and code fonts. System fonts are detected automatically."),
+            );
+            settings_caption(ui, "Interface");
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let current = self.conv.settings.ui_font.clone();
+                for opt in crate::theme::ui_font_options() {
+                    if pill_tab(ui, opt.name, current == opt.id) && current != opt.id {
+                        self.conv.settings.ui_font = opt.id.to_string();
+                        self.apply_font_selection(ui.ctx());
+                    }
+                }
+            });
+            ui.add_space(8.0);
+            settings_caption(ui, "Code / monospace");
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let current = self.conv.settings.mono_font.clone();
+                for opt in crate::theme::mono_font_options() {
+                    if pill_tab(ui, opt.name, current == opt.id) && current != opt.id {
+                        self.conv.settings.mono_font = opt.id.to_string();
+                        self.apply_font_selection(ui.ctx());
                     }
                 }
             });

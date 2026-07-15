@@ -41,6 +41,16 @@ pub fn builtin_themes() -> Vec<ThemeChoice> {
             name: "Midnight".to_string(),
             palette: Palette::MIDNIGHT,
         },
+        ThemeChoice {
+            id: "sublime".to_string(),
+            name: "Sublime".to_string(),
+            palette: Palette::SUBLIME,
+        },
+        ThemeChoice {
+            id: "mariana".to_string(),
+            name: "Sublime 4".to_string(),
+            palette: Palette::MARIANA,
+        },
     ]
 }
 

@@ -513,9 +513,13 @@ impl OxiApp {
         let from_bottom = max_offset - scroll_output.state.offset.y;
         if from_bottom > 80.0 {
             const BTN: f32 = 30.0;
+            // Sit the button just above the composer's actual top edge. Using the padded
+            // `bottom_overlay_h` (min 88) left it floating well above a short composer;
+            // mirror the real composer height (see `render_composer` in sidebar.rs).
+            let composer_h = self.conv.composer_measured_full_h.max(80.0);
             let pos = egui::pos2(
                 scroll_output.inner_rect.center().x - BTN * 0.5,
-                scroll_output.inner_rect.bottom() - bottom_overlay_h.max(0.0) - BTN - 10.0,
+                scroll_output.inner_rect.bottom() - composer_h - BTN - 8.0,
             );
             let mut jump = false;
             egui::Area::new(ui.id().with("scroll_to_bottom_btn"))

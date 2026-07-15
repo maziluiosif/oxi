@@ -1,6 +1,8 @@
 //! Type scale, icon glyphs, font loading, and building egui `Style`/`Visuals` from the
 //! active palette.
 
+use std::sync::RwLock;
+
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
 
 use super::palette::active_palette;
@@ -67,6 +69,7 @@ pub const ICON_SETTINGS: &str = "\u{f013}";
 pub const ICON_PLUS: &str = "\u{f067}";
 /// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
 pub const ICON_CHEVRON_RIGHT: &str = "\u{f054}";
+pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
 /// Hamburger menu — toggle sidebar (`nf-fa-bars`).
 pub const ICON_MENU: &str = "\u{f02a}";
 /// Terminal — toggle the embedded terminal panel (`nf-fa-terminal`).
@@ -128,6 +131,197 @@ pub fn small_spinner(ui: &mut egui::Ui) {
     );
 }
 
+// ─── System fonts (user-selectable in Appearance settings) ──────────────────────
+//
+// The app ships with bundled Noto Sans (proportional) and Ubuntu Mono (monospace). The
+// user can instead pick a font installed on the OS. Each option lists candidate files
+// (path + face index) tried in order; the first that reads is loaded at runtime. If none
+// load, the bundled font is kept — so an option that references a missing file just falls
+// back silently rather than breaking text. `default` (empty candidates) means "bundled".
+
+/// One selectable font: stable `id`, display `name`, and OS font files to try.
+pub struct FontOption {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// `(path, face index)` pairs. First that reads wins. Empty ⇒ use the bundled font.
+    candidates: &'static [(&'static str, u32)],
+}
+
+/// Proportional (interface) font choices. `default` is the bundled Noto Sans.
+static UI_FONTS: &[FontOption] = &[
+    FontOption {
+        id: "default",
+        name: "Default",
+        candidates: &[],
+    },
+    FontOption {
+        id: "system",
+        name: "System",
+        candidates: &[
+            ("/System/Library/Fonts/SFNS.ttf", 0),
+            ("C:\\Windows\\Fonts\\segoeui.ttf", 0),
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
+            ("/usr/share/fonts/TTF/DejaVuSans.ttf", 0),
+        ],
+    },
+    FontOption {
+        id: "helvetica",
+        name: "Helvetica",
+        candidates: &[("/System/Library/Fonts/Helvetica.ttc", 0)],
+    },
+    FontOption {
+        id: "helvetica_neue",
+        name: "Helvetica Neue",
+        candidates: &[("/System/Library/Fonts/HelveticaNeue.ttc", 0)],
+    },
+    FontOption {
+        id: "arial",
+        name: "Arial",
+        candidates: &[
+            ("/System/Library/Fonts/Supplemental/Arial.ttf", 0),
+            ("C:\\Windows\\Fonts\\arial.ttf", 0),
+        ],
+    },
+    FontOption {
+        id: "georgia",
+        name: "Georgia",
+        candidates: &[
+            ("/System/Library/Fonts/Supplemental/Georgia.ttf", 0),
+            ("C:\\Windows\\Fonts\\georgia.ttf", 0),
+        ],
+    },
+];
+
+/// Monospace (code) font choices. `default` is the bundled Ubuntu Mono.
+static MONO_FONTS: &[FontOption] = &[
+    FontOption {
+        id: "default",
+        name: "Default",
+        candidates: &[],
+    },
+    FontOption {
+        id: "sf_mono",
+        name: "SF Mono",
+        candidates: &[("/System/Library/Fonts/SFNSMono.ttf", 0)],
+    },
+    FontOption {
+        id: "menlo",
+        name: "Menlo",
+        candidates: &[("/System/Library/Fonts/Menlo.ttc", 0)],
+    },
+    FontOption {
+        id: "monaco",
+        name: "Monaco",
+        candidates: &[("/System/Library/Fonts/Monaco.ttf", 0)],
+    },
+    FontOption {
+        id: "courier",
+        name: "Courier New",
+        candidates: &[
+            ("/System/Library/Fonts/Supplemental/Courier New.ttf", 0),
+            ("C:\\Windows\\Fonts\\cour.ttf", 0),
+        ],
+    },
+    FontOption {
+        id: "dejavu_mono",
+        name: "DejaVu Sans Mono",
+        candidates: &[
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 0),
+            ("/usr/share/fonts/TTF/DejaVuSansMono.ttf", 0),
+        ],
+    },
+];
+
+impl FontOption {
+    /// `true` if this option is usable on this machine — the bundled default always is;
+    /// a system option is only offered when at least one candidate file exists.
+    fn available(&self) -> bool {
+        self.candidates.is_empty()
+            || self
+                .candidates
+                .iter()
+                .any(|(p, _)| std::path::Path::new(p).exists())
+    }
+}
+
+fn lookup_font(options: &'static [FontOption], id: &str) -> Option<&'static FontOption> {
+    options.iter().find(|o| o.id == id)
+}
+
+/// Available proportional (interface) fonts on this machine, in display order.
+pub fn ui_font_options() -> Vec<&'static FontOption> {
+    UI_FONTS.iter().filter(|o| o.available()).collect()
+}
+
+/// Available monospace (code) fonts on this machine, in display order.
+pub fn mono_font_options() -> Vec<&'static FontOption> {
+    MONO_FONTS.iter().filter(|o| o.available()).collect()
+}
+
+/// `true` if `id` is a recognized proportional-font id (regardless of availability).
+pub fn ui_font_is_known(id: &str) -> bool {
+    UI_FONTS.iter().any(|o| o.id == id)
+}
+
+/// `true` if `id` is a recognized monospace-font id (regardless of availability).
+pub fn mono_font_is_known(id: &str) -> bool {
+    MONO_FONTS.iter().any(|o| o.id == id)
+}
+
+/// The user's selected interface + code fonts, resolved by [`install_fonts`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontSelection {
+    pub ui: String,
+    pub mono: String,
+}
+
+impl Default for FontSelection {
+    fn default() -> Self {
+        Self {
+            ui: "default".to_string(),
+            mono: "default".to_string(),
+        }
+    }
+}
+
+/// Globally-active font selection. Read by [`install_fonts`] (which runs inside
+/// [`setup_style`]); written on startup and whenever the user changes fonts.
+static ACTIVE_FONTS: RwLock<Option<FontSelection>> = RwLock::new(None);
+
+/// Set the active fonts. Call [`setup_style`] afterwards to reinstall and relayout.
+pub fn set_active_fonts(sel: FontSelection) {
+    if let Ok(mut guard) = ACTIVE_FONTS.write() {
+        *guard = Some(sel);
+    }
+}
+
+fn active_fonts() -> FontSelection {
+    ACTIVE_FONTS
+        .read()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default()
+}
+
+/// Read the first readable candidate file for `opt` and register it under `key`, returning
+/// the family key on success. `None` (unreadable / bundled default) leaves fonts untouched.
+fn install_system_font(
+    fonts: &mut FontDefinitions,
+    key: &str,
+    opt: &FontOption,
+) -> Option<String> {
+    let (bytes, index) = opt
+        .candidates
+        .iter()
+        .find_map(|(path, index)| std::fs::read(path).ok().map(|b| (b, *index)))?;
+    let mut data = FontData::from_owned(bytes);
+    data.index = index;
+    fonts
+        .font_data
+        .insert(key.to_string(), std::sync::Arc::new(data));
+    Some(key.to_string())
+}
+
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
@@ -151,17 +345,34 @@ fn install_fonts(ctx: &egui::Context) {
         std::sync::Arc::new(FontData::from_static(SYMBOLS_NERD_FONT_MONO)),
     );
 
+    // Optional user-selected system fonts, loaded from disk. A missing/unreadable file
+    // yields `None` and the bundled font is used instead.
+    let sel = active_fonts();
+    let sys_ui = lookup_font(UI_FONTS, &sel.ui)
+        .filter(|o| !o.candidates.is_empty())
+        .and_then(|o| install_system_font(&mut fonts, "sys_ui", o));
+    let sys_mono = lookup_font(MONO_FONTS, &sel.mono)
+        .filter(|o| !o.candidates.is_empty())
+        .and_then(|o| install_system_font(&mut fonts, "sys_mono", o));
+
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     proportional.insert(0, "noto_sans".to_string());
     // Prefer full Noto Emoji over egui's trimmed default emoji font for glyph coverage.
     proportional.insert(1, "noto_emoji".to_string());
     proportional.push("apple_symbols".to_string());
+    // The chosen system font wins; the bundled Noto Sans stays as a glyph fallback.
+    if let Some(key) = &sys_ui {
+        proportional.insert(0, key.clone());
+    }
 
     let monospace = fonts.families.entry(FontFamily::Monospace).or_default();
     monospace.insert(0, "ubuntu_mono".to_string());
     monospace.push("noto_sans".to_string());
     monospace.push("noto_emoji".to_string());
     monospace.push("apple_symbols".to_string());
+    if let Some(key) = &sys_mono {
+        monospace.insert(0, key.clone());
+    }
 
     // Dedicated icon family — used only for tool pill glyphs.
     // Keeps Nerd Font PUA codepoints out of the proportional/monospace fallback chains

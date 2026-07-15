@@ -80,6 +80,11 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             let app = OxiApp::new();
+            // Register the persisted font choice so the theme's font install picks it up.
+            theme::set_active_fonts(theme::FontSelection {
+                ui: app.conv.settings.ui_font.clone(),
+                mono: app.conv.settings.mono_font.clone(),
+            });
             // Apply the persisted theme (installs fonts + builds egui visuals).
             theme::apply_theme(&cc.egui_ctx, &app.conv.settings.theme_id);
             // Apply the persisted text/UI density (zoom).

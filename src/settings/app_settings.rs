@@ -95,6 +95,13 @@ pub struct AppSettings {
     /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
     #[serde(default)]
     pub ui_density: UiDensity,
+    /// Interface (proportional) font id — see [`crate::theme::ui_font_options`]. `"default"`
+    /// is the bundled font; other ids load a system font at runtime.
+    #[serde(default = "default_font_id")]
+    pub ui_font: String,
+    /// Code (monospace) font id — see [`crate::theme::mono_font_options`].
+    #[serde(default = "default_font_id")]
+    pub mono_font: String,
     /// Maximum number of agent tool rounds per run. `0` means unlimited. Default unlimited.
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: u32,
@@ -317,6 +324,10 @@ fn default_theme_id() -> String {
     crate::theme::DEFAULT_THEME_ID.to_string()
 }
 
+fn default_font_id() -> String {
+    "default".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LegacyAppSettings {
     pub provider: LlmProviderKind,
@@ -356,6 +367,8 @@ impl Default for AppSettings {
             chat_column_max_width: default_chat_column_max_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
+            ui_font: default_font_id(),
+            mono_font: default_font_id(),
             max_tool_rounds: default_max_tool_rounds(),
             bash_timeout_cap_secs: default_bash_timeout_cap_secs(),
             context_window_default: default_context_window(),
@@ -632,6 +645,14 @@ impl AppSettings {
             ) {
                 cfg.effort.clear();
             }
+        }
+        // Reset unknown font ids (e.g. a removed option) to the bundled default so the
+        // picker always has a valid selection highlighted.
+        if !crate::theme::ui_font_is_known(&self.ui_font) {
+            self.ui_font = default_font_id();
+        }
+        if !crate::theme::mono_font_is_known(&self.mono_font) {
+            self.mono_font = default_font_id();
         }
         if let Some(legacy_require_approval) = self.require_approval.take() {
             self.require_write_edit_approval = legacy_require_approval;

@@ -130,8 +130,12 @@ impl OxiApp {
         self.continue_after_settings_exit(action);
     }
 
-    /// Re-apply theme + zoom after Cancel/Discard restores the settings snapshot.
+    /// Re-apply theme + fonts + zoom after Cancel/Discard restores the settings snapshot.
     fn reapply_appearance(&mut self, ctx: &egui::Context) {
+        crate::theme::set_active_fonts(crate::theme::FontSelection {
+            ui: self.conv.settings.ui_font.clone(),
+            mono: self.conv.settings.mono_font.clone(),
+        });
         crate::theme::apply_theme(ctx, &self.conv.settings.theme_id);
         ctx.set_zoom_factor(self.conv.settings.ui_density.zoom_factor());
         // Keep Local HF UI fields in sync with restored settings.
@@ -395,26 +399,17 @@ impl OxiApp {
             }
         }
 
+        // Pinned to the bottom of the sidebar so "Back to chat" lines up with the
+        // chat sidebar's settings row. In a `bottom_up` layout the first item added
+        // sits lowest.
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!(
-                    "~/{}",
-                    crate::settings::AppSettings::config_path()
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("settings.json")
-                ))
-                .size(FS_TINY)
-                .color(c_text_faint())
-                .monospace(),
-            );
             ui.add_space(2.0);
-            ui.label(
-                RichText::new("Settings file")
-                    .size(FS_TINY)
-                    .color(c_text_faint()),
-            );
+            if settings_nav_row(ui, ICON_CHEVRON_LEFT, "Back to chat", false)
+                .on_hover_text("Return to chat (asks before discarding unsaved changes)")
+                .clicked()
+            {
+                self.request_settings_exit(SettingsExitAction::BackToChat);
+            }
             ui.add_space(2.0);
         });
     }

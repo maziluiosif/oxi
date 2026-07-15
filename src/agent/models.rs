@@ -17,7 +17,7 @@ use serde_json::Value;
 /// Do not use Oxi's own crate version here: Oxi is currently `0.x`, while the
 /// ChatGPT Codex backend compares this query parameter with Codex CLI versions
 /// such as `0.142.5` and can filter out the entire catalog for an older client.
-const CODEX_MODELS_CLIENT_VERSION: &str = "0.142.5";
+const CODEX_MODELS_CLIENT_VERSION: &str = "0.198.0";
 
 /// One entry in the OpenAI-style `/v1/models` list response.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -226,10 +226,14 @@ static CONTEXT_CATALOG: &[(&str, usize)] = &[
     ("claude-3-5-haiku", 200_000),
 
     // ── OpenAI GPT family ─────────────────────────────────────────────────────
-    ("gpt-5.5-pro", 400_000),
-    // ChatGPT Codex reports ~258K usable context for gpt-5.5
+    ("gpt-5.6-pro", 400_000),
+    ("gpt-5.6-codex", 400_000),
+    // ChatGPT Codex reports ~258K usable context for the gpt-5.5/5.6 line
     // (272K raw with a 95% effective window), so keep the local fallback aligned
     // with the context shown by Codex instead of the broader GPT-5 family default.
+    ("gpt-5.6", 258_000),
+    ("gpt-5.5-pro", 400_000),
+    ("gpt-5.5-codex", 400_000),
     ("gpt-5.5", 258_000),
     ("gpt-5.4-pro", 400_000),
     ("gpt-5.4-mini", 400_000),
