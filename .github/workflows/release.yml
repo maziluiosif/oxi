@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: release
@@ -189,22 +190,24 @@ jobs:
     if: needs.changelog.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: dev
-
-      - name: Copy release metadata back to dev
+      - name: Open a master-to-dev sync PR and enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          version="${{ needs.changelog.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin dev --tags
-          # The tag points at the generated release commit, which only changes
-          # CHANGELOG.md, Cargo.toml and Cargo.lock. Cherry-picking that commit avoids
-          # merging master topology back into the long-lived development branch.
-          git cherry-pick "v${version}^{}"
-          git push origin HEAD:dev
+          version="v${{ needs.changelog.outputs.version }}"
+          pr=$(gh pr list --base dev --head master --state open --json number --jq '.[0].number')
+          if [ -z "$pr" ]; then
+            gh pr create \
+              --base dev \
+              --head master \
+              --title "chore: sync release ${version} back to dev" \
+              --body "Brings the generated ${version} changelog and Cargo version bump back to dev."
+            pr=$(gh pr list --base dev --head master --state open --json number --jq '.[0].number')
+          fi
+          test -n "$pr"
+          # dev requires the CI check, so the PR merges only after that check succeeds.
+          gh pr merge "$pr" --auto --merge
 
   homebrew:
     needs: [changelog, publish]

@@ -75,7 +75,7 @@ cargo test -- --ignored
 - Merging into `master` starts the release workflow. It generates release notes and a
   SemVer bump from commits since the latest `v*` tag, builds every supported platform,
   then commits `CHANGELOG.md`, `Cargo.toml`, and `Cargo.lock`, tags and publishes the
-  release, and cherry-picks that metadata commit back to `dev`.
+  release, then opens a `master` → `dev` sync PR and auto-merges it after CI passes.
 - Use Conventional Commit prefixes where possible (`feat:`, `fix:`, `security:`, and
   `type!:` for breaking changes). They provide deterministic release notes and version
   selection if the optional LLM changelog service is unavailable. You normally should
