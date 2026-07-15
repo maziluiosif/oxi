@@ -42,7 +42,7 @@ keyring-core = "1"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
-cpal = "0.15"
+cpal = "0.18"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
