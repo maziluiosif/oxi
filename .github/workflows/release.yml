@@ -32,7 +32,7 @@ jobs:
           # workflow_dispatch may be launched from another ref; releases always come from master.
           ref: master
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
