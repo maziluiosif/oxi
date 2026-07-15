@@ -82,7 +82,7 @@ jobs:
           ref: ${{ needs.changelog.outputs.source_sha }}
 
       - name: Apply generated version metadata
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-metadata
 
@@ -154,7 +154,7 @@ jobs:
           ref: ${{ needs.changelog.outputs.source_sha }}
 
       - name: Download generated release metadata
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-metadata
 
@@ -170,7 +170,7 @@ jobs:
           git push --atomic origin HEAD:master "refs/tags/v${version}"
 
       - name: Download packaged binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: oxi-*
           path: dist
