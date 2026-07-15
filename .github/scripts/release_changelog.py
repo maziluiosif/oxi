@@ -26,6 +26,7 @@ import sys
 import urllib.request
 import urllib.error
 from datetime import date
+from pathlib import Path
 
 REPO = "maziluiosif/oxi"
 MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-haiku-4.5")
@@ -46,7 +47,7 @@ def set_output(name: str, value: str) -> None:
 
 
 def current_version() -> str:
-    text = open("Cargo.toml", encoding="utf-8").read()
+    text = Path("Cargo.toml").read_text(encoding="utf-8")
     m = re.search(r'(?m)^\s*version\s*=\s*"([^"]+)"', text)
     if not m:
         sys.exit("could not find version in Cargo.toml")
@@ -82,7 +83,7 @@ def bump_version(version: str, bump: str) -> str:
 def call_llm(commits: str, files: list[str]) -> dict:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
-        sys.exit("OPENROUTER_API_KEY is not set")
+        raise RuntimeError("OPENROUTER_API_KEY is not set")
 
     system = (
         "You are a release-notes generator for the open-source Rust desktop app "
@@ -127,9 +128,15 @@ def call_llm(commits: str, files: list[str]) -> dict:
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        sys.exit(f"OpenRouter HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')}")
+        body = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(f"OpenRouter HTTP {exc.code}: {body}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
 
-    content = data["choices"][0]["message"]["content"]
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("OpenRouter returned an unexpected response shape") from exc
     return parse_llm_json(content)
 
 
@@ -139,7 +146,7 @@ def parse_llm_json(content: str) -> dict:
     content = re.sub(r"^```(?:json)?|```$", "", content, flags=re.MULTILINE).strip()
     start, end = content.find("{"), content.rfind("}")
     if start == -1 or end == -1:
-        sys.exit(f"LLM did not return JSON:\n{content}")
+        raise ValueError(f"LLM did not return JSON:\n{content}")
     raw = content[start : end + 1]
     try:
         obj = json.loads(raw)
@@ -160,6 +167,58 @@ def parse_llm_json(content: str) -> dict:
     return {"bump": bump, "sections": sections}
 
 
+def fallback_notes(commits: str) -> dict:
+    """Build deterministic release notes when the optional LLM is unavailable.
+
+    Conventional-commit prefixes select a category and semver bump. Unknown but
+    non-maintenance commits are retained under Changed, so a merge to master still
+    produces a release instead of being blocked by an external API outage.
+    """
+    sections: dict[str, list[str]] = {}
+    bump = "patch"
+    breaking = "BREAKING CHANGE" in commits
+
+    for raw in commits.splitlines():
+        subject = raw.removeprefix("- ").strip()
+        if not subject or raw == subject:
+            continue
+        match = re.match(r"([a-zA-Z]+)(?:\([^)]*\))?(!)?:\s*(.+)", subject)
+        if match:
+            kind, bang, text = match.groups()
+            kind = kind.lower()
+            breaking = breaking or bool(bang)
+        else:
+            kind, text = "changed", subject
+
+        if kind in {"chore", "ci", "test", "docs", "style"}:
+            continue
+        if kind == "feat":
+            category = "Added"
+            if bump == "patch":
+                bump = "minor"
+        elif kind == "fix":
+            category = "Fixed"
+        elif kind in {"security", "sec"}:
+            category = "Security"
+        elif kind in {"remove", "removed"}:
+            category = "Removed"
+            breaking = True
+        elif kind in {"deprecate", "deprecated"}:
+            category = "Deprecated"
+        else:
+            category = "Changed"
+
+        text = text.strip().rstrip(".")
+        if text and text not in sections.setdefault(category, []):
+            sections[category].append(text[0].upper() + text[1:])
+
+    if breaking:
+        bump = "major"
+    if not sections:
+        sections = {"Changed": ["Internal maintenance and dependency updates"]}
+    return {"bump": bump, "sections": sections}
+
+
 def render_section(version: str, sections: dict) -> str:
     lines = [f"## [{version}] - {date.today().isoformat()}", ""]
     for cat in CATEGORIES:
@@ -171,7 +230,7 @@ def render_section(version: str, sections: dict) -> str:
 
 
 def update_changelog(version: str, prev: str | None, section: str) -> str:
-    text = open("CHANGELOG.md", encoding="utf-8").read()
+    text = Path("CHANGELOG.md").read_text(encoding="utf-8")
 
     # Insert the new section directly after the "## [Unreleased]" heading.
     marker = "## [Unreleased]"
@@ -199,28 +258,35 @@ def update_changelog(version: str, prev: str | None, section: str) -> str:
         count=1,
     )
 
-    open("CHANGELOG.md", "w", encoding="utf-8").write(text)
+    Path("CHANGELOG.md").write_text(text, encoding="utf-8")
     return section
 
 
 def update_cargo(prev: str, version: str) -> None:
-    toml = open("Cargo.toml", encoding="utf-8").read()
-    toml = re.sub(
+    toml_path = Path("Cargo.toml")
+    toml = toml_path.read_text(encoding="utf-8")
+    toml, toml_count = re.subn(
         r'(?m)^(\s*version\s*=\s*)"%s"' % re.escape(prev),
         r'\g<1>"%s"' % version,
         toml,
         count=1,
     )
-    open("Cargo.toml", "w", encoding="utf-8").write(toml)
+    if toml_count != 1:
+        raise RuntimeError(f"could not bump Cargo.toml from {prev} to {version}")
 
-    lock = open("Cargo.lock", encoding="utf-8").read()
-    lock = re.sub(
+    lock_path = Path("Cargo.lock")
+    lock = lock_path.read_text(encoding="utf-8")
+    lock, lock_count = re.subn(
         r'(name = "oxi"\nversion = )"%s"' % re.escape(prev),
         r'\g<1>"%s"' % version,
         lock,
         count=1,
     )
-    open("Cargo.lock", "w", encoding="utf-8").write(lock)
+    if lock_count != 1:
+        raise RuntimeError(f"could not bump oxi in Cargo.lock from {prev} to {version}")
+
+    toml_path.write_text(toml, encoding="utf-8")
+    lock_path.write_text(lock, encoding="utf-8")
 
 
 def main() -> None:
@@ -233,17 +299,19 @@ def main() -> None:
         set_output("released", "false")
         return
 
-    result = call_llm(commits, files)
-    if not result["sections"]:
-        print("LLM found no user-facing changes; nothing to release.")
-        set_output("released", "false")
-        return
+    try:
+        result = call_llm(commits, files)
+        if not result["sections"]:
+            raise ValueError("LLM returned no user-facing sections")
+    except (RuntimeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"::warning::LLM changelog generation failed; using deterministic fallback: {exc}")
+        result = fallback_notes(commits)
 
     version = bump_version(prev, result["bump"])
     section = render_section(version, result["sections"])
     body = update_changelog(version, tag.lstrip("v") if tag else None, section)
     update_cargo(prev, version)
-    open("release_notes.md", "w", encoding="utf-8").write(body)
+    Path("release_notes.md").write_text(body, encoding="utf-8")
 
     print(f"Released v{version} (bump={result['bump']}, from v{prev})")
     set_output("released", "true")

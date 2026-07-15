@@ -56,7 +56,7 @@ static WRITE_CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 /// returned but callers generally shouldn't let them block saving the rest of settings.
 pub fn store(account: &str, value: &str) -> Result<(), String> {
     {
-        let mut cache = WRITE_CACHE.lock().unwrap();
+        let mut cache = WRITE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if cache
             .get_or_insert_with(HashMap::new)
             .get(account)
@@ -75,7 +75,7 @@ pub fn store(account: &str, value: &str) -> Result<(), String> {
             .map_err(|e| e.to_string())
     };
     if result.is_ok() {
-        let mut cache = WRITE_CACHE.lock().unwrap();
+        let mut cache = WRITE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         cache
             .get_or_insert_with(HashMap::new)
             .insert(account.to_string(), value.to_string());
@@ -103,7 +103,10 @@ pub fn delete(account: &str) -> Result<(), String> {
         Err(e) => Err(e.to_string()),
     };
     if result.is_ok()
-        && let Some(cache) = WRITE_CACHE.lock().unwrap().as_mut()
+        && let Some(cache) = WRITE_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
     {
         cache.remove(account);
     }
@@ -133,7 +136,11 @@ static UNIFIED_CACHE: Mutex<Option<UnifiedSecrets>> = Mutex::new(None);
 /// Load the unified secrets blob, migrating from the old per-item accounts on first read
 /// if the unified item doesn't exist yet. Cached for the rest of the process.
 pub fn load_unified() -> UnifiedSecrets {
-    if let Some(s) = UNIFIED_CACHE.lock().unwrap().as_ref() {
+    if let Some(s) = UNIFIED_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
         return s.clone();
     }
     let stored = load_blob(UNIFIED_ACCOUNT);
@@ -142,15 +149,17 @@ pub fn load_unified() -> UnifiedSecrets {
     } else {
         migrate_legacy_accounts()
     };
-    *UNIFIED_CACHE.lock().unwrap() = Some(unified.clone());
+    *UNIFIED_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(unified.clone());
     unified
 }
 
 pub fn save_unified(unified: &UnifiedSecrets) -> Result<(), String> {
     let json = serde_json::to_string(unified).map_err(|e| e.to_string())?;
-    let result = store_blob(UNIFIED_ACCOUNT, &json);
-    *UNIFIED_CACHE.lock().unwrap() = Some(unified.clone());
-    result
+    store_blob(UNIFIED_ACCOUNT, &json)?;
+    // Never let the in-process cache claim a failed keychain write succeeded. Callers can now
+    // surface the error and retry without silently diverging from what survives a restart.
+    *UNIFIED_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(unified.clone());
+    Ok(())
 }
 
 /// Windows Credential Manager caps a single credential blob at

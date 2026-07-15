@@ -1,4 +1,4 @@
-//! User approval gate for shell (`bash`) and filesystem-changing (`write` / `edit`) tools.
+//! User approval gate for shell and built-in filesystem-changing tools.
 //!
 //! When approval is enabled, the agent thread sends [`AgentEvent::ApprovalRequest`] and blocks
 //! until the UI returns an [`ApprovalDecision`] over a back-channel. Read-only tools
@@ -41,7 +41,11 @@ impl ApprovalPolicy {
     pub fn requires_approval(self, name: &str) -> bool {
         match name {
             "bash" => self.bash,
-            "write" | "edit" => self.write_edit,
+            "write" | "edit" | "delete" | "move" | "mkdir" => self.write_edit,
+            // MCP servers are third-party processes and their tools may mutate files, external
+            // systems, or credentials. Unknown capabilities must fail closed rather than being
+            // treated like built-in read-only tools.
+            name if crate::agent::mcp::McpManager::is_mcp_tool(name) => true,
             _ => false,
         }
     }
@@ -127,7 +131,15 @@ mod tests {
 
     #[test]
     fn mutating_tools_require_approval() {
-        for t in ["bash", "write", "edit"] {
+        for t in [
+            "bash",
+            "write",
+            "edit",
+            "delete",
+            "move",
+            "mkdir",
+            "mcp_github_create_issue",
+        ] {
             assert!(
                 ApprovalPolicy {
                     write_edit: true,

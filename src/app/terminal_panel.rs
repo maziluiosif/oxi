@@ -38,8 +38,8 @@ impl OxiApp {
             .exact_size(height)
             .frame(
                 Frame::new()
-                    .fill(c_bg_sidebar())
-                    .stroke(Stroke::new(1.0, c_border_subtle())),
+                    .fill(c_bg_elevated())
+                    .stroke(Stroke::new(1.0, c_border())),
             )
             .show(ui, |ui| {
                 self.render_terminal_resize_handle(ui);
@@ -145,7 +145,7 @@ impl OxiApp {
     }
 
     /// Persist settings, surfacing any error on the active session.
-    fn save_settings_quietly(&mut self) {
+    pub(crate) fn save_settings_quietly(&mut self) {
         if let Err(e) = self.conv.settings.save() {
             self.run_state_mut(self.active_session_key()).stream_error =
                 Some(format!("Save settings: {e}"));

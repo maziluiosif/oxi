@@ -14,7 +14,98 @@ use crate::session_store;
 
 impl OxiApp {
     pub(crate) fn send_message(&mut self) {
-        self.send_message_opts(false);
+        if self.conv.editing_last_prompt.is_some() {
+            self.submit_edited_last_prompt();
+        } else {
+            self.send_message_opts(false);
+        }
+    }
+
+    pub(crate) fn begin_edit_last_prompt(&mut self) {
+        let key = self.active_session_key();
+        if self.active_waiting_response() || self.compaction_active_for(key) {
+            self.notify_composer(
+                "Wait for the current operation to finish before editing the prompt.",
+            );
+            return;
+        }
+        let Some(journal) = self.run_state(key).and_then(|run| run.undo_journal.clone()) else {
+            self.notify_composer("This older response has no restorable file checkpoint.");
+            return;
+        };
+        if let Some(reason) = journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .unavailable_reason()
+        {
+            self.notify_composer(format!("Edit & retry is unavailable: {reason}"));
+            return;
+        }
+        let Some(user) = self
+            .active_session()
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MsgRole::User && !m.is_summary)
+            .cloned()
+        else {
+            return;
+        };
+        let previous_input = std::mem::take(&mut self.conv.input);
+        let previous_images = std::mem::take(&mut self.conv.pending_images);
+        self.conv.input = self
+            .run_state(key)
+            .and_then(|run| run.last_user_prompt.clone())
+            .unwrap_or(user.text);
+        self.conv.pending_images = user
+            .attachments
+            .into_iter()
+            .map(|UserAttachment::Image { mime, data }| (mime, data))
+            .collect();
+        self.conv.editing_last_prompt = Some(super::state::PromptEditState {
+            previous_input,
+            previous_images,
+        });
+        self.conv.focus_chat_input_next_frame = true;
+    }
+
+    pub(crate) fn cancel_edit_last_prompt(&mut self) {
+        if let Some(edit) = self.conv.editing_last_prompt.take() {
+            self.conv.input = edit.previous_input;
+            self.conv.pending_images = edit.previous_images;
+        }
+    }
+
+    fn submit_edited_last_prompt(&mut self) {
+        let key = self.active_session_key();
+        if self.conv.input.trim().is_empty() && self.conv.pending_images.is_empty() {
+            return;
+        }
+        let journal = self.run_state(key).and_then(|r| r.undo_journal.clone());
+        if let Some(journal) = journal {
+            let root = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
+            if let Err(e) = journal
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .restore(&root)
+            {
+                self.notify_composer(format!("Cannot restore this response: {e}"));
+                return;
+            }
+        }
+        let Some(user_idx) = self
+            .active_session()
+            .messages
+            .iter()
+            .rposition(|m| m.role == MsgRole::User && !m.is_summary)
+        else {
+            return;
+        };
+        self.active_session_mut().messages.truncate(user_idx);
+        self.active_session_mut().wire_history = None;
+        self.run_state_mut(key).wire_history = None;
+        self.conv.editing_last_prompt = None;
+        self.send_message_opts(true);
     }
 
     /// `skip_autocompact` is set when an auto-compaction has just finished and is replaying
@@ -47,10 +138,14 @@ impl OxiApp {
             .run_state(key)
             .is_some_and(|state| state.waiting_response)
         {
+            self.notify_composer(
+                "A response is still streaming — stop it or wait for it to finish.",
+            );
             return;
         }
         // Don't send into a session whose history is mid-compaction.
         if self.compaction_active_for(key) {
+            self.notify_composer("Context is being compacted — try again in a moment.");
             return;
         }
 
@@ -69,6 +164,10 @@ impl OxiApp {
             {
                 let images = std::mem::take(&mut self.conv.pending_images);
                 self.conv.input.clear();
+                self.notify_composer(
+                    "Context is almost full — compacting first; your message will be sent \
+                     automatically.",
+                );
                 self.start_compaction(key, Some(super::compaction::QueuedSend { text, images }));
                 return;
             }
@@ -100,12 +199,15 @@ impl OxiApp {
 
         {
             let run = self.run_state_mut(key);
-            run.agent_ack = false;
             run.begin_waiting_response();
             run.stream_error = None;
         }
 
-        self.materialize_prompt(key, &text, &user_attachments);
+        // Expand @path mentions into attached file/folder context for the agent.
+        let cwd = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
+        let expanded = super::mentions::expand_at_mentions(&text, &cwd);
+        self.run_state_mut(key).last_user_prompt = Some(text.clone());
+        self.materialize_prompt(key, &expanded, &user_attachments);
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
         if let Err(e) =
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
@@ -126,7 +228,6 @@ impl OxiApp {
             }
             let run = self.run_state_mut(key);
             run.end_waiting_response();
-            run.agent_ack = false;
         }
     }
 
@@ -219,7 +320,8 @@ impl OxiApp {
 
     /// Drop the partial text/thinking of the round being retried after a mid-stream
     /// failure, so the regenerated round is not shown twice. Tool blocks from
-    /// completed rounds are kept.
+    /// completed rounds are kept; in-flight tools (early `ToolStart` before args
+    /// finished / execution began) are dropped so they don't linger as ghost pills.
     pub(crate) fn reset_streaming_tail(&mut self, key: SessionKey) {
         let Some(m) = self.last_assistant_mut(key) else {
             return;
@@ -229,7 +331,11 @@ impl OxiApp {
         }
         while matches!(
             m.blocks.last(),
-            Some(AssistantBlock::Answer(_) | AssistantBlock::Thinking(_))
+            Some(
+                AssistantBlock::Answer(_)
+                    | AssistantBlock::Thinking(_)
+                    | AssistantBlock::Tool { is_error: None, .. }
+            )
         ) {
             m.blocks.pop();
         }
@@ -256,26 +362,42 @@ impl OxiApp {
             return;
         };
         let id = tool_call_id.unwrap_or("").to_string();
-        if !id.is_empty() {
-            let dup = m
-                .blocks
-                .iter()
-                .any(|b| matches!(b, AssistantBlock::Tool { tool_call_id: tid, .. } if tid == &id));
-            if dup {
-                return;
-            }
-        } else if let Some(AssistantBlock::Tool {
-            name: n, output, ..
-        }) = m.blocks.last()
-            && n == name
-            && output.is_empty()
-        {
-            return;
-        }
         let args_summary = args.map(|a| {
             let s = a.to_string();
             s.chars().take(800).collect::<String>()
         });
+        // Providers may emit an early ToolStart (name+id, args still streaming) and a
+        // second ToolStart with full args right before execution. Update the existing
+        // block's summary instead of creating a duplicate pill.
+        if !id.is_empty() {
+            for b in m.blocks.iter_mut().rev() {
+                if let AssistantBlock::Tool {
+                    tool_call_id: tid,
+                    args_summary: existing,
+                    ..
+                } = b
+                    && tid == &id
+                {
+                    if args_summary.is_some() {
+                        *existing = args_summary;
+                    }
+                    return;
+                }
+            }
+        } else if let Some(AssistantBlock::Tool {
+            name: n,
+            output,
+            args_summary: existing,
+            ..
+        }) = m.blocks.last_mut()
+            && n == name
+            && output.is_empty()
+        {
+            if args_summary.is_some() {
+                *existing = args_summary;
+            }
+            return;
+        }
         m.blocks.push(AssistantBlock::Tool {
             tool_call_id: id,
             name: name.to_string(),
@@ -341,8 +463,7 @@ impl OxiApp {
             s.messages[..s.messages.len() - 1].to_vec()
         };
         let settings = self.conv.settings.clone();
-        let system =
-            crate::agent::prompt::build_system_prompt(&settings, cwd.to_string_lossy().as_ref());
+        let system = crate::agent::prompt::build_system_prompt_for_workspace(&settings, &cwd);
         let tools = crate::agent::tools::tool_definitions_json(
             &settings.tools_enabled,
             settings.bash_timeout_cap_secs,
@@ -385,6 +506,13 @@ impl OxiApp {
             cancel.clone(),
             prior_wire,
             chars_per_token,
+            {
+                let journal = Arc::new(std::sync::Mutex::new(
+                    crate::agent::tools::TurnUndoJournal::default(),
+                ));
+                self.run_state_mut(key).undo_journal = Some(journal.clone());
+                journal
+            },
         );
         let existing_wire = self.run_state(key).and_then(|run| run.wire_history.clone());
         let run = self.run_state_mut(key);
@@ -409,6 +537,9 @@ impl OxiApp {
         {
             last.finish_streaming();
         }
+        if key == self.active_session_key() {
+            self.conv.stick_bottom_hold_frames = 3;
+        }
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
         if let Err(e) =
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
@@ -430,7 +561,6 @@ impl OxiApp {
         }
         run.wire_session_file = session_file;
         run.end_waiting_response();
-        run.agent_ack = false;
         run.cancel_agent = None;
         run.agent_rx = None;
         run.approval_tx = None;

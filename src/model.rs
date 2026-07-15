@@ -90,6 +90,10 @@ pub struct Session {
     /// only (not persisted), used to calibrate the context trim budget and the composer
     /// context indicator. `None` until the first turn reports usage.
     pub chars_per_token: Option<f32>,
+    /// Provider-native wire history (`messages[]`) persisted across restarts for prompt-cache hits.
+    pub wire_history: Option<Vec<serde_json::Value>>,
+    /// Fingerprint that must match the current system/tools/model for `wire_history` reuse.
+    pub wire_fingerprint: u64,
 }
 
 pub fn make_session_title(text: &str) -> String {
@@ -127,8 +131,10 @@ pub fn tool_breaks_explore_cluster(block: &AssistantBlock) -> bool {
     matches!(
         block,
         AssistantBlock::Tool { name, diff, .. }
-            if name.eq_ignore_ascii_case("edit")
-                || diff
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "edit" | "write" | "delete" | "move" | "mkdir"
+            ) || diff
                     .as_deref()
                     .is_some_and(|diff_text| !diff_text.trim().is_empty())
     )

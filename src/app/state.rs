@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Instant;
@@ -45,6 +46,16 @@ pub enum SettingsExitAction {
     ToggleGitBranches,
 }
 
+/// A destructive action waiting on the shared confirmation modal (see `app::confirm`).
+#[derive(Clone)]
+pub enum ConfirmAction {
+    DeleteSession { wi: usize, si: usize },
+    DeleteWorkspace { wi: usize },
+    GitDiscard { paths: Vec<String> },
+    DeleteLocalModel { id: String },
+    DeleteVoiceModel { id: String },
+}
+
 /// One project root and its chat tabs.
 pub struct Workspace {
     pub root_path: String,
@@ -69,8 +80,10 @@ pub struct SessionRunState {
     pub pending_approval: Option<PendingApproval>,
     pub waiting_response: bool,
     pub stream_started_at: Option<Instant>,
-    pub agent_ack: bool,
     pub stream_error: Option<String>,
+    /// Set while the provider stream is being retried after a transient failure
+    /// ("Reconnecting…" in the header chip); cleared on the next stream event.
+    pub stream_retrying: Option<String>,
     pub turn_usage: TokenUsage,
     /// Usage from the most recently completed turn. Kept while idle and as a fallback while a
     /// new turn is running before the provider reports current-turn usage.
@@ -81,6 +94,11 @@ pub struct SessionRunState {
     pub wire_history: Option<Vec<Value>>,
     pub wire_fingerprint: u64,
     pub wire_session_file: Option<String>,
+    /// Path states captured by reversible built-in filesystem calls in the most recent turn.
+    pub undo_journal: Option<Arc<Mutex<crate::agent::tools::TurnUndoJournal>>>,
+    /// Unexpanded text entered by the user for the most recent turn (the transcript may contain
+    /// expanded @mentions). Kept in memory alongside the undo journal for Edit & retry.
+    pub last_user_prompt: Option<String>,
 }
 
 impl SessionRunState {
@@ -95,7 +113,6 @@ impl SessionRunState {
 
     pub fn reset_after_disconnect(&mut self) {
         self.end_waiting_response();
-        self.agent_ack = false;
         self.stream_error = None;
     }
 
@@ -215,23 +232,41 @@ pub struct SshTestMsg {
 #[derive(Debug)]
 pub struct UpdateMsg(pub Result<crate::update::ReleaseInfo, String>);
 
+pub struct PromptEditState {
+    pub previous_input: String,
+    pub previous_images: Vec<(String, Vec<u8>)>,
+}
+
 pub struct ConversationState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
     pub input: String,
     pub sidebar_search: String,
+    /// When set, the sidebar shows an inline rename field for `(workspace_idx, session_idx)`.
+    pub renaming_session: Option<(usize, usize)>,
+    pub rename_draft: String,
     pub chat_scroll_id: egui::Id,
     pub pending_images: Vec<(String, Vec<u8>)>,
     pub scroll_to_bottom_once: bool,
+    /// Keep transcript `stick_to_bottom` for a few frames after a turn ends so the
+    /// "Working…" → "Worked…" collapse reclamps scroll without a one-frame jump.
+    pub stick_bottom_hold_frames: u8,
     pub input_history: Vec<String>,
     pub input_history_index: Option<usize>,
     pub input_history_draft: String,
+    /// Short-lived inline notice under the composer (blocked send, rejected
+    /// attachment, …) with the moment it was raised; expires after a few seconds.
+    pub composer_notice: Option<(String, Instant)>,
+    /// Present while the composer is replacing the last user prompt and its assistant response.
+    pub editing_last_prompt: Option<PromptEditState>,
     /// Set when navigation should hand keyboard focus back to the chat composer.
     pub focus_chat_input_next_frame: bool,
     /// Set when opening the terminal from chrome so keyboard focus moves into the PTY.
     pub focus_terminal_next_frame: bool,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
+    /// Settings page left-nav width (independent of the chat sidebar).
+    pub settings_sidebar_width: f32,
     /// Bottom terminal panel visibility and height (persisted in settings).
     pub terminal_open: bool,
     pub terminal_height: f32,
@@ -239,6 +274,8 @@ pub struct ConversationState {
     /// Snapshot captured when Settings opens. Used to detect dirty state and restore on Cancel.
     pub settings_original: Option<AppSettings>,
     pub settings_exit_prompt: Option<SettingsExitAction>,
+    /// Last failed settings save, shown inline on the Settings page (not in chat).
+    pub settings_save_error: Option<String>,
     pub settings_open: bool,
     pub settings_tab: SettingsTab,
     pub settings_provider_tab: LlmProviderKind,
@@ -261,8 +298,9 @@ pub struct ConversationState {
     pub git: crate::git::GitState,
     pub git_commit_message: String,
     pub git_new_branch: String,
-    /// Pending confirmation for the destructive "Discard all changes" action.
-    pub git_discard_all_prompt: Option<Vec<String>>,
+    /// Destructive action awaiting confirmation in the shared modal (delete chat /
+    /// workspace / model, git discard). At most one at a time, app-wide.
+    pub confirm_prompt: Option<ConfirmAction>,
     /// Set while a commit-message generation is in flight: we've asked the git worker for
     /// the diff and are waiting for it to come back so we can kick off the LLM completion.
     pub commit_gen_pending: bool,
@@ -271,6 +309,9 @@ pub struct ConversationState {
     pub commit_gen_rx: Option<std::sync::mpsc::Receiver<crate::agent::CompleteEvent>>,
     /// Last commit-generation error, shown inline under the composer until the next run.
     pub commit_gen_error: Option<String>,
+    /// Commit message stashed while a generation streams into the field; restored
+    /// if the generation fails so the user's own text isn't lost.
+    pub commit_gen_stash: Option<String>,
     /// Git worker request channel. Responses arrive on `git_rx`; drained each frame.
     pub git_tx: Option<std::sync::mpsc::Sender<crate::git::GitOp>>,
     pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,

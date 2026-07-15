@@ -1,4 +1,4 @@
-use eframe::egui::{self, Frame, LayerId};
+use eframe::egui::{self, Frame, Key, LayerId, Modifiers};
 
 use crate::model::MsgRole;
 use crate::theme::*;
@@ -7,6 +7,7 @@ use super::OxiApp;
 
 impl eframe::App for OxiApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_global_shortcuts(ctx);
         self.consume_dropped_files(ctx);
         self.drain_agent(ctx);
         self.drain_models(ctx);
@@ -66,5 +67,60 @@ impl eframe::App for OxiApp {
                     self.render_main_area(ui);
                 }
             });
+
+        // Shared destructive-action confirmation modal, on top of everything.
+        self.render_confirm_prompt(ui.ctx());
+    }
+}
+
+impl OxiApp {
+    /// Global shortcuts that work outside the composer TextEdit.
+    /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B sidebar,
+    /// Cmd/Ctrl+. stop run, Escape focuses composer (or closes settings).
+    fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        let cmd = Modifiers::COMMAND;
+        let (new_chat, toggle_term, toggle_sidebar, stop, escape) = ctx.input(|i| {
+            (
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
+                i.key_pressed(Key::Escape),
+            )
+        });
+
+        if new_chat && !self.conv.settings_open {
+            self.new_chat();
+        }
+        if toggle_term {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleTerminal);
+        }
+        if toggle_sidebar {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleSidebar);
+        }
+        if stop && self.any_waiting_response() {
+            self.send_abort();
+        }
+        // Escape: leave settings, or hand focus back to the composer. Skip when the
+        // terminal panel is showing so Escape stays available to the PTY (the terminal
+        // is hidden while Settings is open, so Escape works there regardless). Escape
+        // for the shared confirm modal is handled by the modal itself.
+        if escape
+            && (!self.conv.terminal_open || self.conv.settings_open)
+            && !self.confirm_prompt_open()
+        {
+            if self.conv.settings_open {
+                if self.conv.settings_exit_prompt.is_some() {
+                    // Modal already up: Escape means "Stay".
+                    self.conv.settings_exit_prompt = None;
+                } else if self.settings_dirty() {
+                    self.request_settings_exit(super::state::SettingsExitAction::BackToChat);
+                } else {
+                    self.close_settings_page();
+                }
+            } else {
+                self.conv.focus_chat_input_next_frame = true;
+            }
+        }
     }
 }

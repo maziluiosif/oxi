@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::agent::AgentEvent;
 use crate::oauth::OAuthUiMsg;
+use crate::session_store;
 
 use super::{OxiApp, PendingApproval, SessionKey};
 
@@ -15,7 +16,8 @@ fn approval_summary(name: &str, args: &Option<Value>) -> String {
     };
     let field = match name {
         "bash" => "command",
-        "write" | "edit" => "path",
+        "write" | "edit" | "delete" | "mkdir" => "path",
+        "move" => "from",
         _ => "",
     };
     args.get(field)
@@ -162,6 +164,12 @@ impl OxiApp {
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Worker ended without a terminal message (normal after CodexDone;
+                    // abnormal mid-flow) — make sure the UI doesn't stay silent.
+                    if self.conv.oauth_busy {
+                        self.conv.oauth_last_message =
+                            Some("Sign-in was interrupted — try again.".to_string());
+                    }
                     self.conv.oauth_busy = false;
                     break;
                 }
@@ -171,10 +179,12 @@ impl OxiApp {
     }
 
     fn apply_agent_event(&mut self, key: SessionKey, ev: AgentEvent) {
+        // Any event other than another retry means the stream is flowing again.
+        if !matches!(ev, AgentEvent::StreamRetry { .. }) {
+            self.run_state_mut(key).stream_retrying = None;
+        }
         match ev {
-            AgentEvent::AgentStart => {
-                self.run_state_mut(key).agent_ack = true;
-            }
+            AgentEvent::AgentStart => {}
             AgentEvent::TextStart => {
                 self.on_text_block_start(key);
             }
@@ -232,6 +242,8 @@ impl OxiApp {
             }
             AgentEvent::StreamRetry { attempt, reason } => {
                 eprintln!("[oxi] stream retry (attempt {attempt}): {reason}");
+                self.run_state_mut(key).stream_retrying =
+                    Some(format!("Connection lost (attempt {attempt}): {reason}"));
                 self.reset_streaming_tail(key);
             }
             AgentEvent::AssistantMessageDone => {}
@@ -253,7 +265,16 @@ impl OxiApp {
                 }
             }
             AgentEvent::WireHistory(history) => {
-                self.run_state_mut(key).wire_history = Some(history);
+                self.run_state_mut(key).wire_history = Some(history.clone());
+                let fingerprint = self.run_state(key).map(|r| r.wire_fingerprint).unwrap_or(0);
+                {
+                    let sess = self.session_mut_by_key(key);
+                    sess.wire_history = Some(history);
+                    sess.wire_fingerprint = fingerprint;
+                }
+                let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
+                let _ =
+                    session_store::save_session_messages(&root_path, self.session_mut_by_key(key));
             }
             AgentEvent::ProviderDone => {}
             AgentEvent::AgentEnd => {

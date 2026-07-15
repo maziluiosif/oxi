@@ -28,7 +28,7 @@ use crate::model::{
 use crate::theme::*;
 use crate::ui::preview_expand::expand_persist_id;
 
-use thinking::{render_thinking_group_block, thinking_group_is_live};
+use thinking::{render_thinking_group_block_opts, thinking_group_is_live};
 use tool_pill::{ExploredClusterCtx, render_explored_cluster, render_single_tool_block};
 
 fn user_image_texture(
@@ -90,8 +90,11 @@ pub(super) fn block_state_tag(streaming: bool) -> &'static str {
 
 /// Write/edit-like tools render as full detail blocks, not explore-cluster rows.
 pub(super) fn is_edit_like_tool(block: &AssistantBlock) -> bool {
-    matches!(block, AssistantBlock::Tool { name, .. } if name.eq_ignore_ascii_case("write"))
-        || tool_breaks_explore_cluster(block)
+    matches!(
+        block,
+        AssistantBlock::Tool { name, .. }
+            if matches!(name.to_ascii_lowercase().as_str(), "write" | "delete" | "move" | "mkdir")
+    ) || tool_breaks_explore_cluster(block)
 }
 
 fn has_visible_assistant_content(blocks: &[AssistantBlock], streaming: bool) -> bool {
@@ -107,12 +110,7 @@ fn has_visible_assistant_content(blocks: &[AssistantBlock], streaming: bool) -> 
     })
 }
 
-pub fn render_message(
-    ui: &mut Ui,
-    msg_idx: usize,
-    msg: &ChatMessage,
-    agent_ack: bool,
-) -> egui::Response {
+pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::Response {
     let col_w = content_wrap_width(ui);
 
     if msg.role == MsgRole::User && msg.is_summary {
@@ -122,7 +120,7 @@ pub fn render_message(
                 Frame::new()
                     .fill(c_bg_elevated_2())
                     .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .corner_radius(CornerRadius::same(10))
+                    .corner_radius(CornerRadius::same(RADIUS_CARD))
                     .inner_margin(Margin::symmetric(12, 9))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -144,16 +142,18 @@ pub fn render_message(
     }
 
     if msg.role == MsgRole::User {
+        // Right-aligned chat bubble (capped width) so user turns read as chat, not a document.
+        let bubble_w = (col_w * 0.78).clamp(220.0, col_w);
         let response = ui
-            .vertical(|ui| {
-                ui.set_width(col_w);
+            .with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                ui.set_max_width(col_w);
                 Frame::new()
                     .fill(c_user_bubble())
-                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .corner_radius(CornerRadius::same(10))
+                    .stroke(Stroke::new(1.0, c_user_bubble_border()))
+                    .corner_radius(CornerRadius::same(RADIUS_CARD))
                     .inner_margin(Margin::symmetric(12, 9))
                     .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
+                        ui.set_max_width(bubble_w);
                         if !msg.text.is_empty() {
                             ui.add(
                                 Label::new(
@@ -175,12 +175,19 @@ pub fn render_message(
                     });
             })
             .response;
-        ui.add_space(8.0);
+        if !msg.text.is_empty() {
+            crate::ui::chrome::copy_message_context_menu(
+                &response,
+                egui::Id::new(("copy_user_msg", msg_idx)),
+                &msg.text,
+            );
+        }
+        ui.add_space(10.0);
         return response;
     }
 
     ui.vertical(|ui| {
-        render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg), agent_ack);
+        render_assistant_message_run(ui, msg_idx, std::slice::from_ref(msg));
     })
     .response
 }
@@ -201,7 +208,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                         }
                         // Wrap in a subtle rounded frame
                         Frame::new()
-                            .corner_radius(CornerRadius::same(8))
+                            .corner_radius(CornerRadius::same(RADIUS_CHIP))
                             .stroke(Stroke::new(1.0, c_border()))
                             .show(ui, |ui| {
                                 ui.add(Image::new((tex.id(), sz)));
@@ -210,7 +217,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                         // Fallback badge when texture loading fails
                         Frame::new()
                             .fill(c_bg_elevated_2())
-                            .corner_radius(CornerRadius::same(6))
+                            .corner_radius(CornerRadius::same(RADIUS_BUTTON))
                             .inner_margin(Margin::symmetric(8, 4))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
@@ -232,12 +239,7 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
     });
 }
 
-pub fn render_assistant_message_run(
-    ui: &mut Ui,
-    msg_idx: usize,
-    messages: &[ChatMessage],
-    agent_ack: bool,
-) {
+pub fn render_assistant_message_run(ui: &mut Ui, msg_idx: usize, messages: &[ChatMessage]) {
     let col_w = content_wrap_width(ui);
     let mut blocks = Vec::new();
     let mut streaming = false;
@@ -259,15 +261,7 @@ pub fn render_assistant_message_run(
 
     ui.vertical(|ui| {
         ui.set_width(col_w);
-        render_assistant_blocks(
-            ui,
-            msg_idx,
-            &blocks,
-            streaming,
-            agent_ack,
-            started_at,
-            worked_duration,
-        );
+        render_assistant_blocks(ui, msg_idx, &blocks, streaming, started_at, worked_duration);
     });
     ui.add_space(8.0);
 }
@@ -319,14 +313,30 @@ fn render_activity_range(
                     global.last().copied().unwrap_or(global[0]) + 1,
                     streaming,
                 );
-                render_thinking_group_block(ui, msg_idx, global[0], combined, thinking_live);
+                render_thinking_group_block_opts(
+                    ui,
+                    msg_idx,
+                    global[0],
+                    combined,
+                    thinking_live,
+                    true,
+                );
             }
             AssistantBlockGroup::Answer(i) => {
                 let gi = start + i;
                 if let AssistantBlock::Answer(text) = &blocks[gi]
                     && !text.trim().is_empty()
                 {
-                    markdown::render_markdown(ui, text);
+                    let response = ui
+                        .vertical(|ui| {
+                            markdown::render_markdown(ui, text);
+                        })
+                        .response;
+                    crate::ui::chrome::copy_message_context_menu(
+                        &response,
+                        egui::Id::new(("copy_answer", msg_idx, gi)),
+                        text,
+                    );
                 }
             }
             AssistantBlockGroup::ExploringTools {
@@ -386,9 +396,20 @@ fn render_activity_summary(
             None => "Working".to_string(),
         }
     } else {
-        match worked_duration {
+        let base = match worked_duration {
             Some(d) => format!("Worked for {}", format_worked_duration(d)),
             None => "Worked".to_string(),
+        };
+        let tool_n = blocks[..worked_end]
+            .iter()
+            .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
+            .count();
+        if tool_n == 0 {
+            base
+        } else if tool_n == 1 {
+            format!("{base} · 1 tool")
+        } else {
+            format!("{base} · {tool_n} tools")
         }
     };
 
@@ -459,7 +480,6 @@ pub fn render_assistant_blocks(
     msg_idx: usize,
     blocks: &[AssistantBlock],
     streaming: bool,
-    _agent_ack: bool,
     started_at: Option<std::time::Instant>,
     worked_duration: Option<std::time::Duration>,
 ) {
@@ -517,11 +537,22 @@ pub fn render_assistant_blocks(
         ui.add_space(2.0);
     }
 
-    for block in &blocks[worked_end..] {
+    for (i, block) in blocks[worked_end..].iter().enumerate() {
         if let AssistantBlock::Answer(text) = block
             && (!text.trim().is_empty() || streaming)
         {
-            markdown::render_markdown(ui, text);
+            let response = ui
+                .vertical(|ui| {
+                    markdown::render_markdown(ui, text);
+                })
+                .response;
+            if !text.trim().is_empty() {
+                crate::ui::chrome::copy_message_context_menu(
+                    &response,
+                    egui::Id::new(("copy_trailing_answer", msg_idx, worked_end + i)),
+                    text,
+                );
+            }
         }
     }
 }

@@ -12,7 +12,7 @@ use super::provider::{
     ComputeLocation, LlmProviderKind, ProviderConfig, ProviderProfile, UiDensity, WebSearchBackend,
 };
 
-pub const ALL_TOOL_NAMES: [&str; 9] = [
+pub const ALL_TOOL_NAMES: [&str; 15] = [
     "read",
     "write",
     "edit",
@@ -20,8 +20,15 @@ pub const ALL_TOOL_NAMES: [&str; 9] = [
     "grep",
     "find",
     "ls",
+    "codebase_search",
+    "git_status",
+    "git_diff",
     "web_search",
     "web_fetch",
+    // Keep new tools appended so persisted positional enable flags retain their meaning.
+    "delete",
+    "move",
+    "mkdir",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +43,12 @@ pub struct AppSettings {
     pub providers: BTreeMap<LlmProviderKind, ProviderConfig>,
     /// Single editable system prompt template.
     pub system_prompt: String,
+    /// Include root-level `AGENTS.md` project instructions in the agent system prompt when present.
+    #[serde(default = "default_include_agents_md")]
+    pub include_agents_md: bool,
+    /// Include `.oxi/rules/` and `.cursor/rules/` markdown files in the agent system prompt.
+    #[serde(default = "default_include_oxi_rules")]
+    pub include_oxi_rules: bool,
     /// One flag per entry in [`ALL_TOOL_NAMES`]. Stored as a `Vec` so older settings files
     /// with fewer tools still deserialize; [`AppSettings::normalize`] resizes it to the
     /// current tool count, enabling any newly-added tools by default.
@@ -50,7 +63,7 @@ pub struct AppSettings {
     /// than falling back to another provider.
     #[serde(default = "default_searxng_url")]
     pub searxng_url: String,
-    /// Require explicit user approval before each filesystem-changing tool (`write` / `edit`).
+    /// Require explicit user approval before each built-in filesystem-changing tool.
     #[serde(default = "default_require_approval")]
     pub require_write_edit_approval: bool,
     /// Require explicit user approval before each `bash` tool call.
@@ -86,6 +99,12 @@ pub struct AppSettings {
     /// Overall text/UI density (zoom). Defaults to [`UiDensity::Normal`].
     #[serde(default)]
     pub ui_density: UiDensity,
+    /// Interface font id — `"default"` is bundled; `system:<family>` selects an installed font.
+    #[serde(default = "default_font_id")]
+    pub ui_font: String,
+    /// Code (monospace) font id — see [`crate::theme::mono_font_options`].
+    #[serde(default = "default_font_id")]
+    pub mono_font: String,
     /// Maximum number of agent tool rounds per run. `0` means unlimited. Default unlimited.
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: u32,
@@ -121,6 +140,73 @@ pub struct AppSettings {
     /// Local voice dictation (see [`crate::voice_engine`]).
     #[serde(default)]
     pub dictation: DictationSettings,
+    /// Local HF (`llama-server`) runtime tuning: port, context size, GPU layers.
+    #[serde(default)]
+    pub local_hf: LocalHfSettings,
+    /// MCP servers to spawn (stdio). Tools appear as `mcp_<server>_<tool>`.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// One MCP server entry (stdio transport).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Short id used in tool names (e.g. `filesystem`).
+    pub name: String,
+    /// Executable to spawn (e.g. `npx`).
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_mcp_enabled")]
+    pub enabled: bool,
+}
+
+fn default_mcp_enabled() -> bool {
+    true
+}
+
+impl Default for McpServerConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            command: String::new(),
+            args: Vec::new(),
+            enabled: true,
+        }
+    }
+}
+
+/// Persisted Local HF runtime parameters (port / context / GPU offload).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocalHfSettings {
+    #[serde(default = "default_local_hf_port")]
+    pub runtime_port: u16,
+    #[serde(default = "default_local_hf_context")]
+    pub context_size: usize,
+    #[serde(default = "default_local_hf_gpu_layers")]
+    pub gpu_layers: i32,
+}
+
+fn default_local_hf_port() -> u16 {
+    18080
+}
+
+fn default_local_hf_context() -> usize {
+    32768
+}
+
+fn default_local_hf_gpu_layers() -> i32 {
+    999
+}
+
+impl Default for LocalHfSettings {
+    fn default() -> Self {
+        Self {
+            runtime_port: default_local_hf_port(),
+            context_size: default_local_hf_context(),
+            gpu_layers: default_local_hf_gpu_layers(),
+        }
+    }
 }
 
 /// Settings for local speech-to-text dictation. The whisper model itself is loaded lazily
@@ -225,12 +311,24 @@ fn default_chat_column_max_width() -> f32 {
     crate::theme::CHAT_COLUMN_MAX_DEFAULT
 }
 
+fn default_include_agents_md() -> bool {
+    true
+}
+
+fn default_include_oxi_rules() -> bool {
+    true
+}
+
 /// Clamp bounds for the bottom terminal panel height.
 pub const TERMINAL_H_MIN: f32 = 96.0;
 pub const TERMINAL_H_MAX: f32 = 900.0;
 
 fn default_theme_id() -> String {
     crate::theme::DEFAULT_THEME_ID.to_string()
+}
+
+fn default_font_id() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +354,8 @@ impl Default for AppSettings {
             active_provider: LlmProviderKind::OpenAi,
             providers,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
+            include_agents_md: default_include_agents_md(),
+            include_oxi_rules: default_include_oxi_rules(),
             tools_enabled: default_tools_enabled(),
             web_search_backend: WebSearchBackend::default(),
             searxng_url: default_searxng_url(),
@@ -270,6 +370,8 @@ impl Default for AppSettings {
             chat_column_max_width: default_chat_column_max_width(),
             theme_id: default_theme_id(),
             ui_density: UiDensity::Normal,
+            ui_font: default_font_id(),
+            mono_font: default_font_id(),
             max_tool_rounds: default_max_tool_rounds(),
             bash_timeout_cap_secs: default_bash_timeout_cap_secs(),
             context_window_default: default_context_window(),
@@ -280,6 +382,8 @@ impl Default for AppSettings {
             last_active_workspace_root_path: None,
             last_active_session_file: None,
             dictation: DictationSettings::default(),
+            local_hf: LocalHfSettings::default(),
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -295,8 +399,26 @@ impl AppSettings {
     pub fn load() -> Self {
         let path = Self::config_path();
         let bytes = fs::read(&path).unwrap_or_default();
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(e) if !bytes.is_empty() => {
+                // Preserve malformed user configuration for diagnosis/recovery instead of
+                // silently making it look as if every setting disappeared.
+                let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                let backup = path.with_file_name(format!("settings.corrupt-{timestamp}.json"));
+                match fs::copy(&path, &backup) {
+                    Ok(_) => eprintln!(
+                        "[oxi] invalid settings JSON ({e}); preserved it at {}",
+                        backup.display()
+                    ),
+                    Err(copy_err) => eprintln!(
+                        "[oxi] invalid settings JSON ({e}); could not preserve it: {copy_err}"
+                    ),
+                }
+                serde_json::Value::Null
+            }
+            Err(_) => serde_json::Value::Null,
+        };
         // Sniff the on-disk shape by its distinctive keys rather than trying typed parses
         // in sequence: a profiles-era file must never silently parse as the new shape
         // (it would come out with empty provider configs and drop the user's setup).
@@ -545,6 +667,31 @@ impl AppSettings {
                 cfg.effort.clear();
             }
         }
+        // Migrate ids from the former hard-coded picker to runtime family ids. Missing fonts
+        // then fall back to the bundled defaults, keeping settings portable between machines.
+        self.ui_font = match self.ui_font.as_str() {
+            "helvetica" => "system:Helvetica".to_string(),
+            "helvetica_neue" => "system:Helvetica Neue".to_string(),
+            "arial" => "system:Arial".to_string(),
+            "georgia" => "system:Georgia".to_string(),
+            // The old "System" entry was an OS-dependent alias rather than a font family.
+            "system" => default_font_id(),
+            _ => self.ui_font.clone(),
+        };
+        self.mono_font = match self.mono_font.as_str() {
+            "sf_mono" => "system:SF Mono".to_string(),
+            "menlo" => "system:Menlo".to_string(),
+            "monaco" => "system:Monaco".to_string(),
+            "courier" => "system:Courier New".to_string(),
+            "dejavu_mono" => "system:DejaVu Sans Mono".to_string(),
+            _ => self.mono_font.clone(),
+        };
+        if !crate::theme::ui_font_is_known(&self.ui_font) {
+            self.ui_font = default_font_id();
+        }
+        if !crate::theme::mono_font_is_known(&self.mono_font) {
+            self.mono_font = default_font_id();
+        }
         if let Some(legacy_require_approval) = self.require_approval.take() {
             self.require_write_edit_approval = legacy_require_approval;
             self.require_bash_approval = legacy_require_approval;
@@ -556,6 +703,12 @@ impl AppSettings {
             self.bash_timeout_cap_secs = default_bash_timeout_cap_secs();
         }
         self.bash_timeout_cap_secs = self.bash_timeout_cap_secs.clamp(5, 3600);
+        if self.local_hf.runtime_port == 0 {
+            self.local_hf.runtime_port = default_local_hf_port();
+        }
+        if self.local_hf.context_size == 0 {
+            self.local_hf.context_size = default_local_hf_context();
+        }
         // Workspaces: drop entries whose folder vanished, dedupe by path.
         let mut seen = std::collections::HashSet::new();
         self.workspaces.retain(|w| {
@@ -591,7 +744,8 @@ impl AppSettings {
             }
         }
         if changed {
-            let _ = crate::secrets::save_unified(&unified);
+            crate::secrets::save_unified(&unified)
+                .map_err(|e| format!("Could not save credentials to the OS keychain: {e}"))?;
         }
         let path = Self::config_path();
         if let Some(dir) = path.parent() {
@@ -935,8 +1089,11 @@ mod tests {
 
     #[test]
     fn all_tool_names_has_expected_tools() {
-        assert_eq!(ALL_TOOL_NAMES.len(), 9);
+        assert_eq!(ALL_TOOL_NAMES.len(), 15);
         assert!(ALL_TOOL_NAMES.contains(&"bash"));
+        assert!(ALL_TOOL_NAMES.contains(&"codebase_search"));
+        assert!(ALL_TOOL_NAMES.contains(&"git_status"));
+        assert!(ALL_TOOL_NAMES.contains(&"git_diff"));
         assert!(ALL_TOOL_NAMES.contains(&"web_search"));
         assert!(ALL_TOOL_NAMES.contains(&"web_fetch"));
     }

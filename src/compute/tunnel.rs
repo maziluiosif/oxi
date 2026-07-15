@@ -331,7 +331,7 @@ mod tests {
             observed: observed.clone(),
         };
         let accepted = v.check_server_key(&sample_key()).await.unwrap();
-        let recorded = observed.lock().unwrap().clone();
+        let recorded = observed.lock().unwrap_or_else(|e| e.into_inner()).clone();
         (accepted, recorded)
     }
 

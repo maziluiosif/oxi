@@ -11,8 +11,10 @@ use crate::model::{Session, make_session_title};
 
 #[cfg(test)]
 pub use dedupe::chat_messages_equal;
+#[cfg(test)]
+pub use io::load_session_messages;
 use io::parse_session_header_and_messages;
-pub use io::{load_session_messages, save_session_messages};
+pub use io::{load_session_messages_with_wire, save_session_messages};
 use paths::{agent_dir, configured_session_dir, default_session_dir};
 
 pub fn load_workspace_sessions(root_path: &str) -> Vec<Session> {
@@ -47,6 +49,8 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             pending_images: Vec::new(),
             modified: session.modified,
             chars_per_token: None,
+            wire_history: None,
+            wire_fingerprint: 0,
         })
         .collect()
 }
@@ -204,6 +208,8 @@ mod tests {
             input_text: String::new(),
             pending_images: Vec::new(),
             chars_per_token: None,
+            wire_history: None,
+            wire_fingerprint: 0,
             modified: SystemTime::now(),
         };
 
@@ -264,6 +270,8 @@ mod tests {
             input_text: String::new(),
             pending_images: Vec::new(),
             chars_per_token: None,
+            wire_history: None,
+            wire_fingerprint: 0,
             modified: SystemTime::now(),
         };
 
@@ -309,6 +317,8 @@ mod tests {
             input_text: String::new(),
             pending_images: Vec::new(),
             chars_per_token: None,
+            wire_history: None,
+            wire_fingerprint: 0,
             modified: SystemTime::now(),
         };
 

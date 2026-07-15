@@ -3,6 +3,11 @@
 
 [advisories]
 ignore = [
+    # ttf-parser 0.25.1 is unmaintained (warning, not a known vulnerability).
+    # It is pulled in only by the latest fontdb 0.23 release, used to enumerate
+    # local UI fonts. Dependabot tracks Cargo weekly; remove this entry when
+    # fontdb replaces ttf-parser or a maintained fork becomes viable.
+    "RUSTSEC-2026-0192",
     # rsa: Marvin Attack timing sidechannel. Pulled in via russh, which pins
     # rsa =0.10.0-rc.x; no fixed rsa release exists. Exposure here is a
     # client-side SSH tunnel to a user-configured trusted host only.

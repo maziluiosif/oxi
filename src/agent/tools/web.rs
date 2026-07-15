@@ -5,8 +5,10 @@
 //! `tokio::task::spawn_blocking`. We drive the async `reqwest` client from there using a small
 //! current-thread runtime, which keeps these helpers synchronous like the other tools.
 
+use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde_json::Value;
 
 use super::MAX_TOOL_OUTPUT_CHARS;
@@ -16,6 +18,9 @@ const DEFAULT_SEARCH_COUNT: usize = 8;
 const MAX_SEARCH_COUNT: usize = 20;
 const DEFAULT_FETCH_CHARS: usize = 20_000;
 const HTTP_TIMEOUT_SECS: u64 = 20;
+/// Maximum decompressed response body retained for `web_fetch`. The final tool text is much
+/// smaller, but HTML needs some headroom before tags/navigation are stripped.
+const MAX_FETCH_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 const DEFAULT_USER_AGENT: &str = "oxi/0.6";
 /// Zero-config search backends used when no SearXNG URL is set. DuckDuckGo's HTML endpoint
@@ -391,6 +396,126 @@ fn resolve_ddg_href(href: &str) -> String {
     absolute
 }
 
+fn ip_is_private_or_special(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let o = ip.octets();
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+                || ip.is_multicast()
+                || o[0] == 0
+                || (o[0] == 100 && (64..=127).contains(&o[1]))
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                || (o[0] == 192 && o[1] == 0 && o[2] == 2)
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
+                || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+                || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+        }
+        IpAddr::V6(ip) => {
+            let s = ip.segments();
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+                || (s[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+                || ip.to_ipv4_mapped().is_some_and(|v4| ip_is_private_or_special(v4.into()))
+        }
+    }
+}
+
+fn public_addresses_for_url(url: &url::Url) -> Result<Vec<std::net::SocketAddr>, String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(err("url must use http:// or https://"));
+    }
+    let host = url.host_str().ok_or_else(|| err("url is missing a host"))?;
+    if host.eq_ignore_ascii_case("localhost")
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+    {
+        return Err(err("web_fetch blocks local/private destinations"));
+    }
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| err("url has no usable port"))?;
+    let addresses: Vec<_> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("could not resolve {host}: {e}"))?
+        .collect();
+    if addresses.is_empty() || addresses.iter().any(|a| ip_is_private_or_special(a.ip())) {
+        return Err(err("web_fetch blocks local/private destinations"));
+    }
+    Ok(addresses)
+}
+
+fn public_http_get_bounded(url: &str) -> Result<HttpResponse, String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("invalid url: {e}"))?;
+    let initial_addresses = public_addresses_for_url(&parsed)?;
+    let initial_host = parsed
+        .host_str()
+        .ok_or_else(|| err("url is missing a host"))?
+        .to_string();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .user_agent(DEFAULT_USER_AGENT)
+            // Pin the validated DNS result so a hostname cannot rebind to a private IP between
+            // validation and connection. Redirects are disabled for the same reason.
+            .resolve_to_addrs(&initial_host, &initial_addresses)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("client: {e}"))?;
+        let resp = client
+            .get(parsed)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        let status = resp.status().as_u16();
+        if (300..400).contains(&status) {
+            return Err(
+                "web_fetch does not follow redirects; fetch the public destination URL directly"
+                    .to_string(),
+            );
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        if let Some(len) = resp.content_length()
+            && len > MAX_FETCH_BODY_BYTES as u64
+        {
+            return Err(format!(
+                "response is too large ({len} bytes; limit is {MAX_FETCH_BODY_BYTES})"
+            ));
+        }
+        let mut stream = resp.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("read body: {e}"))?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_FETCH_BODY_BYTES {
+                return Err(format!(
+                    "response exceeded the {MAX_FETCH_BODY_BYTES}-byte limit"
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let body = String::from_utf8_lossy(&bytes).into_owned();
+        Ok(HttpResponse {
+            status,
+            content_type,
+            body,
+        })
+    })
+}
+
 pub(crate) fn tool_web_fetch(args: &Value) -> Result<String, String> {
     let url = args
         .get("url")
@@ -398,16 +523,13 @@ pub(crate) fn tool_web_fetch(args: &Value) -> Result<String, String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| err("missing url"))?;
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(err("url must start with http:// or https://"));
-    }
     let max_chars = args
         .get("max_chars")
         .and_then(|x| x.as_u64())
         .map(|n| (n as usize).min(MAX_TOOL_OUTPUT_CHARS))
         .unwrap_or(DEFAULT_FETCH_CHARS);
 
-    let resp = http_get(url, &[], false, DEFAULT_USER_AGENT, &[])?;
+    let resp = public_http_get_bounded(url)?;
     if resp.status >= 400 {
         return Err(format!("HTTP {} fetching {url}", resp.status));
     }
@@ -567,177 +689,5 @@ fn collapse_whitespace(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn html_to_text_strips_tags_and_scripts() {
-        let html = "<html><head><style>.a{color:red}</style></head><body><h1>Title</h1><script>alert(1)</script><p>Hello &amp; welcome</p><p>Second</p></body></html>";
-        let text = html_to_text(html);
-        assert!(text.contains("Title"));
-        assert!(text.contains("Hello & welcome"));
-        assert!(text.contains("Second"));
-        assert!(!text.contains("alert"));
-        assert!(!text.contains("color:red"));
-        assert!(!text.contains('<'));
-    }
-
-    #[test]
-    fn html_to_text_preserves_non_ascii() {
-        let text = html_to_text("<p>Salut, în această zi însorită!</p>");
-        assert!(text.contains("în această zi însorită"));
-    }
-
-    #[test]
-    fn truncate_appends_marker() {
-        let s = "a".repeat(100);
-        let out = truncate(s, 10);
-        assert!(out.starts_with("aaaaaaaaaa"));
-        assert!(out.contains("truncated"));
-    }
-
-    #[test]
-    fn looks_like_html_detects_doctype() {
-        assert!(looks_like_html("  <!DOCTYPE html><html>"));
-        assert!(!looks_like_html("{\"json\": true}"));
-    }
-
-    #[test]
-    fn web_fetch_rejects_non_http() {
-        let res = tool_web_fetch(&serde_json::json!({"url": "file:///etc/passwd"}));
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn web_search_requires_query() {
-        let res = tool_web_search(
-            "https://example.invalid",
-            crate::settings::WebSearchBackend::Bing,
-            &serde_json::json!({}),
-        );
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn parse_ddg_results_extracts_title_link_snippet() {
-        let html = concat!(
-            "<div class=\"result\">",
-            "<a rel=\"nofollow\" class=\"result__a\" ",
-            "href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.rust-lang.org%2F&amp;rut=abc\">",
-            "The <b>Rust</b> Language</a>",
-            "<a class=\"result__snippet\" href=\"#\">A language empowering everyone &amp; more.</a>",
-            "</div>",
-            "<div class=\"result\">",
-            "<a class=\"result__a\" href=\"https://example.com/direct\">Direct link</a>",
-            "</div>",
-        );
-        let results = parse_ddg_results(html, 10);
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, "The Rust Language");
-        assert_eq!(results[0].1, "https://www.rust-lang.org/");
-        assert_eq!(results[0].2, "A language empowering everyone & more.");
-        assert_eq!(results[1].1, "https://example.com/direct");
-        assert!(results[1].2.is_empty());
-    }
-
-    #[test]
-    fn parse_ddg_results_skips_ads_and_respects_count() {
-        let html = concat!(
-            "<a class=\"result__a\" href=\"https://duckduckgo.com/y.js?ad_domain=x\">Ad</a>",
-            "<a class=\"result__a\" href=\"https://one.example\">One</a>",
-            "<a class=\"result__a\" href=\"https://two.example\">Two</a>",
-        );
-        let results = parse_ddg_results(html, 1);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].1, "https://one.example");
-    }
-
-    /// Live network test: `cargo test ddg_search_live -- --ignored --nocapture`.
-    #[test]
-    #[ignore = "hits the real DuckDuckGo endpoint"]
-    fn ddg_search_live() {
-        let out = ddg_search("rust programming language", 5).expect("ddg_search failed");
-        println!("{out}");
-        assert!(out.contains("Search results for:"));
-        assert!(out.contains("https://"));
-    }
-
-    #[test]
-    fn parse_rss_items_extracts_title_link_snippet() {
-        let xml = concat!(
-            "<rss version=\"2.0\"><channel>",
-            "<item><title>The <b>Rust</b> Language</title>",
-            "<link>https://www.rust-lang.org/</link>",
-            "<description>Blazingly fast &amp; memory-efficient.</description></item>",
-            "<item><title>Second</title><link>https://example.com</link></item>",
-            "<item><link>https://no-title.example</link></item>",
-            "</channel></rss>"
-        );
-        let results = parse_rss_items(xml, 10);
-        // The third item has no title, so it is dropped.
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, "The Rust Language");
-        assert_eq!(results[0].1, "https://www.rust-lang.org/");
-        assert_eq!(results[0].2, "Blazingly fast & memory-efficient.");
-        assert!(results[1].2.is_empty());
-    }
-
-    #[test]
-    fn parse_rss_items_respects_count() {
-        let mut xml = String::from("<rss><channel>");
-        for n in 0..15 {
-            xml.push_str(&format!(
-                "<item><title>r{n}</title><link>https://x{n}.example</link></item>"
-            ));
-        }
-        xml.push_str("</channel></rss>");
-        let results = parse_rss_items(&xml, 3);
-        assert_eq!(results.len(), 3);
-        assert_eq!(results[0].0, "r0");
-        assert_eq!(results[2].0, "r2");
-    }
-
-    #[test]
-    fn parse_rss_items_empty_feed_returns_nothing() {
-        let xml = "<rss><channel></channel></rss>";
-        assert!(parse_rss_items(xml, 10).is_empty());
-        // No items at all.
-        assert!(parse_rss_items("", 10).is_empty());
-    }
-
-    /// Live network test: `cargo test bing_search_live -- --ignored --nocapture`.
-    #[test]
-    #[ignore = "hits the real Bing endpoint"]
-    fn bing_search_live() {
-        let out = bing_search("rust programming language", 5).expect("bing_search failed");
-        println!("{out}");
-        assert!(out.contains("Search results for:"));
-        assert!(out.contains("https://"));
-    }
-
-    /// Live network test: `cargo test web_search_bing_zero_config_live -- --ignored --nocapture`.
-    /// Exercises the full zero-config path (empty base URL -> selected Bing backend).
-    #[test]
-    #[ignore = "hits the real Bing endpoint"]
-    fn web_search_bing_zero_config_live() {
-        use crate::settings::WebSearchBackend;
-        let out = tool_web_search(
-            "",
-            WebSearchBackend::Bing,
-            &serde_json::json!({"query": "rust programming language", "count": 5}),
-        )
-        .expect("zero-config web_search failed");
-        println!("{out}");
-        assert!(out.contains("Search results for:"));
-    }
-
-    #[test]
-    fn resolve_ddg_href_unwraps_redirect() {
-        let link = resolve_ddg_href("//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.rs%2Fserde&rut=x");
-        assert_eq!(link, "https://docs.rs/serde");
-        assert_eq!(
-            resolve_ddg_href("https://example.com/page"),
-            "https://example.com/page"
-        );
-    }
-}
+#[path = "web/tests.rs"]
+mod tests;

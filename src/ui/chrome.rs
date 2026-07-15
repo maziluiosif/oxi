@@ -7,6 +7,9 @@ use eframe::egui::{
 
 use crate::theme::*;
 
+mod copy_modal;
+pub use copy_modal::*;
+
 pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
     Frame::new()
         .fill(c_bg_input())
@@ -24,6 +27,91 @@ pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
             );
         });
     ui.add_space(3.0);
+}
+
+/// Framed single-line settings input — matches the sidebar field language so settings
+/// don't fall back to bare egui `TextEdit` chrome.
+pub fn settings_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    settings_text_field_opts(ui, text, hint, false, f32::INFINITY)
+}
+
+/// Like [`settings_text_field`], but with an explicit width (e.g. short numeric fields).
+pub fn settings_text_field_width(
+    ui: &mut Ui,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+) -> Response {
+    settings_text_field_opts(ui, text, hint, false, width)
+}
+
+/// Password variant of [`settings_text_field`].
+pub fn settings_password_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    settings_text_field_opts(ui, text, hint, true, f32::INFINITY)
+}
+
+fn settings_text_field_opts(
+    ui: &mut Ui,
+    text: &mut String,
+    hint: &str,
+    password: bool,
+    width: f32,
+) -> Response {
+    Frame::new()
+        .fill(c_bg_input())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
+        .corner_radius(RADIUS_BUTTON)
+        .inner_margin(Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            let mut edit = TextEdit::singleline(text)
+                .frame(egui::Frame::NONE)
+                .margin(Margin::symmetric(1, 0))
+                .font(FontId::proportional(FS_SMALL))
+                .desired_width(width)
+                .hint_text(hint);
+            if password {
+                edit = edit.password(true);
+            }
+            ui.add(edit)
+        })
+        .inner
+}
+
+/// Framed multiline settings editor (system prompts, etc.).
+pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Response {
+    Frame::new()
+        .fill(c_bg_input())
+        .stroke(Stroke::new(1.0, c_border_subtle()))
+        .corner_radius(RADIUS_BUTTON)
+        .inner_margin(Margin::symmetric(8, 6))
+        .show(ui, |ui| {
+            ui.add(
+                TextEdit::multiline(text)
+                    .frame(egui::Frame::NONE)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(rows)
+                    .hint_text(hint),
+            )
+        })
+        .inner
+}
+
+/// Settings list row: left-aligned identity, right-aligned actions, optional divider.
+/// Callers typically put labels on the left and buttons via `Layout::right_to_left`.
+pub fn settings_list_row(ui: &mut Ui, show_divider: bool, add_contents: impl FnOnce(&mut Ui)) {
+    let available = ui.available_width();
+    ui.horizontal(|ui| {
+        ui.set_min_width(available);
+        ui.set_min_height(28.0);
+        add_contents(ui);
+    });
+    if show_divider {
+        ui.add_space(4.0);
+        hairline(ui);
+        ui.add_space(4.0);
+    } else {
+        ui.add_space(2.0);
+    }
 }
 
 /// Section caption used above groups of settings: small, uppercase, muted.
@@ -44,7 +132,17 @@ pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) 
         ui.add_space(2.0);
         ui.label(RichText::new(sub).size(FS_SMALL).color(c_text_muted()));
     }
-    ui.add_space(10.0);
+    ui.add_space(14.0);
+}
+
+/// Card header: caption + optional one-line helper. Returns nothing; just paints.
+pub fn settings_card_header(ui: &mut Ui, title: &str, help: Option<&str>) {
+    ui.label(RichText::new(title).size(FS_BODY).color(c_text()).strong());
+    if let Some(help) = help {
+        ui.add_space(2.0);
+        ui.label(RichText::new(help).size(FS_TINY).color(c_text_muted()));
+    }
+    ui.add_space(8.0);
 }
 
 /// A card frame used to group related settings. Matches the elevated background + subtle border.
@@ -52,7 +150,7 @@ pub fn card_frame() -> Frame {
     Frame::new()
         .fill(c_bg_elevated())
         .stroke(Stroke::new(1.0, c_border_subtle()))
-        .corner_radius(10.0)
+        .corner_radius(RADIUS_CARD)
         .inner_margin(Margin::symmetric(14, 12))
 }
 
@@ -70,6 +168,18 @@ pub fn field_label(ui: &mut Ui, text: &str) {
     ui.add_space(10.0);
     ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
     ui.add_space(3.0);
+}
+
+/// Like [`field_label`], but without the leading gap (for the first field in a card).
+pub fn field_label_first(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).size(FS_TINY).color(c_text_muted()));
+    ui.add_space(3.0);
+}
+
+/// Muted helper line under a control (kept short so cards stay scannable).
+pub fn field_hint(ui: &mut Ui, text: &str) {
+    ui.add_space(3.0);
+    ui.label(RichText::new(text).size(FS_TINY).color(c_text_faint()));
 }
 
 /// Horizontal rule that matches the subtle border color.
@@ -102,7 +212,7 @@ pub fn alert_banner(ui: &mut Ui, text: &str, error: bool) {
     Frame::new()
         .fill(bg)
         .stroke(stroke)
-        .corner_radius(CornerRadius::same(6))
+        .corner_radius(CornerRadius::same(RADIUS_BUTTON))
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -168,8 +278,24 @@ pub fn icon_button_core(
     active: bool,
     look: &IconButtonLook,
 ) -> Response {
+    icon_button_core_with_hover(ui, icon, size, glyph_size, active, true, look)
+}
+
+/// Variant of [`icon_button_core`] that can keep its resting visuals while hovered. The button
+/// remains clickable and keeps the pointer cursor, which is useful for strongly colored active
+/// states where replacing the active fill or glyph would make the state appear to switch off.
+#[allow(clippy::too_many_arguments)]
+pub fn icon_button_core_with_hover(
+    ui: &mut Ui,
+    icon: &str,
+    size: egui::Vec2,
+    glyph_size: f32,
+    active: bool,
+    show_hover_visuals: bool,
+    look: &IconButtonLook,
+) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = response.hovered();
+    let hovered = show_hover_visuals && response.hovered();
     let fill = if hovered { look.hover_fill } else { look.fill };
     let stroke = if hovered {
         look.hover_stroke
@@ -198,7 +324,7 @@ pub fn icon_button_core(
             look.glyph
         },
     );
-    if hovered {
+    if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     response
@@ -522,9 +648,9 @@ pub fn ghost_button_icon_enabled(
 }
 
 /// Compact chip-style button for tight toolbar rows (git Pull/Push/Fetch, etc.) — shares the
-/// ghost-button border palette but renders at `FS_TINY` on `c_bg_elevated` with 6px rounding,
+/// ghost-button border palette but renders at `FS_TINY` on `c_bg_elevated` with button rounding,
 /// so the small action chips share one language across the app. Leading icon glyph variant.
-pub fn mini_button_icon(ui: &mut Ui, icon: &str, label: &str) -> Response {
+pub fn mini_button_icon_enabled(ui: &mut Ui, icon: &str, label: &str, enabled: bool) -> Response {
     icon_text_button_core(
         ui,
         icon,
@@ -536,12 +662,12 @@ pub fn mini_button_icon(ui: &mut Ui, icon: &str, label: &str) -> Response {
             hover_fill: c_row_hover(),
             stroke: c_border_subtle(),
             hover_stroke: c_border(),
-            rounding: CornerRadius::same(6),
+            rounding: CornerRadius::same(RADIUS_BUTTON),
             glyph: c_text_muted(),
         },
         c_text_muted(),
         c_accent(),
-        true,
+        enabled,
     )
 }
 
@@ -589,11 +715,12 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
     } else {
         Color32::TRANSPARENT
     };
-    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
     if selected {
         ui.painter().rect_stroke(
             rect,
-            CornerRadius::same(7),
+            CornerRadius::same(RADIUS_ROW),
             Stroke::new(1.0, c_border_subtle()),
             egui::StrokeKind::Middle,
         );

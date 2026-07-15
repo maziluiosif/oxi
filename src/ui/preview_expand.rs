@@ -66,8 +66,14 @@ pub fn clickable_expand_overlay_quiet(ui: &mut Ui, rect: Rect, persist_id: Id) {
 
 fn clickable_expand_overlay_impl(ui: &mut Ui, rect: Rect, persist_id: Id, hover_border: bool) {
     let id = persist_id.with("preview_click");
-    let response = ui.interact(rect, id, Sense::hover());
-    if response.hovered() {
+    // Keep the overlay hover-only so wheel events reach the transcript. Determine containment
+    // directly from the pointer, though: when expanded, selectable child labels can own hover and
+    // make `response.hovered()` false even though the pointer is visibly inside this panel.
+    let _response = ui.interact(rect, id, Sense::hover());
+    let pointer_inside = ui
+        .ctx()
+        .input(|i| i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
+    if pointer_inside {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         if hover_border {
             ui.painter().rect_stroke(
@@ -78,12 +84,7 @@ fn clickable_expand_overlay_impl(ui: &mut Ui, rect: Rect, persist_id: Id, hover_
             );
         }
     }
-    if response.hovered()
-        && ui.ctx().input(|i| {
-            i.pointer.primary_clicked()
-                && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))
-        })
-    {
+    if pointer_inside && ui.ctx().input(|i| i.pointer.primary_clicked()) {
         toggle_expanded(ui, persist_id);
     }
 }

@@ -77,7 +77,11 @@ impl OxiApp {
         // The diff collected for the commit-message generator can arrive on any drained
         // state, so capture it across all of them rather than only the last one.
         let mut collected_diff: Option<String> = None;
+        let mut saw_final_snapshot = false;
         while let Ok(mut state) = rx.try_recv() {
+            if !state.busy {
+                saw_final_snapshot = true;
+            }
             if state.busy {
                 // The worker emits a lightweight "busy" snapshot before each git op.
                 // Keep the last real snapshot's content in place while only updating
@@ -112,6 +116,18 @@ impl OxiApp {
         {
             self.start_commit_gen(&diff);
             ctx.request_repaint();
+        } else if self.conv.commit_gen_pending && saw_final_snapshot && !self.conv.git.busy {
+            // The diff collection finished without producing a diff (empty tree or a git
+            // error): stop the "Generating…" state instead of leaving it stuck.
+            self.conv.commit_gen_pending = false;
+            self.conv.commit_gen_error = Some(
+                self.conv
+                    .git
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "No changes to summarize.".to_string()),
+            );
+            ctx.request_repaint();
         }
     }
 
@@ -129,9 +145,18 @@ impl OxiApp {
             max_chars: Some(1500),
             effort_override: Some("low".to_string()),
         });
-        self.conv.git_commit_message.clear();
+        // Stash whatever the user already typed: the stream writes into the field,
+        // and a failed generation must not cost them their own draft.
+        self.conv.commit_gen_stash = Some(std::mem::take(&mut self.conv.git_commit_message));
         self.conv.commit_gen_error = None;
         self.conv.commit_gen_rx = Some(rx);
+    }
+
+    /// Put the user's pre-generation draft back after a failed/aborted generation.
+    fn restore_commit_gen_stash(&mut self) {
+        if let Some(prev) = self.conv.commit_gen_stash.take() {
+            self.conv.git_commit_message = prev;
+        }
     }
 
     /// Drain streamed commit-message deltas into the composer. Called each frame.
@@ -152,9 +177,15 @@ impl OxiApp {
                             let trimmed = text.trim();
                             if !trimmed.is_empty() {
                                 self.conv.git_commit_message = trimmed.to_string();
+                                self.conv.commit_gen_stash = None;
+                            } else {
+                                self.restore_commit_gen_stash();
                             }
                         }
-                        Err(e) => self.conv.commit_gen_error = Some(e),
+                        Err(e) => {
+                            self.conv.commit_gen_error = Some(e);
+                            self.restore_commit_gen_stash();
+                        }
                     }
                     done = true;
                     ctx.request_repaint();
@@ -162,6 +193,11 @@ impl OxiApp {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Worker died without a terminal event: tell the user instead of
+                    // silently leaving a half-written (or empty) message behind.
+                    self.conv.commit_gen_error =
+                        Some("Generation stopped unexpectedly.".to_string());
+                    self.restore_commit_gen_stash();
                     done = true;
                     break;
                 }
@@ -177,7 +213,17 @@ impl OxiApp {
         self.conv.commit_gen_pending || self.conv.commit_gen_rx.is_some()
     }
 
-    pub(super) fn request(&self, op: GitOp) {
-        let _ = self.conv.git_tx.as_ref().map(|t| t.send(op));
+    /// Send an op to the git worker; surfaces a visible error instead of silently
+    /// dropping the request when the worker channel is gone.
+    pub(crate) fn request(&mut self, op: GitOp) {
+        let sent = self
+            .conv
+            .git_tx
+            .as_ref()
+            .is_some_and(|t| t.send(op).is_ok());
+        if !sent {
+            self.conv.git.error =
+                Some("Git worker is not running — reopen the panel to restart it.".to_string());
+        }
     }
 }

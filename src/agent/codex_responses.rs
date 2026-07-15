@@ -362,6 +362,17 @@ fn process_responses_event(
                             .and_then(|x| x.as_str())
                             .unwrap_or("{}");
                         let call_id = item.get("call_id").and_then(|x| x.as_str()).unwrap_or("");
+                        // Emit ToolStart as soon as the completed function_call item arrives —
+                        // don't wait for the rest of the SSE stream / response.completed.
+                        if !call_id.is_empty() && !name.is_empty() {
+                            let parsed_args: Value =
+                                serde_json::from_str(args).unwrap_or(json!({}));
+                            let _ = tx.send(AgentEvent::ToolStart {
+                                name: name.to_string(),
+                                tool_call_id: call_id.to_string(),
+                                args: Some(parsed_args),
+                            });
+                        }
                         pending_tools.push(ToolCallAccum {
                             id: call_id.to_string(),
                             name: name.to_string(),
@@ -581,7 +592,15 @@ pub async fn run_codex_responses_loop(
             let is_readonly = |name: &str| {
                 matches!(
                     name,
-                    "read" | "grep" | "find" | "ls" | "web_search" | "web_fetch"
+                    "read"
+                        | "grep"
+                        | "find"
+                        | "ls"
+                        | "codebase_search"
+                        | "git_status"
+                        | "git_diff"
+                        | "web_search"
+                        | "web_fetch"
                 )
             };
             struct ToolCallP {
@@ -642,7 +661,7 @@ pub async fn run_codex_responses_loop(
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
                             is_error: Some(is_err),
-                            full_output_path: None,
+                            full_output_path: result.full_output_path,
                             diff: result.diff,
                         });
                         messages.push(json!({
@@ -664,6 +683,7 @@ pub async fn run_codex_responses_loop(
                             output: reason,
                             is_error: true,
                             diff: None,
+                            full_output_path: None,
                         },
                     };
                     let text = result.output.clone();
@@ -676,7 +696,7 @@ pub async fn run_codex_responses_loop(
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
                         is_error: Some(is_err),
-                        full_output_path: None,
+                        full_output_path: result.full_output_path,
                         diff: result.diff,
                     });
                     messages.push(json!({

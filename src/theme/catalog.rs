@@ -41,6 +41,16 @@ pub fn builtin_themes() -> Vec<ThemeChoice> {
             name: "Midnight".to_string(),
             palette: Palette::MIDNIGHT,
         },
+        ThemeChoice {
+            id: "sublime".to_string(),
+            name: "Sublime".to_string(),
+            palette: Palette::SUBLIME,
+        },
+        ThemeChoice {
+            id: "mariana".to_string(),
+            name: "Sublime 4".to_string(),
+            palette: Palette::MARIANA,
+        },
     ]
 }
 
@@ -104,8 +114,6 @@ impl ThemeSpec {
                 "text_faint" => p.text_faint = c,
                 "sidebar_section" => p.sidebar_section = c,
                 "user_bubble" => p.user_bubble = c,
-                "row_active" => p.row_active = c,
-                "row_hover" => p.row_hover = c,
                 "success" => p.success = c,
                 "danger" => p.danger = c,
                 "diff_add_fg" => p.diff_add_fg = c,

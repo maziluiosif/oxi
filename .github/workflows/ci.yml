@@ -27,6 +27,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Validate GitHub Actions workflows
+        uses: raven-actions/actionlint@v2
+
+      - name: Test release changelog generator
+        run: python .github/scripts/test_release_changelog.py
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 

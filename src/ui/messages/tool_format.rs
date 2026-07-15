@@ -1,8 +1,8 @@
 //! Text formatting for tool calls: short argument previews, one-line summaries, diff/
 //! output layout jobs, and the Nerd Font icon per tool name.
 
-use eframe::egui::text::{LayoutJob, LayoutSection, TextFormat, TextWrapping};
-use eframe::egui::{Color32, FontId};
+use eframe::egui::FontId;
+use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 
 use crate::theme::*;
 
@@ -20,48 +20,6 @@ pub(super) fn diff_counts(diff: &str) -> (usize, usize) {
         }
     }
     (added, removed)
-}
-
-pub(super) fn diff_wrapped_job(diff: &str, wrap_width: f32) -> LayoutJob {
-    let lines: Vec<&str> = diff.lines().collect();
-    let mut job = LayoutJob {
-        wrap: TextWrapping {
-            max_width: wrap_width,
-            ..Default::default()
-        },
-        break_on_newline: true,
-        ..Default::default()
-    };
-
-    let context_text = c_text_muted();
-
-    for (i, line) in lines.iter().enumerate() {
-        let start = job.text.len();
-        job.text.push_str(line);
-        if i + 1 < lines.len() {
-            job.text.push('\n');
-        }
-        let end = job.text.len();
-        let (color, background) = if line.starts_with('+') {
-            (c_diff_add_fg(), c_diff_add_bg())
-        } else if line.starts_with('-') {
-            (c_diff_del_fg(), c_diff_del_bg())
-        } else {
-            (context_text, Color32::TRANSPARENT)
-        };
-        job.sections.push(LayoutSection {
-            leading_space: 0.0,
-            byte_range: egui::text::ByteIndex(start)..egui::text::ByteIndex(end),
-            format: TextFormat {
-                font_id: FontId::monospace(FS_TINY),
-                color,
-                background,
-                ..Default::default()
-            },
-        });
-    }
-
-    job
 }
 
 fn tool_path_from_args(args_summary: Option<&String>) -> Option<String> {
@@ -188,9 +146,21 @@ pub(super) fn tool_summary_text(
                 }
             }
         }
-        "read" | "write" | "edit" | "find" | "ls" => {
+        "read" | "write" | "edit" | "delete" | "mkdir" | "find" | "ls" => {
             if let Some(path) = tool_path_from_args(args_summary) {
                 parts.push(short_path(&path, 2));
+            }
+        }
+        "move" => {
+            if let Some(raw) = args_summary
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+            {
+                if let Some(from) = v.get("from").and_then(|x| x.as_str()) {
+                    parts.push(short_path(from, 2));
+                }
+                if let Some(to) = v.get("to").and_then(|x| x.as_str()) {
+                    parts.push(format!("→ {}", short_path(to, 2)));
+                }
             }
         }
         "web_search" => {
@@ -248,24 +218,24 @@ pub(super) fn tool_icon(name: &str) -> &'static str {
     }
 }
 
-/// Argument scurt, relevant, din `args_summary` JSON: path > command > prima valoare.
+/// Short, relevant argument from the `args_summary` JSON: path > command > first value.
 fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
     let raw = args_summary?;
     let v = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-    // path / filePath pentru read/write/edit/find
+    // path / filePath for read/write/edit/find
     if let Some(p) = v
         .get("path")
         .or_else(|| v.get("filePath"))
         .and_then(|x| x.as_str())
     {
-        // afișăm doar ultimele 2 segmente
+        // Show only the last 2 path segments.
         let segs: Vec<&str> = p.trim_start_matches('/').split('/').collect();
         let short = if segs.len() > 2 {
             format!("…/{}/{}", segs[segs.len() - 2], segs[segs.len() - 1])
         } else {
             p.to_string()
         };
-        // adaugă range de linii dacă există
+        // Append the line range when present.
         let offset = v.get("offset").and_then(|x| x.as_u64());
         let limit = v.get("limit").and_then(|x| x.as_u64());
         return Some(match (offset, limit) {
@@ -274,7 +244,7 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
             _ => short,
         });
     }
-    // command pentru bash
+    // command for bash
     if let Some(cmd) = v.get("command").and_then(|x| x.as_str()) {
         let tok: String = cmd.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
         let mut s: String = tok.chars().take(60).collect();
@@ -283,7 +253,7 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
         }
         return Some(s);
     }
-    // pattern + path pentru grep
+    // pattern + path for grep
     if name == "grep" {
         let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("");
         let dir = v.get("path").and_then(|x| x.as_str()).unwrap_or("");
@@ -295,13 +265,13 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
             });
         }
     }
-    // URL scurtat pentru web_fetch
+    // Shortened URL for web_fetch.
     if name == "web_fetch"
         && let Some(u) = v.get("url").and_then(|x| x.as_str())
     {
         return Some(short_url(u, 44));
     }
-    // fallback: prima string din obiect
+    // Fallback: the first string value in the object.
     if let serde_json::Value::Object(map) = &v
         && let Some(s) = map.values().find_map(|x| x.as_str())
     {

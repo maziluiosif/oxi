@@ -17,7 +17,6 @@ use crate::agent::history::{
 };
 use crate::agent::loop_ctx::LoopCtx;
 use crate::agent::openai::{run_azure_chat_loop, run_chat_loop};
-use crate::agent::prompt::build_system_prompt;
 use crate::agent::tools::{ToolEnv, tool_definitions_json};
 use crate::model::ChatMessage;
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
@@ -162,6 +161,7 @@ pub fn spawn_agent_run(
     cancel: Arc<AtomicBool>,
     prior_wire: Option<Vec<serde_json::Value>>,
     chars_per_token: f32,
+    undo_journal: Arc<std::sync::Mutex<crate::agent::tools::TurnUndoJournal>>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
@@ -179,6 +179,12 @@ pub fn spawn_agent_run(
             // it entirely here — no system prompt, wire history, or tool definitions from oxi —
             // then return before the HTTP-provider machinery below.
             if cfg.provider == LlmProviderKind::ClaudeCodeAcp {
+                undo_journal
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .mark_non_reversible(
+                        "Claude Code ACP manages its own tools, so this response cannot be restored safely.",
+                    );
                 run_acp_turn(
                     &cfg,
                     &acp,
@@ -197,15 +203,19 @@ pub fn spawn_agent_run(
                 return;
             }
 
-            let system = build_system_prompt(&settings, cwd_ref.to_string_lossy().as_ref());
+            let system =
+                crate::agent::prompt::build_system_prompt_for_workspace(&settings, cwd_ref);
             let context_tokens = cfg.effective_context_window(settings.context_window_default);
             let context_budget = crate::agent::history::context_char_budget_from_tokens(
                 context_tokens,
                 chars_per_token,
             );
             let max_rounds = settings.max_tool_rounds;
-            let tools =
+            let mut tools =
                 tool_definitions_json(&settings.tools_enabled, settings.bash_timeout_cap_secs);
+            let mcp = crate::agent::mcp::McpManager::new();
+            mcp.sync_servers(&settings.mcp_servers);
+            tools.extend(mcp.tool_definitions());
             let mut messages = if let Some(mut wire) = prior_wire {
                 if let Some(last_user) = chat_for_history.last()
                     && last_user.role == crate::model::MsgRole::User
@@ -225,6 +235,8 @@ pub fn spawn_agent_run(
                 web_search_url: settings.effective_web_search_url(),
                 web_search_backend: settings.web_search_backend,
                 bash_timeout_cap_secs: settings.bash_timeout_cap_secs,
+                mcp: Some(mcp),
+                undo_journal: Some(undo_journal),
             };
             let model = cfg.model_id.clone();
             let effort_override = (!cfg.effort.trim().is_empty()).then_some(cfg.effort.trim());

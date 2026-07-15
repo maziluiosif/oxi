@@ -11,18 +11,49 @@ use super::dedupe::dedupe_trailing_duplicate_messages;
 use super::format::{chat_message_to_json_entries, session_file_stem_or_generated};
 use super::paths::session_file_path;
 
+#[cfg(test)]
 pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
+    let (messages, _wire) = load_session_messages_with_wire(session_file)?;
+    Some(messages)
+}
+
+/// Loaded chat messages plus optional provider wire history `(fingerprint, messages)`.
+type SessionMessagesWithWire = (Vec<ChatMessage>, Option<(u64, Vec<Value>)>);
+
+/// Load chat messages plus any persisted provider wire history.
+pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMessagesWithWire> {
     let file = File::open(session_file).ok()?;
     let reader = BufReader::new(file);
     let mut saw_header = false;
     let mut messages = Vec::new();
+    let mut wire: Option<(u64, Vec<Value>)> = None;
 
-    for line in reader.lines().map_while(Result::ok) {
+    for (line_idx, line) in reader.lines().enumerate() {
+        let line = match line {
+            Ok(line) => line,
+            Err(e) => {
+                eprintln!(
+                    "[oxi] partially recovered session {session_file}: line {} could not be read: {e}",
+                    line_idx + 1
+                );
+                break;
+            }
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        let value = serde_json::from_str::<Value>(trimmed).ok()?;
+        let value = match serde_json::from_str::<Value>(trimmed) {
+            Ok(value) => value,
+            Err(e) if saw_header => {
+                eprintln!(
+                    "[oxi] partially recovered session {session_file}: invalid JSON on line {}: {e}",
+                    line_idx + 1
+                );
+                break;
+            }
+            Err(_) => return None,
+        };
         if !saw_header {
             let header_type = value.get("type").and_then(Value::as_str);
             let header_id = value.get("id").and_then(Value::as_str);
@@ -32,10 +63,22 @@ pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
             saw_header = true;
             continue;
         }
-        if value.get("type").and_then(Value::as_str) == Some("message")
-            && let Some(message) = value.get("message")
-        {
-            messages.push(message.clone());
+        match value.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                if let Some(message) = value.get("message") {
+                    messages.push(message.clone());
+                }
+            }
+            Some("wire_history") => {
+                let fingerprint = value
+                    .get("fingerprint")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if let Some(Value::Array(arr)) = value.get("messages") {
+                    wire = Some((fingerprint, arr.clone()));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -43,9 +86,10 @@ pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
         return None;
     }
 
-    Some(hydrate::messages_from_get_messages(&json!({
+    let chat = hydrate::messages_from_get_messages(&json!({
         "messages": messages,
-    })))
+    }));
+    Some((chat, wire))
 }
 
 pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(), String> {
@@ -99,6 +143,22 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
             )
             .map_err(|e| e.to_string())?;
         }
+    }
+
+    if let Some(wire) = session.wire_history.as_ref()
+        && !wire.is_empty()
+    {
+        writeln!(
+            file,
+            "{}",
+            serde_json::to_string(&json!({
+                "type": "wire_history",
+                "fingerprint": session.wire_fingerprint,
+                "messages": wire,
+            }))
+            .map_err(|e| e.to_string())?
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     file.sync_all().map_err(|e| e.to_string())?;
@@ -249,24 +309,29 @@ mod tests {
     }
 
     #[test]
-    fn load_session_messages_invalid_json_line_returns_none() {
+    fn load_session_messages_invalid_json_after_header_recovers_prefix() {
         let path = temp_file(
             "bad-json.jsonl",
             b"{\"type\":\"session\",\"id\":\"abc\"}\nnot json at all\n",
         );
-        assert!(load_session_messages(path.to_str().unwrap()).is_none());
+        assert_eq!(
+            load_session_messages(path.to_str().unwrap()).unwrap().len(),
+            0
+        );
     }
 
     #[test]
-    fn load_session_messages_truncated_last_line_returns_none() {
-        // Simulates a crash mid-`writeln!`: the file ends with a half-written JSON object
-        // (valid UTF-8, invalid JSON), which fails the `serde_json::from_str(..).ok()?`
-        // in the read loop and bails the whole call out to `None`.
+    fn load_session_messages_truncated_last_line_recovers_valid_prefix() {
+        // Simulates a crash mid-`writeln!`: JSONL lets us retain every complete entry before it.
         let path = temp_file(
             "truncated.jsonl",
-            b"{\"type\":\"session\",\"id\":\"abc\"}\n{\"type\":\"message\",\"message\":{\"rol",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"kept\"}}\n\
+              {\"type\":\"message\",\"message\":{\"rol",
         );
-        assert!(load_session_messages(path.to_str().unwrap()).is_none());
+        let messages = load_session_messages(path.to_str().unwrap()).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "kept");
     }
 
     #[test]

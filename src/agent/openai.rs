@@ -31,6 +31,9 @@ struct ToolCallAccum {
     id: String,
     name: String,
     arguments: String,
+    /// Whether we already emitted an early [`AgentEvent::ToolStart`] for this call
+    /// while arguments were still streaming (so the UI can show a running pill immediately).
+    started: bool,
 }
 
 pub async fn run_chat_loop(
@@ -233,7 +236,15 @@ async fn run_chat_loop_at(
             let is_readonly = |name: &str| {
                 matches!(
                     name,
-                    "read" | "grep" | "find" | "ls" | "web_search" | "web_fetch"
+                    "read"
+                        | "grep"
+                        | "find"
+                        | "ls"
+                        | "codebase_search"
+                        | "git_status"
+                        | "git_diff"
+                        | "web_search"
+                        | "web_fetch"
                 )
             };
 
@@ -300,7 +311,7 @@ async fn run_chat_loop_at(
                         let _ = tx.send(AgentEvent::ToolEnd {
                             tool_call_id: tc.id.clone(),
                             is_error: Some(is_err),
-                            full_output_path: None,
+                            full_output_path: result.full_output_path,
                             diff: result.diff,
                         });
                         messages.push(json!({
@@ -323,6 +334,7 @@ async fn run_chat_loop_at(
                             output: reason,
                             is_error: true,
                             diff: None,
+                            full_output_path: None,
                         },
                     };
                     let text = result.output.clone();
@@ -335,7 +347,7 @@ async fn run_chat_loop_at(
                     let _ = tx.send(AgentEvent::ToolEnd {
                         tool_call_id: tc.id.clone(),
                         is_error: Some(is_err),
-                        full_output_path: None,
+                        full_output_path: result.full_output_path,
                         diff: result.diff,
                     });
                     messages.push(json!({
@@ -433,6 +445,16 @@ fn process_sse_line(
                         entry.arguments.push_str(a);
                     }
                 }
+                // Surface the tool pill as soon as name+id are known — don't wait for the
+                // full arguments JSON (which can take seconds for large write/edit payloads).
+                if !entry.started && !entry.id.is_empty() && !entry.name.is_empty() {
+                    entry.started = true;
+                    let _ = tx.send(AgentEvent::ToolStart {
+                        name: entry.name.clone(),
+                        tool_call_id: entry.id.clone(),
+                        args: None,
+                    });
+                }
             }
         }
         if let Some(content) = d.get("content").and_then(|x| x.as_str()) {
@@ -464,6 +486,73 @@ fn read_openai_usage(v: &Value, usage: &mut TokenUsage) {
     {
         usage.cache_read_input_tokens = n;
         usage.input_tokens = usage.input_tokens.saturating_sub(n);
+    }
+}
+
+#[cfg(test)]
+mod early_tool_start_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn tool_start_emitted_when_name_and_id_first_appear_before_args() {
+        let (tx, rx) = mpsc::channel::<AgentEvent>();
+        let mut assistant_text = String::new();
+        let mut tool_map = HashMap::new();
+        let mut finish_reason = None;
+        let mut stream_error = None;
+        let mut usage = TokenUsage::default();
+
+        // Name+id arrive first (typical OpenAI streaming shape).
+        process_sse_line(
+            &format!(
+                "data: {}",
+                json!({"choices": [{"index": 0, "delta": {"tool_calls": [
+                    {"index": 0, "id": "call_1", "type": "function",
+                     "function": {"name": "web_search", "arguments": ""}}
+                ]}}]})
+            ),
+            &mut assistant_text,
+            &mut tool_map,
+            &mut finish_reason,
+            &mut stream_error,
+            &mut usage,
+            &tx,
+        );
+        let early: Vec<_> = rx.try_iter().collect();
+        assert!(
+            matches!(
+                &early[..],
+                [AgentEvent::ToolStart {
+                    name,
+                    tool_call_id,
+                    args: None
+                }] if name == "web_search" && tool_call_id == "call_1"
+            ),
+            "expected early ToolStart with no args, got {early:?}"
+        );
+
+        // Argument deltas must not re-emit ToolStart.
+        process_sse_line(
+            &format!(
+                "data: {}",
+                json!({"choices": [{"index": 0, "delta": {"tool_calls": [
+                    {"index": 0, "function": {"arguments": "{\"query\":\"rust\"}"}}
+                ]}}]})
+            ),
+            &mut assistant_text,
+            &mut tool_map,
+            &mut finish_reason,
+            &mut stream_error,
+            &mut usage,
+            &tx,
+        );
+        assert!(
+            rx.try_iter().next().is_none(),
+            "no duplicate ToolStart on args"
+        );
+        assert_eq!(tool_map[&0].arguments, "{\"query\":\"rust\"}");
+        assert!(tool_map[&0].started);
     }
 }
 
@@ -577,6 +666,8 @@ mod integration_tests {
             web_search_url: String::new(),
             web_search_backend: WebSearchBackend::default(),
             bash_timeout_cap_secs: 300,
+            mcp: None,
+            undo_journal: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -663,6 +754,8 @@ mod integration_tests {
             web_search_url: String::new(),
             web_search_backend: WebSearchBackend::default(),
             bash_timeout_cap_secs: 300,
+            mcp: None,
+            undo_journal: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({

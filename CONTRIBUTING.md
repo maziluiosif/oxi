@@ -72,6 +72,11 @@ cargo test -- --ignored
 
 - Keep PRs focused — one logical change per PR is easier to review and bisect than a
   bundle of unrelated fixes.
-- The release process (`.github/workflows/release.yml`) generates `CHANGELOG.md`
-  automatically from commit history on `master`; you don't need to hand-edit the
-  changelog yourself.
+- Merging into `master` starts the release workflow. It generates release notes and a
+  SemVer bump from commits since the latest `v*` tag, builds every supported platform,
+  then commits `CHANGELOG.md`, `Cargo.toml`, and `Cargo.lock`, tags and publishes the
+  release, then opens a `master` → `dev` sync PR and auto-merges it after CI passes.
+- Use Conventional Commit prefixes where possible (`feat:`, `fix:`, `security:`, and
+  `type!:` for breaking changes). They provide deterministic release notes and version
+  selection if the optional LLM changelog service is unavailable. You normally should
+  not edit `CHANGELOG.md` or bump the crate version by hand.

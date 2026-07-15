@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Tracks direct and transitive Rust dependencies. In particular, ttf-parser is
+  # currently pulled in by fontdb; Dependabot will open the upgrade path as soon
+  # as fontdb publishes a release that replaces the unmaintained parser.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies

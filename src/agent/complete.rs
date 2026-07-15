@@ -117,6 +117,8 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         web_search_backend: WebSearchBackend::default(),
         // Inert: completion runs have no tools enabled.
         bash_timeout_cap_secs: 300,
+        mcp: None,
+        undo_journal: None,
     };
 
     let r = match cfg.provider {

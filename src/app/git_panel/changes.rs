@@ -1,10 +1,9 @@
 //! Header (branch status, pull/push/fetch), tab strip, the "Changes" tab (commit
 //! composer, staged/unstaged lists), and the full-area diff viewer.
 
-use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
+use eframe::egui::text::{LayoutJob, TextFormat};
 use eframe::egui::{
-    self, Align, Color32, CornerRadius, FontId, Frame, Layout, Margin, RichText, ScrollArea, Sense,
-    Stroke, Ui,
+    self, Align, Color32, CornerRadius, FontId, Layout, RichText, ScrollArea, Sense, Ui,
 };
 
 use crate::git::{GitEntry, GitOp};
@@ -41,12 +40,13 @@ impl OxiApp {
                     .on_hover_text("Git operation in progress");
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false)
-                    .on_hover_text("Refresh")
-                    .clicked()
-                {
+                let busy = self.conv.git.busy;
+                let refresh = crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false);
+                if busy {
+                    refresh.on_hover_text("Git operation in progress…");
+                } else if refresh.on_hover_text("Refresh").clicked() {
                     self.ensure_git_channels();
-                    let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+                    self.request(GitOp::Refresh);
                 }
             });
         });
@@ -89,25 +89,27 @@ impl OxiApp {
                 }
             });
             ui.add_space(4.0);
+            // Disabled while the worker is busy so an impatient double-click can't
+            // queue the same network operation twice.
+            let busy = self.conv.git.busy;
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                if crate::ui::chrome::mini_button_icon(ui, ICON_DOWNLOAD, "Pull")
-                    .on_hover_text("Pull (fast-forward only)")
-                    .clicked()
-                {
-                    self.request(GitOp::Pull);
-                }
-                if crate::ui::chrome::mini_button_icon(ui, ICON_UPLOAD, "Push")
-                    .on_hover_text("Push")
-                    .clicked()
-                {
-                    self.request(GitOp::Push);
-                }
-                if crate::ui::chrome::mini_button_icon(ui, ICON_REFRESH, "Fetch")
-                    .on_hover_text("Fetch")
-                    .clicked()
-                {
-                    self.request(GitOp::Fetch);
+                for (icon, label, hover, op) in [
+                    (
+                        ICON_DOWNLOAD,
+                        "Pull",
+                        "Pull (fast-forward only)",
+                        GitOp::Pull,
+                    ),
+                    (ICON_UPLOAD, "Push", "Push", GitOp::Push),
+                    (ICON_REFRESH, "Fetch", "Fetch", GitOp::Fetch),
+                ] {
+                    let resp = crate::ui::chrome::mini_button_icon_enabled(ui, icon, label, !busy);
+                    if busy {
+                        resp.on_hover_text("Git operation in progress…");
+                    } else if resp.on_hover_text(hover).clicked() {
+                        self.request(op);
+                    }
                 }
             });
         }
@@ -140,8 +142,6 @@ impl OxiApp {
     }
 
     pub(super) fn render_git_changes(&mut self, ui: &mut Ui) {
-        self.render_discard_all_prompt(ui.ctx());
-
         // Commit composer
         ui.label(
             RichText::new("Message")
@@ -150,16 +150,12 @@ impl OxiApp {
                 .strong(),
         );
         ui.add_space(2.0);
-        let resp = egui::TextEdit::multiline(&mut self.conv.git_commit_message)
-            .hint_text(
-                RichText::new("Commit message…")
-                    .size(FS_SMALL)
-                    .color(c_text_faint()),
-            )
-            .desired_rows(3)
-            .desired_width(ui.available_width())
-            .font(FontId::proportional(FS_SMALL));
-        ui.add(resp);
+        crate::ui::chrome::settings_text_area(
+            ui,
+            &mut self.conv.git_commit_message,
+            "Commit message…",
+            3,
+        );
         ui.add_space(4.0);
 
         let gen_active = self.commit_gen_active();
@@ -312,8 +308,9 @@ impl OxiApp {
                         .on_hover_text("Discard all changes")
                         .clicked()
                         {
-                            self.conv.git_discard_all_prompt =
-                                Some(entries.iter().map(|e| e.path.clone()).collect());
+                            self.request_confirm(crate::app::state::ConfirmAction::GitDiscard {
+                                paths: entries.iter().map(|e| e.path.clone()).collect(),
+                            });
                         }
                         if crate::ui::chrome::icon_button_inline(
                             ui,
@@ -332,59 +329,6 @@ impl OxiApp {
                 });
             },
         );
-    }
-
-    fn render_discard_all_prompt(&mut self, ctx: &egui::Context) {
-        let Some(paths) = self.conv.git_discard_all_prompt.clone() else {
-            return;
-        };
-
-        egui::Area::new(egui::Id::new("git_discard_all_prompt"))
-            .order(egui::Order::Foreground)
-            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-            .show(ctx, |ui| {
-                Frame::new()
-                    .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(RADIUS_CHIP)
-                    .inner_margin(Margin::same(12))
-                    .show(ui, |ui| {
-                        ui.set_width(300.0);
-                        ui.label(
-                            RichText::new("Discard all changes?")
-                                .size(FS_SMALL)
-                                .color(c_text())
-                                .strong(),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(format!(
-                                "This will permanently discard changes in {} file{}.",
-                                paths.len(),
-                                if paths.len() == 1 { "" } else { "s" }
-                            ))
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                        );
-                        ui.add_space(2.0);
-                        ui.label(
-                            RichText::new("This action cannot be undone.")
-                                .size(FS_TINY)
-                                .color(crate::theme::c_error_fg()),
-                        );
-                        ui.add_space(10.0);
-
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if crate::ui::chrome::ghost_button(ui, "Discard all", true).clicked() {
-                                self.request(GitOp::Discard(paths.clone()));
-                                self.conv.git_discard_all_prompt = None;
-                            }
-                            if crate::ui::chrome::ghost_button(ui, "Cancel", false).clicked() {
-                                self.conv.git_discard_all_prompt = None;
-                            }
-                        });
-                    });
-            });
     }
 
     fn render_change_row(
@@ -508,7 +452,9 @@ impl OxiApp {
                             .on_hover_text("Discard changes")
                             .clicked()
                         {
-                            self.request(GitOp::Discard(vec![entry.path.clone()]));
+                            self.request_confirm(crate::app::state::ConfirmAction::GitDiscard {
+                                paths: vec![entry.path.clone()],
+                            });
                         }
                     });
                 });
@@ -615,7 +561,7 @@ impl OxiApp {
                     .as_ref()
                     .is_some_and(|(h, w, _)| (*h, *w) == key);
                 if !cached {
-                    let job = colorize_diff(diff_text, wrap_width);
+                    let job = crate::ui::diff::diff_layout_job(diff_text, wrap_width);
                     self.conv.diff_job_cache = Some((key.0, key.1, job));
                 }
                 ui.horizontal(|ui| {
@@ -644,53 +590,4 @@ fn status_color(status: char) -> Color32 {
         '?' => c_text_muted(),
         _ => c_text(),
     }
-}
-
-/// Colorize a unified diff: added/removed/context lines painted with their bg color.
-fn colorize_diff(text: &str, wrap_width: f32) -> LayoutJob {
-    let mut job = LayoutJob {
-        wrap: TextWrapping {
-            max_width: wrap_width,
-            ..Default::default()
-        },
-        break_on_newline: true,
-        ..Default::default()
-    };
-
-    let context_color = c_text_muted();
-
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        let start = job.text.len();
-        job.text.push_str(line);
-        // Keep the newline inside this section's byte range — egui only lays out
-        // bytes covered by a section, so a newline left in a gap gets dropped.
-        if lines.peek().is_some() {
-            job.text.push('\n');
-        }
-        let end = job.text.len();
-        let (color, bg) = if line.starts_with("+++") || line.starts_with("---") {
-            (c_text(), c_bg_elevated())
-        } else if line.starts_with('+') {
-            (c_diff_add_fg(), c_diff_add_bg())
-        } else if line.starts_with('-') {
-            (c_diff_del_fg(), c_diff_del_bg())
-        } else if line.starts_with("@@") {
-            (c_accent(), Color32::TRANSPARENT)
-        } else {
-            (context_color, Color32::TRANSPARENT)
-        };
-        job.sections.push(egui::text::LayoutSection {
-            leading_space: 0.0,
-            byte_range: egui::text::ByteIndex(start)..egui::text::ByteIndex(end),
-            format: TextFormat {
-                font_id: FontId::monospace(FS_CODE),
-                color,
-                background: bg,
-                ..Default::default()
-            },
-        });
-    }
-
-    job
 }

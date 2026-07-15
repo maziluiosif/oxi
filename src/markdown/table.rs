@@ -3,7 +3,7 @@
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{Align, Layout, Stroke, vec2};
-use pulldown_cmark::{Event, Tag, TagEnd};
+use pulldown_cmark::{Alignment, Event, Tag, TagEnd};
 
 use crate::theme::*;
 
@@ -132,14 +132,14 @@ fn collect_cell_text(it: &mut ParserPeek<'_>) -> String {
 pub(super) fn render_table(
     ui: &mut eframe::egui::Ui,
     wrap_w: f32,
-    column_count: usize,
+    alignments: &[Alignment],
     it: &mut ParserPeek<'_>,
 ) {
     let rows = collect_table_data(it);
     if rows.is_empty() {
         return;
     }
-    let cols = column_count.max(1);
+    let cols = alignments.len().max(1);
     let grid = c_md_code_block_border();
     let outer = c_border();
     let header_bg = c_md_code_block_header_bg();
@@ -154,7 +154,7 @@ pub(super) fn render_table(
         eframe::egui::Frame::new()
             .fill(c_md_code_block_bg())
             .stroke(Stroke::new(1.0, outer))
-            .corner_radius(eframe::egui::CornerRadius::same(8))
+            .corner_radius(eframe::egui::CornerRadius::same(crate::theme::RADIUS_CHIP))
             .inner_margin(eframe::egui::Margin::same(0))
             .show(ui, |ui| {
                 ui.set_width(table_w);
@@ -169,9 +169,9 @@ pub(super) fn render_table(
                             let mut job = LayoutJob::default();
                             set_job_wrap(&mut job, (cell_w - CELL_PAD_X * 2.0).max(24.0));
                             let fmt = if is_header {
-                                inline_text_format(SZ_BODY, 1, InlineDensity::Normal)
+                                inline_text_format(SZ_BODY, 1, false, InlineDensity::Normal)
                             } else {
-                                inline_text_format(SZ_BODY, 0, InlineDensity::Normal)
+                                inline_text_format(SZ_BODY, 0, false, InlineDensity::Normal)
                             };
                             job.append(text, 0.0, fmt);
                             (is_header, job)
@@ -191,7 +191,7 @@ pub(super) fn render_table(
                         ui.set_width(table_w);
                         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
 
-                        for (is_header, job) in cell_jobs {
+                        for (col_idx, (is_header, job)) in cell_jobs.into_iter().enumerate() {
                             let (rect, _) = ui.allocate_exact_size(
                                 vec2(cell_w, row_h),
                                 eframe::egui::Sense::hover(),
@@ -206,11 +206,16 @@ pub(super) fn render_table(
                                 egui::StrokeKind::Middle,
                             );
 
+                            let halign = match alignments.get(col_idx) {
+                                Some(Alignment::Center) => Align::Center,
+                                Some(Alignment::Right) => Align::Max,
+                                _ => Align::Min,
+                            };
                             let inner_rect = rect.shrink2(vec2(CELL_PAD_X, CELL_PAD_Y));
                             let mut child = ui.new_child(
                                 eframe::egui::UiBuilder::new()
                                     .max_rect(inner_rect)
-                                    .layout(Layout::top_down(Align::Min)),
+                                    .layout(Layout::top_down(halign)),
                             );
                             selectable_job(&mut child, job);
                         }

@@ -36,8 +36,6 @@ pub struct Palette {
     pub text_faint: Color32,
     pub sidebar_section: Color32,
     pub user_bubble: Color32,
-    pub row_active: Color32,
-    pub row_hover: Color32,
     pub success: Color32,
     pub danger: Color32,
     pub diff_add_fg: Color32,
@@ -81,9 +79,7 @@ impl Palette {
         text_muted: rgb(0x8b, 0x8f, 0x99),
         text_faint: rgb(0x6b, 0x6d, 0x78),
         sidebar_section: rgb(0x6d, 0x71, 0x7b),
-        user_bubble: rgb(0x1c, 0x1e, 0x22),
-        row_active: rgb(0x21, 0x24, 0x2a),
-        row_hover: rgb(0x18, 0x1a, 0x1e),
+        user_bubble: rgb(0x22, 0x24, 0x2a),
         success: rgb(0x4a, 0xc8, 0x8c),
         danger: rgb(0xe0, 0x6c, 0x6c),
         diff_add_fg: rgb(0x99, 0xc7, 0x94),
@@ -123,9 +119,7 @@ impl Palette {
         text_muted: rgb(0x5f, 0x63, 0x6b),
         text_faint: rgb(0x8b, 0x8f, 0x99),
         sidebar_section: rgb(0x80, 0x84, 0x8e),
-        user_bubble: rgb(0xee, 0xf0, 0xf3),
-        row_active: rgb(0xe3, 0xe6, 0xec),
-        row_hover: rgb(0xec, 0xec, 0xf0),
+        user_bubble: rgb(0xe8, 0xea, 0xef),
         success: rgb(0x2f, 0x9e, 0x6f),
         danger: rgb(0xc0, 0x39, 0x2b),
         diff_add_fg: rgb(0x1a, 0x7f, 0x37),
@@ -164,9 +158,7 @@ impl Palette {
         text_muted: rgb(0x8b, 0x8f, 0x99),
         text_faint: rgb(0x6b, 0x6d, 0x78),
         sidebar_section: rgb(0x6d, 0x71, 0x7b),
-        user_bubble: rgb(0x0e, 0x0e, 0x11),
-        row_active: rgb(0x17, 0x18, 0x1d),
-        row_hover: rgb(0x10, 0x10, 0x13),
+        user_bubble: rgb(0x14, 0x14, 0x18),
         success: rgb(0x4a, 0xc8, 0x8c),
         danger: rgb(0xe0, 0x6c, 0x6c),
         diff_add_fg: rgb(0x99, 0xc7, 0x94),
@@ -186,6 +178,87 @@ impl Palette {
         md_code_block_border: rgb(0x20, 0x23, 0x29),
         md_quote_accent: rgb(0xc4, 0x82, 0x4f),
         md_code_fg: rgb(0xe1, 0xe4, 0xea),
+    };
+
+    /// Sublime: the classic Sublime Text "Monokai" scheme — warm charcoal surfaces
+    /// (`#272822`), off-white ink, a vivid orange accent, and the signature pink/green
+    /// signal colors.
+    pub const SUBLIME: Palette = Palette {
+        dark_base: true,
+        bg_main: rgb(0x27, 0x28, 0x22),
+        bg_sidebar: rgb(0x1e, 0x1f, 0x1c),
+        bg_elevated: rgb(0x2f, 0x30, 0x2a),
+        bg_elevated_2: rgb(0x38, 0x39, 0x30),
+        bg_input: rgb(0x21, 0x22, 0x1c),
+        faint_bg: rgb(0x2c, 0x2d, 0x26),
+        border: rgb(0x3e, 0x3d, 0x32),
+        border_subtle: rgb(0x33, 0x34, 0x2b),
+        accent: rgb(0xfd, 0x97, 0x1f),
+        text: rgb(0xf8, 0xf8, 0xf2),
+        text_strong: rgb(0xfd, 0xff, 0xf1),
+        text_muted: rgb(0xa5, 0x9f, 0x85),
+        text_faint: rgb(0x75, 0x71, 0x5e),
+        sidebar_section: rgb(0x8f, 0x8a, 0x75),
+        user_bubble: rgb(0x38, 0x39, 0x30),
+        success: rgb(0xa6, 0xe2, 0x2e),
+        danger: rgb(0xf9, 0x26, 0x72),
+        diff_add_fg: rgb(0xa6, 0xe2, 0x2e),
+        diff_add_bg: rgb(0x26, 0x30, 0x1c),
+        diff_del_fg: rgb(0xf9, 0x26, 0x72),
+        diff_del_bg: rgb(0x35, 0x1a, 0x24),
+        widget_inactive_bg: rgb(0x34, 0x35, 0x2c),
+        widget_hovered_bg: rgb(0x3f, 0x40, 0x34),
+        widget_active_bg: rgb(0x49, 0x4a, 0x3c),
+        widget_open_bg: rgb(0x3a, 0x3b, 0x30),
+        widget_active_border: rgb(0x57, 0x57, 0x45),
+        selection_bg: rgb(0x49, 0x48, 0x3e),
+        selection_stroke: rgb(0x75, 0x71, 0x5e),
+        md_code_bg: rgb(0x38, 0x39, 0x30),
+        md_code_block_bg: rgb(0x1e, 0x1f, 0x1c),
+        md_code_block_header_bg: rgb(0x2a, 0x2b, 0x24),
+        md_code_block_border: rgb(0x3e, 0x3d, 0x32),
+        md_quote_accent: rgb(0xfd, 0x97, 0x1f),
+        md_code_fg: rgb(0xe6, 0xdb, 0x74),
+    };
+
+    /// Sublime 4: the Sublime Text 4 default "Mariana" scheme — desaturated blue-grey
+    /// surfaces (`#2b303b`), a soft blue accent, and Mariana's green/red/teal signals.
+    pub const MARIANA: Palette = Palette {
+        dark_base: true,
+        bg_main: rgb(0x2b, 0x30, 0x3b),
+        bg_sidebar: rgb(0x21, 0x25, 0x2b),
+        bg_elevated: rgb(0x33, 0x3a, 0x45),
+        bg_elevated_2: rgb(0x3b, 0x43, 0x51),
+        bg_input: rgb(0x23, 0x27, 0x2e),
+        faint_bg: rgb(0x2f, 0x35, 0x40),
+        border: rgb(0x3f, 0x46, 0x50),
+        border_subtle: rgb(0x2c, 0x31, 0x3b),
+        accent: rgb(0x66, 0x99, 0xcc),
+        text: rgb(0xd8, 0xde, 0xe9),
+        text_strong: rgb(0xf2, 0xf4, 0xf8),
+        text_muted: rgb(0x8b, 0x95, 0xa3),
+        text_faint: rgb(0x65, 0x70, 0x7d),
+        sidebar_section: rgb(0x7e, 0x8a, 0x99),
+        user_bubble: rgb(0x33, 0x3a, 0x45),
+        success: rgb(0x99, 0xc7, 0x94),
+        danger: rgb(0xec, 0x5f, 0x67),
+        diff_add_fg: rgb(0x99, 0xc7, 0x94),
+        diff_add_bg: rgb(0x26, 0x31, 0x2a),
+        diff_del_fg: rgb(0xec, 0x5f, 0x67),
+        diff_del_bg: rgb(0x32, 0x23, 0x2a),
+        widget_inactive_bg: rgb(0x33, 0x3a, 0x45),
+        widget_hovered_bg: rgb(0x3d, 0x45, 0x52),
+        widget_active_bg: rgb(0x47, 0x50, 0x5e),
+        widget_open_bg: rgb(0x38, 0x40, 0x49),
+        widget_active_border: rgb(0x56, 0x60, 0x6e),
+        selection_bg: rgb(0x41, 0x50, 0x5f),
+        selection_stroke: rgb(0x66, 0x99, 0xcc),
+        md_code_bg: rgb(0x33, 0x3a, 0x45),
+        md_code_block_bg: rgb(0x21, 0x25, 0x2b),
+        md_code_block_header_bg: rgb(0x2c, 0x32, 0x3d),
+        md_code_block_border: rgb(0x3f, 0x46, 0x50),
+        md_quote_accent: rgb(0x66, 0x99, 0xcc),
+        md_code_fg: rgb(0x5f, 0xb3, 0xb3),
     };
 }
 
@@ -329,6 +402,16 @@ pub fn c_info_bg() -> Color32 {
     tint_on_panels(c_accent(), 30)
 }
 
+/// Dimmed backdrop behind modal dialogs. Lighter on light themes so the page still
+/// reads through instead of going near-black.
+pub fn c_modal_backdrop() -> Color32 {
+    if active_palette().dark_base {
+        Color32::from_black_alpha(140)
+    } else {
+        Color32::from_black_alpha(80)
+    }
+}
+
 /// Left rail on thinking blocks — accent sunk toward the panel so it reads as a
 /// quiet hairline, not a highlight.
 pub fn c_thinking_rail() -> Color32 {
@@ -378,14 +461,21 @@ pub fn c_composer_focus_border() -> Color32 {
     surface_tint(p.border, p.accent, 115)
 }
 
+/// Soft accent border for user chat bubbles so they separate from the transcript.
+pub fn c_user_bubble_border() -> Color32 {
+    let p = active_palette();
+    surface_tint(p.border, p.accent, 70)
+}
+
 // ── Tool pill palettes (single source of truth for the transcript tool pills + edit blocks) ──
 
-/// Background for a plain (done) tool pill. Matches the original near-black neutral surface on
-/// dark themes; a faint elevated tint on light.
+/// Background for a plain (done) tool pill. Uses the theme's input surface on dark themes so
+/// the pill remains distinct without introducing a foreign near-black block (especially visible
+/// on blue-grey themes such as Sublime Text 4 / Mariana).
 pub fn c_tool_pill_bg() -> Color32 {
     let p = active_palette();
     if p.dark_base {
-        Color32::from_rgb(0x15, 0x16, 0x19)
+        p.bg_input
     } else {
         p.bg_elevated_2
     }
@@ -396,11 +486,12 @@ pub fn c_tool_pill_bg() -> Color32 {
 pub fn c_tool_running_bg() -> Color32 {
     c_tool_pill_bg()
 }
-/// Background for an errored tool pill (danger-tinted dark surface on dark; light reddish on light).
+/// Background for an errored tool pill. Keep the normal tool surface and add only a quiet danger
+/// wash, so failures remain recognizable without turning into high-contrast red/black blocks.
 pub fn c_tool_error_bg() -> Color32 {
     let p = active_palette();
     if p.dark_base {
-        Color32::from_rgb(0x22, 0x14, 0x15)
+        surface_tint(p.bg_input, p.danger, 14)
     } else {
         surface_tint(p.bg_elevated_2, p.danger, 18)
     }
@@ -417,63 +508,68 @@ pub fn c_tool_running_border() -> Color32 {
 pub fn c_tool_error_border() -> Color32 {
     let p = active_palette();
     if p.dark_base {
-        Color32::from_rgb(0x47, 0x20, 0x22)
+        surface_tint(p.border_subtle, p.danger, 55)
     } else {
         surface_tint(p.border, p.danger, 90)
     }
 }
-/// Foreground for an errored tool label.
+/// Foreground for an errored tool label. On dark themes, blend the danger hue into normal text
+/// rather than using a bright fixed pink that can overpower muted palettes such as Mariana.
 pub fn c_tool_error_fg() -> Color32 {
     let p = active_palette();
     if p.dark_base {
-        Color32::from_rgb(0xf0, 0x9a, 0x9d)
+        surface_tint(p.text, p.danger, 100)
     } else {
         p.danger
     }
 }
-/// Background for the diff body of an edit tool.
+/// Background for expanded tool output and the diff body of edit tools. Follow the theme's
+/// input surface on dark themes so edit views share the same quiet surface as tool-call pills.
 pub fn c_tool_diff_bg() -> Color32 {
     let p = active_palette();
-    if p.dark_base {
-        Color32::from_rgb(0x0f, 0x10, 0x13)
-    } else {
-        p.bg_main
-    }
+    if p.dark_base { p.bg_input } else { p.bg_main }
 }
 
 // ── Status-badge tints ("running" / "done" / "failed" chips under tool pills) ──
+
+// These chips sit on *every* tool pill, so they were the loudest repeated element in the
+// transcript. The tints are kept deliberately quiet — a faint wash over the pill surface with
+// a slightly dimmed colored label — so state reads at a glance without shouting. `done` (the
+// resting state of every finished call) is the quietest; `running`/`failed` carry a bit more
+// so the two states worth noticing still stand out. All derived from the active palette via
+// `surface_tint` so every theme (dark and light) stays consistent.
 
 /// Running badge (accent): (fg, bg, stroke).
 pub fn badge_running_parts() -> (Color32, Color32, Color32) {
     let p = active_palette();
     if p.dark_base {
         (
-            p.accent,
-            Color32::from_rgb(0x2a, 0x1c, 0x10),
-            Color32::from_rgb(0x4d, 0x33, 0x1d),
+            surface_tint(p.accent, p.bg_elevated_2, 40),
+            surface_tint(p.bg_elevated_2, p.accent, 24),
+            surface_tint(p.border, p.accent, 55),
         )
     } else {
         (
             p.accent,
-            surface_tint(p.bg_elevated_2, p.accent, 28),
-            surface_tint(p.border, p.accent, 90),
+            surface_tint(p.bg_elevated_2, p.accent, 22),
+            surface_tint(p.border, p.accent, 70),
         )
     }
 }
-/// Done badge (success): (fg, bg, stroke).
+/// Done badge (success): (fg, bg, stroke). The quietest of the three.
 pub fn badge_done_parts() -> (Color32, Color32, Color32) {
     let p = active_palette();
     if p.dark_base {
         (
-            p.diff_add_fg,
-            Color32::from_rgb(0x12, 0x20, 0x18),
-            Color32::from_rgb(0x22, 0x3a, 0x2b),
+            surface_tint(p.diff_add_fg, p.bg_elevated_2, 55),
+            surface_tint(p.bg_elevated_2, p.success, 16),
+            surface_tint(p.border, p.success, 42),
         )
     } else {
         (
-            p.diff_add_fg,
-            surface_tint(p.bg_elevated_2, p.success, 26),
-            surface_tint(p.border, p.success, 90),
+            surface_tint(p.diff_add_fg, p.bg_main, 30),
+            surface_tint(p.bg_elevated_2, p.success, 18),
+            surface_tint(p.border, p.success, 60),
         )
     }
 }
@@ -482,15 +578,15 @@ pub fn badge_failed_parts() -> (Color32, Color32, Color32) {
     let p = active_palette();
     if p.dark_base {
         (
-            p.diff_del_fg,
-            Color32::from_rgb(0x2a, 0x15, 0x17),
-            Color32::from_rgb(0x47, 0x20, 0x22),
+            surface_tint(p.diff_del_fg, p.bg_elevated_2, 40),
+            surface_tint(p.bg_elevated_2, p.danger, 22),
+            surface_tint(p.border, p.danger, 55),
         )
     } else {
         (
-            p.diff_del_fg,
-            surface_tint(p.bg_elevated_2, p.danger, 26),
-            surface_tint(p.border, p.danger, 90),
+            p.danger,
+            surface_tint(p.bg_elevated_2, p.danger, 22),
+            surface_tint(p.border, p.danger, 70),
         )
     }
 }

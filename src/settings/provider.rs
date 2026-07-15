@@ -267,6 +267,8 @@ impl ProviderConfig {
         }
     }
 
+    /// Compact "Provider · model" label (unit-tested; handy for status/chrome surfaces).
+    #[allow(dead_code)]
     pub fn subtitle(&self) -> String {
         format!("{} · {}", self.provider.label(), self.model_id)
     }

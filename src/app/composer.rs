@@ -2,14 +2,17 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use eframe::egui::{
-    self, Button, Color32, ComboBox, CornerRadius, Frame, Id, Image, Margin, Order, Pos2, RichText,
+    self, Button, Color32, ComboBox, CornerRadius, Frame, Id, Image, Margin, Order, RichText,
     Sense, Stroke, TextEdit, TextureHandle, Ui, text::CCursor, text::CCursorRange,
 };
 
 use crate::agent::context_char_budget_from_tokens;
-use crate::model::{AssistantBlock, ChatMessage, MsgRole};
 use crate::theme::*;
 
+use super::composer_helpers::{
+    context_indicator_color, estimate_message_chars, format_context_tokens, paint_arc,
+    truncate_label,
+};
 use super::{OxiApp, SessionKey};
 
 /// Diameter of the round send button.
@@ -86,7 +89,40 @@ fn quiet_combo_icon(
     );
 }
 
+/// How long a composer notice stays visible.
+const COMPOSER_NOTICE_SECS: f32 = 5.0;
+
 impl OxiApp {
+    /// Raise a short-lived inline notice under the composer (blocked send, rejected
+    /// attachment, …). Replaces any previous notice.
+    pub(crate) fn notify_composer(&mut self, msg: impl Into<String>) {
+        self.conv.composer_notice = Some((msg.into(), std::time::Instant::now()));
+    }
+
+    /// Small warning line inside the composer card; auto-expires.
+    fn render_composer_notice(&mut self, ui: &mut Ui) {
+        let Some((msg, raised_at)) = self.conv.composer_notice.clone() else {
+            return;
+        };
+        if raised_at.elapsed().as_secs_f32() > COMPOSER_NOTICE_SECS {
+            self.conv.composer_notice = None;
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(
+                RichText::new(ICON_INFO)
+                    .font(egui::FontId::new(FS_TINY, icon_font()))
+                    .color(c_warning_fg()),
+            );
+            ui.label(RichText::new(msg).size(FS_TINY).color(c_warning_fg()));
+        });
+        ui.add_space(COMPOSER_GAP);
+        // Keep frames coming so the notice disappears on time.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(250));
+    }
+
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
         let chat_column_max = crate::theme::chat_column_max_width(ui.ctx());
         let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
@@ -116,6 +152,22 @@ impl OxiApp {
                     .corner_radius(crate::theme::RADIUS_PANEL)
                     .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN as i8))
                     .show(ui, |ui| {
+                        // === Transient notice (blocked send, rejected attachment, …) ===
+                        self.render_composer_notice(ui);
+                        if self.conv.editing_last_prompt.is_some() {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new("Editing previous prompt")
+                                        .size(FS_SMALL)
+                                        .color(c_warning_fg()),
+                                );
+                                if ui.small_button("Cancel").clicked() {
+                                    self.cancel_edit_last_prompt();
+                                }
+                            });
+                            ui.add_space(COMPOSER_GAP);
+                        }
+
                         // === Attachment thumbnails (above the text, like Cursor) ===
                         if !self.conv.pending_images.is_empty() {
                             self.render_attachment_thumbnails(ui);
@@ -152,10 +204,16 @@ impl OxiApp {
                         let galley_h = te_output.galley.rect.height();
                         self.conv.composer_measured_text_h = galley_h;
 
-                        // Enter → send, Shift+Enter → newline
+                        // Enter → send, Shift+Enter → newline; ↑/↓ → input history.
+                        // Suppressed while the confirm modal is up: Enter there means
+                        // "confirm", not "send".
                         let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                         let shift_held = ui.input(|i| i.modifiers.shift);
-                        if te_output.response.has_focus() && enter_pressed && !shift_held {
+                        if te_output.response.has_focus()
+                            && enter_pressed
+                            && !shift_held
+                            && !self.confirm_prompt_open()
+                        {
                             while self.conv.input.ends_with('\n') {
                                 self.conv.input.pop();
                             }
@@ -164,6 +222,9 @@ impl OxiApp {
                             if can_send_now {
                                 self.send_message();
                             }
+                        }
+                        if te_output.response.has_focus() {
+                            self.handle_composer_history_keys(ui, &te_output.response);
                         }
 
                         ui.add_space(COMPOSER_GAP);
@@ -199,6 +260,8 @@ impl OxiApp {
     /// `[+]  [model ▾]                                  [↑]`
     fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool, composer_focused: bool) {
         ui.spacing_mut().item_spacing.x = 6.0;
+        let narrow = ui.available_width() < 520.0;
+        let compact = ui.available_width() < 410.0;
 
         // ── Left: round attach button ──────────────────────────────────────
         let attach = crate::ui::chrome::icon_button_core(
@@ -221,8 +284,8 @@ impl OxiApp {
             self.pick_image_attachment();
         }
 
-        // ── Left: minimal model selector (plain text + chevron) ────────────
-        self.render_model_selector(ui);
+        // ── Left: provider + model (compact widths when the chat column is squeezed) ──
+        self.render_model_selector(ui, narrow, compact);
 
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -241,7 +304,11 @@ impl OxiApp {
                     crate::theme::c_on_accent(),
                     true,
                     ICON_SEND,
-                    "Send message",
+                    if self.conv.editing_last_prompt.is_some() {
+                        "Restore changes and send"
+                    } else {
+                        "Send message"
+                    },
                 )
             } else {
                 (
@@ -278,20 +345,30 @@ impl OxiApp {
             }
 
             self.render_context_indicator(ui);
-            ui.add_space(8.0);
 
-            // Quiet keyboard hint, faded in only while the input has focus.
-            let hint_t = ui.ctx().animate_bool_with_time(
-                Id::new("composer_hint_anim"),
-                composer_focused,
-                0.15,
-            );
-            if hint_t > 0.0 {
+            // Keep the primary keyboard action discoverable while the composer has focus.
+            // On smaller windows the compact version retains the information without pushing
+            // controls out of the row.
+            if !narrow {
                 ui.add_space(8.0);
+                let hint_t = ui.ctx().animate_bool_with_time(
+                    Id::new("composer_hint_anim"),
+                    composer_focused,
+                    0.15,
+                );
+                if hint_t > 0.0 {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Enter to send · Shift+Enter for newline")
+                            .size(FS_TINY)
+                            .color(c_text_faint().gamma_multiply(hint_t)),
+                    );
+                }
+            } else if composer_focused && !compact {
                 ui.label(
-                    RichText::new("Shift+Enter for newline")
+                    RichText::new("Enter sends")
                         .size(FS_TINY)
-                        .color(c_text_faint().gamma_multiply(hint_t)),
+                        .color(c_text_faint()),
                 );
             }
         });
@@ -329,12 +406,13 @@ impl OxiApp {
         } else {
             (c_bg_input(), c_border_subtle(), c_text_muted(), "Dictate")
         };
-        let mic = crate::ui::chrome::icon_button_core(
+        let mic = crate::ui::chrome::icon_button_core_with_hover(
             ui,
             ICON_MIC,
             egui::vec2(MIC_DIAM, MIC_DIAM),
             14.0,
             false,
+            !recording,
             &crate::ui::chrome::IconButtonLook {
                 fill,
                 hover_fill: c_row_hover(),
@@ -347,6 +425,14 @@ impl OxiApp {
         .on_hover_text(hover);
         if mic.clicked() {
             self.toggle_dictation();
+        }
+        if let Some(err) = self.conv.voice_ui.error.as_ref() {
+            ui.label(
+                RichText::new(format!("Dictation: {err}"))
+                    .size(FS_TINY)
+                    .color(c_danger()),
+            )
+            .on_hover_text(err);
         }
     }
 
@@ -497,9 +583,10 @@ impl OxiApp {
     /// Estimated size (chars) of what a run for `key` sends: system prompt + tool definitions
     /// + all persisted messages. Excludes unsent composer input.
     pub(crate) fn estimated_session_context_chars(&self, key: SessionKey) -> usize {
-        let root = self.conv.workspaces[key.workspace_idx].root_path.as_str();
+        let root = std::path::Path::new(self.conv.workspaces[key.workspace_idx].root_path.as_str());
         let system_chars =
-            crate::agent::prompt::build_system_prompt(&self.conv.settings, root).len();
+            crate::agent::prompt::build_system_prompt_for_workspace(&self.conv.settings, root)
+                .len();
         let messages_chars = self
             .session_by_key(key)
             .messages
@@ -524,26 +611,40 @@ impl OxiApp {
 
     /// Two borderless dropdowns styled as quiet text with a chevron: provider (only
     /// providers the user has actually configured), then model within that provider's
-    /// config.
-    fn render_model_selector(&mut self, ui: &mut Ui) {
+    /// config. `narrow` and `compact` shrink the controls before they can crowd out
+    /// the attachment/send actions on small desktop windows.
+    fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool, compact: bool) {
         let oauth = crate::oauth::load_oauth_store();
         let configured = self.conv.settings.configured_provider_kinds(&oauth);
         let active_provider = self.conv.settings.active_provider;
+        let combo_w = if compact {
+            76.0
+        } else if narrow {
+            110.0
+        } else {
+            150.0
+        };
 
         ui.scope(|ui| {
             quiet_combo_style(ui);
 
-            let label = active_provider.label().to_string();
+            let provider_label = active_provider.label();
+            let label = if compact {
+                truncate_label(provider_label, 9)
+            } else {
+                provider_label.to_string()
+            };
             let resp = ComboBox::from_id_salt("provider_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
-                .width(150.0)
-                .height(300.0) // matching height
+                .width(combo_w)
+                .height(300.0)
                 .show_ui(ui, |ui| {
                     for kind in &configured {
                         let selected = active_provider == *kind;
                         if ui.selectable_label(selected, kind.label()).clicked() && !selected {
                             self.conv.settings.active_provider = *kind;
+                            self.save_settings_quietly();
                             // Refresh the model list for the newly active provider so the
                             // model dropdown offers the full catalog; the config keeps
                             // whatever model id it last had selected in the meantime.
@@ -578,23 +679,27 @@ impl OxiApp {
 
             let label = if current.is_empty() {
                 "(custom)".to_string()
+            } else if narrow {
+                truncate_label(&current, if compact { 9 } else { 18 })
             } else {
                 current.clone()
             };
             let resp = ComboBox::from_id_salt("active_model_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
-                .width(150.0)
-                .height(300.0) // Set explicit high height for the dropdown popup
+                .width(combo_w)
+                .height(300.0)
                 .show_ui(ui, |ui| {
                     for m in &items {
                         if ui.selectable_label(m == &current, m.clone()).clicked() {
                             self.conv.settings.provider_mut(kind).model_id = m.clone();
+                            self.save_settings_quietly();
                         }
                     }
                 });
             resp.response
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(&current);
         });
     }
 
@@ -654,7 +759,7 @@ impl OxiApp {
                                 hover_fill: c_bg_main(),
                                 stroke: c_border(),
                                 hover_stroke: c_border(),
-                                rounding: CornerRadius::same(8),
+                                rounding: CornerRadius::same(RADIUS_CHIP),
                                 glyph: c_text(),
                             },
                         )
@@ -669,74 +774,5 @@ impl OxiApp {
         if let Some(i) = remove_idx {
             self.remove_pending_image_at(i);
         }
-    }
-}
-
-fn paint_arc(ui: &Ui, center: Pos2, radius: f32, start: f32, sweep: f32, stroke: Stroke) {
-    if sweep <= 0.0 {
-        return;
-    }
-    let segments = ((sweep.abs() / std::f32::consts::TAU) * 48.0)
-        .ceil()
-        .max(6.0) as usize;
-    let mut points = Vec::with_capacity(segments + 1);
-    for i in 0..=segments {
-        let t = start + sweep * (i as f32 / segments as f32);
-        points.push(Pos2::new(
-            center.x + radius * t.cos(),
-            center.y + radius * t.sin(),
-        ));
-    }
-    ui.painter().add(egui::Shape::line(points, stroke));
-}
-
-fn context_indicator_color(pct: f32) -> Color32 {
-    if pct >= 0.9 {
-        c_danger()
-    } else if pct >= 0.75 {
-        c_warning_fg()
-    } else {
-        c_accent()
-    }
-}
-
-fn format_context_tokens(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.1}m", tokens as f64 / 1_000_000.0)
-    } else if tokens >= 1_000 {
-        format!("{:.1}k", tokens as f64 / 1_000.0)
-    } else {
-        tokens.to_string()
-    }
-}
-
-fn estimate_message_chars(m: &ChatMessage) -> usize {
-    match m.role {
-        MsgRole::User => {
-            m.text.len()
-                + m.attachments
-                    .iter()
-                    .map(|a| match a {
-                        crate::model::UserAttachment::Image { data, .. } => data.len() * 4 / 3,
-                    })
-                    .sum::<usize>()
-        }
-        MsgRole::Assistant => m
-            .blocks
-            .iter()
-            .map(|b| match b {
-                AssistantBlock::Thinking(t) | AssistantBlock::Answer(t) => t.len(),
-                AssistantBlock::Tool {
-                    name,
-                    output,
-                    args_summary,
-                    ..
-                } => {
-                    name.len()
-                        + output.len().min(8_000)
-                        + args_summary.as_deref().unwrap_or("").len()
-                }
-            })
-            .sum(),
     }
 }

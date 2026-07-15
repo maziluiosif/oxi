@@ -13,15 +13,45 @@ use super::super::state::{SettingsExitAction, SettingsTab};
 
 const SETTINGS_CONTENT_MAX: f32 = 820.0;
 
+/// One settings-sidebar section: a caption + the navigation rows under it.
+struct SettingsNavGroup {
+    caption: &'static str,
+    items: &'static [(SettingsTab, &'static str, &'static str)],
+}
+
+/// Grouped navigation keeps related pages together instead of dumping every tab in one list.
+const SETTINGS_NAV: &[SettingsNavGroup] = &[
+    SettingsNavGroup {
+        caption: "AI",
+        items: &[
+            (SettingsTab::Providers, ICON_PROVIDERS, "Models & providers"),
+            (SettingsTab::Prompts, ICON_PROMPTS, "Prompts"),
+        ],
+    },
+    SettingsNavGroup {
+        caption: "Agent",
+        items: &[(SettingsTab::Agent, ICON_AGENT, "Tools & safety")],
+    },
+    SettingsNavGroup {
+        caption: "App",
+        items: &[
+            (SettingsTab::Voice, ICON_MIC, "Voice"),
+            (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
+            (SettingsTab::About, ICON_INFO, "About"),
+        ],
+    },
+];
+
 impl OxiApp {
     pub(crate) fn open_settings_page(&mut self) {
         if self.conv.settings_original.is_none() {
             self.conv.settings_original = Some(self.conv.settings.clone());
         }
+        self.conv.settings_save_error = None;
         self.conv.settings_open = true;
     }
 
-    fn settings_dirty(&self) -> bool {
+    pub(crate) fn settings_dirty(&self) -> bool {
         self.conv
             .settings_original
             .as_ref()
@@ -64,11 +94,14 @@ impl OxiApp {
     }
 
     pub(crate) fn save_settings_page(&mut self) {
+        // Failures stay on the Settings page (inline banner) — routing them to the
+        // chat's stream-error banner hid them from the view the user is looking at.
         if let Err(e) = self.conv.settings.save() {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some(format!("Save settings: {e}"));
+            self.conv.settings_save_error = Some(format!("Could not save settings: {e}"));
+            self.conv.settings_exit_prompt = None;
             return;
         }
+        self.conv.settings_save_error = None;
         self.conv.settings_original = Some(self.conv.settings.clone());
         self.conv.settings_exit_prompt = None;
         self.conv.settings_open = false;
@@ -77,31 +110,38 @@ impl OxiApp {
 
     fn save_settings_and_continue(&mut self, action: SettingsExitAction) {
         if let Err(e) = self.conv.settings.save() {
-            self.run_state_mut(self.active_session_key()).stream_error =
-                Some(format!("Save settings: {e}"));
+            self.conv.settings_save_error = Some(format!("Could not save settings: {e}"));
+            self.conv.settings_exit_prompt = None;
             return;
         }
+        self.conv.settings_save_error = None;
         self.conv.settings_original = Some(self.conv.settings.clone());
         self.close_settings_page();
         self.continue_after_settings_exit(action);
     }
 
-    pub(crate) fn cancel_settings_page(&mut self) {
+    fn discard_settings_and_continue(&mut self, ctx: &egui::Context, action: SettingsExitAction) {
         if let Some(original) = self.conv.settings_original.take() {
             self.conv.settings = original;
         }
-        self.conv.settings_exit_prompt = None;
-        self.conv.settings_open = false;
-        self.conv.focus_chat_input_next_frame = true;
-    }
-
-    fn discard_settings_and_continue(&mut self, action: SettingsExitAction) {
-        if let Some(original) = self.conv.settings_original.take() {
-            self.conv.settings = original;
-        }
+        self.reapply_appearance(ctx);
         self.conv.settings_exit_prompt = None;
         self.conv.settings_open = false;
         self.continue_after_settings_exit(action);
+    }
+
+    /// Re-apply theme + fonts + zoom after Cancel/Discard restores the settings snapshot.
+    fn reapply_appearance(&mut self, ctx: &egui::Context) {
+        crate::theme::set_active_fonts(crate::theme::FontSelection {
+            ui: self.conv.settings.ui_font.clone(),
+            mono: self.conv.settings.mono_font.clone(),
+        });
+        crate::theme::apply_theme(ctx, &self.conv.settings.theme_id);
+        ctx.set_zoom_factor(self.conv.settings.ui_density.zoom_factor());
+        // Keep Local HF UI fields in sync with restored settings.
+        self.conv.local_models.runtime_port = self.conv.settings.local_hf.runtime_port;
+        self.conv.local_models.context_size = self.conv.settings.local_hf.context_size;
+        self.conv.local_models.gpu_layers = self.conv.settings.local_hf.gpu_layers;
     }
 
     pub(crate) fn render_settings_page(&mut self, ui: &mut Ui) {
@@ -116,7 +156,11 @@ impl OxiApp {
             ui.set_min_height(full_h);
             ui.spacing_mut().item_spacing.x = 0.0;
 
-            let w = self.conv.sidebar_width.clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
+            // Independent of the chat sidebar width so resizing chat doesn't affect Settings.
+            let w = self
+                .conv
+                .settings_sidebar_width
+                .clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
             ui.allocate_ui_with_layout(
                 egui::vec2(w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
@@ -152,6 +196,19 @@ impl OxiApp {
                 |ui| {
                     Frame::new().fill(c_bg_main()).show(ui, |ui| {
                         self.render_settings_header(ui);
+                        if let Some(err) = self.conv.settings_save_error.clone() {
+                            Frame::new()
+                                .inner_margin(Margin {
+                                    left: 36,
+                                    right: 26,
+                                    top: 10,
+                                    bottom: 0,
+                                })
+                                .show(ui, |ui| {
+                                    ui.set_max_width(SETTINGS_CONTENT_MAX);
+                                    crate::ui::chrome::alert_banner(ui, &err, true);
+                                });
+                        }
                         ScrollArea::vertical()
                             .id_salt("settings_page_scroll")
                             .auto_shrink([false, false])
@@ -188,6 +245,13 @@ impl OxiApp {
             return;
         };
 
+        // Dim the page so the dialog reads as a modal, not a floating card.
+        // Clicking the dimmed backdrop dismisses (Stay); Escape is handled by the
+        // global shortcut handler so it doesn't race the prompt being opened.
+        if crate::ui::chrome::modal_backdrop(ctx, "unsaved_settings_exit_backdrop") {
+            self.conv.settings_exit_prompt = None;
+        }
+
         egui::Area::new(egui::Id::new("unsaved_settings_exit_prompt"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -196,36 +260,54 @@ impl OxiApp {
                     .fill(c_bg_elevated())
                     .stroke(Stroke::new(1.0, c_border()))
                     .corner_radius(RADIUS_CHIP)
-                    .inner_margin(Margin::same(12))
+                    .inner_margin(Margin::same(16))
                     .show(ui, |ui| {
-                        ui.set_width(280.0);
+                        ui.set_width(crate::ui::chrome::MODAL_W);
                         ui.label(
                             RichText::new("Unsaved changes")
-                                .size(FS_SMALL)
+                                .size(FS_BODY)
                                 .color(c_text())
                                 .strong(),
                         );
                         ui.add_space(4.0);
                         ui.label(
                             RichText::new("Save changes before leaving Settings?")
-                                .size(FS_TINY)
+                                .size(FS_SMALL)
                                 .color(c_text_muted()),
                         );
-                        ui.add_space(10.0);
+                        ui.add_space(14.0);
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if primary_button(ui, "Save").clicked() {
+                            if primary_button(ui, "Save").on_hover_text("Enter").clicked() {
                                 self.save_settings_and_continue(action);
                             }
                             if ghost_button(ui, "Discard", true).clicked() {
-                                self.discard_settings_and_continue(action);
+                                self.discard_settings_and_continue(ctx, action);
                             }
-                            if ghost_button(ui, "Stay", false).clicked() {
+                            if ghost_button(ui, "Stay", false)
+                                .on_hover_text("Esc")
+                                .clicked()
+                            {
                                 self.conv.settings_exit_prompt = None;
                             }
                         });
                     });
             });
+
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.save_settings_and_continue(action);
+        }
+    }
+
+    fn settings_tab_label(tab: SettingsTab) -> &'static str {
+        match tab {
+            SettingsTab::Providers => "Models & providers",
+            SettingsTab::Agent => "Tools & safety",
+            SettingsTab::Prompts => "Prompts",
+            SettingsTab::Voice => "Voice",
+            SettingsTab::Appearance => "Appearance",
+            SettingsTab::About => "About",
+        }
     }
 
     fn render_settings_header(&mut self, ui: &mut Ui) {
@@ -239,32 +321,51 @@ impl OxiApp {
             })
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Settings")
-                            .size(FS_H1)
-                            .color(c_text())
-                            .strong(),
-                    );
-                    ui.add_space(10.0);
-                    ui.label(
-                        RichText::new("Preferences for oxi")
-                            .size(FS_SMALL)
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("Settings")
+                                .size(FS_H1)
+                                .color(c_text())
+                                .strong(),
+                        );
+                        ui.add_space(2.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "Settings › {}",
+                                Self::settings_tab_label(self.conv.settings_tab)
+                            ))
+                            .size(FS_TINY)
                             .color(c_text_muted()),
-                    );
+                        );
+                    });
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if primary_button(ui, "Save").clicked() {
+                        let dirty = self.settings_dirty();
+                        if ui
+                            .add_enabled(dirty, crate::ui::chrome::primary_button_widget("Save"))
+                            .on_hover_text("Write settings.json and return to chat")
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
                             self.save_settings_page();
                         }
-                        let dirty = self.settings_dirty();
-                        if ghost_button(ui, "Cancel", false).clicked() {
-                            self.cancel_settings_page();
+                        if ghost_button(ui, "Cancel", false)
+                            .on_hover_text(
+                                "Return to chat (asks before discarding unsaved changes)",
+                            )
+                            .clicked()
+                        {
+                            // Same guarded flow as every other exit: with unsaved
+                            // changes this opens the Save/Discard/Stay prompt instead
+                            // of silently dropping them.
+                            self.request_settings_exit(SettingsExitAction::BackToChat);
                         }
                         if dirty {
                             ui.label(
-                                RichText::new("Unsaved changes")
+                                RichText::new("Unsaved")
                                     .size(FS_TINY)
-                                    .color(c_text_muted()),
+                                    .color(c_accent())
+                                    .strong(),
                             );
                         }
                     });
@@ -281,40 +382,34 @@ impl OxiApp {
         ui.set_min_width(ui.max_rect().width());
 
         ui.add_space(4.0);
-        settings_caption(ui, "Settings");
-        ui.add_space(4.0);
 
-        let items = [
-            (SettingsTab::Providers, ICON_PROVIDERS, "Models & providers"),
-            (SettingsTab::Agent, ICON_AGENT, "Agent"),
-            (SettingsTab::Prompts, ICON_PROMPTS, "Prompts"),
-            (SettingsTab::Voice, ICON_MIC, "Voice"),
-            (SettingsTab::Appearance, ICON_APPEARANCE, "Appearance"),
-            (SettingsTab::About, ICON_INFO, "About"),
-        ];
-        for (tab, icon, label) in items {
-            let selected = self.conv.settings_tab == tab;
-            let response = settings_nav_row(ui, icon, label, selected);
-            if response.clicked() {
-                self.conv.settings_tab = tab;
+        for (group_i, group) in SETTINGS_NAV.iter().enumerate() {
+            if group_i > 0 {
+                ui.add_space(12.0);
             }
-            ui.add_space(2.0);
+            settings_caption(ui, group.caption);
+            ui.add_space(4.0);
+            for (tab, icon, label) in group.items {
+                let selected = self.conv.settings_tab == *tab;
+                let response = settings_nav_row(ui, icon, label, selected);
+                if response.clicked() {
+                    self.conv.settings_tab = *tab;
+                }
+                ui.add_space(2.0);
+            }
         }
 
+        // Pinned to the bottom of the sidebar so "Back to chat" lines up with the
+        // chat sidebar's settings row. In a `bottom_up` layout the first item added
+        // sits lowest.
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!(
-                    "~/{}",
-                    crate::settings::AppSettings::config_path()
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("settings.json")
-                ))
-                .size(FS_TINY)
-                .color(c_text_faint())
-                .monospace(),
-            );
+            ui.add_space(2.0);
+            if settings_nav_row(ui, ICON_CHEVRON_LEFT, "Back to chat", false)
+                .on_hover_text("Return to chat (asks before discarding unsaved changes)")
+                .clicked()
+            {
+                self.request_settings_exit(SettingsExitAction::BackToChat);
+            }
             ui.add_space(2.0);
         });
     }

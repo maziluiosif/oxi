@@ -22,7 +22,16 @@ impl OxiApp {
             ui.set_height(24.0);
 
             let add_w = 22.0;
-            let search_w = (ui.available_width() - add_w - ui.spacing().item_spacing.x).max(48.0);
+            let clear_w = if self.conv.sidebar_search.is_empty() {
+                0.0
+            } else {
+                22.0
+            };
+            let search_w = (ui.available_width()
+                - add_w
+                - clear_w
+                - ui.spacing().item_spacing.x * if clear_w > 0.0 { 2.0 } else { 1.0 })
+            .max(48.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(search_w, 24.0),
                 Layout::left_to_right(Align::Center),
@@ -31,6 +40,14 @@ impl OxiApp {
                     sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
                 },
             );
+
+            if clear_w > 0.0
+                && crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, clear_w, false)
+                    .on_hover_text("Clear chat search")
+                    .clicked()
+            {
+                self.conv.sidebar_search.clear();
+            }
 
             if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, add_w, false)
                 .on_hover_text(
@@ -45,7 +62,8 @@ impl OxiApp {
 
         ui.add_space(8.0);
 
-        let scroll_h = ui.available_height().max(48.0);
+        const FOOTER_H: f32 = 36.0;
+        let scroll_h = (ui.available_height() - FOOTER_H).max(48.0);
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
             .max_height(scroll_h)
@@ -54,6 +72,23 @@ impl OxiApp {
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
+
+        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            ui.add_space(4.0);
+            if crate::ui::chrome::flat_button_icon(
+                ui,
+                ICON_SETTINGS,
+                "Settings",
+                FS_SMALL,
+                egui::vec2(ui.available_width(), 28.0),
+                c_text_muted(),
+            )
+            .on_hover_text("Open settings")
+            .clicked()
+            {
+                self.open_settings_page();
+            }
+        });
 
         ui.expand_to_include_rect(ui.max_rect());
     }
@@ -86,7 +121,7 @@ impl OxiApp {
             if row_hovered {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 ui.painter()
-                    .rect_filled(rect, CornerRadius::same(6), c_row_hover());
+                    .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
             }
             // Leading glyph: folder open/closed at rest, fold chevron on hover.
             let glyph = match (row_hovered, folded) {
@@ -158,10 +193,13 @@ impl OxiApp {
             }
             // The cwd workspace (index 0) is always present, so it gets no delete option.
             if wi != 0 {
+                let ws_running = (0..n_sessions).any(|si| self.session_row_is_running(wi, si));
                 response.context_menu(|ui| {
-                    if ui.button("Delete workspace").clicked() {
-                        self.delete_workspace(wi);
-                        sidebar_changed = true;
+                    let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
+                    if ws_running {
+                        resp.on_disabled_hover_text("A chat in this workspace is still running");
+                    } else if resp.clicked() {
+                        self.request_confirm(super::state::ConfirmAction::DeleteWorkspace { wi });
                     }
                 });
             }
@@ -181,8 +219,23 @@ impl OxiApp {
                 let Some(session) = self.conv.workspaces[wi].sessions.get(si) else {
                     return;
                 };
-                if !q.is_empty() && !session.title.to_lowercase().contains(&q) {
-                    continue;
+                if !q.is_empty() {
+                    let title_hit = session.title.to_lowercase().contains(&q);
+                    let msg_hit = session.messages.iter().any(|m| {
+                        m.text.to_lowercase().contains(&q)
+                            || m.blocks.iter().any(|b| match b {
+                                crate::model::AssistantBlock::Answer(t)
+                                | crate::model::AssistantBlock::Thinking(t) => {
+                                    t.to_lowercase().contains(&q)
+                                }
+                                crate::model::AssistantBlock::Tool { output, .. } => {
+                                    output.to_lowercase().contains(&q)
+                                }
+                            })
+                    });
+                    if !title_hit && !msg_hit {
+                        continue;
+                    }
                 }
                 visible_sessions += 1;
                 let row_title = sidebar_session_title_display(&session.title);
@@ -193,6 +246,7 @@ impl OxiApp {
                         ui.push_id((wi, si), |ui| {
                             let selected = wi == self.conv.active_workspace && si == active_si;
                             let running = self.session_row_is_running(wi, si);
+                            let has_error = !running && self.session_row_has_error(wi, si);
                             let title = row_title.clone();
                             const ROW_INNER_H: f32 = 22.0;
                             const ROW_VMARGIN: f32 = 4.0;
@@ -201,7 +255,9 @@ impl OxiApp {
                                 egui::vec2(row_w, row_outer_h),
                                 Sense::click(),
                             );
-                            let hovered = response.hovered();
+                            // Keep the row hovered while the pointer is over an
+                            // overlapping action such as the hover-only trash button.
+                            let hovered = ui.rect_contains_pointer(rect);
                             if hovered {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
@@ -212,73 +268,111 @@ impl OxiApp {
                             } else {
                                 Color32::TRANSPARENT
                             };
-                            ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
-                            if response.clicked() {
-                                self.select_session_in_workspace(wi, si);
-                            }
-                            response.context_menu(|ui| {
-                                if wi == self.conv.active_workspace
-                                    && !running
-                                    && ui.button("Delete chat").clicked()
-                                {
-                                    self.delete_session(si);
+                            ui.painter()
+                                .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
+                            if self.conv.renaming_session == Some((wi, si)) {
+                                let edit = egui::TextEdit::singleline(&mut self.conv.rename_draft)
+                                    .font(egui::TextStyle::Small)
+                                    .desired_width(rect.width() - 8.0);
+                                let resp = ui.put(rect.shrink2(egui::vec2(4.0, 2.0)), edit);
+                                resp.request_focus();
+                                let enter = resp.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                if enter {
+                                    let draft = self.conv.rename_draft.clone();
+                                    self.rename_session(si, draft);
+                                    self.conv.renaming_session = None;
                                     sidebar_changed = true;
+                                } else if escape || (resp.lost_focus() && !enter) {
+                                    self.conv.renaming_session = None;
                                 }
-                            });
-                            // Hover-only delete button, mirroring the context-menu action.
-                            // `rect_contains_pointer`, not `response.hovered()`: the
-                            // trash button interacted below overlaps this rect and
-                            // would otherwise steal hover from the row response,
-                            // flickering show/hide every other frame.
-                            let can_delete = wi == self.conv.active_workspace && !running;
-                            let show_trash = can_delete && ui.rect_contains_pointer(rect);
-                            self.render_session_row_inner(
-                                ui, rect, wi, si, running, selected, title, show_trash,
-                            );
+                            } else {
+                                if response.clicked() {
+                                    self.select_session_in_workspace(wi, si);
+                                }
+                                response.context_menu(|ui| {
+                                    if wi == self.conv.active_workspace && !running {
+                                        if ui.button("Rename chat").clicked() {
+                                            self.conv.renaming_session = Some((wi, si));
+                                            self.conv.rename_draft =
+                                                self.conv.workspaces[wi].sessions[si].title.clone();
+                                        }
+                                        if ui.button("Export as Markdown…").clicked() {
+                                            self.select_session_in_workspace(wi, si);
+                                            self.export_active_session_markdown();
+                                        }
+                                        if ui.button("Delete chat").clicked() {
+                                            self.request_confirm(
+                                                super::state::ConfirmAction::DeleteSession {
+                                                    wi,
+                                                    si,
+                                                },
+                                            );
+                                        }
+                                    }
+                                });
+                                // Hover-only delete button, mirroring the context-menu action.
+                                // `rect_contains_pointer`, not `response.hovered()`: the
+                                // trash button interacted below overlaps this rect and
+                                // would otherwise steal hover from the row response,
+                                // flickering show/hide every other frame.
+                                let can_delete = wi == self.conv.active_workspace && !running;
+                                let show_trash = can_delete && ui.rect_contains_pointer(rect);
+                                self.render_session_row_inner(
+                                    ui, rect, wi, si, running, has_error, selected, title,
+                                    show_trash,
+                                );
 
-                            if show_trash {
-                                // Flush against the same right edge the time label
-                                // sits at, so it swaps in instead of crowding it.
-                                const TIME_W: f32 = 34.0;
-                                let trash_rect = egui::Rect::from_min_max(
-                                    egui::pos2(rect.right() - 3.0 - TIME_W, rect.top() + 2.0),
-                                    egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
-                                );
-                                // Backing fill keeps the icon legible over long titles.
-                                ui.painter().rect_filled(
-                                    trash_rect,
-                                    CornerRadius::same(7),
-                                    if selected {
-                                        c_row_active()
-                                    } else {
-                                        c_row_hover()
-                                    },
-                                );
-                                // Painted + interacted in place, never allocated: a
-                                // hover-only widget that allocates nudges the layout
-                                // every time it appears.
-                                let trash_resp = ui
-                                    .interact(trash_rect, ui.id().with("row_trash"), Sense::click())
-                                    .on_hover_text("Delete chat");
-                                ui.painter().text(
-                                    trash_rect.center(),
-                                    egui::Align2::CENTER_CENTER,
-                                    ICON_TRASH,
-                                    FontId::new(FS_TINY, icon_font()),
+                                if show_trash {
+                                    // Flush against the same right edge the time label
+                                    // sits at, so it swaps in instead of crowding it.
+                                    const TIME_W: f32 = 34.0;
+                                    let trash_rect = egui::Rect::from_min_max(
+                                        egui::pos2(rect.right() - 3.0 - TIME_W, rect.top() + 2.0),
+                                        egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
+                                    );
+                                    // Backing fill keeps the icon legible over long titles.
+                                    ui.painter().rect_filled(
+                                        trash_rect,
+                                        CornerRadius::same(RADIUS_ROW),
+                                        if selected {
+                                            c_row_active()
+                                        } else {
+                                            c_row_hover()
+                                        },
+                                    );
+                                    // Painted + interacted in place, never allocated: a
+                                    // hover-only widget that allocates nudges the layout
+                                    // every time it appears.
+                                    let trash_resp = ui
+                                        .interact(
+                                            trash_rect,
+                                            ui.id().with("row_trash"),
+                                            Sense::click(),
+                                        )
+                                        .on_hover_text("Delete chat");
+                                    ui.painter().text(
+                                        trash_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        ICON_TRASH,
+                                        FontId::new(FS_TINY, icon_font()),
+                                        if trash_resp.hovered() {
+                                            c_accent()
+                                        } else {
+                                            c_text_faint()
+                                        },
+                                    );
                                     if trash_resp.hovered() {
-                                        c_accent()
-                                    } else {
-                                        c_text_faint()
-                                    },
-                                );
-                                if trash_resp.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    if trash_resp.clicked() {
+                                        self.request_confirm(
+                                            super::state::ConfirmAction::DeleteSession { wi, si },
+                                        );
+                                    }
                                 }
-                                if trash_resp.clicked() {
-                                    self.delete_session(si);
-                                    sidebar_changed = true;
-                                }
-                            }
+                            } // end else not renaming
                         });
                     });
                 });
@@ -295,6 +389,11 @@ impl OxiApp {
                         "No chats found"
                     };
                     ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
+                    if !q.is_empty()
+                        && crate::ui::chrome::ghost_button(ui, "Clear", false).clicked()
+                    {
+                        self.conv.sidebar_search.clear();
+                    }
                 });
                 ui.add_space(4.0);
             }
@@ -309,6 +408,7 @@ impl OxiApp {
         wi: usize,
         si: usize,
         running: bool,
+        has_error: bool,
         selected: bool,
         title: String,
         hide_time: bool,
@@ -345,7 +445,13 @@ impl OxiApp {
                 + spin_reserve
                 + sx * if running { 4.0 } else { 3.0 };
             let title_w = (ui.available_width() - fixed).max(24.0);
-            let bullet_col = if selected { c_accent() } else { c_text_muted() };
+            let bullet_col = if has_error {
+                c_danger()
+            } else if selected {
+                c_accent()
+            } else {
+                c_text_muted()
+            };
 
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = sx;
@@ -354,9 +460,14 @@ impl OxiApp {
                         egui::vec2(lead_w, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
-                            // Dot only on the active chat — a bullet on every row is noise.
-                            if selected {
-                                ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                            if selected || has_error {
+                                let resp =
+                                    ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
+                                if has_error {
+                                    resp.on_hover_text(
+                                        "This chat has an error — open it to see details",
+                                    );
+                                }
                             }
                         },
                     );
@@ -378,7 +489,7 @@ impl OxiApp {
                     |ui| {
                         use eframe::egui::Label;
                         let title_color = if selected { c_text() } else { c_text_muted() };
-                        ui.add(
+                        let resp = ui.add(
                             Label::new(
                                 RichText::new(title.as_str())
                                     .size(FS_SMALL)
@@ -387,6 +498,18 @@ impl OxiApp {
                             .truncate()
                             .halign(Align::LEFT),
                         );
+                        let full_w = ui.fonts_mut(|f| {
+                            f.layout_no_wrap(
+                                title.clone(),
+                                FontId::proportional(FS_SMALL),
+                                title_color,
+                            )
+                            .rect
+                            .width()
+                        });
+                        if full_w > title_w {
+                            resp.on_hover_text(title.as_str());
+                        }
                     },
                 );
             });
@@ -484,14 +607,19 @@ impl OxiApp {
                             self.render_chat_header(ui, column_center_w);
                             ui.add_space(HEADER_GAP);
 
-                            if show_diff {
-                                // Diff viewer replaces the chat transcript + composer.
-                                let diff_h =
-                                    (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), diff_h),
-                                    egui::Layout::top_down(egui::Align::Min),
-                                    |ui| {
+                            // Floating composer always stays available — even over a diff —
+                            // so you can discuss the change without leaving the view.
+                            const COMPOSER_GAP: f32 = 8.0;
+                            let composer_overlay_h =
+                                (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
+                            let conversation_h =
+                                (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                            let chat_rect = ui.max_rect();
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), conversation_h),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    if show_diff {
                                         if let Some((title, diff_text)) = self.conv.git.diff.clone()
                                         {
                                             self.render_diff_view(
@@ -501,45 +629,38 @@ impl OxiApp {
                                                 column_center_w,
                                             );
                                         }
-                                    },
-                                );
-                            } else {
-                                // Floating composer: the transcript uses the full remaining height,
-                                // while the input is painted as an overlay pinned to the bottom of the
-                                // chat column. The transcript adds matching tail padding internally so
-                                // bottom content can still be scrolled into view.
-                                const COMPOSER_GAP: f32 = 8.0;
-                                let composer_overlay_h =
-                                    (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
-                                let conversation_h =
-                                    (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                                let chat_rect = ui.max_rect();
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), conversation_h),
-                                    egui::Layout::top_down(egui::Align::Min),
-                                    |ui| {
+                                    } else {
                                         self.render_conversation(
                                             ui,
                                             column_center_w,
                                             conversation_h,
                                             composer_overlay_h,
                                         );
-                                    },
-                                );
+                                    }
+                                },
+                            );
 
-                                let composer_h = self.conv.composer_measured_full_h.max(80.0);
-                                let composer_top = chat_rect.bottom() - composer_h;
-                                let composer_rect = egui::Rect::from_min_size(
-                                    egui::pos2(chat_rect.left(), composer_top),
-                                    egui::vec2(chat_rect.width(), composer_h),
-                                );
-                                ui.scope_builder(
-                                    egui::UiBuilder::new().max_rect(composer_rect),
-                                    |ui| {
-                                        self.render_composer(ui, column_center_w);
-                                    },
-                                );
-                            }
+                            // Soft scrim so transcript text doesn't compete with the input.
+                            let composer_h = self.conv.composer_measured_full_h.max(80.0);
+                            let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
+                            let scrim_top = chat_rect.bottom() - scrim_h;
+                            let scrim_rect = egui::Rect::from_min_max(
+                                egui::pos2(chat_rect.left(), scrim_top),
+                                egui::pos2(chat_rect.right(), chat_rect.bottom()),
+                            );
+                            paint_composer_scrim(ui, scrim_rect);
+
+                            let composer_top = chat_rect.bottom() - composer_h;
+                            let composer_rect = egui::Rect::from_min_size(
+                                egui::pos2(chat_rect.left(), composer_top),
+                                egui::vec2(chat_rect.width(), composer_h),
+                            );
+                            ui.scope_builder(
+                                egui::UiBuilder::new().max_rect(composer_rect),
+                                |ui| {
+                                    self.render_composer(ui, column_center_w);
+                                },
+                            );
                         });
                     ui.expand_to_include_rect(ui.max_rect());
                 },
@@ -640,5 +761,31 @@ impl OxiApp {
         };
         ui.painter()
             .vline(boundary_x, sep_rect.y_range(), Stroke::new(1.0, col));
+    }
+}
+
+/// Soft vertical fade behind the floating composer so transcript text doesn't compete
+/// with the input card.
+fn paint_composer_scrim(ui: &mut Ui, rect: egui::Rect) {
+    if rect.height() < 4.0 {
+        return;
+    }
+    let base = c_bg_main();
+    let steps = 12usize;
+    let step_h = rect.height() / steps as f32;
+    for i in 0..steps {
+        let t = (i as f32 + 0.5) / steps as f32;
+        // Ease-in: transparent at the top, opaque near the composer.
+        let alpha = (t * t * 220.0) as u8;
+        let y0 = rect.top() + i as f32 * step_h;
+        let band = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), y0),
+            egui::pos2(rect.right(), y0 + step_h + 0.5),
+        );
+        ui.painter().rect_filled(
+            band,
+            0.0,
+            Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha),
+        );
     }
 }

@@ -210,6 +210,19 @@ pub(super) fn render_thinking_group_block(
     combined: String,
     live: bool,
 ) {
+    render_thinking_group_block_opts(ui, msg_idx, salt, combined, live, false);
+}
+
+/// `nested_in_activity`: when true (expanded "Worked for…" summary), skip the extra
+/// "Thought for…" caption and show the body directly — one less collapsible layer.
+pub(super) fn render_thinking_group_block_opts(
+    ui: &mut Ui,
+    msg_idx: usize,
+    salt: usize,
+    combined: String,
+    live: bool,
+    nested_in_activity: bool,
+) {
     let bubble_w = content_wrap_width(ui);
     ui.set_width(bubble_w);
     // Fold based on *visual* rows (after wrapping), not logical `\n` line count: a long
@@ -231,6 +244,20 @@ pub(super) fn render_thinking_group_block(
     // resets to collapsed at the live→done transition — i.e. the block auto-folds when
     // thinking finishes, matching the "Worked for X" summary behavior.
     let elapsed = thinking_elapsed(ui, msg_idx, salt, live);
+    if nested_in_activity && !live {
+        // Nested under an expanded activity summary: show body only (no second caption).
+        render_thinking_text_panel(
+            ui,
+            THINKING_PREVIEW_LINES,
+            persist_id,
+            overflow,
+            combined.as_str(),
+            false,
+        );
+        ui.add_space(6.0);
+        return;
+    }
+
     if live {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
