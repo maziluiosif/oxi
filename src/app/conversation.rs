@@ -32,7 +32,7 @@ impl OxiApp {
         }
     }
 
-    /// Approve/deny prompt for a mutating tool call (`bash` / `write` / `edit`).
+    /// Approve/deny prompt for a shell or built-in filesystem mutation tool.
     /// Rendered at the bottom of the transcript (above the floating composer) so it stays in
     /// view while the run is paused — `stick_to_bottom` keeps the tail visible during a run.
     fn render_approval_card(&mut self, ui: &mut Ui, pa: PendingApproval) {

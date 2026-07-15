@@ -821,6 +821,72 @@ fn readonly_bash_keeps_turn_undo_available() {
     assert!(journal.lock().unwrap().restore(&cwd).is_ok());
 }
 
+#[test]
+fn reversible_delete_move_and_mkdir_restore_cleanly() {
+    use std::sync::{Arc, Mutex};
+
+    let cwd = temp_workspace("undo-path-ops");
+    fs::write(cwd.join("delete-me.txt"), "original").unwrap();
+    fs::write(cwd.join("move-me.txt"), "moved content").unwrap();
+    let journal = Arc::new(Mutex::new(super::TurnUndoJournal::default()));
+    let mut env = all_enabled();
+    env.undo_journal = Some(journal.clone());
+
+    assert!(!run_tool(&cwd, "delete", &json!({"path": "delete-me.txt"}), &env,).is_error);
+    assert!(
+        !run_tool(
+            &cwd,
+            "move",
+            &json!({"from": "move-me.txt", "to": "moved.txt"}),
+            &env,
+        )
+        .is_error
+    );
+    assert!(!run_tool(&cwd, "mkdir", &json!({"path": "created-dir"}), &env,).is_error);
+
+    assert!(!cwd.join("delete-me.txt").exists());
+    assert!(!cwd.join("move-me.txt").exists());
+    assert!(cwd.join("moved.txt").exists());
+    assert!(cwd.join("created-dir").is_dir());
+
+    journal.lock().unwrap().restore(&cwd).unwrap();
+    assert_eq!(
+        fs::read_to_string(cwd.join("delete-me.txt")).unwrap(),
+        "original"
+    );
+    assert_eq!(
+        fs::read_to_string(cwd.join("move-me.txt")).unwrap(),
+        "moved content"
+    );
+    assert!(!cwd.join("moved.txt").exists());
+    assert!(!cwd.join("created-dir").exists());
+}
+
+#[test]
+fn undo_refuses_untracked_file_inside_created_directory() {
+    use std::sync::{Arc, Mutex};
+
+    let cwd = temp_workspace("undo-created-dir-conflict");
+    let journal = Arc::new(Mutex::new(super::TurnUndoJournal::default()));
+    let mut env = all_enabled();
+    env.undo_journal = Some(journal.clone());
+    assert!(!run_tool(&cwd, "mkdir", &json!({"path": "created-dir"}), &env,).is_error);
+    fs::write(cwd.join("created-dir/user.txt"), "user").unwrap();
+
+    assert!(journal.lock().unwrap().restore(&cwd).is_err());
+    assert!(cwd.join("created-dir/user.txt").exists());
+}
+
+#[test]
+fn delete_refuses_non_empty_directory() {
+    let cwd = temp_workspace("delete-non-empty");
+    fs::create_dir(cwd.join("dir")).unwrap();
+    fs::write(cwd.join("dir/file.txt"), "keep").unwrap();
+    let result = run_tool(&cwd, "delete", &json!({"path": "dir"}), &all_enabled());
+    assert!(result.is_error);
+    assert!(cwd.join("dir/file.txt").exists());
+}
+
 // ─── tool_definitions_json ──────────────────────────────────────────
 
 #[test]

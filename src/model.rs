@@ -131,8 +131,10 @@ pub fn tool_breaks_explore_cluster(block: &AssistantBlock) -> bool {
     matches!(
         block,
         AssistantBlock::Tool { name, diff, .. }
-            if name.eq_ignore_ascii_case("edit")
-                || diff
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "edit" | "write" | "delete" | "move" | "mkdir"
+            ) || diff
                     .as_deref()
                     .is_some_and(|diff_text| !diff_text.trim().is_empty())
     )

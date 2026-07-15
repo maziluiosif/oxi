@@ -56,7 +56,7 @@ pub enum AgentEvent {
         tool_call_id: String,
         args: Option<Value>,
     },
-    /// A mutating tool (`bash` / `write` / `edit`) is waiting for the user to approve or deny it.
+    /// A shell or built-in filesystem mutation tool is waiting for approval.
     ApprovalRequest {
         name: String,
         args: Option<Value>,

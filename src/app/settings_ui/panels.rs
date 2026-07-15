@@ -251,12 +251,12 @@ impl OxiApp {
             if ui
                 .checkbox(
                     &mut require_write_edit_approval,
-                    RichText::new("Ask before write / edit")
+                    RichText::new("Ask before file changes")
                         .size(FS_SMALL)
                         .color(c_text()),
                 )
                 .on_hover_text(
-                    "When on, the agent pauses for your approval before each write/edit tool call.",
+                    "When on, the agent pauses before write, edit, delete, move, or mkdir tool calls.",
                 )
                 .changed()
             {

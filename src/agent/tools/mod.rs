@@ -49,7 +49,7 @@ pub struct ToolEnv {
     pub bash_timeout_cap_secs: u32,
     /// Optional MCP manager for `mcp_*` tools.
     pub mcp: Option<crate::agent::mcp::McpManager>,
-    /// Per-turn rollback journal. Built-in write/edit calls are tracked; MCP calls mark it
+    /// Per-turn rollback journal. Built-in filesystem mutations are tracked; MCP calls mark it
     /// non-reversible because their side effects cannot be observed reliably. Bash is restricted
     /// by the system prompt to non-mutating verification commands.
     pub undo_journal: Option<Arc<Mutex<TurnUndoJournal>>>,
@@ -108,11 +108,14 @@ pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResu
     match name {
         "write" => file_ops::tool_write(cwd, args, env.undo_journal.as_ref()),
         "edit" => file_ops::tool_edit(cwd, args, env.undo_journal.as_ref()),
+        "delete" => file_ops::tool_delete(cwd, args, env.undo_journal.as_ref()),
+        "move" => file_ops::tool_move(cwd, args, env.undo_journal.as_ref()),
+        "mkdir" => file_ops::tool_mkdir(cwd, args, env.undo_journal.as_ref()),
         _ => {
             let result = match name {
                 "read" => file_ops::tool_read(cwd, args),
                 // The system prompt restricts bash to non-mutating verification commands. File
-                // changes must go through write/edit, so merely running bash must not hide the
+                // changes must go through the filesystem tools, so merely running bash must not hide the
                 // Regenerate action for otherwise read-only turns.
                 "bash" => shell_search::tool_bash(cwd, args, env.bash_timeout_cap_secs),
                 "grep" => shell_search::tool_grep(cwd, args),

@@ -609,3 +609,176 @@ pub(crate) fn tool_edit(
         full_output_path: None,
     }
 }
+
+fn mutation_error(output: impl Into<String>) -> ToolResult {
+    ToolResult {
+        output: output.into(),
+        is_error: true,
+        diff: None,
+        full_output_path: None,
+    }
+}
+
+fn journal_before(undo: Option<&Arc<Mutex<TurnUndoJournal>>>, path: &Path) -> Result<(), String> {
+    if let Some(journal) = undo {
+        journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_before(path)?;
+    }
+    Ok(())
+}
+
+fn journal_after(undo: Option<&Arc<Mutex<TurnUndoJournal>>>, path: &Path) -> Result<(), String> {
+    if let Some(journal) = undo {
+        journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_after(path)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn tool_delete(
+    cwd: &Path,
+    args: &Value,
+    undo: Option<&Arc<Mutex<TurnUndoJournal>>>,
+) -> ToolResult {
+    let Some(path) = args.get("path").and_then(Value::as_str) else {
+        return mutation_error(err("missing path"));
+    };
+    let abs = match resolve_under_cwd(cwd, path) {
+        Ok(path) => path,
+        Err(e) => return mutation_error(e),
+    };
+    if abs == cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()) {
+        return mutation_error("refusing to delete the workspace root");
+    }
+    if let Err(e) = journal_before(undo, &abs) {
+        return mutation_error(e);
+    }
+    let metadata = match fs::symlink_metadata(&abs) {
+        Ok(metadata) => metadata,
+        Err(e) => return mutation_error(e.to_string()),
+    };
+    let result = if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        // Deliberately non-recursive: recursive deletion would need to journal every child.
+        fs::remove_dir(&abs)
+    } else {
+        fs::remove_file(&abs)
+    };
+    if let Err(e) = result {
+        return mutation_error(format!(
+            "Delete {}: {e}. Directories must be empty; delete their children first.",
+            abs.display()
+        ));
+    }
+    if let Err(e) = journal_after(undo, &abs) {
+        return mutation_error(e);
+    }
+    ToolResult {
+        output: format!("Deleted {}", abs.display()),
+        is_error: false,
+        diff: None,
+        full_output_path: None,
+    }
+}
+
+pub(crate) fn tool_mkdir(
+    cwd: &Path,
+    args: &Value,
+    undo: Option<&Arc<Mutex<TurnUndoJournal>>>,
+) -> ToolResult {
+    let Some(path) = args.get("path").and_then(Value::as_str) else {
+        return mutation_error(err("missing path"));
+    };
+    let abs = match resolve_under_cwd_for_create(cwd, path) {
+        Ok(path) => path,
+        Err(e) => return mutation_error(e),
+    };
+    if abs.exists() {
+        return mutation_error(format!("Path already exists: {}", abs.display()));
+    }
+    let Some(parent) = abs.parent() else {
+        return mutation_error("directory has no parent");
+    };
+    if !parent.is_dir() {
+        return mutation_error("parent directory does not exist; create it first");
+    }
+    if let Err(e) = journal_before(undo, &abs) {
+        return mutation_error(e);
+    }
+    if let Err(e) = fs::create_dir(&abs) {
+        return mutation_error(format!("Create directory {}: {e}", abs.display()));
+    }
+    if let Err(e) = journal_after(undo, &abs) {
+        return mutation_error(e);
+    }
+    ToolResult {
+        output: format!("Created directory {}", abs.display()),
+        is_error: false,
+        diff: None,
+        full_output_path: None,
+    }
+}
+
+pub(crate) fn tool_move(
+    cwd: &Path,
+    args: &Value,
+    undo: Option<&Arc<Mutex<TurnUndoJournal>>>,
+) -> ToolResult {
+    let Some(from) = args.get("from").and_then(Value::as_str) else {
+        return mutation_error(err("missing from"));
+    };
+    let Some(to) = args.get("to").and_then(Value::as_str) else {
+        return mutation_error(err("missing to"));
+    };
+    let source = match resolve_under_cwd(cwd, from) {
+        Ok(path) => path,
+        Err(e) => return mutation_error(e),
+    };
+    let destination = match resolve_under_cwd_for_create(cwd, to) {
+        Ok(path) => path,
+        Err(e) => return mutation_error(e),
+    };
+    if destination.exists() {
+        return mutation_error(format!(
+            "Destination already exists: {}",
+            destination.display()
+        ));
+    }
+    if source.is_dir()
+        && fs::read_dir(&source)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(true)
+    {
+        return mutation_error(
+            "moving non-empty directories is not supported; move their children first",
+        );
+    }
+    let Some(parent) = destination.parent() else {
+        return mutation_error("destination has no parent");
+    };
+    if !parent.is_dir() {
+        return mutation_error("destination parent does not exist; create it first");
+    }
+    if let Err(e) = journal_before(undo, &source).and_then(|_| journal_before(undo, &destination)) {
+        return mutation_error(e);
+    }
+    if let Err(e) = fs::rename(&source, &destination) {
+        return mutation_error(format!(
+            "Move {} to {}: {e}",
+            source.display(),
+            destination.display()
+        ));
+    }
+    if let Err(e) = journal_after(undo, &source).and_then(|_| journal_after(undo, &destination)) {
+        return mutation_error(e);
+    }
+    ToolResult {
+        output: format!("Moved {} to {}", source.display(), destination.display()),
+        is_error: false,
+        diff: None,
+        full_output_path: None,
+    }
+}

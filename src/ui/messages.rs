@@ -90,8 +90,11 @@ pub(super) fn block_state_tag(streaming: bool) -> &'static str {
 
 /// Write/edit-like tools render as full detail blocks, not explore-cluster rows.
 pub(super) fn is_edit_like_tool(block: &AssistantBlock) -> bool {
-    matches!(block, AssistantBlock::Tool { name, .. } if name.eq_ignore_ascii_case("write"))
-        || tool_breaks_explore_cluster(block)
+    matches!(
+        block,
+        AssistantBlock::Tool { name, .. }
+            if matches!(name.to_ascii_lowercase().as_str(), "write" | "delete" | "move" | "mkdir")
+    ) || tool_breaks_explore_cluster(block)
 }
 
 fn has_visible_assistant_content(blocks: &[AssistantBlock], streaming: bool) -> bool {

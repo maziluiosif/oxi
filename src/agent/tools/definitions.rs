@@ -68,11 +68,54 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                     }
                 }
             }),
+            "delete" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "delete",
+                    "description": "Delete a file or an empty directory inside the workspace. Directory deletion is non-recursive; delete children first so every change remains reversible.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" }
+                        },
+                        "required": ["path"]
+                    }
+                }
+            }),
+            "move" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "move",
+                    "description": "Move or rename one file or empty directory inside the workspace. The destination must not exist and its parent must exist.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "from": { "type": "string" },
+                            "to": { "type": "string" }
+                        },
+                        "required": ["from", "to"]
+                    }
+                }
+            }),
+            "mkdir" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "mkdir",
+                    "description": "Create one directory inside the workspace. Its parent directory must already exist.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" }
+                        },
+                        "required": ["path"]
+                    }
+                }
+            }),
             "bash" => serde_json::json!({
                 "type": "function",
                 "function": {
                     "name": "bash",
-                    "description": "Run a shell command in the workspace directory. For reading/searching/listing prefer the dedicated read/grep/find/ls tools; use bash for builds, tests, git, side effects. Output beyond 40k chars is truncated — pipe through head/tail.",
+                    "description": "Run a non-mutating shell command in the workspace directory (for example builds, checks, and tests). Never use bash to modify workspace files; use write/edit/delete/move/mkdir. Output beyond 40k chars is truncated — pipe through head/tail.",
                     "parameters": {
                         "type": "object",
                         "properties": {

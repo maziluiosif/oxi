@@ -146,9 +146,21 @@ pub(super) fn tool_summary_text(
                 }
             }
         }
-        "read" | "write" | "edit" | "find" | "ls" => {
+        "read" | "write" | "edit" | "delete" | "mkdir" | "find" | "ls" => {
             if let Some(path) = tool_path_from_args(args_summary) {
                 parts.push(short_path(&path, 2));
+            }
+        }
+        "move" => {
+            if let Some(raw) = args_summary
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+            {
+                if let Some(from) = v.get("from").and_then(|x| x.as_str()) {
+                    parts.push(short_path(from, 2));
+                }
+                if let Some(to) = v.get("to").and_then(|x| x.as_str()) {
+                    parts.push(format!("→ {}", short_path(to, 2)));
+                }
             }
         }
         "web_search" => {

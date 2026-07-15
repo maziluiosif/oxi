@@ -12,7 +12,7 @@ use super::provider::{
     ComputeLocation, LlmProviderKind, ProviderConfig, ProviderProfile, UiDensity, WebSearchBackend,
 };
 
-pub const ALL_TOOL_NAMES: [&str; 12] = [
+pub const ALL_TOOL_NAMES: [&str; 15] = [
     "read",
     "write",
     "edit",
@@ -25,6 +25,10 @@ pub const ALL_TOOL_NAMES: [&str; 12] = [
     "git_diff",
     "web_search",
     "web_fetch",
+    // Keep new tools appended so persisted positional enable flags retain their meaning.
+    "delete",
+    "move",
+    "mkdir",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,7 +63,7 @@ pub struct AppSettings {
     /// than falling back to another provider.
     #[serde(default = "default_searxng_url")]
     pub searxng_url: String,
-    /// Require explicit user approval before each filesystem-changing tool (`write` / `edit`).
+    /// Require explicit user approval before each built-in filesystem-changing tool.
     #[serde(default = "default_require_approval")]
     pub require_write_edit_approval: bool,
     /// Require explicit user approval before each `bash` tool call.
@@ -1085,7 +1089,7 @@ mod tests {
 
     #[test]
     fn all_tool_names_has_expected_tools() {
-        assert_eq!(ALL_TOOL_NAMES.len(), 12);
+        assert_eq!(ALL_TOOL_NAMES.len(), 15);
         assert!(ALL_TOOL_NAMES.contains(&"bash"));
         assert!(ALL_TOOL_NAMES.contains(&"codebase_search"));
         assert!(ALL_TOOL_NAMES.contains(&"git_status"));

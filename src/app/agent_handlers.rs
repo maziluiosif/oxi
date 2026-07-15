@@ -16,7 +16,8 @@ fn approval_summary(name: &str, args: &Option<Value>) -> String {
     };
     let field = match name {
         "bash" => "command",
-        "write" | "edit" => "path",
+        "write" | "edit" | "delete" | "mkdir" => "path",
+        "move" => "from",
         _ => "",
     };
     args.get(field)

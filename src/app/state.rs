@@ -94,7 +94,7 @@ pub struct SessionRunState {
     pub wire_history: Option<Vec<Value>>,
     pub wire_fingerprint: u64,
     pub wire_session_file: Option<String>,
-    /// File states captured by built-in write/edit calls in the most recent turn.
+    /// Path states captured by reversible built-in filesystem calls in the most recent turn.
     pub undo_journal: Option<Arc<Mutex<crate::agent::tools::TurnUndoJournal>>>,
     /// Unexpanded text entered by the user for the most recent turn (the transcript may contain
     /// expanded @mentions). Kept in memory alongside the undo journal for Edit & retry.
