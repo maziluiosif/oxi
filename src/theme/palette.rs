@@ -527,11 +527,7 @@ pub fn c_tool_error_fg() -> Color32 {
 /// input surface on dark themes so edit views share the same quiet surface as tool-call pills.
 pub fn c_tool_diff_bg() -> Color32 {
     let p = active_palette();
-    if p.dark_base {
-        p.bg_input
-    } else {
-        p.bg_main
-    }
+    if p.dark_base { p.bg_input } else { p.bg_main }
 }
 
 // ── Status-badge tints ("running" / "done" / "failed" chips under tool pills) ──

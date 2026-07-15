@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::process::Child;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Instant;
@@ -93,6 +94,11 @@ pub struct SessionRunState {
     pub wire_history: Option<Vec<Value>>,
     pub wire_fingerprint: u64,
     pub wire_session_file: Option<String>,
+    /// File states captured by built-in write/edit calls in the most recent turn.
+    pub undo_journal: Option<Arc<Mutex<crate::agent::tools::TurnUndoJournal>>>,
+    /// Unexpanded text entered by the user for the most recent turn (the transcript may contain
+    /// expanded @mentions). Kept in memory alongside the undo journal for Edit & retry.
+    pub last_user_prompt: Option<String>,
 }
 
 impl SessionRunState {
@@ -226,6 +232,11 @@ pub struct SshTestMsg {
 #[derive(Debug)]
 pub struct UpdateMsg(pub Result<crate::update::ReleaseInfo, String>);
 
+pub struct PromptEditState {
+    pub previous_input: String,
+    pub previous_images: Vec<(String, Vec<u8>)>,
+}
+
 pub struct ConversationState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -246,6 +257,8 @@ pub struct ConversationState {
     /// Short-lived inline notice under the composer (blocked send, rejected
     /// attachment, …) with the moment it was raised; expires after a few seconds.
     pub composer_notice: Option<(String, Instant)>,
+    /// Present while the composer is replacing the last user prompt and its assistant response.
+    pub editing_last_prompt: Option<PromptEditState>,
     /// Set when navigation should hand keyboard focus back to the chat composer.
     pub focus_chat_input_next_frame: bool,
     /// Set when opening the terminal from chrome so keyboard focus moves into the PTY.

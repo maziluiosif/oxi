@@ -54,6 +54,7 @@ pub struct OxiApp {
 
 impl OxiApp {
     pub fn new() -> Self {
+        crate::agent::tools::cleanup_stale_spill_files();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
         let root_path = cwd.to_string_lossy().to_string();
@@ -125,6 +126,7 @@ impl OxiApp {
                 input_history_index: None,
                 input_history_draft: String::new(),
                 composer_notice: None,
+                editing_last_prompt: None,
                 focus_chat_input_next_frame: true,
                 focus_terminal_next_frame: false,
                 sidebar_open: true,
@@ -321,6 +323,9 @@ impl OxiApp {
 
     /// Save the current composer input/images to the active session, load from the target.
     fn swap_session_input(&mut self, new_workspace: usize, new_session: usize) {
+        // Edit & retry is intentionally scoped to the active transcript. Leaving it is equivalent
+        // to Cancel, so the original per-session draft is not accidentally replaced.
+        self.cancel_edit_last_prompt();
         let old_wi = self.conv.active_workspace;
         let old_si = self.conv.workspaces[old_wi].active;
         self.conv.workspaces[old_wi].sessions[old_si].input_text =

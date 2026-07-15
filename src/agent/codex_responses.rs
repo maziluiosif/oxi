@@ -601,7 +601,7 @@ pub async fn run_codex_responses_loop(
                         | "git_diff"
                         | "web_search"
                         | "web_fetch"
-                ) || name.starts_with("mcp_")
+                )
             };
             struct ToolCallP {
                 id: String,

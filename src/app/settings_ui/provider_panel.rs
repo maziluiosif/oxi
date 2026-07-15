@@ -642,8 +642,10 @@ impl OxiApp {
                 {
                     let mut s = load_oauth_store();
                     clear_codex(&mut s);
-                    let _ = save_oauth_store(&s);
-                    self.conv.oauth_last_message = Some("Signed out Codex OAuth.".into());
+                    self.conv.oauth_last_message = Some(match save_oauth_store(&s) {
+                        Ok(()) => "Signed out Codex OAuth.".into(),
+                        Err(e) => format!("Could not update the OS keychain: {e}"),
+                    });
                 }
             });
             if let Some(ref msg) = self.conv.oauth_last_message {

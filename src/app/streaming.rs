@@ -14,7 +14,98 @@ use crate::session_store;
 
 impl OxiApp {
     pub(crate) fn send_message(&mut self) {
-        self.send_message_opts(false);
+        if self.conv.editing_last_prompt.is_some() {
+            self.submit_edited_last_prompt();
+        } else {
+            self.send_message_opts(false);
+        }
+    }
+
+    pub(crate) fn begin_edit_last_prompt(&mut self) {
+        let key = self.active_session_key();
+        if self.active_waiting_response() || self.compaction_active_for(key) {
+            self.notify_composer(
+                "Wait for the current operation to finish before editing the prompt.",
+            );
+            return;
+        }
+        let Some(journal) = self.run_state(key).and_then(|run| run.undo_journal.clone()) else {
+            self.notify_composer("This older response has no restorable file checkpoint.");
+            return;
+        };
+        if let Some(reason) = journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .unavailable_reason()
+        {
+            self.notify_composer(format!("Edit & retry is unavailable: {reason}"));
+            return;
+        }
+        let Some(user) = self
+            .active_session()
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MsgRole::User && !m.is_summary)
+            .cloned()
+        else {
+            return;
+        };
+        let previous_input = std::mem::take(&mut self.conv.input);
+        let previous_images = std::mem::take(&mut self.conv.pending_images);
+        self.conv.input = self
+            .run_state(key)
+            .and_then(|run| run.last_user_prompt.clone())
+            .unwrap_or(user.text);
+        self.conv.pending_images = user
+            .attachments
+            .into_iter()
+            .map(|UserAttachment::Image { mime, data }| (mime, data))
+            .collect();
+        self.conv.editing_last_prompt = Some(super::state::PromptEditState {
+            previous_input,
+            previous_images,
+        });
+        self.conv.focus_chat_input_next_frame = true;
+    }
+
+    pub(crate) fn cancel_edit_last_prompt(&mut self) {
+        if let Some(edit) = self.conv.editing_last_prompt.take() {
+            self.conv.input = edit.previous_input;
+            self.conv.pending_images = edit.previous_images;
+        }
+    }
+
+    fn submit_edited_last_prompt(&mut self) {
+        let key = self.active_session_key();
+        if self.conv.input.trim().is_empty() && self.conv.pending_images.is_empty() {
+            return;
+        }
+        let journal = self.run_state(key).and_then(|r| r.undo_journal.clone());
+        if let Some(journal) = journal {
+            let root = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
+            if let Err(e) = journal
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .restore(&root)
+            {
+                self.notify_composer(format!("Cannot restore this response: {e}"));
+                return;
+            }
+        }
+        let Some(user_idx) = self
+            .active_session()
+            .messages
+            .iter()
+            .rposition(|m| m.role == MsgRole::User && !m.is_summary)
+        else {
+            return;
+        };
+        self.active_session_mut().messages.truncate(user_idx);
+        self.active_session_mut().wire_history = None;
+        self.run_state_mut(key).wire_history = None;
+        self.conv.editing_last_prompt = None;
+        self.send_message_opts(true);
     }
 
     /// `skip_autocompact` is set when an auto-compaction has just finished and is replaying
@@ -115,6 +206,7 @@ impl OxiApp {
         // Expand @path mentions into attached file/folder context for the agent.
         let cwd = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
         let expanded = super::mentions::expand_at_mentions(&text, &cwd);
+        self.run_state_mut(key).last_user_prompt = Some(text.clone());
         self.materialize_prompt(key, &expanded, &user_attachments);
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
         if let Err(e) =
@@ -414,6 +506,13 @@ impl OxiApp {
             cancel.clone(),
             prior_wire,
             chars_per_token,
+            {
+                let journal = Arc::new(std::sync::Mutex::new(
+                    crate::agent::tools::TurnUndoJournal::default(),
+                ));
+                self.run_state_mut(key).undo_journal = Some(journal.clone());
+                journal
+            },
         );
         let existing_wire = self.run_state(key).and_then(|run| run.wire_history.clone());
         let run = self.run_state_mut(key);

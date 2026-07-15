@@ -42,6 +42,10 @@ impl ApprovalPolicy {
         match name {
             "bash" => self.bash,
             "write" | "edit" => self.write_edit,
+            // MCP servers are third-party processes and their tools may mutate files, external
+            // systems, or credentials. Unknown capabilities must fail closed rather than being
+            // treated like built-in read-only tools.
+            name if crate::agent::mcp::McpManager::is_mcp_tool(name) => true,
             _ => false,
         }
     }
@@ -127,7 +131,7 @@ mod tests {
 
     #[test]
     fn mutating_tools_require_approval() {
-        for t in ["bash", "write", "edit"] {
+        for t in ["bash", "write", "edit", "mcp_github_create_issue"] {
             assert!(
                 ApprovalPolicy {
                     write_edit: true,

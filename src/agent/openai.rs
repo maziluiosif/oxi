@@ -245,7 +245,7 @@ async fn run_chat_loop_at(
                         | "git_diff"
                         | "web_search"
                         | "web_fetch"
-                ) || name.starts_with("mcp_")
+                )
             };
 
             // Split into consecutive groups: each group is either all-readonly (parallel) or a single mutating call.
@@ -667,6 +667,7 @@ mod integration_tests {
             web_search_backend: WebSearchBackend::default(),
             bash_timeout_cap_secs: 300,
             mcp: None,
+            undo_journal: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -754,6 +755,7 @@ mod integration_tests {
             web_search_backend: WebSearchBackend::default(),
             bash_timeout_cap_secs: 300,
             mcp: None,
+            undo_journal: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({

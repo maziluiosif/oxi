@@ -5,8 +5,10 @@
 //! `tokio::task::spawn_blocking`. We drive the async `reqwest` client from there using a small
 //! current-thread runtime, which keeps these helpers synchronous like the other tools.
 
+use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde_json::Value;
 
 use super::MAX_TOOL_OUTPUT_CHARS;
@@ -16,6 +18,9 @@ const DEFAULT_SEARCH_COUNT: usize = 8;
 const MAX_SEARCH_COUNT: usize = 20;
 const DEFAULT_FETCH_CHARS: usize = 20_000;
 const HTTP_TIMEOUT_SECS: u64 = 20;
+/// Maximum decompressed response body retained for `web_fetch`. The final tool text is much
+/// smaller, but HTML needs some headroom before tags/navigation are stripped.
+const MAX_FETCH_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 const DEFAULT_USER_AGENT: &str = "oxi/0.6";
 /// Zero-config search backends used when no SearXNG URL is set. DuckDuckGo's HTML endpoint
@@ -391,6 +396,126 @@ fn resolve_ddg_href(href: &str) -> String {
     absolute
 }
 
+fn ip_is_private_or_special(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let o = ip.octets();
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+                || ip.is_multicast()
+                || o[0] == 0
+                || (o[0] == 100 && (64..=127).contains(&o[1]))
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                || (o[0] == 192 && o[1] == 0 && o[2] == 2)
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
+                || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+                || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+        }
+        IpAddr::V6(ip) => {
+            let s = ip.segments();
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00 // unique-local fc00::/7
+                || (s[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+                || ip.to_ipv4_mapped().is_some_and(|v4| ip_is_private_or_special(v4.into()))
+        }
+    }
+}
+
+fn public_addresses_for_url(url: &url::Url) -> Result<Vec<std::net::SocketAddr>, String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(err("url must use http:// or https://"));
+    }
+    let host = url.host_str().ok_or_else(|| err("url is missing a host"))?;
+    if host.eq_ignore_ascii_case("localhost")
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+    {
+        return Err(err("web_fetch blocks local/private destinations"));
+    }
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| err("url has no usable port"))?;
+    let addresses: Vec<_> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("could not resolve {host}: {e}"))?
+        .collect();
+    if addresses.is_empty() || addresses.iter().any(|a| ip_is_private_or_special(a.ip())) {
+        return Err(err("web_fetch blocks local/private destinations"));
+    }
+    Ok(addresses)
+}
+
+fn public_http_get_bounded(url: &str) -> Result<HttpResponse, String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("invalid url: {e}"))?;
+    let initial_addresses = public_addresses_for_url(&parsed)?;
+    let initial_host = parsed
+        .host_str()
+        .ok_or_else(|| err("url is missing a host"))?
+        .to_string();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+            .user_agent(DEFAULT_USER_AGENT)
+            // Pin the validated DNS result so a hostname cannot rebind to a private IP between
+            // validation and connection. Redirects are disabled for the same reason.
+            .resolve_to_addrs(&initial_host, &initial_addresses)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("client: {e}"))?;
+        let resp = client
+            .get(parsed)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        let status = resp.status().as_u16();
+        if (300..400).contains(&status) {
+            return Err(
+                "web_fetch does not follow redirects; fetch the public destination URL directly"
+                    .to_string(),
+            );
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        if let Some(len) = resp.content_length()
+            && len > MAX_FETCH_BODY_BYTES as u64
+        {
+            return Err(format!(
+                "response is too large ({len} bytes; limit is {MAX_FETCH_BODY_BYTES})"
+            ));
+        }
+        let mut stream = resp.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("read body: {e}"))?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_FETCH_BODY_BYTES {
+                return Err(format!(
+                    "response exceeded the {MAX_FETCH_BODY_BYTES}-byte limit"
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let body = String::from_utf8_lossy(&bytes).into_owned();
+        Ok(HttpResponse {
+            status,
+            content_type,
+            body,
+        })
+    })
+}
+
 pub(crate) fn tool_web_fetch(args: &Value) -> Result<String, String> {
     let url = args
         .get("url")
@@ -398,16 +523,13 @@ pub(crate) fn tool_web_fetch(args: &Value) -> Result<String, String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| err("missing url"))?;
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(err("url must start with http:// or https://"));
-    }
     let max_chars = args
         .get("max_chars")
         .and_then(|x| x.as_u64())
         .map(|n| (n as usize).min(MAX_TOOL_OUTPUT_CHARS))
         .unwrap_or(DEFAULT_FETCH_CHARS);
 
-    let resp = http_get(url, &[], false, DEFAULT_USER_AGENT, &[])?;
+    let resp = public_http_get_bounded(url)?;
     if resp.status >= 400 {
         return Err(format!("HTTP {} fetching {url}", resp.status));
     }
@@ -606,6 +728,20 @@ mod tests {
     fn web_fetch_rejects_non_http() {
         let res = tool_web_fetch(&serde_json::json!({"url": "file:///etc/passwd"}));
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn web_fetch_rejects_loopback_and_private_hosts() {
+        for url in [
+            "http://localhost:8080/secret",
+            "http://127.0.0.1/secret",
+            "http://10.0.0.1/secret",
+            "http://[::1]/secret",
+            "http://169.254.169.254/latest/meta-data/",
+        ] {
+            let res = tool_web_fetch(&serde_json::json!({"url": url}));
+            assert!(res.is_err(), "{url} should be blocked");
+        }
     }
 
     #[test]

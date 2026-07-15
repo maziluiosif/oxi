@@ -151,6 +151,19 @@ impl OxiApp {
                     .show(ui, |ui| {
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
+                        if self.conv.editing_last_prompt.is_some() {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new("Editing previous prompt")
+                                        .size(FS_SMALL)
+                                        .color(c_warning_fg()),
+                                );
+                                if ui.small_button("Cancel").clicked() {
+                                    self.cancel_edit_last_prompt();
+                                }
+                            });
+                            ui.add_space(COMPOSER_GAP);
+                        }
 
                         // === Attachment thumbnails (above the text, like Cursor) ===
                         if !self.conv.pending_images.is_empty() {
@@ -288,7 +301,11 @@ impl OxiApp {
                     crate::theme::c_on_accent(),
                     true,
                     ICON_SEND,
-                    "Send message",
+                    if self.conv.editing_last_prompt.is_some() {
+                        "Restore changes and send"
+                    } else {
+                        "Send message"
+                    },
                 )
             } else {
                 (

@@ -1,14 +1,15 @@
 //! read / write / edit and unified diff helpers.
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
 use super::MAX_TOOL_OUTPUT_CHARS;
-use super::ToolResult;
 use super::paths::{err, resolve_under_cwd, resolve_under_cwd_for_create};
+use super::{ToolResult, TurnUndoJournal};
 
 const READ_MAX_LINES: usize = 2000;
 
@@ -43,19 +44,104 @@ pub(crate) fn maybe_spill_truncated(s: String) -> (String, Option<String>) {
     (truncate_out(s), path)
 }
 
+pub(crate) fn cleanup_stale_spill_files() {
+    let dir = std::env::temp_dir().join("oxi-tool-output");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let cutoff =
+        std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(7 * 24 * 60 * 60));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let stale = cutoff.is_some_and(|cutoff| {
+            entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .is_some_and(|modified| modified < cutoff)
+        });
+        if stale {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 fn spill_full_output(s: &str) -> Option<String> {
     let dir = std::env::temp_dir().join("oxi-tool-output");
-    let _ = fs::create_dir_all(&dir);
-    let name = format!(
-        "tool-{}.txt",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
-    );
-    let path = dir.join(name);
-    fs::write(&path, s).ok()?;
+    fs::create_dir_all(&dir).ok()?;
+    let path = unique_temp_path(&dir, "tool-output", "txt");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).ok()?;
+    file.write_all(s.as_bytes()).ok()?;
+    file.sync_all().ok()?;
     Some(path.to_string_lossy().into_owned())
+}
+
+fn unique_temp_path(dir: &Path, prefix: &str, extension: &str) -> PathBuf {
+    use rand::RngExt;
+    let random: u64 = rand::rng().random();
+    dir.join(format!(
+        "{prefix}-{}-{random:016x}.{extension}",
+        std::process::id()
+    ))
+}
+
+/// Replace a file without exposing a partially-written destination. The temporary file lives in
+/// the destination directory, so the final rename is atomic on supported local filesystems.
+fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| err("destination has no parent directory"))?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let tmp = unique_temp_path(parent, ".oxi-write", "tmp");
+    let existing_permissions = fs::metadata(path).ok().map(|m| m.permissions());
+    let result = (|| -> Result<(), String> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+        file.write_all(content).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        if let Some(permissions) = existing_permissions {
+            fs::set_permissions(&tmp, permissions).map_err(|e| e.to_string())?;
+        }
+        #[cfg(windows)]
+        if path.exists() {
+            // Windows rename does not replace an existing destination. Move the original aside
+            // and roll back if installing the synced replacement fails, so an error never leaves
+            // the destination missing.
+            let backup = unique_temp_path(parent, ".oxi-backup", "tmp");
+            fs::rename(path, &backup).map_err(|e| e.to_string())?;
+            if let Err(e) = fs::rename(&tmp, path) {
+                let _ = fs::rename(&backup, path);
+                return Err(e.to_string());
+            }
+            let _ = fs::remove_file(backup);
+        } else {
+            fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(windows))]
+        fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        if let Ok(dir) = File::open(parent) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// Produce a minimal-ish unified diff between `before` and `after` text.
@@ -278,7 +364,11 @@ pub(crate) fn tool_read(cwd: &Path, args: &Value) -> Result<String, String> {
     )))
 }
 
-pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
+pub(crate) fn tool_write(
+    cwd: &Path,
+    args: &Value,
+    undo: Option<&Arc<Mutex<TurnUndoJournal>>>,
+) -> ToolResult {
     let path = match args.get("path").and_then(|x| x.as_str()) {
         Some(p) => p,
         None => {
@@ -314,9 +404,20 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
     };
     // Read existing file for diff (empty string if new file).
     let before = fs::read_to_string(&abs).unwrap_or_default();
-    if let Some(parent) = abs.parent()
-        && let Err(e) = fs::create_dir_all(parent)
+    if let Some(journal) = undo
+        && let Err(e) = journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_before(&abs)
     {
+        return ToolResult {
+            output: e,
+            is_error: true,
+            diff: None,
+            full_output_path: None,
+        };
+    }
+    if let Err(e) = atomic_write(&abs, content.as_bytes()) {
         return ToolResult {
             output: e.to_string(),
             is_error: true,
@@ -324,9 +425,14 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
             full_output_path: None,
         };
     }
-    if let Err(e) = fs::write(&abs, content.as_bytes()) {
+    if let Some(journal) = undo
+        && let Err(e) = journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_after(&abs)
+    {
         return ToolResult {
-            output: e.to_string(),
+            output: e,
             is_error: true,
             diff: None,
             full_output_path: None,
@@ -341,7 +447,11 @@ pub(crate) fn tool_write(cwd: &Path, args: &Value) -> ToolResult {
     }
 }
 
-pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
+pub(crate) fn tool_edit(
+    cwd: &Path,
+    args: &Value,
+    undo: Option<&Arc<Mutex<TurnUndoJournal>>>,
+) -> ToolResult {
     let path = match args.get("path").and_then(|x| x.as_str()) {
         Some(p) => p,
         None => {
@@ -420,42 +530,67 @@ pub(crate) fn tool_edit(cwd: &Path, args: &Value) -> ToolResult {
             full_output_path: None,
         };
     }
-    for (old, _, replace_all) in &edits {
+    // Validate and apply against the evolving in-memory document. This makes dependent edits
+    // deterministic and transactional: if any entry fails, nothing is written to disk.
+    let mut total_replacements = 0usize;
+    for (edit_idx, (old, new, replace_all)) in edits.into_iter().enumerate() {
         let count = content.matches(old.as_str()).count();
-        if *replace_all {
+        if replace_all {
             if count == 0 {
                 return ToolResult {
-                    output: err("oldText not found in file"),
+                    output: err(format!("edit {}: oldText not found in file", edit_idx + 1)),
                     is_error: true,
                     diff: None,
                     full_output_path: None,
                 };
             }
+            total_replacements += count;
+            content = content.replace(old.as_str(), &new);
         } else if count != 1 {
             return ToolResult {
                 output: err(format!(
-                    "oldText must match exactly once in file, found {count} occurrences \
-                     (pass replaceAll: true to replace every occurrence)"
+                    "edit {}: oldText must match exactly once in the current document, found {count} occurrences \
+                     (pass replaceAll: true to replace every occurrence)",
+                    edit_idx + 1
                 )),
                 is_error: true,
                 diff: None,
                 full_output_path: None,
             };
-        }
-    }
-    let mut total_replacements = 0usize;
-    for (old, new, replace_all) in edits {
-        if replace_all {
-            total_replacements += content.matches(old.as_str()).count();
-            content = content.replace(old.as_str(), &new);
         } else if let Some(idx) = content.find(old.as_str()) {
             content.replace_range(idx..idx + old.len(), &new);
             total_replacements += 1;
         }
     }
-    if let Err(e) = fs::write(&abs, &content) {
+    if let Some(journal) = undo
+        && let Err(e) = journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_before(&abs)
+    {
+        return ToolResult {
+            output: e,
+            is_error: true,
+            diff: None,
+            full_output_path: None,
+        };
+    }
+    if let Err(e) = atomic_write(&abs, content.as_bytes()) {
         return ToolResult {
             output: e.to_string(),
+            is_error: true,
+            diff: None,
+            full_output_path: None,
+        };
+    }
+    if let Some(journal) = undo
+        && let Err(e) = journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_after(&abs)
+    {
+        return ToolResult {
+            output: e,
             is_error: true,
             diff: None,
             full_output_path: None,

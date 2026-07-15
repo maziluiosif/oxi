@@ -470,6 +470,41 @@ impl OxiApp {
                                     mi += 1;
                                 }
                             }
+                            let rollback_available = self
+                                .run_state(self.active_session_key())
+                                .and_then(|run| run.undo_journal.as_ref())
+                                .is_some_and(|journal| {
+                                    journal
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .unavailable_reason()
+                                        .is_none()
+                                });
+                            let can_edit = !self.active_waiting_response()
+                                && !self.compaction_active_for(self.active_session_key())
+                                && messages
+                                    .last()
+                                    .is_some_and(|m| m.role == MsgRole::Assistant)
+                                && self.conv.editing_last_prompt.is_none()
+                                && rollback_available;
+                            if can_edit {
+                                ui.horizontal(|ui| {
+                                    if crate::ui::chrome::ghost_button_icon(
+                                        ui,
+                                        ICON_REFRESH,
+                                        "Regenerate",
+                                        false,
+                                    )
+                                    .on_hover_text(
+                                        "Edit the last prompt, restore its file changes, and retry",
+                                    )
+                                    .clicked()
+                                    {
+                                        self.begin_edit_last_prompt();
+                                    }
+                                });
+                                ui.add_space(8.0);
+                            }
                         }
                     });
                     if pad > 0.0 {

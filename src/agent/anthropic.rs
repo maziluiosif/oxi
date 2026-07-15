@@ -420,7 +420,7 @@ pub async fn run_anthropic_loop(
                         | "git_diff"
                         | "web_search"
                         | "web_fetch"
-                ) || name.starts_with("mcp_")
+                )
             };
             struct ToolCall {
                 id: String,

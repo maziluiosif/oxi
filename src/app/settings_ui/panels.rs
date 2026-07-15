@@ -614,6 +614,52 @@ impl OxiApp {
             ui.add_space(10.0);
             hairline(ui);
             ui.add_space(8.0);
+            settings_caption(ui, "Diagnostics");
+            ui.add_space(4.0);
+            let config_path = crate::settings::AppSettings::config_path();
+            let config_dir = config_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+            ui.label(
+                RichText::new(format!(
+                    "OS: {} · Architecture: {}\nConfig: {}\nWorkspace: {}",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                    config_dir.display(),
+                    self.active_workspace().root_path
+                ))
+                .size(FS_TINY)
+                .monospace()
+                .color(c_text_muted()),
+            );
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if crate::ui::chrome::ghost_button(ui, "Copy diagnostics", false).clicked() {
+                    let report = format!(
+                        "oxi {}\nOS: {} {}\nConfig: {}\nWorkspace: {}\nProvider: {}\nModel: {}\nGit repository: {}",
+                        crate::update::APP_VERSION,
+                        std::env::consts::OS,
+                        std::env::consts::ARCH,
+                        config_dir.display(),
+                        self.active_workspace().root_path,
+                        self.conv.settings.active_provider.label(),
+                        self.conv.settings.active_config().model_id,
+                        self.conv.git.repo,
+                    );
+                    ui.ctx().copy_text(report);
+                }
+                if crate::ui::chrome::ghost_button(ui, "Open config folder", false).clicked() {
+                    let _ = webbrowser::open(&format!("file://{}", config_dir.display()));
+                }
+                let crash_log = config_dir.join("crash.log");
+                if crash_log.is_file()
+                    && crate::ui::chrome::ghost_button(ui, "Open crash log", false).clicked()
+                {
+                    let _ = webbrowser::open(&format!("file://{}", crash_log.display()));
+                }
+            });
+
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if crate::ui::chrome::ghost_button(ui, "GitHub", false).clicked() {
                     let _ = webbrowser::open(crate::update::REPO_URL);

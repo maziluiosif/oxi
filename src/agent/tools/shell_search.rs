@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use glob::glob;
@@ -146,6 +146,42 @@ fn sanitize_bash_env(cmd: &mut Command) {
     cmd.env_remove("CDPATH");
 }
 
+fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        // Keep draining after the display cap so the child can never block on a full pipe.
+        const CAP: usize = super::MAX_TOOL_OUTPUT_CHARS * 2;
+        let mut kept = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) if kept.len() < CAP => {
+                    let take = n.min(CAP - kept.len());
+                    kept.extend_from_slice(&buf[..take]);
+                }
+                Ok(_) => {}
+            }
+        }
+        kept
+    })
+}
+
+fn terminate_child_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // The shell is placed in its own process group before exec. A negative pid targets the
+        // complete group, preventing timeout-created grandchildren from continuing unnoticed.
+        let pgid = -(child.id() as i32);
+        // SAFETY: kill is called with a process-group id created for this child. Errors simply
+        // mean the process already exited or permission was denied; Child::kill remains fallback.
+        unsafe {
+            libc::kill(pgid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<String, String> {
     let cmd = args
         .get("command")
@@ -168,6 +204,17 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<Strin
             .stderr(std::process::Stdio::piped());
         // Strip inherited secrets / agent-hostile env from the child shell.
         sanitize_bash_env(&mut c);
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setpgid(0, 0) only changes the soon-to-exec child's process group and does
+        // not access parent memory. It enables reliable whole-tree termination on timeout.
+        unsafe {
+            c.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         c.spawn().map_err(|e| e.to_string())?
     } else {
         {
@@ -188,42 +235,45 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<Strin
             c.spawn().map_err(|e| e.to_string())?
         }
     };
-    let timeout = Some(Duration::from_secs_f64(timeout_s));
-    let status = loop {
-        if let Some(t) = timeout
-            && start.elapsed() > t
-        {
-            let _ = child.kill();
-            return Ok(truncate_out(format!(
-                "[timeout after {}s]\n",
-                t.as_secs_f64()
-            )));
+    let stdout_reader = child.stdout.take().map(spawn_pipe_reader);
+    let stderr_reader = child.stderr.take().map(spawn_pipe_reader);
+    let timeout = Duration::from_secs_f64(timeout_s);
+    let (status, timed_out) = loop {
+        if start.elapsed() > timeout {
+            terminate_child_tree(&mut child);
+            break (None, true);
         }
         match child.try_wait() {
-            Ok(Some(s)) => break s,
+            Ok(Some(s)) => break (Some(s), false),
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(e) => return Err(e.to_string()),
+            Err(e) => {
+                terminate_child_tree(&mut child);
+                return Err(e.to_string());
+            }
         }
     };
-    let mut out = String::new();
-    if let Some(mut o) = child.stdout {
-        let _ = o.read_to_string(&mut out);
-    }
-    if let Some(mut e) = child.stderr {
-        let mut err = String::new();
-        let _ = e.read_to_string(&mut err);
-        if !err.is_empty() {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&err);
+    let stdout = stdout_reader
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_reader
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let mut out = String::from_utf8_lossy(&stdout).into_owned();
+    if !stderr.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
         }
+        out.push_str(&String::from_utf8_lossy(&stderr));
     }
-    Ok(truncate_out(format!(
-        "exit code: {}\n{}",
-        status.code().unwrap_or(-1),
-        out
-    )))
+    let prefix = if timed_out {
+        format!("[timeout after {}s]\n", timeout.as_secs_f64())
+    } else {
+        format!(
+            "exit code: {}\n",
+            status.and_then(|s| s.code()).unwrap_or(-1)
+        )
+    };
+    Ok(truncate_out(format!("{prefix}{out}")))
 }
 
 pub(crate) fn tool_grep(cwd: &Path, args: &Value) -> Result<String, String> {

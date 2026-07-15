@@ -148,9 +148,11 @@ pub fn load_unified() -> UnifiedSecrets {
 
 pub fn save_unified(unified: &UnifiedSecrets) -> Result<(), String> {
     let json = serde_json::to_string(unified).map_err(|e| e.to_string())?;
-    let result = store_blob(UNIFIED_ACCOUNT, &json);
+    store_blob(UNIFIED_ACCOUNT, &json)?;
+    // Never let the in-process cache claim a failed keychain write succeeded. Callers can now
+    // surface the error and retry without silently diverging from what survives a restart.
     *UNIFIED_CACHE.lock().unwrap() = Some(unified.clone());
-    result
+    Ok(())
 }
 
 /// Windows Credential Manager caps a single credential blob at

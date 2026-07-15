@@ -44,8 +44,10 @@ fn migrate_legacy_file() -> Option<OAuthStore> {
     let path = legacy_oauth_path();
     let bytes = fs::read(&path).ok()?;
     let store: OAuthStore = serde_json::from_slice(&bytes).ok()?;
-    if store.openai_codex.is_some() {
-        let _ = save_oauth_store(&store);
+    if store.openai_codex.is_some() && save_oauth_store(&store).is_err() {
+        // Keep the plaintext legacy file until the keychain write is confirmed. Deleting it on a
+        // failed migration would permanently sign the user out.
+        return Some(store);
     }
     let _ = fs::remove_file(&path);
     Some(store)

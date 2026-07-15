@@ -161,6 +161,7 @@ pub fn spawn_agent_run(
     cancel: Arc<AtomicBool>,
     prior_wire: Option<Vec<serde_json::Value>>,
     chars_per_token: f32,
+    undo_journal: Arc<std::sync::Mutex<crate::agent::tools::TurnUndoJournal>>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let rt = match tokio::runtime::Runtime::new() {
@@ -178,6 +179,12 @@ pub fn spawn_agent_run(
             // it entirely here — no system prompt, wire history, or tool definitions from oxi —
             // then return before the HTTP-provider machinery below.
             if cfg.provider == LlmProviderKind::ClaudeCodeAcp {
+                undo_journal
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .mark_non_reversible(
+                        "Claude Code ACP manages its own tools, so this response cannot be restored safely.",
+                    );
                 run_acp_turn(
                     &cfg,
                     &acp,
@@ -229,6 +236,7 @@ pub fn spawn_agent_run(
                 web_search_backend: settings.web_search_backend,
                 bash_timeout_cap_secs: settings.bash_timeout_cap_secs,
                 mcp: Some(mcp),
+                undo_journal: Some(undo_journal),
             };
             let model = cfg.model_id.clone();
             let effort_override = (!cfg.effort.trim().is_empty()).then_some(cfg.effort.trim());

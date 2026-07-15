@@ -42,8 +42,9 @@ fn migrate_legacy_file() -> Option<SshCredentialStore> {
     let path = legacy_credentials_path();
     let bytes = fs::read(&path).ok()?;
     let store: SshCredentialStore = serde_json::from_slice(&bytes).ok()?;
-    if !store.passwords.is_empty() {
-        let _ = save_ssh_credentials(&store);
+    if !store.passwords.is_empty() && save_ssh_credentials(&store).is_err() {
+        // Preserve the legacy source until the credential-store migration really succeeded.
+        return Some(store);
     }
     let _ = fs::remove_file(&path);
     Some(store)

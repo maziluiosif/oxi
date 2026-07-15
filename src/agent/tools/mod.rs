@@ -1,6 +1,7 @@
 //! Built-in tools (read, write, edit, bash, grep, find, ls).
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
@@ -23,14 +24,16 @@ mod definitions;
 mod file_ops;
 mod paths;
 mod shell_search;
+mod undo;
 mod web;
 
 #[cfg(test)]
 mod tests;
 
 pub use definitions::tool_definitions_json;
-pub(crate) use file_ops::floor_char_boundary;
+pub(crate) use file_ops::{cleanup_stale_spill_files, floor_char_boundary};
 pub use paths::resolve_under_cwd;
+pub use undo::TurnUndoJournal;
 
 /// Runtime configuration passed to [`run_tool`]: which tools are enabled (one flag per entry in
 /// [`ALL_TOOL_NAMES`]) plus any tool-specific settings such as the SearXNG endpoint.
@@ -46,10 +49,19 @@ pub struct ToolEnv {
     pub bash_timeout_cap_secs: u32,
     /// Optional MCP manager for `mcp_*` tools.
     pub mcp: Option<crate::agent::mcp::McpManager>,
+    /// Per-turn rollback journal. Built-in write/edit calls are tracked; MCP calls mark it
+    /// non-reversible because their side effects cannot be observed reliably. Bash is restricted
+    /// by the system prompt to non-mutating verification commands.
+    pub undo_journal: Option<Arc<Mutex<TurnUndoJournal>>>,
 }
 
 pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResult {
     if crate::agent::mcp::McpManager::is_mcp_tool(name) {
+        if let Some(journal) = &env.undo_journal {
+            journal.lock().unwrap_or_else(|e| e.into_inner()).mark_non_reversible(
+                "This response used an MCP tool, whose workspace side effects cannot be restored safely.",
+            );
+        }
         let Some(mcp) = env.mcp.as_ref() else {
             return ToolResult {
                 output: format!("MCP tool `{name}` requested but no MCP manager is configured"),
@@ -94,11 +106,14 @@ pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResu
         };
     }
     match name {
-        "write" => file_ops::tool_write(cwd, args),
-        "edit" => file_ops::tool_edit(cwd, args),
+        "write" => file_ops::tool_write(cwd, args, env.undo_journal.as_ref()),
+        "edit" => file_ops::tool_edit(cwd, args, env.undo_journal.as_ref()),
         _ => {
             let result = match name {
                 "read" => file_ops::tool_read(cwd, args),
+                // The system prompt restricts bash to non-mutating verification commands. File
+                // changes must go through write/edit, so merely running bash must not hide the
+                // Regenerate action for otherwise read-only turns.
                 "bash" => shell_search::tool_bash(cwd, args, env.bash_timeout_cap_secs),
                 "grep" => shell_search::tool_grep(cwd, args),
                 "find" => shell_search::tool_find(cwd, args),

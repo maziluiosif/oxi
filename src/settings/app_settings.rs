@@ -395,8 +395,26 @@ impl AppSettings {
     pub fn load() -> Self {
         let path = Self::config_path();
         let bytes = fs::read(&path).unwrap_or_default();
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(e) if !bytes.is_empty() => {
+                // Preserve malformed user configuration for diagnosis/recovery instead of
+                // silently making it look as if every setting disappeared.
+                let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+                let backup = path.with_file_name(format!("settings.corrupt-{timestamp}.json"));
+                match fs::copy(&path, &backup) {
+                    Ok(_) => eprintln!(
+                        "[oxi] invalid settings JSON ({e}); preserved it at {}",
+                        backup.display()
+                    ),
+                    Err(copy_err) => eprintln!(
+                        "[oxi] invalid settings JSON ({e}); could not preserve it: {copy_err}"
+                    ),
+                }
+                serde_json::Value::Null
+            }
+            Err(_) => serde_json::Value::Null,
+        };
         // Sniff the on-disk shape by its distinctive keys rather than trying typed parses
         // in sequence: a profiles-era file must never silently parse as the new shape
         // (it would come out with empty provider configs and drop the user's setup).
@@ -722,7 +740,8 @@ impl AppSettings {
             }
         }
         if changed {
-            let _ = crate::secrets::save_unified(&unified);
+            crate::secrets::save_unified(&unified)
+                .map_err(|e| format!("Could not save credentials to the OS keychain: {e}"))?;
         }
         let path = Self::config_path();
         if let Some(dir) = path.parent() {

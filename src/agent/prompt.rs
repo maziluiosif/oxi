@@ -53,6 +53,9 @@ fn build_system_prompt_with_project_instructions(
     };
 
     let mut body = template.replace("{tools_list}", &tools_list);
+    body.push_str(
+        "\n\nWorkspace mutation policy:\n- Create or modify workspace files only with the built-in `write` and `edit` tools.\n- Never use `bash`, scripts, formatters, generators, package installers, or MCP tools to create, modify, move, rename, or delete workspace files.\n- Use `bash` only for commands that do not mutate the workspace. This restriction lets Oxi restore a turn before the user edits and retries its prompt.",
+    );
     if let Some(contents) = agents_md.map(str::trim).filter(|s| !s.is_empty()) {
         body.push_str("\n\nProject instructions from AGENTS.md:\n");
         body.push_str(contents);

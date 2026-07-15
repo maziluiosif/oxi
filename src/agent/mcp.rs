@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 
 use crate::settings::McpServerConfig;
 
+const MAX_MCP_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct McpToolInfo {
     pub server: String,
@@ -87,6 +89,9 @@ impl McpManager {
                 }
             }
         }
+        // Sanitization can collapse distinct punctuation-heavy names to the same exposed tool id.
+        // Keep a single deterministic definition so provider calls can never resolve ambiguously.
+        dedupe_mcp_tool_names(&mut tools);
         state.tools = tools;
     }
 
@@ -110,14 +115,20 @@ impl McpManager {
     }
 
     pub fn call_tool(&self, full_name: &str, args: &Value) -> Result<String, String> {
-        let (server, tool) = parse_mcp_tool_name(full_name)
-            .ok_or_else(|| format!("not an MCP tool: {full_name}"))?;
         let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // Resolve against the discovered registry instead of splitting the exposed name. Both
+        // server and tool names may contain underscores, so `split_once('_')` is ambiguous.
+        let info = state
+            .tools
+            .iter()
+            .find(|t| mcp_tool_name(&t.server, &t.name) == full_name)
+            .cloned()
+            .ok_or_else(|| format!("unknown MCP tool: {full_name}"))?;
         let proc = state
             .processes
-            .get_mut(&server)
-            .ok_or_else(|| format!("MCP server `{server}` is not connected"))?;
-        call_tool(proc, &tool, args)
+            .get_mut(&info.server)
+            .ok_or_else(|| format!("MCP server `{}` is not connected", info.server))?;
+        call_tool(proc, &info.name, args)
     }
 
     pub fn is_mcp_tool(name: &str) -> bool {
@@ -140,13 +151,9 @@ fn mcp_tool_name(server: &str, tool: &str) -> String {
     format!("mcp_{}_{}", sanitize(server), sanitize(tool))
 }
 
-fn parse_mcp_tool_name(full: &str) -> Option<(String, String)> {
-    let rest = full.strip_prefix("mcp_")?;
-    let (server, tool) = rest.split_once('_')?;
-    if server.is_empty() || tool.is_empty() {
-        return None;
-    }
-    Some((server.to_string(), tool.to_string()))
+fn dedupe_mcp_tool_names(tools: &mut Vec<McpToolInfo>) {
+    let mut seen = std::collections::HashSet::new();
+    tools.retain(|tool| seen.insert(mcp_tool_name(&tool.server, &tool.name)));
 }
 
 struct ListedTool {
@@ -292,6 +299,11 @@ fn read_line(proc: &mut McpProcess) -> Result<String, String> {
         }
         if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
             let len: usize = rest.trim().parse().map_err(|e| format!("{e}"))?;
+            if len > MAX_MCP_MESSAGE_BYTES {
+                return Err(format!(
+                    "MCP message is too large ({len} bytes; limit is {MAX_MCP_MESSAGE_BYTES})"
+                ));
+            }
             // Consume remaining headers until blank line.
             loop {
                 let mut line = String::new();
