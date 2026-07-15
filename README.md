@@ -57,7 +57,7 @@ target/release/oxi
 
 - **Native desktop app** — Rust + egui, no Electron/webview runtime.
 - **Local-first** — settings, sessions, tool execution, SSH credentials, OAuth tokens, local models, and voice models are handled on your machine.
-- **Workspace-aware agent tools** — read, write, edit, grep, find, list files, run shell commands, and search/fetch web content.
+- **Workspace-aware agent tools** — inspect and search code, read/write/edit/delete/move files, create directories, inspect Git state/diffs, run verification commands, call MCP servers, and search/fetch web content.
 - **Provider flexibility** — OpenAI, Azure OpenAI, OpenRouter, GPT Codex, OpenCode Go, Custom Anthropic-compatible endpoints, LM Studio, Ollama, Local HF, and Claude Code over ACP.
 - **Local model friendly** — connect to LM Studio/Ollama, tunnel to a remote runtime over SSH, or let oxi download GGUF models from HuggingFace and run them through `llama-server`.
 - **Built-in developer surfaces** — source-control panel, diffs, commit-message generation, and a workspace-rooted terminal.
@@ -119,24 +119,34 @@ The agent can call these tools when enabled in Settings:
 | `read` | Read a text file, optionally by line range |
 | `write` | Write or overwrite a file, creating parent directories |
 | `edit` | Replace exact text in a file |
-| `bash` | Run a shell command in the workspace directory |
+| `delete` | Delete a file or an empty directory |
+| `move` | Move or rename a file or empty directory |
+| `mkdir` | Create one directory whose parent already exists |
+| `bash` | Run a non-mutating verification command in the workspace directory |
 | `grep` | Search regex text in files under the workspace |
 | `find` | Find files matching a glob pattern |
 | `ls` | List directory entries |
+| `codebase_search` | Rank code and matching lines for a natural-language query |
+| `git_status` | Show the workspace's staged, unstaged, and untracked changes |
+| `git_diff` | Show staged/unstaged or revision-based Git diffs |
 | `web_search` | Search the web through Bing RSS, DuckDuckGo, or a configured SearXNG instance |
 | `web_fetch` | Fetch a URL and return readable text |
+| `mcp_<server>_<tool>` | Call tools exposed by enabled stdio MCP servers |
 
 Tool behavior:
 
 - path-based tools reject paths that escape the workspace root
 - `write` can create new files under the workspace
 - `edit` requires each `oldText` to match exactly once unless `replaceAll` is set
+- `delete` is non-recursive, while `move` refuses to overwrite destinations and `mkdir` creates one level at a time
+- built-in filesystem mutations are journaled per turn so **Edit & retry** can restore them when no conflicting user change occurred
 - `read` is capped per call
 - `grep` / `find` skip common large folders such as `.git`, `target`, and `node_modules`
 - `grep`, `find`, and `ls` have result caps
 - `web_fetch` only accepts `http://` / `https://` URLs and strips HTML to plain text
 - web tools are read-only and do not require approval
-- `write`, `edit`, and `bash` can require explicit approval, controlled separately in Settings
+- filesystem mutations (`write`, `edit`, `delete`, `move`, `mkdir`) and `bash` can require explicit approval, controlled separately in Settings
+- MCP tools always require approval because their side effects are not known in advance
 - `write` and `edit` generate unified diffs for the UI
 - `bash` has a configurable timeout cap, defaulting to 300 seconds
 - `bash` includes a small deny-list for obviously risky command substrings, but this is not a sandbox; the approval prompt is the real safety boundary
@@ -378,7 +388,7 @@ High-level source layout:
 - `src/main.rs` — native `eframe` entry point, window setup, panic logging
 - `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior, Git/terminal panels
 - `src/agent/` — agent runner, prompts, provider adapters, history conversion/trimming, approvals, tool execution
-- `src/agent/tools/` — read/write/edit/bash/grep/find/ls/web tools
+- `src/agent/tools/` — filesystem, shell/search, codebase-search, Git inspection, web, and reversible-turn tool implementations
 - `src/git.rs` — background Git worker and typed Git operations
 - `src/terminal.rs` — PTY terminal session
 - `src/local_models.rs` — HuggingFace GGUF downloads and local `llama-server` runtime management
@@ -406,7 +416,7 @@ Important runtime behavior:
 ## Current limitations and safety notes
 
 - `bash` safety checks are best-effort and not a sandbox
-- tool execution can modify files inside the selected workspace
+- built-in filesystem tools can modify files inside the selected workspace; MCP tools and `bash` may have broader side effects and are not sandboxed
 - Git panel actions can modify the repository, including discard/commit/checkout/pull/push
 - Remote SSH tunnels should only be pointed at hosts you control
 - long conversation trimming uses approximate budgets, not exact tokenizer accounting

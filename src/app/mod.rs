@@ -11,6 +11,7 @@ use crate::settings::AppSettings;
 mod agent_handlers;
 mod compaction;
 mod composer;
+mod composer_helpers;
 mod confirm;
 mod connection;
 mod conversation;

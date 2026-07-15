@@ -777,7 +777,11 @@ fn undo_journal_restores_modified_and_created_files() {
         .is_error
     );
 
-    journal.lock().unwrap().restore(&cwd).unwrap();
+    journal
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .restore(&cwd)
+        .unwrap();
     assert_eq!(
         fs::read_to_string(cwd.join("existing.txt")).unwrap(),
         "before"
@@ -805,7 +809,13 @@ fn undo_journal_refuses_to_overwrite_later_user_edit() {
     );
     fs::write(cwd.join("file.txt"), "user").unwrap();
 
-    assert!(journal.lock().unwrap().restore(&cwd).is_err());
+    assert!(
+        journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .restore(&cwd)
+            .is_err()
+    );
     assert_eq!(fs::read_to_string(cwd.join("file.txt")).unwrap(), "user");
 }
 
@@ -818,7 +828,13 @@ fn readonly_bash_keeps_turn_undo_available() {
     let mut env = all_enabled();
     env.undo_journal = Some(journal.clone());
     assert!(!run_tool(&cwd, "bash", &json!({"command": "pwd"}), &env).is_error);
-    assert!(journal.lock().unwrap().restore(&cwd).is_ok());
+    assert!(
+        journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .restore(&cwd)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -849,7 +865,11 @@ fn reversible_delete_move_and_mkdir_restore_cleanly() {
     assert!(cwd.join("moved.txt").exists());
     assert!(cwd.join("created-dir").is_dir());
 
-    journal.lock().unwrap().restore(&cwd).unwrap();
+    journal
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .restore(&cwd)
+        .unwrap();
     assert_eq!(
         fs::read_to_string(cwd.join("delete-me.txt")).unwrap(),
         "original"
@@ -873,7 +893,13 @@ fn undo_refuses_untracked_file_inside_created_directory() {
     assert!(!run_tool(&cwd, "mkdir", &json!({"path": "created-dir"}), &env,).is_error);
     fs::write(cwd.join("created-dir/user.txt"), "user").unwrap();
 
-    assert!(journal.lock().unwrap().restore(&cwd).is_err());
+    assert!(
+        journal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .restore(&cwd)
+            .is_err()
+    );
     assert!(cwd.join("created-dir/user.txt").exists());
 }
 
