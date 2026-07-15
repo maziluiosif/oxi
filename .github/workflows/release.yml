@@ -3,10 +3,11 @@ name: Release
 on:
   push:
     branches: [master]
+  # Allows retrying the pipeline from the Actions UI without manufacturing a commit.
+  workflow_dispatch:
 
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency:
   group: release
@@ -15,19 +16,28 @@ concurrency:
 jobs:
   changelog:
     runs-on: ubuntu-latest
-    # Skip the run triggered by our own release-bump commit, to avoid a loop.
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    # Skip the run triggered by our own release-bump commit when a custom token is used.
+    # Pushes made with GITHUB_TOKEN normally do not trigger another workflow, but this guard
+    # keeps the pipeline loop-safe if the authentication strategy changes later.
+    if: ${{ github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'chore(release):') }}
     outputs:
       released: ${{ steps.gen.outputs.released }}
       version: ${{ steps.gen.outputs.version }}
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # workflow_dispatch may be launched from another ref; releases always come from master.
+          ref: master
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Record source revision
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog and bump version
         id: gen
@@ -36,45 +46,17 @@ jobs:
           OPENROUTER_MODEL: anthropic/claude-haiku-4.5
         run: python .github/scripts/release_changelog.py
 
-      - name: Commit, tag and push
-        if: steps.gen.outputs.released == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md Cargo.toml Cargo.lock
-          git commit -m "chore(release): v${{ steps.gen.outputs.version }}"
-          git tag "v${{ steps.gen.outputs.version }}"
-          git push origin HEAD:master
-          git push origin "v${{ steps.gen.outputs.version }}"
-
-      - name: Upload release notes
+      - name: Upload generated release metadata
         if: steps.gen.outputs.released == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: release-notes
-          path: release_notes.md
-
-  sync-dev:
-    needs: changelog
-    if: needs.changelog.outputs.released == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Open (or reuse) a sync PR master -> dev and auto-merge it
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ver="v${{ needs.changelog.outputs.version }}"
-          pr=$(gh pr list --base dev --head master --state open --json number -q '.[0].number')
-          if [ -z "$pr" ]; then
-            gh pr create --base dev --head master \
-              --title "chore: sync release $ver back to dev" \
-              --body "Brings the \`$ver\` changelog entry and version bump from master into dev."
-            pr=$(gh pr list --base dev --head master --state open --json number -q '.[0].number')
-          fi
-          # Merge once CI on the PR is green (auto-merge); harmless if it can merge now.
-          gh pr merge "$pr" --auto --merge || echo "Could not enable auto-merge; merge the sync PR manually."
+          name: release-metadata
+          path: |
+            CHANGELOG.md
+            Cargo.toml
+            Cargo.lock
+            release_notes.md
+          if-no-files-found: error
 
   build:
     needs: changelog
@@ -96,7 +78,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ needs.changelog.outputs.version }}
+          ref: ${{ needs.changelog.outputs.source_sha }}
+
+      - name: Apply generated version metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -148,24 +135,79 @@ jobs:
         run: |
           Compress-Archive -Path "target/${{ matrix.target }}/release/oxi.exe" -DestinationPath "${{ matrix.name }}.zip"
 
-      - name: Download release notes
+      - name: Upload packaged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.*
+          if-no-files-found: error
+
+  publish:
+    needs: [changelog, build]
+    if: needs.changelog.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.changelog.outputs.source_sha }}
+
+      - name: Download generated release metadata
         uses: actions/download-artifact@v4
         with:
-          name: release-notes
+          name: release-metadata
 
-      - name: Publish release
+      - name: Commit, tag and push the verified release
+        run: |
+          version="${{ needs.changelog.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md Cargo.toml Cargo.lock
+          git commit -m "chore(release): v${version}"
+          git tag -a "v${version}" -m "oxi v${version}"
+          # The release commit is published only after every platform built successfully.
+          git push --atomic origin HEAD:master "refs/tags/v${version}"
+
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: oxi-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish one GitHub release with all platforms
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.changelog.outputs.version }}
           name: v${{ needs.changelog.outputs.version }}
           body_path: release_notes.md
-          files: |
-            ${{ matrix.name }}.tar.gz
-            ${{ matrix.name }}.zip
-          fail_on_unmatched_files: false
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  sync-dev:
+    needs: [changelog, publish]
+    if: needs.changelog.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: dev
+
+      - name: Copy release metadata back to dev
+        run: |
+          version="${{ needs.changelog.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin dev --tags
+          # The tag points at the generated release commit, which only changes
+          # CHANGELOG.md, Cargo.toml and Cargo.lock. Cherry-picking that commit avoids
+          # merging master topology back into the long-lived development branch.
+          git cherry-pick "v${version}^{}"
+          git push origin HEAD:dev
 
   homebrew:
-    needs: [changelog, build]
+    needs: [changelog, publish]
     if: needs.changelog.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
