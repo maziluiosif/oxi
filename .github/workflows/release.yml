@@ -26,7 +26,7 @@ jobs:
       version: ${{ steps.gen.outputs.version }}
       source_sha: ${{ steps.source.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           # workflow_dispatch may be launched from another ref; releases always come from master.
@@ -77,7 +77,7 @@ jobs:
             name: oxi-windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.changelog.outputs.source_sha }}
 
@@ -148,7 +148,7 @@ jobs:
     if: needs.changelog.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ needs.changelog.outputs.source_sha }}
