@@ -5,7 +5,7 @@ use eframe::egui::{self, Align, Layout, RichText, Ui};
 use crate::settings::{ALL_TOOL_NAMES, LlmProviderKind};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_hint, field_label, field_label_first, ghost_button, hairline, pill_tab,
+    card_frame, field_hint, field_label, field_label_first, ghost_button, hairline,
     settings_caption, settings_card_header, settings_section_title, settings_text_area,
     settings_text_field, settings_text_field_width,
 };
@@ -37,11 +37,18 @@ const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
     ("External agents", &[LlmProviderKind::ClaudeCodeAcp]),
 ];
 
-/// Tool chips grouped by intent so the Agent panel is scannable.
+/// Tool chips grouped by intent so the Agent panel is scannable. Keep this list in sync with
+/// `ALL_TOOL_NAMES`: every built-in tool must be visible and configurable here.
 const TOOL_GROUPS: &[(&str, &[&str])] = &[
-    ("Read", &["read", "grep", "find", "ls", "codebase_search"]),
-    ("Write", &["write", "edit"]),
-    ("Shell", &["bash"]),
+    (
+        "Explore workspace",
+        &["read", "grep", "find", "ls", "codebase_search"],
+    ),
+    (
+        "Change files",
+        &["write", "edit", "delete", "move", "mkdir"],
+    ),
+    ("Run commands", &["bash"]),
     ("Git", &["git_status", "git_diff"]),
     ("Web", &["web_search", "web_fetch"]),
 ];
@@ -91,29 +98,33 @@ impl OxiApp {
             });
         }
 
-        ui.add_space(16.0);
-        settings_caption(ui, "Choose provider");
+        ui.add_space(12.0);
+        settings_caption(ui, "Configure provider");
         ui.add_space(4.0);
-
-        // Grouped pill bars instead of one dense wrapped row of 10 providers.
-        for (group_label, providers) in PROVIDER_GROUPS {
-            ui.label(
-                RichText::new(*group_label)
-                    .size(FS_TINY)
-                    .color(c_text_muted()),
-            );
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for &provider in *providers {
-                    let selected = self.conv.settings_provider_tab == provider;
-                    if pill_tab(ui, provider.label(), selected) {
-                        self.conv.settings_provider_tab = provider;
+        let current_provider = self.conv.settings_provider_tab;
+        egui::ComboBox::from_id_salt("settings_provider_picker")
+            .selected_text(current_provider.label())
+            .width(320.0)
+            .show_ui(ui, |ui| {
+                for (group_label, providers) in PROVIDER_GROUPS {
+                    ui.label(
+                        RichText::new(*group_label)
+                            .size(FS_TINY)
+                            .color(c_text_faint())
+                            .strong(),
+                    );
+                    for &provider in *providers {
+                        if ui
+                            .selectable_label(provider == current_provider, provider.label())
+                            .clicked()
+                        {
+                            self.conv.settings_provider_tab = provider;
+                        }
                     }
+                    ui.add_space(4.0);
                 }
             });
-            ui.add_space(10.0);
-        }
+        ui.add_space(10.0);
 
         let provider = self.conv.settings_provider_tab;
         card_frame().show(ui, |ui| {
@@ -176,11 +187,42 @@ impl OxiApp {
 
         // ── Tools ──────────────────────────────────────────────────────────
         card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Enabled tools",
-                Some("Click a chip to toggle. Disabled tools are hidden from the model."),
-            );
+            let enabled_count = self
+                .conv
+                .settings
+                .tools_enabled
+                .iter()
+                .take(ALL_TOOL_NAMES.len())
+                .filter(|enabled| **enabled)
+                .count();
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("Enabled tools")
+                            .size(FS_BODY)
+                            .color(c_text())
+                            .strong(),
+                    );
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "{enabled_count} of {} available to the agent",
+                            ALL_TOOL_NAMES.len()
+                        ))
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                    );
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ghost_button(ui, "Disable all", false).clicked() {
+                        self.conv.settings.tools_enabled.fill(false);
+                    }
+                    if ghost_button(ui, "Enable all", false).clicked() {
+                        self.conv.settings.tools_enabled.fill(true);
+                    }
+                });
+            });
+            ui.add_space(10.0);
             for (gi, (group, names)) in TOOL_GROUPS.iter().enumerate() {
                 if gi > 0 {
                     ui.add_space(10.0);
@@ -331,16 +373,21 @@ impl OxiApp {
                 "Web search",
                 Some("Backend used by the web_search tool."),
             );
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let current = self.conv.settings.web_search_backend;
-                for b in crate::settings::WebSearchBackend::ALL {
-                    if pill_tab(ui, b.label(), b == current) && b != current {
-                        self.conv.settings.web_search_backend = b;
+            let current = self.conv.settings.web_search_backend;
+            egui::ComboBox::from_id_salt("web_search_backend_combo")
+                .selected_text(current.label())
+                .width(220.0)
+                .show_ui(ui, |ui| {
+                    for backend in crate::settings::WebSearchBackend::ALL {
+                        if ui
+                            .selectable_label(backend == current, backend.label())
+                            .clicked()
+                        {
+                            self.conv.settings.web_search_backend = backend;
+                        }
                     }
-                }
-            });
-            ui.add_space(8.0);
+                });
+            ui.add_space(6.0);
             match self.conv.settings.web_search_backend {
                 crate::settings::WebSearchBackend::Bing => {
                     ui.label(
@@ -464,35 +511,38 @@ impl OxiApp {
 
             settings_caption(ui, "Provider");
             ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let current = self.conv.settings.commit_msg_provider;
-                if pill_tab(ui, "Active provider", current.is_none()) && current.is_some() {
-                    self.conv.settings.commit_msg_provider = None;
-                    self.conv.settings.commit_msg_model_id.clear();
-                }
-            });
-            ui.add_space(8.0);
-            for (group_label, providers) in PROVIDER_GROUPS {
-                ui.label(
-                    RichText::new(*group_label)
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
-                );
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let current = self.conv.settings.commit_msg_provider;
-                    for &kind in *providers {
-                        if pill_tab(ui, kind.label(), current == Some(kind))
-                            && current != Some(kind)
-                        {
-                            self.conv.settings.commit_msg_provider = Some(kind);
+            let current = self.conv.settings.commit_msg_provider;
+            let current_label = current.map_or("Use active provider", |provider| provider.label());
+            egui::ComboBox::from_id_salt("commit_message_provider_combo")
+                .selected_text(current_label)
+                .width(320.0)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(current.is_none(), "Use active provider")
+                        .clicked()
+                    {
+                        self.conv.settings.commit_msg_provider = None;
+                        self.conv.settings.commit_msg_model_id.clear();
+                    }
+                    ui.separator();
+                    for (group_label, providers) in PROVIDER_GROUPS {
+                        ui.label(
+                            RichText::new(*group_label)
+                                .size(FS_TINY)
+                                .color(c_text_faint())
+                                .strong(),
+                        );
+                        for &kind in *providers {
+                            if ui
+                                .selectable_label(current == Some(kind), kind.label())
+                                .clicked()
+                            {
+                                self.conv.settings.commit_msg_provider = Some(kind);
+                            }
                         }
+                        ui.add_space(4.0);
                     }
                 });
-                ui.add_space(8.0);
-            }
             if let Some(kind) = self.conv.settings.commit_msg_provider {
                 field_label(ui, "Model (empty = provider's selected model)");
                 let hint = self.conv.settings.provider(kind).model_id.clone();
@@ -699,15 +749,29 @@ impl OxiApp {
                 "Theme",
                 Some("Built-in themes plus any custom JSON themes."),
             );
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for t in &themes {
-                    if pill_tab(ui, &t.name, t.id == current) && t.id != current {
-                        self.conv.settings.theme_id = t.id.clone();
-                        crate::theme::apply_theme(ui.ctx(), &t.id);
+            let selected_theme = themes
+                .iter()
+                .find(|theme| theme.id == current)
+                .map(|theme| theme.name.as_str())
+                .unwrap_or("Default");
+            let mut next_theme = None;
+            egui::ComboBox::from_id_salt("appearance_theme_combo")
+                .selected_text(selected_theme)
+                .width(320.0)
+                .show_ui(ui, |ui| {
+                    for theme in &themes {
+                        if ui
+                            .selectable_label(theme.id == current, &theme.name)
+                            .clicked()
+                        {
+                            next_theme = Some(theme.id.clone());
+                        }
                     }
-                }
-            });
+                });
+            if let Some(theme_id) = next_theme.filter(|id| id != &current) {
+                self.conv.settings.theme_id = theme_id.clone();
+                crate::theme::apply_theme(ui.ctx(), &theme_id);
+            }
 
             ui.add_space(14.0);
             hairline(ui);
@@ -809,15 +873,21 @@ impl OxiApp {
                 "Text size",
                 Some("Scales the whole UI (density / zoom)."),
             );
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                for d in crate::settings::UiDensity::ALL {
-                    if pill_tab(ui, d.label(), d == current_density) && d != current_density {
-                        self.conv.settings.ui_density = d;
-                        ui.ctx().set_zoom_factor(d.zoom_factor());
+            egui::ComboBox::from_id_salt("appearance_density_combo")
+                .selected_text(current_density.label())
+                .width(320.0)
+                .show_ui(ui, |ui| {
+                    for density in crate::settings::UiDensity::ALL {
+                        if ui
+                            .selectable_label(density == current_density, density.label())
+                            .clicked()
+                            && density != current_density
+                        {
+                            self.conv.settings.ui_density = density;
+                            ui.ctx().set_zoom_factor(density.zoom_factor());
+                        }
                     }
-                }
-            });
+                });
 
             ui.add_space(14.0);
             hairline(ui);
