@@ -563,7 +563,11 @@ impl OxiApp {
                             .show(ui, |ui| {
                                 ui.set_min_width(ui.max_rect().width());
                                 ui.set_min_height(ui.max_rect().height());
-                                self.render_sidebar(ui);
+                                if self.conv.sidebar_mode == super::state::SidebarMode::Explorer {
+                                    self.render_file_explorer(ui);
+                                } else {
+                                    self.render_sidebar(ui);
+                                }
                             });
                         ui.expand_to_include_rect(ui.max_rect());
                     },
@@ -594,6 +598,11 @@ impl OxiApp {
                             bottom: CHAT_FRAME_BOTTOM as i8,
                         })
                         .show(ui, |ui| {
+                            if self.conv.editor.active_document().is_some() {
+                                self.render_text_editor(ui);
+                                return;
+                            }
+
                             let style = (*ui.style()).clone();
                             let column_center_w = crate::theme::chat_column_center_width(
                                 ui.available_width(),

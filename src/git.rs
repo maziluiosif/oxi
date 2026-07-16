@@ -6,6 +6,7 @@
 //! sends a [`GitOp`] over the request channel and the worker replies with a full
 //! [`GitState`] snapshot (after-action) over the response channel.
 
+use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -37,6 +38,19 @@ pub struct GitCommit {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitLineKind {
+    Added,
+    Modified,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GitLineChange {
+    /// Zero-based line number in the current working-tree file.
+    pub line: usize,
+    pub kind: GitLineKind,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GitState {
     /// `false` when the workspace isn't inside a git worktree.
@@ -47,6 +61,8 @@ pub struct GitState {
     pub behind: usize,
     pub staged: Vec<GitEntry>,
     pub unstaged: Vec<GitEntry>,
+    /// Added/modified working-tree lines, keyed by repository-relative path.
+    pub line_changes: HashMap<String, Vec<GitLineChange>>,
     pub log: Vec<GitCommit>,
     /// Currently viewed diff: `(title, unified diff text)`.
     pub diff: Option<(String, String)>,
@@ -358,6 +374,83 @@ fn parse_log(root: &str) -> Vec<GitCommit> {
     entries
 }
 
+fn working_tree_line_changes(
+    root: &str,
+    unstaged: &[GitEntry],
+) -> HashMap<String, Vec<GitLineChange>> {
+    let (ok, output) = git(
+        root,
+        &["diff", "HEAD", "--no-color", "--unified=0", "--no-prefix", "--"],
+    );
+    let mut changes = HashMap::<String, Vec<GitLineChange>>::new();
+    if ok {
+        let mut current_path: Option<String> = None;
+        for line in output.lines() {
+            if let Some(path) = line.strip_prefix("+++ ") {
+                current_path = (path != "/dev/null").then(|| path.to_owned());
+                continue;
+            }
+            let Some(header) = line.strip_prefix("@@ ") else {
+                continue;
+            };
+            let Some(path) = current_path.as_ref() else {
+                continue;
+            };
+            let Some(new_range) = header
+                .split_whitespace()
+                .find(|part| part.starts_with('+'))
+            else {
+                continue;
+            };
+            let old_count = header
+                .split_whitespace()
+                .find(|part| part.starts_with('-'))
+                .and_then(diff_range)
+                .map(|(_, count)| count)
+                .unwrap_or(0);
+            let Some((new_start, new_count)) = diff_range(new_range) else {
+                continue;
+            };
+            let kind = if old_count == 0 {
+                GitLineKind::Added
+            } else {
+                GitLineKind::Modified
+            };
+            let path_changes = changes.entry(path.clone()).or_default();
+            for line_number in new_start..new_start.saturating_add(new_count) {
+                path_changes.push(GitLineChange {
+                    line: line_number.saturating_sub(1),
+                    kind,
+                });
+            }
+        }
+    }
+
+    // Untracked files are absent from `git diff`; every current line is an addition.
+    for entry in unstaged.iter().filter(|entry| entry.status == '?') {
+        if let Ok(content) = std::fs::read_to_string(std::path::Path::new(root).join(&entry.path)) {
+            changes.insert(
+                entry.path.clone(),
+                (0..content.split('\n').count().max(1))
+                    .map(|line| GitLineChange {
+                        line,
+                        kind: GitLineKind::Added,
+                    })
+                    .collect(),
+            );
+        }
+    }
+    changes
+}
+
+fn diff_range(token: &str) -> Option<(usize, usize)> {
+    let range = token.trim_start_matches(['+', '-']);
+    let mut parts = range.split(',');
+    let start = parts.next()?.parse().ok()?;
+    let count = parts.next().and_then(|count| count.parse().ok()).unwrap_or(1);
+    Some((start, count))
+}
+
 fn show_diff(root: &str, path: &str, staged: bool) -> String {
     let mut args = vec!["diff", "--no-color"];
     if staged {
@@ -422,6 +515,7 @@ fn snapshot_with(
     let branches = list_branches(root);
     let (ahead, behind) = ahead_behind(root, &branch);
     let (staged, unstaged) = parse_porcelain(root);
+    let line_changes = working_tree_line_changes(root, &unstaged);
     let log = parse_log(root);
 
     let diff = if let Some(preset) = preset_diff {
@@ -456,6 +550,7 @@ fn snapshot_with(
         behind,
         staged,
         unstaged,
+        line_changes,
         log,
         diff,
         error,

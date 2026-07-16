@@ -16,6 +16,7 @@ mod confirm;
 mod connection;
 mod conversation;
 mod eframe_app;
+mod file_explorer;
 mod git_panel;
 mod input_history;
 mod mentions;
@@ -30,8 +31,8 @@ mod terminal_panel;
 mod update_check;
 
 pub use state::{
-    ConnectionState, ConversationState, LocalRuntimeState, ModelFetchMsg, PendingApproval,
-    RunState, SessionKey, SessionRunState, SshTestMsg, Workspace,
+    ConnectionState, ConversationState, EditorDocument, LocalRuntimeState, ModelFetchMsg,
+    PendingApproval, RunState, SessionKey, SessionRunState, SshTestMsg, Workspace,
 };
 
 pub struct OxiApp {
@@ -135,6 +136,9 @@ impl OxiApp {
                 focus_terminal_next_frame: false,
                 sidebar_open: true,
                 sidebar_width: settings.sidebar_width,
+                sidebar_mode: state::SidebarMode::default(),
+                explorer_expanded: std::collections::HashSet::new(),
+                editor: state::EditorState::default(),
                 settings_sidebar_width: 220.0,
                 terminal_open: settings.terminal_open,
                 terminal_height: settings.terminal_height,
@@ -353,6 +357,13 @@ impl OxiApp {
         {
             return;
         }
+        if self.conv.editor.any_dirty() {
+            self.conv.editor.error = Some("Save the open file before switching workspace.".into());
+            return;
+        }
+        self.conv.editor.documents.clear();
+        self.conv.editor.active = None;
+        self.conv.editor.hidden_active = None;
         let target_si = self.conv.workspaces[workspace_idx].active;
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
@@ -381,6 +392,15 @@ impl OxiApp {
             return;
         }
         let workspace_changed = workspace_idx != self.conv.active_workspace;
+        if workspace_changed && self.conv.editor.any_dirty() {
+            self.conv.editor.error = Some("Save the open file before switching workspace.".into());
+            return;
+        }
+        if workspace_changed {
+            self.conv.editor.documents.clear();
+            self.conv.editor.active = None;
+            self.conv.editor.hidden_active = None;
+        }
         self.swap_session_input(workspace_idx, session_idx);
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;

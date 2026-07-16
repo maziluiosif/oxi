@@ -1,5 +1,5 @@
 //! Persistent bottom status bar: thin strip below the terminal panel with quick
-//! toggles for the sidebar/terminal/git panels and the current git branch.
+//! toggles for the chats/explorer sidebar, terminal/git panels, and the current git branch.
 
 use eframe::egui::{self, Align, Layout, Stroke};
 
@@ -28,7 +28,8 @@ impl OxiApp {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
 
-                    let sidebar_on = self.conv.sidebar_open;
+                    let sidebar_on = self.conv.sidebar_open
+                        && self.conv.sidebar_mode == crate::app::state::SidebarMode::Chats;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_MENU, 20.0, sidebar_on)
                         .on_hover_text(if sidebar_on {
                             "Hide sidebar (Cmd/Ctrl+B)"
@@ -42,22 +43,19 @@ impl OxiApp {
                         );
                     }
 
-                    let settings_on = self.conv.settings_open;
-                    if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, settings_on)
-                        .on_hover_text(if settings_on {
-                            "Back to chat"
+                    let explorer_on = self.conv.sidebar_open
+                        && self.conv.sidebar_mode == crate::app::state::SidebarMode::Explorer;
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_EXPLORER, 20.0, explorer_on)
+                        .on_hover_text(if explorer_on {
+                            "Hide workspace explorer"
                         } else {
-                            "Open settings"
+                            "Open workspace explorer"
                         })
                         .clicked()
                     {
-                        if settings_on {
-                            self.request_settings_exit(
-                                crate::app::state::SettingsExitAction::BackToChat,
-                            );
-                        } else {
-                            self.open_settings_page();
-                        }
+                        self.request_settings_exit(
+                            crate::app::state::SettingsExitAction::ToggleExplorer,
+                        );
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

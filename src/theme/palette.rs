@@ -9,6 +9,24 @@ pub(crate) const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
+/// Semantic colors shared by the editor, minimap, and fenced Markdown code.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct SyntaxPalette {
+    pub foreground: Color32,
+    pub comment: Color32,
+    pub keyword: Color32,
+    pub function: Color32,
+    pub type_name: Color32,
+    pub string: Color32,
+    pub number: Color32,
+    pub constant: Color32,
+    pub variable: Color32,
+    pub operator: Color32,
+    pub tag: Color32,
+    pub attribute: Color32,
+    pub regexp: Color32,
+}
+
 // ─── Palette ─────────────────────────────────────────────────────────────────
 //
 // Every surface / ink / accent color the UI draws with lives in [`Palette`], so the
@@ -58,6 +76,8 @@ pub struct Palette {
     pub md_quote_accent: Color32,
     /// Inline / block code text color.
     pub md_code_fg: Color32,
+    /// Complete semantic syntax-highlighting scheme.
+    pub syntax: SyntaxPalette,
 }
 
 impl Palette {
@@ -99,6 +119,21 @@ impl Palette {
         md_code_block_border: rgb(0x2a, 0x2d, 0x34),
         md_quote_accent: rgb(0xc4, 0x82, 0x4f),
         md_code_fg: rgb(0xe1, 0xe4, 0xea),
+        syntax: SyntaxPalette {
+            foreground: rgb(0xd8, 0xde, 0xe9),
+            comment: rgb(0x70, 0x78, 0x86),
+            keyword: rgb(0xf0, 0x78, 0x78),
+            function: rgb(0x82, 0xaa, 0xff),
+            type_name: rgb(0xff, 0xcb, 0x6b),
+            string: rgb(0xc3, 0xe8, 0x8d),
+            number: rgb(0xf7, 0x8c, 0x6c),
+            constant: rgb(0xc7, 0x92, 0xea),
+            variable: rgb(0xd8, 0xde, 0xe9),
+            operator: rgb(0x89, 0xdd, 0xff),
+            tag: rgb(0xf0, 0x71, 0x78),
+            attribute: rgb(0xff, 0xcb, 0x6b),
+            regexp: rgb(0x89, 0xdd, 0xff),
+        },
     };
 
     /// Light theme: warm near-white surfaces with dark ink, derived from [`Palette::DARK`]
@@ -139,6 +174,21 @@ impl Palette {
         md_code_block_border: rgb(0xde, 0xde, 0xda),
         md_quote_accent: rgb(0xb4, 0x52, 0x19),
         md_code_fg: rgb(0x1f, 0x21, 0x26),
+        syntax: SyntaxPalette {
+            foreground: rgb(0x24, 0x29, 0x2f),
+            comment: rgb(0x6a, 0x73, 0x7d),
+            keyword: rgb(0xcf, 0x22, 0x2e),
+            function: rgb(0x82, 0x50, 0xdf),
+            type_name: rgb(0x95, 0x3f, 0x00),
+            string: rgb(0x0a, 0x30, 0x69),
+            number: rgb(0x05, 0x5d, 0xb8),
+            constant: rgb(0x05, 0x5d, 0xb8),
+            variable: rgb(0x24, 0x29, 0x2f),
+            operator: rgb(0x05, 0x5d, 0xb8),
+            tag: rgb(0x11, 0x6b, 0x2e),
+            attribute: rgb(0x95, 0x3f, 0x00),
+            regexp: rgb(0x11, 0x6b, 0x2e),
+        },
     };
 
     /// Midnight: a pure-black OLED-friendly dark variant of [`Palette::DARK`].
@@ -178,6 +228,21 @@ impl Palette {
         md_code_block_border: rgb(0x20, 0x23, 0x29),
         md_quote_accent: rgb(0xc4, 0x82, 0x4f),
         md_code_fg: rgb(0xe1, 0xe4, 0xea),
+        syntax: SyntaxPalette {
+            foreground: rgb(0xd8, 0xde, 0xe9),
+            comment: rgb(0x61, 0x68, 0x70),
+            keyword: rgb(0xff, 0x7a, 0x90),
+            function: rgb(0x82, 0xaa, 0xff),
+            type_name: rgb(0xff, 0xcb, 0x6b),
+            string: rgb(0xb5, 0xe8, 0x53),
+            number: rgb(0xf7, 0x8c, 0x6c),
+            constant: rgb(0xc7, 0x92, 0xea),
+            variable: rgb(0xd8, 0xde, 0xe9),
+            operator: rgb(0x89, 0xdd, 0xff),
+            tag: rgb(0xff, 0x7a, 0x90),
+            attribute: rgb(0xff, 0xcb, 0x6b),
+            regexp: rgb(0x89, 0xdd, 0xff),
+        },
     };
 
     /// Sublime: the classic Sublime Text "Monokai" scheme — warm charcoal surfaces
@@ -219,6 +284,21 @@ impl Palette {
         md_code_block_border: rgb(0x3e, 0x3d, 0x32),
         md_quote_accent: rgb(0xfd, 0x97, 0x1f),
         md_code_fg: rgb(0xe6, 0xdb, 0x74),
+        syntax: SyntaxPalette {
+            foreground: rgb(0xf8, 0xf8, 0xf2),
+            comment: rgb(0x75, 0x71, 0x5e),
+            keyword: rgb(0xf9, 0x26, 0x72),
+            function: rgb(0xa6, 0xe2, 0x2e),
+            type_name: rgb(0x66, 0xd9, 0xef),
+            string: rgb(0xe6, 0xdb, 0x74),
+            number: rgb(0xae, 0x81, 0xff),
+            constant: rgb(0xae, 0x81, 0xff),
+            variable: rgb(0xf8, 0xf8, 0xf2),
+            operator: rgb(0xf9, 0x26, 0x72),
+            tag: rgb(0xf9, 0x26, 0x72),
+            attribute: rgb(0xa6, 0xe2, 0x2e),
+            regexp: rgb(0xe6, 0xdb, 0x74),
+        },
     };
 
     /// Sublime 4: the Sublime Text 4 default "Mariana" scheme — desaturated blue-grey
@@ -259,6 +339,21 @@ impl Palette {
         md_code_block_border: rgb(0x3f, 0x46, 0x50),
         md_quote_accent: rgb(0x66, 0x99, 0xcc),
         md_code_fg: rgb(0x5f, 0xb3, 0xb3),
+        syntax: SyntaxPalette {
+            foreground: rgb(0xd8, 0xde, 0xe9),
+            comment: rgb(0x7f, 0x8c, 0x98),
+            keyword: rgb(0xc6, 0x95, 0xc6),
+            function: rgb(0x66, 0x99, 0xcc),
+            type_name: rgb(0xfa, 0xc8, 0x63),
+            string: rgb(0x99, 0xc7, 0x94),
+            number: rgb(0xf9, 0xae, 0x58),
+            constant: rgb(0xf9, 0xae, 0x58),
+            variable: rgb(0xd8, 0xde, 0xe9),
+            operator: rgb(0x5f, 0xb3, 0xb3),
+            tag: rgb(0xec, 0x5f, 0x67),
+            attribute: rgb(0xfa, 0xc8, 0x63),
+            regexp: rgb(0x99, 0xc7, 0x94),
+        },
     };
 }
 

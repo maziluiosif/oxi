@@ -65,8 +65,27 @@ impl OxiApp {
                 self.conv.focus_chat_input_next_frame = true;
             }
             SettingsExitAction::ToggleSidebar => {
-                self.conv.sidebar_open = !self.conv.sidebar_open;
+                let chats_on = self.conv.sidebar_open
+                    && self.conv.sidebar_mode == crate::app::state::SidebarMode::Chats;
+                self.conv.sidebar_open = !chats_on;
+                if !chats_on {
+                    self.conv.sidebar_mode = crate::app::state::SidebarMode::Chats;
+                    if self.conv.editor.active.is_some() {
+                        self.conv.editor.hidden_active = self.conv.editor.active.take();
+                    }
+                }
                 self.conv.focus_chat_input_next_frame = true;
+            }
+            SettingsExitAction::ToggleExplorer => {
+                let explorer_on = self.conv.sidebar_open
+                    && self.conv.sidebar_mode == crate::app::state::SidebarMode::Explorer;
+                self.conv.sidebar_open = !explorer_on;
+                if !explorer_on {
+                    self.conv.sidebar_mode = crate::app::state::SidebarMode::Explorer;
+                    if self.conv.editor.active.is_none() {
+                        self.conv.editor.active = self.conv.editor.hidden_active.take();
+                    }
+                }
             }
             SettingsExitAction::ToggleTerminal => self.toggle_terminal(),
             SettingsExitAction::ToggleGitChanges => {

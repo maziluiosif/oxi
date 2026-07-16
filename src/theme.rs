@@ -8,11 +8,13 @@ mod catalog;
 mod format;
 mod palette;
 mod style;
+mod syntax;
 
 pub use catalog::*;
 pub use format::*;
 pub use palette::*;
 pub use style::*;
+pub use syntax::*;
 
 use eframe::egui::{self, Id, Ui};
 

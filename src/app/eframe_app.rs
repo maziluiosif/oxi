@@ -106,6 +106,8 @@ impl eframe::App for OxiApp {
                 }
             });
 
+        self.render_file_picker(ui.ctx());
+
         // Shared destructive-action confirmation modal, on top of everything.
         self.render_confirm_prompt(ui.ctx());
     }
@@ -144,19 +146,24 @@ impl OxiApp {
     fn poll_windows_clipboard_image_paste(&mut self, _ctx: &egui::Context) {}
 
     /// Global shortcuts that work outside the composer TextEdit.
-    /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B sidebar,
-    /// Cmd/Ctrl+. stop run, Escape focuses composer (or closes settings).
+    /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B chats sidebar,
+    /// Cmd/Ctrl+P opens any workspace file, Cmd/Ctrl+S saves and Cmd/Ctrl+F finds in an
+    /// open editor, Cmd/Ctrl+. stops a run.
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
-        let (new_chat, toggle_term, toggle_sidebar, stop, escape) = ctx.input(|i| {
-            (
-                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
-                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
-                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
-                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
-                i.key_pressed(Key::Escape),
-            )
-        });
+        let (new_chat, toggle_term, toggle_sidebar, open_file, save_file, find_file, stop, escape) =
+            ctx.input(|i| {
+                (
+                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
+                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
+                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
+                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
+                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
+                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
+                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
+                    i.key_pressed(Key::Escape),
+                )
+            });
 
         if new_chat && !self.conv.settings_open {
             self.new_chat();
@@ -167,6 +174,19 @@ impl OxiApp {
         if toggle_sidebar {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleSidebar);
         }
+        if open_file && !self.conv.settings_open {
+            self.open_file_picker();
+        }
+        if save_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {
+            self.save_editor_file();
+        }
+        if find_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {
+            self.conv.editor.find_open = true;
+            self.conv.editor.find_select_pending = !self.conv.editor.find_query.is_empty();
+            ctx.memory_mut(|memory| {
+                memory.request_focus(egui::Id::new("workspace_editor_find"));
+            });
+        }
         if stop && self.any_waiting_response() {
             self.send_abort();
         }
@@ -174,7 +194,12 @@ impl OxiApp {
         // terminal panel is showing so Escape stays available to the PTY (the terminal
         // is hidden while Settings is open, so Escape works there regardless). Escape
         // for the shared confirm modal is handled by the modal itself.
-        if escape
+        if escape && self.conv.editor.file_picker_open {
+            self.conv.editor.file_picker_open = false;
+        } else if escape && self.conv.editor.find_open {
+            self.conv.editor.find_open = false;
+            self.conv.editor.find_select_pending = false;
+        } else if escape
             && (!self.conv.terminal_open || self.conv.settings_open)
             && !self.confirm_prompt_open()
         {

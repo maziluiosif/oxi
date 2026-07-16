@@ -56,7 +56,7 @@ impl OxiApp {
 
     /// Make sure the git worker thread exists and is rooted at the active workspace.
     /// `ensure_git_channels` lazily creates it using the real egui context.
-    pub(super) fn ensure_git_channels(&mut self) {
+    pub(crate) fn ensure_git_channels(&mut self) {
         if self.conv.git_rx.is_none() {
             let cwd = self.active_workspace().root_path.clone();
             let chan = crate::git::GitChannels::new(cwd, self.conv.git_ctx.clone());
