@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -206,6 +207,9 @@ jobs:
             pr=$(gh pr list --base dev --head master --state open --json number --jq '.[0].number')
           fi
           test -n "$pr"
+          # PRs created with GITHUB_TOKEN do not trigger pull_request workflows. Dispatch CI
+          # explicitly for the release commit so protected dev receives its required `ci` check.
+          gh workflow run ci.yml --ref master -f ref="v${{ needs.changelog.outputs.version }}"
           # dev requires the CI check, so the PR merges only after that check succeeds.
           gh pr merge "$pr" --auto --merge
 

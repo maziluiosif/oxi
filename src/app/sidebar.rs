@@ -641,6 +641,10 @@ impl OxiApp {
                             );
 
                             // Soft scrim so transcript text doesn't compete with the input.
+                            // If TextEdit changes height while rendering, `render_composer` asks
+                            // egui for a second layout pass in the same frame. That keeps this
+                            // previous measurement safe for hard newlines, wrapping, deletion,
+                            // sending, attachments, and notices without predicting individual keys.
                             let composer_h = self.conv.composer_measured_full_h.max(80.0);
                             let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
                             let scrim_top = chat_rect.bottom() - scrim_h;

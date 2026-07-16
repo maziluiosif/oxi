@@ -51,6 +51,9 @@ pub struct OxiApp {
     /// clone; lives on a dedicated background thread started once here. See
     /// [`crate::voice_engine`].
     pub voice: crate::voice_engine::VoiceManager,
+    /// Windows bitmap-only clipboards do not generate egui paste events. This latches the
+    /// physical Ctrl+V chord so one key press attaches at most one image.
+    clipboard_image_paste_key_down: bool,
 }
 
 impl OxiApp {
@@ -195,6 +198,7 @@ impl OxiApp {
             tunnels: crate::compute::TunnelManager::spawn(),
             acp: crate::agent::acp::AcpManager::spawn(),
             voice,
+            clipboard_image_paste_key_down: false,
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.

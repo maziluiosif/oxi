@@ -12,6 +12,29 @@ use super::provider::{
     ComputeLocation, LlmProviderKind, ProviderConfig, ProviderProfile, UiDensity, WebSearchBackend,
 };
 
+/// Shell hosted by the embedded terminal on Windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsTerminal {
+    #[default]
+    Cmd,
+    PowerShell,
+    Wsl,
+}
+
+#[cfg(windows)]
+impl WindowsTerminal {
+    pub const ALL: [Self; 3] = [Self::Cmd, Self::PowerShell, Self::Wsl];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Cmd => "Command Prompt",
+            Self::PowerShell => "PowerShell",
+            Self::Wsl => "WSL",
+        }
+    }
+}
+
 pub const ALL_TOOL_NAMES: [&str; 15] = [
     "read",
     "write",
@@ -81,6 +104,9 @@ pub struct AppSettings {
     /// Whether the bottom terminal panel is shown.
     #[serde(default)]
     pub terminal_open: bool,
+    /// Shell used by the embedded terminal on Windows.
+    #[serde(default)]
+    pub windows_terminal: WindowsTerminal,
     /// Whether the right source-control (git) panel is shown.
     #[serde(default)]
     pub git_open: bool,
@@ -365,6 +391,7 @@ impl Default for AppSettings {
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),
             terminal_open: false,
+            windows_terminal: WindowsTerminal::default(),
             git_open: false,
             git_width: default_git_width(),
             chat_column_max_width: default_chat_column_max_width(),

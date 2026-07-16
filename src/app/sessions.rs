@@ -201,6 +201,70 @@ impl OxiApp {
         self.conv.pending_images.push((mime.to_string(), bytes));
     }
 
+    /// Attach an image currently stored in the OS clipboard. egui's paste event carries text
+    /// only, so bitmap clipboard formats (notably Windows screenshots / Snipping Tool) must be
+    /// read explicitly and encoded into the same PNG byte format used by normal attachments.
+    pub(crate) fn paste_clipboard_image(&mut self) -> bool {
+        if self.conv.pending_images.len() >= MAX_PENDING_IMAGES {
+            self.notify_composer(format!("At most {MAX_PENDING_IMAGES} images per message"));
+            return true;
+        }
+
+        // Keep the Clipboard value scoped to this operation. On Windows the clipboard is a
+        // process-global lock and retaining it can interfere with egui's normal text paste.
+        let Some(image) = (|| {
+            let mut clipboard = arboard::Clipboard::new().ok()?;
+            clipboard.get_image().ok()
+        })() else {
+            return false; // A normal text paste; let TextEdit handle it.
+        };
+        if image.width == 0 || image.height == 0 {
+            return false;
+        }
+        let Some(expected_len) = image
+            .width
+            .checked_mul(image.height)
+            .and_then(|pixels| pixels.checked_mul(4))
+        else {
+            self.notify_composer("Clipboard image dimensions are too large");
+            return true;
+        };
+        if image.bytes.len() != expected_len {
+            self.notify_composer("Clipboard returned invalid image data");
+            return true;
+        }
+        let (Ok(width), Ok(height)) = (u32::try_from(image.width), u32::try_from(image.height))
+        else {
+            self.notify_composer("Clipboard image dimensions are too large");
+            return true;
+        };
+        let Some(rgba) = image::RgbaImage::from_raw(width, height, image.bytes.into_owned()) else {
+            self.notify_composer("Could not decode clipboard image");
+            return true;
+        };
+        let mut png = std::io::Cursor::new(Vec::new());
+        if image::DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .is_err()
+        {
+            self.notify_composer("Could not encode clipboard image");
+            return true;
+        }
+        let bytes = png.into_inner();
+        if bytes.len() > MAX_IMAGE_ATTACHMENT_BYTES {
+            self.notify_composer(format!(
+                "Clipboard image too large (max {} MB)",
+                MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024)
+            ));
+            return true;
+        }
+        self.conv
+            .pending_images
+            .push(("image/png".to_string(), bytes));
+        self.conv.composer_notice = None;
+        true
+    }
+
     pub(crate) fn remove_pending_image_at(&mut self, index: usize) {
         if index < self.conv.pending_images.len() {
             self.conv.pending_images.remove(index);

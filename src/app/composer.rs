@@ -127,6 +127,7 @@ impl OxiApp {
         let chat_column_max = crate::theme::chat_column_max_width(ui.ctx());
         let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
         let can_send = !self.conv.input.trim().is_empty() || !self.conv.pending_images.is_empty();
+        let had_draft_content = !self.conv.input.is_empty() || !self.conv.pending_images.is_empty();
 
         // Focus state persists in egui memory across frames, so reading it here (before
         // the TextEdit runs) is exact, not one frame late.
@@ -254,7 +255,21 @@ impl OxiApp {
                 ui.add_space(pad);
             }
         });
-        self.conv.composer_measured_full_h = row.response.rect.height();
+        let measured_h = row.response.rect.height();
+        let draft_cleared =
+            had_draft_content && self.conv.input.is_empty() && self.conv.pending_images.is_empty();
+        if draft_cleared {
+            // Sending clears the model after TextEdit has already laid out the old text in this
+            // pass. Reset to the compact anchor before the second pass instead of carrying that
+            // stale, tall measurement into it.
+            self.conv.composer_measured_full_h = 0.0;
+            ui.ctx().request_discard("composer draft cleared");
+        } else if (measured_h - self.conv.composer_measured_full_h).abs() > 0.5 {
+            self.conv.composer_measured_full_h = measured_h;
+            // The floating rect was positioned earlier in this pass using the old height.
+            // Re-run layout before painting instead of exposing one incorrectly anchored frame.
+            ui.ctx().request_discard("composer height changed");
+        }
     }
 
     /// `[+]  [model ▾]                                  [↑]`

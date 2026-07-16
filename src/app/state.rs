@@ -32,6 +32,7 @@ pub enum SettingsTab {
     Agent,
     Prompts,
     Voice,
+    Terminal,
     Appearance,
     About,
 }

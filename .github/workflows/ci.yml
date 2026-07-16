@@ -5,6 +5,13 @@ on:
     branches: [main, master, dev]
   pull_request:
     branches: [main, master, dev]
+  # The release workflow dispatches CI explicitly for its bot-created master -> dev PR.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit/ref to validate instead of the selected workflow ref
+        required: false
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,7 +20,9 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -52,7 +61,9 @@ jobs:
     name: windows-check
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

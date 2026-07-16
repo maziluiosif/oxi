@@ -430,15 +430,23 @@ fn should_extract_runtime_file(base: &str, wanted: &str) -> bool {
 }
 
 fn extract_llama_server_zip(bytes: &[u8]) -> Result<(), String> {
-    let reader = Cursor::new(bytes);
-    let mut zip =
-        zip::ZipArchive::new(reader).map_err(|e| format!("runtime zip open failed: {e}"))?;
     let wanted = if cfg!(windows) {
         "llama-server.exe"
     } else {
         "llama-server"
     };
-    fs::create_dir_all(runtime_dir()).map_err(|e| e.to_string())?;
+    extract_llama_server_zip_to(bytes, &runtime_dir(), wanted)
+}
+
+fn extract_llama_server_zip_to(
+    bytes: &[u8],
+    output_dir: &Path,
+    wanted: &str,
+) -> Result<(), String> {
+    let reader = Cursor::new(bytes);
+    let mut zip =
+        zip::ZipArchive::new(reader).map_err(|e| format!("runtime zip open failed: {e}"))?;
+    fs::create_dir_all(output_dir).map_err(|e| e.to_string())?;
     let mut found_server = false;
     for i in 0..zip.len() {
         let mut file = zip.by_index(i).map_err(|e| e.to_string())?;
@@ -454,7 +462,7 @@ fn extract_llama_server_zip(bytes: &[u8]) -> Result<(), String> {
         if !should_extract_runtime_file(base, wanted) {
             continue;
         }
-        let out = runtime_dir().join(base);
+        let out = output_dir.join(base);
         let mut target = fs::File::create(&out).map_err(|e| e.to_string())?;
         std::io::copy(&mut file, &mut target).map_err(|e| e.to_string())?;
         #[cfg(unix)]
@@ -607,4 +615,85 @@ fn snippet(s: &str) -> String {
         out.push('…');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock before Unix epoch")
+                .as_nanos();
+            let path =
+                std::env::temp_dir().join(format!("oxi-{label}-{}-{nonce}", std::process::id()));
+            fs::create_dir_all(&path).expect("create test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn runtime_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, contents) in entries {
+            writer.start_file(*name, options).expect("start ZIP file");
+            writer.write_all(contents).expect("write ZIP file");
+        }
+        writer.finish().expect("finish ZIP").into_inner()
+    }
+
+    #[test]
+    fn extracts_server_and_sibling_libraries_from_nested_zip() {
+        let archive = runtime_zip(&[
+            ("llama/bin/llama-server.exe", b"server"),
+            ("llama/bin/ggml.dll", b"library"),
+            ("llama/bin/README.txt", b"ignored"),
+        ]);
+        let output = TestDir::new("runtime-zip");
+
+        extract_llama_server_zip_to(&archive, &output.0, "llama-server.exe")
+            .expect("extract runtime ZIP");
+
+        assert_eq!(
+            fs::read(output.0.join("llama-server.exe")).unwrap(),
+            b"server"
+        );
+        assert_eq!(fs::read(output.0.join("ggml.dll")).unwrap(), b"library");
+        assert!(!output.0.join("README.txt").exists());
+        assert!(!output.0.join("llama").exists());
+    }
+
+    #[test]
+    fn runtime_zip_requires_server_binary() {
+        let archive = runtime_zip(&[("llama/bin/ggml.dll", b"library")]);
+        let output = TestDir::new("runtime-zip-missing-server");
+
+        let error = extract_llama_server_zip_to(&archive, &output.0, "llama-server.exe")
+            .expect_err("ZIP without server must fail");
+
+        assert!(error.contains("does not contain llama-server.exe"));
+    }
+
+    #[test]
+    fn corrupt_runtime_zip_is_rejected() {
+        let output = TestDir::new("runtime-zip-corrupt");
+
+        let error = extract_llama_server_zip_to(b"not a ZIP", &output.0, "llama-server.exe")
+            .expect_err("corrupt ZIP must fail");
+
+        assert!(error.contains("runtime zip open failed"));
+    }
 }

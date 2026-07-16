@@ -118,13 +118,21 @@ impl OxiApp {
         if avail.y < 8.0 {
             return;
         }
-        let (rect, _) = ui.allocate_exact_size(avail, Sense::hover());
+        // `TerminalSession::ui` owns interaction/focus for this rectangle. Only reserve layout
+        // space here; a second overlapping widget can win the hit-test and leave the PTY unfocused.
+        let (_, rect) = ui.allocate_space(avail);
         let inner = rect.shrink2(egui::vec2(6.0, 2.0));
 
         // Lazily (re)spawn the shell rooted at the active workspace.
         if self.terminal.is_none() {
             let cwd = self.active_workspace().root_path.clone();
-            match crate::terminal::TerminalSession::spawn(ui.ctx(), &cwd, 24, 80) {
+            match crate::terminal::TerminalSession::spawn(
+                ui.ctx(),
+                &cwd,
+                24,
+                80,
+                self.conv.settings.windows_terminal,
+            ) {
                 Ok(term) => self.terminal = Some(term),
                 Err(e) => {
                     ui.painter().text(
