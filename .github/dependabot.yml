@@ -5,15 +5,28 @@ updates:
   # as fontdb publishes a release that replaces the unmaintained parser.
   - package-ecosystem: cargo
     directory: "/"
+    target-branch: dev
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      # Keep routine compatible upgrades together; SemVer-major migrations stay
+      # separate so they can receive dedicated code changes and manual testing.
+      cargo-compatible:
+        update-types:
+          - patch
+          - minor
     labels:
       - dependencies
 
   - package-ecosystem: github-actions
     directory: "/"
+    target-branch: dev
     schedule:
       interval: monthly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     labels:
       - dependencies
