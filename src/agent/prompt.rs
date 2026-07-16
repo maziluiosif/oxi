@@ -54,7 +54,7 @@ fn build_system_prompt_with_project_instructions(
 
     let mut body = template.replace("{tools_list}", &tools_list);
     body.push_str(
-        "\n\nWorkspace mutation policy:\n- Create, modify, delete, move, or rename workspace paths only with the built-in `write`, `edit`, `delete`, `move`, and `mkdir` tools.\n- Never use `bash`, scripts, formatters, generators, package installers, or MCP tools to mutate workspace files.\n- Use `bash` only for commands that do not mutate the workspace. This restriction lets Oxi restore a turn before the user edits and retries its prompt.",
+        "\n\nWorkspace mutation policy:\n- Create, modify, delete, move, or rename workspace paths only with the built-in `write`, `edit`, `delete`, `move`, and `mkdir` tools.\n- Normally, never use `bash`, scripts, formatters, generators, package installers, or MCP tools to mutate workspace files; use `bash` only for non-mutating commands. This restriction lets Oxi restore a turn before the user edits and retries its prompt.\n- Exception: if the user explicitly asks you to perform an otherwise prohibited operation, that request overrides this policy. You may use the necessary tool, but keep the action narrowly scoped, state any important side effects, and honor all approval prompts and hard tool safety checks.",
     );
     if let Some(contents) = agents_md.map(str::trim).filter(|s| !s.is_empty()) {
         body.push_str("\n\nProject instructions from AGENTS.md:\n");
@@ -138,6 +138,17 @@ mod tests {
         assert!(prompt.contains("Project instructions from AGENTS.md:"));
         assert!(prompt.contains("Run tests with cargo test."));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn includes_explicit_user_override_for_mutations() {
+        let settings = AppSettings::default();
+        let prompt =
+            build_system_prompt_with_project_instructions(&settings, "/tmp/workspace", None, None);
+
+        assert!(prompt.contains("if the user explicitly asks you"));
+        assert!(prompt.contains("overrides this policy"));
+        assert!(prompt.contains("hard tool safety checks"));
     }
 
     #[test]
