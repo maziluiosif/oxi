@@ -175,6 +175,9 @@ pub struct AppSettings {
     pub git_author_name: String,
     #[serde(default)]
     pub git_author_email: String,
+    /// GitHub account name used as the HTTPS username. The PAT remains the actual credential.
+    #[serde(default)]
+    pub github_username: String,
     /// GitHub token is held in memory for editing but never serialized to settings.json.
     /// [`Self::load`] hydrates it from the OS keychain and [`Self::save`] writes it back.
     #[serde(default, skip_serializing)]
@@ -422,6 +425,7 @@ impl Default for AppSettings {
             local_hf: LocalHfSettings::default(),
             git_author_name: String::new(),
             git_author_email: String::new(),
+            github_username: String::new(),
             github_token: String::new(),
             mcp_servers: Vec::new(),
         }

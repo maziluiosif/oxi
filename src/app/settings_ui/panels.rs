@@ -203,7 +203,10 @@ impl OxiApp {
                 "GitHub authentication",
                 Some("Use a fine-grained personal access token with access to the repositories you work with."),
             );
-            field_label_first(ui, "Personal access token");
+            field_label_first(ui, "GitHub username");
+            settings_text_field(ui, &mut self.conv.settings.github_username, "octocat");
+            field_hint(ui, "Your GitHub account name, not your email address.");
+            field_label(ui, "Personal access token");
             crate::ui::chrome::settings_password_field(
                 ui,
                 &mut self.conv.settings.github_token,
@@ -211,7 +214,7 @@ impl OxiApp {
             );
             field_hint(
                 ui,
-                "The token is stored only in your OS keychain. It is used for HTTPS GitHub remotes and is never written to settings.json.",
+                "The token is stored only in your OS keychain. Fine-grained tokens need access to the repository and Contents: Read and write permission. Organization tokens may also require SSO authorization and administrator approval.",
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -221,7 +224,7 @@ impl OxiApp {
                     super::layout::active_pill(ui, "Configured");
                 }
                 if ghost_button(ui, "Create token on GitHub", false).clicked() {
-                    let _ = webbrowser::open("https://github.com/settings/personal-access-tokens/new");
+                    let _ = webbrowser::open("https://github.com/settings/personal-access-tokens/new?name=oxi&description=Native%20Git%20push%20from%20oxi&contents=write");
                 }
                 if !self.conv.settings.github_token.is_empty()
                     && ghost_button(ui, "Clear token", true).clicked()

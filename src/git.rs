@@ -444,33 +444,66 @@ fn author_signature(repo: &Repository) -> Result<git2::Signature<'static>, Strin
 }
 
 fn github_credentials() -> (String, String) {
+    let settings = crate::settings::AppSettings::load();
     let secrets = crate::secrets::load_unified();
-    ("x-access-token".into(), secrets.github_token)
+    (settings.github_username.trim().to_owned(), secrets.github_token.trim().to_owned())
 }
 
 fn remote_callbacks() -> RemoteCallbacks<'static> {
-    let (username, token) = github_credentials();
+    let (configured_username, token) = github_credentials();
     let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(move |_url, username_url, allowed| {
+    callbacks.credentials(move |url, username_url, allowed| {
+        // GitHub accepts a PAT as the HTTP password and requires a non-empty username. Use the
+        // configured account name when available; otherwise derive it from an HTTPS GitHub URL.
+        let url_username = url::Url::parse(url).ok()
+            .map(|u| u.username().to_owned()).filter(|u| !u.is_empty());
+        let username = if !configured_username.is_empty() {
+            configured_username.as_str()
+        } else {
+            username_url.or(url_username.as_deref()).unwrap_or("x-access-token")
+        };
         if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) && !token.is_empty() {
-            return Cred::userpass_plaintext(if username.is_empty() { "x-access-token" } else { &username }, &token);
+            return Cred::userpass_plaintext(username, &token);
         }
         if allowed.contains(CredentialType::SSH_KEY) {
             return Cred::ssh_key_from_agent(username_url.unwrap_or("git"));
         }
         if allowed.contains(CredentialType::USERNAME) {
-            return Cred::username(username_url.unwrap_or("git"));
+            return Cred::username(username);
         }
         Cred::default()
     });
     callbacks
 }
 
+fn remote_url(repo: &Repository, name: &str) -> String {
+    repo.find_remote(name).ok()
+        .and_then(|r| r.url().ok().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn remote_error(repo: &Repository, remote: &str, operation: &str, error: git2::Error) -> String {
+    let url = remote_url(repo, remote);
+    let is_github_https = url.starts_with("https://github.com/") || url.starts_with("http://github.com/");
+    let is_403 = error.code() == git2::ErrorCode::Auth || error.message().contains("403");
+    if is_github_https && is_403 {
+        let (_, token) = github_credentials();
+        if token.is_empty() {
+            return format!("GitHub rejected {operation}: no token is configured. Open Settings → GitHub and save a personal access token with repository Contents: Read and write permission.");
+        }
+        return format!(
+            "GitHub rejected {operation} with HTTP 403. Authentication reached GitHub, but this token cannot write to the repository. For a fine-grained token, grant access to this repository and Repository permissions → Contents: Read and write. For an organization repository, also authorize the token for SSO and check that the organization approved it. Remote: {url}"
+        );
+    }
+    format!("{operation} failed for {url}: {error}")
+}
+
 fn fetch(repo: &Repository) -> Result<(), String> {
     let mut remote = repo.find_remote("origin").map_err(err)?;
     let mut options = FetchOptions::new();
     options.remote_callbacks(remote_callbacks());
-    remote.fetch(&[] as &[&str], Some(&mut options), None).map_err(err)
+    remote.fetch(&[] as &[&str], Some(&mut options), None)
+        .map_err(|e| remote_error(repo, "origin", "fetch", e))
 }
 
 fn pull_ff_only(repo: &Repository) -> Result<(), String> {
@@ -500,7 +533,8 @@ fn push(repo: &Repository) -> Result<(), String> {
     let mut options = PushOptions::new();
     options.remote_callbacks(remote_callbacks());
     let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
-    remote.push(&[&refspec], Some(&mut options)).map_err(err)?;
+    remote.push(&[&refspec], Some(&mut options))
+        .map_err(|e| remote_error(repo, "origin", "push", e))?;
     let mut local = repo.find_branch(&branch, BranchType::Local).map_err(err)?;
     if local.upstream().is_err() { local.set_upstream(Some(&format!("origin/{branch}"))).map_err(err)?; }
     Ok(())
