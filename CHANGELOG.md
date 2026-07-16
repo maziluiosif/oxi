@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-16
+
+### Added
+- Workspace file explorer and editor with multi-tab editing and file operations
+- Fuzzy file picker and search functionality in editor
+- Syntax highlighting, minimap, line numbers, and diff previews
+- Git file statuses and working-tree line markers in editor
+- Editor keyboard shortcuts
+- GitHub token and commit identity settings
+- Secure credential storage in OS keychain
+- HTTPS token and SSH agent authentication support
+- Keyboard shortcuts displayed in tooltips
+
+### Changed
+- Replaced Git CLI with native libgit2 for status, diff, commit, branch, and network operations
+- Improved GitHub HTTPS authentication with configured username support for personal access tokens
+- Enhanced pull operations to merge diverged upstream histories
+- Enhanced push operations to fetch, integrate, and retry non-fast-forward pushes
+- Automatic merge rollback on conflicts or failures
+- Reject merges with uncommitted local changes
+
+### Fixed
+- Safely integrate remote changes during git operations
+- Prefill fine-grained token permissions in GitHub token creation link
+- Provide actionable guidance for token and HTTP 403 errors
+
+
 ## [0.16.0] - 2026-07-16
 
 ### Added
@@ -409,7 +436,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/maziluiosif/oxi/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/maziluiosif/oxi/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/maziluiosif/oxi/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/maziluiosif/oxi/compare/v0.14.1...v0.15.0
