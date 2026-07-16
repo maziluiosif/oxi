@@ -10,7 +10,7 @@ use std::thread;
 
 use git2::{
     BranchType, Cred, CredentialType, Diff, DiffFormat, DiffOptions, FetchOptions, IndexAddOption,
-    ObjectType, Oid, PushOptions, RemoteCallbacks, Repository, Sort, Status,
+    ObjectType, Oid, PushOptions, RemoteCallbacks, Repository, ResetType, Sort, Status,
     StatusOptions, build::CheckoutBuilder,
 };
 
@@ -336,7 +336,7 @@ fn handle_op(cwd: &str, op: GitOp) -> GitState {
                 return Ok(Some(snapshot(&repo, Some((hash.clone(), true)), Some((format!("Commit {hash}"), text)), None)));
             }
             GitOp::Fetch => fetch(&repo)?,
-            GitOp::Pull => pull_ff_only(&repo)?,
+            GitOp::Pull => pull(&repo)?,
             GitOp::Push => push(&repo)?,
             GitOp::CollectCommitDiff => {
                 let staged = diff_text(&make_diff(&repo, true, None)?)?;
@@ -506,37 +506,129 @@ fn fetch(repo: &Repository) -> Result<(), String> {
         .map_err(|e| remote_error(repo, "origin", "fetch", e))
 }
 
-fn pull_ff_only(repo: &Repository) -> Result<(), String> {
-    fetch(repo)?;
+/// Integrate the current branch's upstream after a fetch. Fast-forwards when possible and
+/// creates a regular two-parent merge commit when local and remote histories diverged.
+///
+/// A dirty worktree is rejected before integration. If libgit2 detects merge conflicts, the
+/// attempted merge is rolled back to the original HEAD so a network button can never leave the
+/// user's repository half-merged.
+fn integrate_upstream(repo: &Repository) -> Result<(), String> {
     let branch = current_branch(repo);
-    if branch.is_empty() || branch == "HEAD" { return Err("Cannot pull while HEAD is detached".into()); }
+    if branch.is_empty() || branch == "HEAD" {
+        return Err("Cannot pull while HEAD is detached".into());
+    }
     let local = repo.find_branch(&branch, BranchType::Local).map_err(err)?;
-    let upstream = local.upstream().map_err(|_| "The current branch has no upstream".to_string())?;
+    let upstream = local
+        .upstream()
+        .map_err(|_| "The current branch has no upstream".to_string())?;
+    let upstream_name = upstream.name().ok().flatten().unwrap_or("upstream").to_owned();
     let upstream_ref = upstream.get();
+    let upstream_oid = upstream_ref.target().ok_or("Upstream has no target")?;
     let annotated = repo.reference_to_annotated_commit(upstream_ref).map_err(err)?;
     let (analysis, _) = repo.merge_analysis(&[&annotated]).map_err(err)?;
-    if analysis.is_up_to_date() { return Ok(()); }
-    if !analysis.is_fast_forward() { return Err("Pull refused: the branch cannot be fast-forwarded".into()); }
-    let target = upstream_ref.target().ok_or("Upstream has no target")?;
+    if analysis.is_up_to_date() {
+        return Ok(());
+    }
+
     let refname = format!("refs/heads/{branch}");
-    repo.reference(&refname, target, true, "pull: fast-forward").map_err(err)?;
-    repo.set_head(&refname).map_err(err)?;
+    if analysis.is_fast_forward() {
+        repo.reference(&refname, upstream_oid, true, "pull: fast-forward").map_err(err)?;
+        repo.set_head(&refname).map_err(err)?;
+        let mut checkout = CheckoutBuilder::new();
+        checkout.safe();
+        return repo.checkout_head(Some(&mut checkout)).map_err(err);
+    }
+
+    // A normal merge may touch many files. Refuse it when local staged/unstaged changes exist,
+    // rather than relying on checkout conflict heuristics and surprising the user.
+    if !repo.statuses(None).map_err(err)?.is_empty() {
+        return Err(
+            "Local and remote histories diverged, but the working tree has uncommitted changes. Commit or discard them, then Pull/Push again."
+                .into(),
+        );
+    }
+
+    let original = repo.head().and_then(|h| h.peel_to_commit()).map_err(err)?;
+    let remote_commit = repo.find_commit(upstream_oid).map_err(err)?;
+    // Resolve identity before changing index/worktree, so a missing author config cannot leave a
+    // merge in progress.
+    let signature = author_signature(repo)?;
     let mut checkout = CheckoutBuilder::new();
     checkout.safe();
-    repo.checkout_head(Some(&mut checkout)).map_err(err)
+    repo.merge(&[&annotated], None, Some(&mut checkout)).map_err(err)?;
+
+    let mut index = repo.index().map_err(err)?;
+    if index.has_conflicts() {
+        // Restore both index and worktree. Conflict resolution UI is intentionally not forced on
+        // the user as a side effect of pressing Push.
+        let object = original.as_object();
+        let rollback = repo.reset(object, ResetType::Hard, None).map_err(err);
+        let _ = repo.cleanup_state();
+        rollback?;
+        return Err(format!(
+            "Local and {upstream_name} have conflicting changes. Automatic sync was rolled back safely; merge the branches manually or resolve the conflicting commits before pushing."
+        ));
+    }
+
+    let merge_result = (|| -> Result<(), String> {
+        let tree_oid = index.write_tree().map_err(err)?;
+        let tree = repo.find_tree(tree_oid).map_err(err)?;
+        let message = format!("Merge {upstream_name} into {branch}");
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &message,
+            &tree,
+            &[&original, &remote_commit],
+        )
+        .map_err(err)?;
+        repo.cleanup_state().map_err(err)
+    })();
+    if let Err(error) = merge_result {
+        let rollback = repo.reset(original.as_object(), ResetType::Hard, None).map_err(err);
+        let _ = repo.cleanup_state();
+        rollback?;
+        return Err(format!("Automatic sync failed and was rolled back safely: {error}"));
+    }
+    Ok(())
 }
 
-fn push(repo: &Repository) -> Result<(), String> {
-    let branch = current_branch(repo);
-    if branch.is_empty() || branch == "HEAD" { return Err("Cannot push while HEAD is detached".into()); }
-    let mut remote = repo.find_remote("origin").map_err(err)?;
+fn pull(repo: &Repository) -> Result<(), String> {
+    fetch(repo)?;
+    integrate_upstream(repo)
+}
+
+fn push_once(repo: &Repository, branch: &str) -> Result<(), git2::Error> {
+    let mut remote = repo.find_remote("origin")?;
     let mut options = PushOptions::new();
     options.remote_callbacks(remote_callbacks());
     let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     remote.push(&[&refspec], Some(&mut options))
-        .map_err(|e| remote_error(repo, "origin", "push", e))?;
+}
+
+fn push(repo: &Repository) -> Result<(), String> {
+    let branch = current_branch(repo);
+    if branch.is_empty() || branch == "HEAD" {
+        return Err("Cannot push while HEAD is detached".into());
+    }
+
+    match push_once(repo, &branch) {
+        Ok(()) => {}
+        Err(error) if error.code() == git2::ErrorCode::NotFastForward => {
+            // Match the useful part of `git push`: refresh the remote tracking branch, safely
+            // integrate it, then retry. Never force-push and never overwrite remote history.
+            fetch(repo)?;
+            integrate_upstream(repo)?;
+            push_once(repo, &branch).map_err(|e| remote_error(repo, "origin", "push", e))?;
+        }
+        Err(error) => return Err(remote_error(repo, "origin", "push", error)),
+    }
+
     let mut local = repo.find_branch(&branch, BranchType::Local).map_err(err)?;
-    if local.upstream().is_err() { local.set_upstream(Some(&format!("origin/{branch}"))).map_err(err)?; }
+    if local.upstream().is_err() {
+        local.set_upstream(Some(&format!("origin/{branch}"))).map_err(err)?;
+    }
     Ok(())
 }
 

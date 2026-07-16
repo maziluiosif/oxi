@@ -98,10 +98,10 @@ impl OxiApp {
                     (
                         ICON_DOWNLOAD,
                         "Pull",
-                        "Pull (fast-forward only)",
+                        "Fetch and integrate upstream changes",
                         GitOp::Pull,
                     ),
-                    (ICON_UPLOAD, "Push", "Push", GitOp::Push),
+                    (ICON_UPLOAD, "Push", "Sync remote changes safely, then push", GitOp::Push),
                     (ICON_REFRESH, "Fetch", "Fetch", GitOp::Fetch),
                 ] {
                     let resp = crate::ui::chrome::mini_button_icon_enabled(ui, icon, label, !busy);
