@@ -11,6 +11,7 @@
 # Env:   OXI_VERSION  override the version string (defaults to Cargo.toml).
 #
 # Requires macOS tools `sips` and `iconutil` (present on GitHub macos runners).
+# Keep this script LF-only: Bash treats a CR after `pipefail` as part of the option name.
 set -euo pipefail
 
 BIN="${1:?usage: bundle-macos.sh <oxi-binary> <output-dir>}"
