@@ -9,12 +9,14 @@ mod format;
 mod palette;
 mod style;
 mod syntax;
+mod tree_sitter;
 
 pub use catalog::*;
 pub use format::*;
 pub use palette::*;
 pub use style::*;
 pub use syntax::*;
+pub use tree_sitter::*;
 
 use eframe::egui::{self, Id, Ui};
 
