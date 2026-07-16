@@ -2000,7 +2000,7 @@ mod tests {
     #[test]
     fn language_is_selected_from_extension() {
         assert_eq!(language_for_path(Path::new("src/main.rs")), "rs");
-        assert_eq!(language_for_path(Path::new("web/app.tsx")), "ts");
+        assert_eq!(language_for_path(Path::new("web/app.tsx")), "tsx");
         assert_eq!(language_for_path(Path::new("README")), "txt");
     }
 
