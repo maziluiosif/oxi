@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-16
+
+### Added
+- Reversible filesystem tools: delete, move, and mkdir with approval gating and undo journaling
+- Safe edit and retry workflow with file mutation journaling and transactional multi-edit operations
+- System font discovery with searchable interface and monospace font selectors
+- Appearance customization: Sublime and Mariana theme palettes, persisted system font selection for UI and code
+- MCP tools and @mentions support
+- Agent settings with enable/disable all controls and enabled tool count display
+- Resilient release publishing with fallback to conventional commits
+
+### Changed
+- Settings UI refactored: replaced pill groups with combo boxes for provider, theme, and density
+- Agent and UI helpers modularized for better maintainability
+- Improved robustness in MCP, web fetch, shell timeout, and output handling
+- Enhanced session, settings, and credential migration preservation
+- Updated Codex model catalog for GPT-5.6
+- Sidebar improvements
+
+### Fixed
+- Windows release builds restored
+- Graceful recovery from poisoned mutexes
+- Scroll button placement and preview hover handling
+- Tool pill clipping in streaming UI
+- Keychain failure diagnostics and error surfacing
+
+
 ## [0.14.1] - 2026-07-08
 
 ### Fixed
@@ -364,7 +391,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/maziluiosif/oxi/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/maziluiosif/oxi/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/maziluiosif/oxi/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/maziluiosif/oxi/compare/v0.13.0...v0.13.1
