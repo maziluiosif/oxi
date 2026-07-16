@@ -46,7 +46,7 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                 "type": "function",
                 "function": {
                     "name": "edit",
-                    "description": "Replace text in a file. Each oldText must match exactly once unless replaceAll is true — never include the line-number gutter from read output.",
+                    "description": "Replace text in a file. Each oldText must match exactly once unless replaceAll is true; LF and CRLF are treated as equivalent so text copied from read works on Windows. Never include the line-number gutter from read output.",
                     "parameters": {
                         "type": "object",
                         "properties": {

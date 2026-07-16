@@ -2,6 +2,7 @@
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -111,24 +112,41 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
         }
         let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
         file.write_all(content).map_err(|e| e.to_string())?;
+        file.flush().map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
         if let Some(permissions) = existing_permissions {
             fs::set_permissions(&tmp, permissions).map_err(|e| e.to_string())?;
         }
+        // Close the temporary file before renaming it. This is especially important on Windows,
+        // where an open handle can make rename semantics more restrictive.
+        drop(file);
         #[cfg(windows)]
         if path.exists() {
             // Windows rename does not replace an existing destination. Move the original aside
             // and roll back if installing the synced replacement fails, so an error never leaves
-            // the destination missing.
+            // the destination missing. Sharing violations from editors/AV are often very brief.
             let backup = unique_temp_path(parent, ".oxi-backup", "tmp");
-            fs::rename(path, &backup).map_err(|e| e.to_string())?;
-            if let Err(e) = fs::rename(&tmp, path) {
-                let _ = fs::rename(&backup, path);
-                return Err(e.to_string());
+            retry_windows_io("move original to backup", path, || {
+                fs::rename(path, &backup)
+            })?;
+            if let Err(install_error) =
+                retry_windows_io("install replacement", path, || fs::rename(&tmp, path))
+            {
+                if let Err(rollback_error) =
+                    retry_windows_io("restore original", path, || fs::rename(&backup, path))
+                {
+                    return Err(format!(
+                        "{install_error}; rollback also failed: {rollback_error}; original remains at {}",
+                        backup.display()
+                    ));
+                }
+                return Err(install_error);
             }
-            let _ = fs::remove_file(backup);
+            let _ = retry_windows_io("remove replacement backup", &backup, || {
+                fs::remove_file(&backup)
+            });
         } else {
-            fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+            retry_windows_io("install new file", path, || fs::rename(&tmp, path))?;
         }
         #[cfg(not(windows))]
         fs::rename(&tmp, path).map_err(|e| e.to_string())?;
@@ -142,6 +160,41 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+#[cfg(windows)]
+fn retry_windows_io<T>(
+    operation: &str,
+    path: &Path,
+    mut action: impl FnMut() -> std::io::Result<T>,
+) -> Result<T, String> {
+    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, and ERROR_LOCK_VIOLATION are commonly
+    // transient while an editor, language server, indexer, or antivirus scans a file.
+    const RETRY_DELAYS_MS: &[u64] = &[10, 25, 50, 100, 200, 400];
+    for delay_ms in RETRY_DELAYS_MS {
+        match action() {
+            Ok(value) => return Ok(value),
+            Err(error) if is_transient_windows_file_error(&error) => {
+                std::thread::sleep(std::time::Duration::from_millis(*delay_ms));
+            }
+            Err(error) => {
+                return Err(format!("Could not {operation} {}: {error}", path.display()));
+            }
+        }
+    }
+    action().map_err(|error| {
+        format!(
+            "Could not {operation} {} after {} attempts: {error}",
+            path.display(),
+            RETRY_DELAYS_MS.len() + 1
+        )
+    })
+}
+
+#[cfg(windows)]
+fn is_transient_windows_file_error(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::PermissionDenied
+        || matches!(error.raw_os_error(), Some(5 | 32 | 33))
 }
 
 /// Produce a minimal-ish unified diff between `before` and `after` text.
@@ -447,6 +500,65 @@ pub(crate) fn tool_write(
     }
 }
 
+fn normalize_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+fn uses_crlf_predominantly(text: &str) -> bool {
+    let crlf = text
+        .as_bytes()
+        .windows(2)
+        .filter(|pair| *pair == b"\r\n")
+        .count();
+    let all_lf = text
+        .as_bytes()
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count();
+    crlf > 0 && crlf.saturating_mul(2) >= all_lf
+}
+
+fn text_for_document_newlines(text: &str, document: &str) -> String {
+    let normalized = normalize_newlines(text);
+    if uses_crlf_predominantly(document) {
+        normalized.replace('\n', "\r\n")
+    } else {
+        normalized
+    }
+}
+
+/// Return original byte ranges whose text matches `needle`, treating CRLF and LF as equivalent.
+/// The ranges point into the unmodified document, so edits preserve all unrelated line endings,
+/// including mixed-EOL files.
+fn newline_equivalent_matches(document: &str, needle: &str) -> Vec<Range<usize>> {
+    let needle = normalize_newlines(needle);
+    let bytes = document.as_bytes();
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut original_boundaries = Vec::with_capacity(bytes.len() + 1);
+    original_boundaries.push(0);
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
+            normalized.push(b'\n');
+            index += 2;
+        } else {
+            normalized.push(bytes[index]);
+            index += 1;
+        }
+        original_boundaries.push(index);
+    }
+
+    // Replacing CRLF with LF never changes non-newline UTF-8 bytes, so this remains valid UTF-8.
+    let normalized =
+        String::from_utf8(normalized).expect("normalizing valid UTF-8 preserves UTF-8");
+    normalized
+        .match_indices(&needle)
+        .map(|(start, matched)| {
+            original_boundaries[start]..original_boundaries[start + matched.len()]
+        })
+        .collect()
+}
+
 pub(crate) fn tool_edit(
     cwd: &Path,
     args: &Value,
@@ -534,19 +646,17 @@ pub(crate) fn tool_edit(
     // deterministic and transactional: if any entry fails, nothing is written to disk.
     let mut total_replacements = 0usize;
     for (edit_idx, (old, new, replace_all)) in edits.into_iter().enumerate() {
-        let count = content.matches(old.as_str()).count();
-        if replace_all {
-            if count == 0 {
-                return ToolResult {
-                    output: err(format!("edit {}: oldText not found in file", edit_idx + 1)),
-                    is_error: true,
-                    diff: None,
-                    full_output_path: None,
-                };
-            }
-            total_replacements += count;
-            content = content.replace(old.as_str(), &new);
-        } else if count != 1 {
+        let matches = newline_equivalent_matches(&content, &old);
+        let count = matches.len();
+        if replace_all && count == 0 {
+            return ToolResult {
+                output: err(format!("edit {}: oldText not found in file", edit_idx + 1)),
+                is_error: true,
+                diff: None,
+                full_output_path: None,
+            };
+        }
+        if !replace_all && count != 1 {
             return ToolResult {
                 output: err(format!(
                     "edit {}: oldText must match exactly once in the current document, found {count} occurrences \
@@ -557,10 +667,17 @@ pub(crate) fn tool_edit(
                 diff: None,
                 full_output_path: None,
             };
-        } else if let Some(idx) = content.find(old.as_str()) {
-            content.replace_range(idx..idx + old.len(), &new);
-            total_replacements += 1;
         }
+
+        // Tool arguments conventionally contain LF because `read` returns platform-neutral text.
+        // Convert inserted line endings to the document's predominant style while replacing the
+        // original byte ranges, preserving unrelated mixed line endings and any UTF-8 BOM.
+        let new = text_for_document_newlines(&new, &content);
+        let replacements = if replace_all { count } else { 1 };
+        for range in matches.into_iter().take(replacements).rev() {
+            content.replace_range(range, &new);
+        }
+        total_replacements += replacements;
     }
     if let Some(journal) = undo
         && let Err(e) = journal

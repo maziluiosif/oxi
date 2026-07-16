@@ -5,6 +5,10 @@
 //! monospace text and forwards keyboard input back to the PTY.
 
 use std::io::{Read, Write};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -24,7 +28,49 @@ struct MouseState {
     last_cell: Option<(u16, u16)>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct TerminalSelection {
+    anchor: (u16, u16), // (row, col)
+    focus: (u16, u16),
+    dragging: bool,
+}
+
+fn shell_cwd(cwd: &str) -> String {
+    #[cfg(windows)]
+    {
+        // `std::fs::canonicalize` returns verbatim paths on Windows. CreateProcess accepts them,
+        // but cmd.exe can ignore a `\\?\C:\...` current directory and fall back to System32.
+        if let Some(unc) = cwd
+            .strip_prefix(r"\\?\UNC\")
+            .or_else(|| cwd.strip_prefix("//?/UNC/"))
+        {
+            return format!(r"\\{unc}").replace('/', r"\");
+        }
+        if let Some(drive_path) = cwd
+            .strip_prefix(r"\\?\")
+            .or_else(|| cwd.strip_prefix("//?/"))
+        {
+            return drive_path.replace('/', r"\");
+        }
+    }
+    cwd.to_string()
+}
+
+use crate::settings::WindowsTerminal;
 use crate::theme;
+
+/// Whether WSL can be launched on this Windows installation.
+#[cfg(windows)]
+pub fn wsl_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        std::process::Command::new("wsl.exe")
+            .arg("--status")
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
 
 /// Monospace font size for the terminal grid.
 const TERM_FONT_SIZE: f32 = 13.0;
@@ -34,8 +80,9 @@ const SCROLLBACK: usize = 5000;
 /// A live PTY session plus its parsed screen state.
 pub struct TerminalSession {
     parser: Arc<Mutex<vt100::Parser>>,
-    /// Writes here are forwarded to the shell's stdin.
-    writer: Box<dyn Write + Send>,
+    /// Writes here are forwarded to the shell's stdin. Shared with the reader thread so it can
+    /// answer terminal status queries emitted by Windows ConPTY.
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     /// Kept so we can resize the kernel pty window when the panel size changes.
     master: Box<dyn MasterPty + Send>,
     /// Flipped to `false` by the reader thread when the shell exits (EOF).
@@ -43,13 +90,22 @@ pub struct TerminalSession {
     rows: u16,
     cols: u16,
     mouse: MouseState,
+    selection: Option<TerminalSelection>,
     /// Scrollback view offset (rows up from the bottom) used when no app grabs the mouse.
     scroll_offset: usize,
 }
 
 impl TerminalSession {
     /// Spawn the user's default shell in `cwd`, wired to a fresh PTY.
-    pub fn spawn(ctx: &egui::Context, cwd: &str, rows: u16, cols: u16) -> Result<Self, String> {
+    pub fn spawn(
+        ctx: &egui::Context,
+        cwd: &str,
+        rows: u16,
+        cols: u16,
+        windows_terminal: WindowsTerminal,
+    ) -> Result<Self, String> {
+        #[cfg(not(windows))]
+        let _ = windows_terminal;
         let rows = rows.max(1);
         let cols = cols.max(1);
         let pty_system = native_pty_system();
@@ -62,11 +118,49 @@ impl TerminalSession {
             })
             .map_err(|e| format!("openpty: {e}"))?;
 
+        let cwd = shell_cwd(cwd);
+        #[cfg(windows)]
+        let mut cmd = match windows_terminal {
+            WindowsTerminal::Cmd => {
+                // Use the actual Windows command processor and bypass cmd AutoRun entries.
+                let shell = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
+                let mut cmd = CommandBuilder::new(shell);
+                cmd.arg("/D");
+                cmd
+            }
+            WindowsTerminal::PowerShell => {
+                let mut cmd = CommandBuilder::new("powershell.exe");
+                cmd.arg("-NoLogo");
+                cmd.arg("-NoExit");
+                cmd
+            }
+            WindowsTerminal::Wsl => {
+                if !wsl_available() {
+                    return Err("WSL is not installed or is unavailable".to_string());
+                }
+                let mut cmd = CommandBuilder::new("wsl.exe");
+                // Let WSL translate the Windows workspace path and enter it before
+                // starting the shell.
+                if !cwd.trim().is_empty() {
+                    cmd.arg("--cd");
+                    cmd.arg(&cwd);
+                }
+                cmd
+            }
+        };
+        #[cfg(not(windows))]
         let mut cmd = CommandBuilder::new_default_prog();
         if !cwd.trim().is_empty() {
-            cmd.cwd(cwd);
+            #[cfg(windows)]
+            if windows_terminal != WindowsTerminal::Wsl {
+                cmd.cwd(&cwd);
+            }
+            #[cfg(not(windows))]
+            cmd.cwd(&cwd);
         }
         cmd.env("TERM", "xterm-256color");
+        #[cfg(windows)]
+        cmd.env("PROMPT", "$P$G ");
 
         let _child = pair
             .slave
@@ -80,27 +174,59 @@ impl TerminalSession {
             .master
             .try_clone_reader()
             .map_err(|e| format!("pty reader: {e}"))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| format!("pty writer: {e}"))?;
+        let writer = Arc::new(Mutex::new(
+            pair.master
+                .take_writer()
+                .map_err(|e| format!("pty writer: {e}"))?,
+        ));
 
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
         let alive = Arc::new(AtomicBool::new(true));
 
         let parser_rd = parser.clone();
+        let writer_rd = writer.clone();
         let alive_rd = alive.clone();
         let ctx = ctx.clone();
         std::thread::Builder::new()
             .name("oxi-pty-reader".to_string())
             .spawn(move || {
                 let mut buf = [0u8; 8192];
+                let mut query_tail = Vec::new();
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            if let Ok(mut p) = parser_rd.lock() {
+                            let cursor = if let Ok(mut p) = parser_rd.lock() {
                                 p.process(&buf[..n]);
+                                Some(p.screen().cursor_position())
+                            } else {
+                                None
+                            };
+
+                            // portable-pty 0.9 enables ConPTY's Win32 input mode. ConPTY emits
+                            // DSR requests during startup and waits for a reply; vt100 parses the
+                            // requests but does not answer them, leaving cmd at a blank cursor.
+                            query_tail.extend_from_slice(&buf[..n]);
+                            let status_query = query_tail.windows(4).any(|w| w == b"\x1b[5n");
+                            let cursor_query = query_tail.windows(4).any(|w| w == b"\x1b[6n");
+                            if status_query && let Ok(mut writer) = writer_rd.lock() {
+                                let _ = writer.write_all(b"\x1b[0n");
+                                let _ = writer.flush();
+                            }
+                            if cursor_query
+                                && let Some((row, col)) = cursor
+                                && let Ok(mut writer) = writer_rd.lock()
+                            {
+                                let reply = format!("\x1b[{};{}R", row + 1, col + 1);
+                                let _ = writer.write_all(reply.as_bytes());
+                                let _ = writer.flush();
+                            }
+                            if status_query || cursor_query {
+                                query_tail.clear();
+                            } else if query_tail.len() > 3 {
+                                // A DSR request is four bytes; retain only a possible prefix split
+                                // across two pipe reads so old output cannot trigger repeat replies.
+                                query_tail.drain(..query_tail.len() - 3);
                             }
                             ctx.request_repaint();
                         }
@@ -130,6 +256,7 @@ impl TerminalSession {
             rows,
             cols,
             mouse: MouseState::default(),
+            selection: None,
             scroll_offset: 0,
         })
     }
@@ -140,8 +267,10 @@ impl TerminalSession {
 
     /// Send raw bytes to the shell.
     fn send(&mut self, bytes: &[u8]) {
-        let _ = self.writer.write_all(bytes);
-        let _ = self.writer.flush();
+        if let Ok(mut writer) = self.writer.lock() {
+            let _ = writer.write_all(bytes);
+            let _ = writer.flush();
+        }
     }
 
     /// Resize the pty and parser if the grid dimensions changed.
@@ -188,6 +317,9 @@ impl TerminalSession {
             resp.request_focus();
         }
 
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
         self.handle_mouse(ui, rect, cell_w, cell_h, resp.hovered());
         // Apply scrollback view (no-op when an app has grabbed the mouse / offset is 0).
         // `set_scrollback` clamps to the buffer length; read the offset back so further
@@ -227,6 +359,16 @@ impl TerminalSession {
         let mut out: Vec<u8> = Vec::new();
         for ev in events {
             match ev {
+                Event::Copy => {
+                    if let Some(text) = self.selected_text() {
+                        ui.ctx().copy_text(text);
+                        self.selection = None;
+                    } else {
+                        // egui-winit translates Ctrl+C into `Event::Copy`; without a selection it
+                        // must retain terminal semantics and send SIGINT/ETX to the shell.
+                        out.push(3);
+                    }
+                }
                 Event::Text(t) => out.extend_from_slice(t.as_bytes()),
                 Event::Paste(t) => out.extend_from_slice(t.as_bytes()),
                 Event::Key {
@@ -235,6 +377,13 @@ impl TerminalSession {
                     modifiers,
                     ..
                 } => {
+                    if modifiers.command && key == Key::C && self.selection.is_some() {
+                        if let Some(text) = self.selected_text() {
+                            ui.ctx().copy_text(text);
+                        }
+                        self.selection = None;
+                        continue;
+                    }
                     if modifiers.ctrl {
                         // Ctrl+A..Z -> control bytes 0x01..0x1A; a few common extras.
                         if let Some(b) = ctrl_byte(key) {
@@ -250,8 +399,9 @@ impl TerminalSession {
             }
         }
         if !out.is_empty() {
-            // Typing jumps back to the live bottom of the buffer.
+            // Typing jumps back to the live bottom and dismisses any stale selection.
             self.scroll_offset = 0;
+            self.selection = None;
             self.send(&out);
         }
     }
@@ -316,6 +466,38 @@ impl TerminalSession {
         if mode == MMode::None {
             self.mouse.held = None;
             self.mouse.last_cell = None;
+            let events = ui.input(|i| i.events.clone());
+            for event in events {
+                match event {
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        ..
+                    } if rect.contains(pos) || self.selection.is_some_and(|s| s.dragging) => {
+                        let (col, row) = cell_at(pos);
+                        if pressed {
+                            self.selection = Some(TerminalSelection {
+                                anchor: (row, col),
+                                focus: (row, col),
+                                dragging: true,
+                            });
+                        } else if let Some(selection) = self.selection.as_mut() {
+                            selection.focus = (row, col);
+                            selection.dragging = false;
+                        }
+                    }
+                    Event::PointerMoved(pos) => {
+                        if let Some(selection) = self.selection.as_mut()
+                            && selection.dragging
+                        {
+                            let (col, row) = cell_at(pos);
+                            selection.focus = (row, col);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             return;
         }
 
@@ -388,6 +570,40 @@ impl TerminalSession {
         }
     }
 
+    fn selected_text(&self) -> Option<String> {
+        let selection = self.selection?;
+        if selection.anchor == selection.focus {
+            return None;
+        }
+        let (start, end) = ordered_selection(selection);
+        let parser = self.parser.lock().ok()?;
+        let screen = parser.screen();
+        let (_, cols) = screen.size();
+        let mut output = String::new();
+        for row in start.0..=end.0 {
+            let first_col = if row == start.0 { start.1 } else { 0 };
+            let last_col = if row == end.0 {
+                end.1
+            } else {
+                cols.saturating_sub(1)
+            };
+            let mut line = String::new();
+            for col in first_col..=last_col {
+                let Some(cell) = screen.cell(row, col) else {
+                    continue;
+                };
+                if !cell.is_wide_continuation() {
+                    line.push_str(cell.contents());
+                }
+            }
+            output.push_str(line.trim_end());
+            if row != end.0 {
+                output.push('\n');
+            }
+        }
+        (!output.is_empty()).then_some(output)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn paint_grid(
         &self,
@@ -426,10 +642,21 @@ impl TerminalSession {
                 if cell.inverse() {
                     std::mem::swap(&mut fg, &mut bg);
                 }
+                let selected = self.selection.is_some_and(|selection| {
+                    if selection.anchor == selection.focus {
+                        return false;
+                    }
+                    let (start, end) = ordered_selection(selection);
+                    (row, col) >= start && (row, col) <= end
+                });
                 let fmt = TextFormat {
                     font_id: font.clone(),
                     color: fg.unwrap_or_else(theme::c_text),
-                    background: bg.unwrap_or(Color32::TRANSPARENT),
+                    background: if selected {
+                        theme::c_accent().linear_multiply(0.35)
+                    } else {
+                        bg.unwrap_or(Color32::TRANSPARENT)
+                    },
                     italics: cell.italic(),
                     underline: if cell.underline() {
                         Stroke::new(1.0, fg.unwrap_or_else(theme::c_text))
@@ -462,6 +689,14 @@ impl TerminalSession {
                 );
             }
         }
+    }
+}
+
+fn ordered_selection(selection: TerminalSelection) -> ((u16, u16), (u16, u16)) {
+    if selection.anchor <= selection.focus {
+        (selection.anchor, selection.focus)
+    } else {
+        (selection.focus, selection.anchor)
     }
 }
 

@@ -3825,6 +3825,7 @@ name = "oxi"
 version = "0.15.0"
 dependencies = [
  "apple-native-keyring-store",
+ "arboard",
  "base64",
  "bytes",
  "chrono",
@@ -3858,6 +3859,7 @@ dependencies = [
  "webbrowser",
  "whisper-rs",
  "windows-native-keyring-store",
+ "windows-sys 0.61.2",
  "winresource",
  "wiremock",
  "zbus-secret-service-keyring-store",

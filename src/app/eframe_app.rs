@@ -6,7 +6,45 @@ use crate::theme::*;
 use super::OxiApp;
 
 impl eframe::App for OxiApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if self.conv.settings_open || !ctx.memory(|m| m.has_focus(egui::Id::new("composer_input")))
+        {
+            return;
+        }
+
+        // A bitmap-only Windows clipboard may produce Ctrl+V but no `Paste(String)`. Inspect raw
+        // input before egui consumes it, and suppress normal paste only if an image was attached.
+        let paste_requested = raw_input.events.iter().any(|event| match event {
+            egui::Event::Paste(_) => true,
+            egui::Event::Key {
+                key: Key::V,
+                pressed: true,
+                modifiers,
+                ..
+            } => modifiers.command,
+            _ => false,
+        });
+        // Try the bitmap clipboard globally. This also covers a freshly opened app where the
+        // composer requests focus during this frame but wasn't focused in the previous frame.
+        if paste_requested && self.paste_clipboard_image() {
+            self.clipboard_image_paste_key_down = true;
+            raw_input.events.retain(|event| {
+                !matches!(event, egui::Event::Paste(_))
+                    && !matches!(
+                        event,
+                        egui::Event::Key {
+                            key: Key::V,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } if modifiers.command
+                    )
+            });
+        }
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_windows_clipboard_image_paste(ctx);
         self.handle_global_shortcuts(ctx);
         self.consume_dropped_files(ctx);
         self.drain_agent(ctx);
@@ -74,6 +112,37 @@ impl eframe::App for OxiApp {
 }
 
 impl OxiApp {
+    /// egui-winit consumes Ctrl+V while asking arboard for text. A Windows clipboard containing
+    /// only a screenshot therefore produces neither `Event::Paste` nor a usable key event.
+    /// Poll the physical chord before rendering and attach the bitmap once per key press.
+    #[cfg(windows)]
+    fn poll_windows_clipboard_image_paste(&mut self, ctx: &egui::Context) {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
+
+        if !ctx.memory(|m| m.has_focus(egui::Id::new("composer_input"))) {
+            self.clipboard_image_paste_key_down = false;
+            return;
+        }
+
+        // SAFETY: GetAsyncKeyState has no pointer arguments and is safe for GUI-thread polling.
+        let down =
+            unsafe { GetAsyncKeyState(VK_CONTROL as i32) < 0 && GetAsyncKeyState('V' as i32) < 0 };
+        if down && !self.clipboard_image_paste_key_down {
+            // Clipboard access can transiently fail when another Windows process still owns the
+            // global clipboard lock. Keep retrying on subsequent frames while Ctrl+V is held,
+            // and latch only after an image was actually consumed.
+            self.clipboard_image_paste_key_down = self.paste_clipboard_image();
+            if !self.clipboard_image_paste_key_down {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        } else if !down {
+            self.clipboard_image_paste_key_down = false;
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn poll_windows_clipboard_image_paste(&mut self, _ctx: &egui::Context) {}
+
     /// Global shortcuts that work outside the composer TextEdit.
     /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B sidebar,
     /// Cmd/Ctrl+. stop run, Escape focuses composer (or closes settings).

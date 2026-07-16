@@ -484,8 +484,23 @@ pub(crate) fn tool_codebase_search(cwd: &Path, args: &Value) -> Result<String, S
     Ok(truncate_out(out))
 }
 
+/// Keep background CLI tools from opening a transient console window when oxi is built as a
+/// Windows GUI application. On other platforms this is intentionally a no-op.
+fn configure_background_command(cmd: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 pub(crate) fn tool_git_status(cwd: &Path, _args: &Value) -> Result<String, String> {
-    let output = Command::new("git")
+    let mut cmd = Command::new("git");
+    configure_background_command(&mut cmd);
+    let output = cmd
         .args(["status", "--short", "--branch"])
         .current_dir(cwd)
         .output()
@@ -522,6 +537,7 @@ pub(crate) fn tool_git_diff(cwd: &Path, args: &Value) -> Result<String, String> 
         let _ = resolve_under_cwd(cwd, p)?;
         cmd.args(["--", p]);
     }
+    configure_background_command(&mut cmd);
     let output = cmd
         .current_dir(cwd)
         .output()

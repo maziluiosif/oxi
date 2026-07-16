@@ -482,6 +482,108 @@ fn tool_edit_empty_old_text_errors() {
 }
 
 #[test]
+fn tool_edit_matches_lf_old_text_against_crlf_and_preserves_crlf() {
+    let cwd = temp_workspace("edit-crlf");
+    fs::write(
+        cwd.join("windows.txt"),
+        "before\r\nold one\r\nold two\r\nafter\r\n",
+    )
+    .unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "windows.txt",
+            "edits": [{"oldText": "old one\nold two", "newText": "new one\nnew two"}]
+        }),
+        &all_enabled(),
+    );
+    assert!(!res.is_error, "{}", res.output);
+    assert_eq!(
+        fs::read_to_string(cwd.join("windows.txt")).unwrap(),
+        "before\r\nnew one\r\nnew two\r\nafter\r\n"
+    );
+}
+
+#[test]
+fn tool_edit_matches_crlf_old_text_against_lf_and_preserves_lf() {
+    let cwd = temp_workspace("edit-lf-with-crlf-needle");
+    fs::write(cwd.join("unix.txt"), "before\nold one\nold two\nafter\n").unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "unix.txt",
+            "edits": [{"oldText": "old one\r\nold two", "newText": "new one\r\nnew two"}]
+        }),
+        &all_enabled(),
+    );
+    assert!(!res.is_error, "{}", res.output);
+    assert_eq!(
+        fs::read_to_string(cwd.join("unix.txt")).unwrap(),
+        "before\nnew one\nnew two\nafter\n"
+    );
+}
+
+#[test]
+fn tool_edit_replace_all_multiline_crlf() {
+    let cwd = temp_workspace("edit-all-crlf");
+    fs::write(cwd.join("all.txt"), "a\r\nb\r\n--\r\na\r\nb\r\n").unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "all.txt",
+            "edits": [{"oldText": "a\nb", "newText": "x\ny", "replaceAll": true}]
+        }),
+        &all_enabled(),
+    );
+    assert!(!res.is_error, "{}", res.output);
+    assert!(res.output.contains("2 replacements"));
+    assert_eq!(
+        fs::read_to_string(cwd.join("all.txt")).unwrap(),
+        "x\r\ny\r\n--\r\nx\r\ny\r\n"
+    );
+}
+
+#[test]
+fn tool_edit_preserves_utf8_bom_at_file_start() {
+    let cwd = temp_workspace("edit-bom");
+    fs::write(cwd.join("bom.txt"), "\u{feff}first\r\nsecond\r\n").unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "bom.txt",
+            "edits": [{"oldText": "first\nsecond", "newText": "changed\ndone"}]
+        }),
+        &all_enabled(),
+    );
+    assert!(!res.is_error, "{}", res.output);
+    assert_eq!(
+        fs::read_to_string(cwd.join("bom.txt")).unwrap(),
+        "\u{feff}changed\r\ndone\r\n"
+    );
+}
+
+#[test]
+fn tool_edit_eol_equivalence_still_rejects_ambiguous_matches() {
+    let cwd = temp_workspace("edit-eol-ambiguous");
+    fs::write(cwd.join("mixed.txt"), "a\r\nb\r\n--\na\nb\n").unwrap();
+    let res = run_tool(
+        &cwd,
+        "edit",
+        &json!({
+            "path": "mixed.txt",
+            "edits": [{"oldText": "a\nb", "newText": "x"}]
+        }),
+        &all_enabled(),
+    );
+    assert!(res.is_error);
+    assert!(res.output.contains("2 occurrences"));
+}
+
+#[test]
 fn tool_edit_ambiguous_error_mentions_replace_all() {
     let cwd = temp_workspace("edit-ambiguous-hint");
     fs::write(cwd.join("dup.txt"), "hello hello").unwrap();

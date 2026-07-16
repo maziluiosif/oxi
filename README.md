@@ -42,6 +42,32 @@ Requirements:
 
 - Rust toolchain compatible with the crate's `rust-version` in `Cargo.toml`
 - desktop environment supported by `eframe`
+- native C/C++ build tools required by the local Whisper voice-dictation dependency
+
+#### Windows prerequisites
+
+Install LLVM/libclang and CMake from PowerShell:
+
+```powershell
+winget install --id LLVM.LLVM -e
+winget install --id Kitware.CMake -e
+```
+
+You also need Visual Studio Build Tools with the **Desktop development with C++** workload (MSVC and a Windows SDK). After installing these dependencies, open a new terminal and verify them:
+
+```powershell
+cmake --version
+Test-Path "C:\Program Files\LLVM\bin\libclang.dll"
+```
+
+If the second command returns `True` but the build cannot find `libclang`, configure its location permanently and for the current terminal:
+
+```powershell
+[Environment]::SetEnvironmentVariable("LIBCLANG_PATH", "C:\Program Files\LLVM\bin", "User")
+$env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
+```
+
+Then build and run the application:
 
 ```bash
 cargo run --release
