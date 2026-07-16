@@ -192,8 +192,15 @@ impl OxiApp {
             field_label_first(ui, "Author name");
             settings_text_field(ui, &mut self.conv.settings.git_author_name, "Your name");
             field_label(ui, "Author email");
-            settings_text_field(ui, &mut self.conv.settings.git_author_email, "you@example.com");
-            field_hint(ui, "Leave both empty to use identity from the repository or global Git config.");
+            settings_text_field(
+                ui,
+                &mut self.conv.settings.git_author_email,
+                "you@example.com",
+            );
+            field_hint(
+                ui,
+                "Leave both empty to use identity from the repository or global Git config.",
+            );
         });
 
         ui.add_space(12.0);

@@ -487,7 +487,9 @@ pub(crate) fn tool_codebase_search(cwd: &Path, args: &Value) -> Result<String, S
 pub(crate) fn tool_git_status(cwd: &Path, _args: &Value) -> Result<String, String> {
     let repo = git2::Repository::discover(cwd).map_err(|e| format!("git status failed: {e}"))?;
     let branch = repo
-        .head().ok().and_then(|h| h.shorthand().ok().map(str::to_owned))
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().ok().map(str::to_owned))
         .unwrap_or_else(|| "HEAD (detached)".into());
     let mut opts = git2::StatusOptions::new();
     opts.include_untracked(true).recurse_untracked_dirs(true);
@@ -495,38 +497,70 @@ pub(crate) fn tool_git_status(cwd: &Path, _args: &Value) -> Result<String, Strin
     let mut text = format!("## {branch}\n");
     for entry in statuses.iter() {
         let s = entry.status();
-        let x = if s.contains(git2::Status::INDEX_NEW) { 'A' }
-            else if s.contains(git2::Status::INDEX_MODIFIED) { 'M' }
-            else if s.contains(git2::Status::INDEX_DELETED) { 'D' }
-            else if s.contains(git2::Status::INDEX_RENAMED) { 'R' } else { ' ' };
-        let y = if s.contains(git2::Status::WT_NEW) { '?' }
-            else if s.contains(git2::Status::WT_MODIFIED) { 'M' }
-            else if s.contains(git2::Status::WT_DELETED) { 'D' }
-            else if s.contains(git2::Status::WT_RENAMED) { 'R' } else { ' ' };
-        text.push_str(&format!("{x}{y} {}\n", entry.path().unwrap_or("(non-UTF-8 path)")));
+        let x = if s.contains(git2::Status::INDEX_NEW) {
+            'A'
+        } else if s.contains(git2::Status::INDEX_MODIFIED) {
+            'M'
+        } else if s.contains(git2::Status::INDEX_DELETED) {
+            'D'
+        } else if s.contains(git2::Status::INDEX_RENAMED) {
+            'R'
+        } else {
+            ' '
+        };
+        let y = if s.contains(git2::Status::WT_NEW) {
+            '?'
+        } else if s.contains(git2::Status::WT_MODIFIED) {
+            'M'
+        } else if s.contains(git2::Status::WT_DELETED) {
+            'D'
+        } else if s.contains(git2::Status::WT_RENAMED) {
+            'R'
+        } else {
+            ' '
+        };
+        text.push_str(&format!(
+            "{x}{y} {}\n",
+            entry.path().unwrap_or("(non-UTF-8 path)")
+        ));
     }
-    if statuses.is_empty() { text.push_str("(clean working tree)\n"); }
+    if statuses.is_empty() {
+        text.push_str("(clean working tree)\n");
+    }
     Ok(truncate_out(text))
 }
 
 pub(crate) fn tool_git_diff(cwd: &Path, args: &Value) -> Result<String, String> {
-    let staged = args.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
+    let staged = args
+        .get("staged")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let path = args.get("path").and_then(|v| v.as_str());
-    if let Some(p) = path { let _ = resolve_under_cwd(cwd, p)?; }
+    if let Some(p) = path {
+        let _ = resolve_under_cwd(cwd, p)?;
+    }
     let repo = git2::Repository::discover(cwd).map_err(|e| format!("git diff failed: {e}"))?;
     let mut opts = git2::DiffOptions::new();
-    opts.include_untracked(true).recurse_untracked_dirs(true).show_untracked_content(true);
-    if let Some(p) = path { opts.pathspec(p); }
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show_untracked_content(true);
+    if let Some(p) = path {
+        opts.pathspec(p);
+    }
     let revision = args.get("revision").and_then(|v| v.as_str());
     let diff = if let Some(rev) = revision {
-        let tree = repo.revparse_single(rev).and_then(|o| o.peel_to_tree()).map_err(|e| e.to_string())?;
+        let tree = repo
+            .revparse_single(rev)
+            .and_then(|o| o.peel_to_tree())
+            .map_err(|e| e.to_string())?;
         repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
     } else if staged {
         let tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
         repo.diff_tree_to_index(tree.as_ref(), None, Some(&mut opts))
     } else {
         repo.diff_index_to_workdir(None, Some(&mut opts))
-    }.map_err(|e| e.to_string())?;
+    }
+    .map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     diff.print(git2::DiffFormat::Patch, |_d, _h, line| {
         if matches!(line.origin(), '+' | '-' | ' ') {
@@ -534,9 +568,12 @@ pub(crate) fn tool_git_diff(cwd: &Path, args: &Value) -> Result<String, String> 
         }
         bytes.extend_from_slice(line.content());
         true
-    }).map_err(|e| e.to_string())?;
+    })
+    .map_err(|e| e.to_string())?;
     let mut text = String::from_utf8_lossy(&bytes).into_owned();
-    if text.trim().is_empty() { text = "(no diff)".into(); }
+    if text.trim().is_empty() {
+        text = "(no diff)".into();
+    }
     Ok(truncate_out(text))
 }
 

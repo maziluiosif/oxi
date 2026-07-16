@@ -938,8 +938,10 @@ mod tests {
 
     #[test]
     fn github_token_not_serialized_to_json() {
-        let mut s = AppSettings::default();
-        s.github_token = "github_pat_super-secret-value".to_string();
+        let s = AppSettings {
+            github_token: "github_pat_super-secret-value".to_string(),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("github_pat_super-secret-value"));
         assert!(!json.contains("github_token"));

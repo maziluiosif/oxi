@@ -13,6 +13,9 @@ use super::{EditorDocument, OxiApp};
 const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const ALWAYS_SKIPPED_DIRS: &[&str] = &[".git"];
 
+type EditorScrollOutput =
+    egui::scroll_area::ScrollAreaOutput<(Vec<f32>, bool, Option<(usize, usize)>)>;
+
 impl OxiApp {
     pub(crate) fn render_file_explorer(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
@@ -1263,7 +1266,7 @@ impl OxiApp {
                 0.0
             };
             if selection_scroll != 0.0 {
-                let mut state = scroll_output.state.clone();
+                let mut state = scroll_output.state;
                 let max_y =
                     (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
                 state.offset.y = (state.offset.y + selection_scroll).clamp(0.0, max_y);
@@ -1497,7 +1500,7 @@ fn paint_minimap(
     content: &str,
     language: &str,
     size: egui::Vec2,
-    scroll: &egui::scroll_area::ScrollAreaOutput<(Vec<f32>, bool, Option<(usize, usize)>)>,
+    scroll: &EditorScrollOutput,
     selected_lines: Option<(usize, usize)>,
 ) -> Option<f32> {
     const SCROLLBAR_WIDTH: f32 = 10.0;

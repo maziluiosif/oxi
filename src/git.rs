@@ -97,13 +97,20 @@ impl GitChannels {
         let _ = thread::Builder::new()
             .name("oxi-git".into())
             .spawn(move || git_worker(cwd, op_rx, snap_tx, ctx));
-        Self { tx: op_tx, rx: snap_rx }
+        Self {
+            tx: op_tx,
+            rx: snap_rx,
+        }
     }
 }
 
 fn git_worker(cwd: String, rx: Receiver<GitOp>, tx: Sender<GitState>, ctx: egui::Context) {
     let mut cwd = cwd;
-    let _ = tx.send(GitState { busy: true, last_op: Some("refresh".into()), ..Default::default() });
+    let _ = tx.send(GitState {
+        busy: true,
+        last_op: Some("refresh".into()),
+        ..Default::default()
+    });
     for op in rx {
         if let GitOp::SetCwd(path) = op {
             cwd = path;
@@ -144,11 +151,15 @@ fn open_repo(cwd: &str) -> Result<Repository, String> {
 }
 
 fn repo_root(repo: &Repository) -> Result<&Path, String> {
-    repo.workdir().ok_or_else(|| "Bare repositories are not supported".into())
+    repo.workdir()
+        .ok_or_else(|| "Bare repositories are not supported".into())
 }
 
 fn current_branch(repo: &Repository) -> String {
-    repo.head().ok().and_then(|h| h.shorthand().ok().map(str::to_owned)).unwrap_or_default()
+    repo.head()
+        .ok()
+        .and_then(|h| h.shorthand().ok().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 fn list_branches(repo: &Repository) -> Vec<String> {
@@ -165,13 +176,23 @@ fn list_branches(repo: &Repository) -> Vec<String> {
 
 fn ahead_behind(repo: &Repository) -> (usize, usize) {
     let Ok(head) = repo.head() else { return (0, 0) };
-    let Some(local_oid) = head.target() else { return (0, 0) };
-    let Ok(name) = head.shorthand() else { return (0, 0) };
-    let Ok(upstream) = repo.find_branch(name, BranchType::Local).and_then(|b| b.upstream()) else {
+    let Some(local_oid) = head.target() else {
         return (0, 0);
     };
-    let Some(upstream_oid) = upstream.get().target() else { return (0, 0) };
-    repo.graph_ahead_behind(local_oid, upstream_oid).unwrap_or((0, 0))
+    let Ok(name) = head.shorthand() else {
+        return (0, 0);
+    };
+    let Ok(upstream) = repo
+        .find_branch(name, BranchType::Local)
+        .and_then(|b| b.upstream())
+    else {
+        return (0, 0);
+    };
+    let Some(upstream_oid) = upstream.get().target() else {
+        return (0, 0);
+    };
+    repo.graph_ahead_behind(local_oid, upstream_oid)
+        .unwrap_or((0, 0))
 }
 
 fn status_entries(repo: &Repository) -> Result<(Vec<GitEntry>, Vec<GitEntry>), String> {
@@ -187,59 +208,103 @@ fn status_entries(repo: &Repository) -> Result<(Vec<GitEntry>, Vec<GitEntry>), S
         let status = entry.status();
         let path = entry.path().unwrap_or("(non-UTF-8 path)").to_owned();
         let conflict = status.contains(Status::CONFLICTED);
-        let index_status = if status.contains(Status::INDEX_NEW) { Some('A') }
-            else if status.contains(Status::INDEX_MODIFIED) { Some('M') }
-            else if status.contains(Status::INDEX_DELETED) { Some('D') }
-            else if status.contains(Status::INDEX_RENAMED) { Some('R') }
-            else if status.contains(Status::INDEX_TYPECHANGE) { Some('T') }
-            else { None };
-        let work_status = if status.contains(Status::WT_NEW) { Some('?') }
-            else if status.contains(Status::WT_MODIFIED) { Some('M') }
-            else if status.contains(Status::WT_DELETED) { Some('D') }
-            else if status.contains(Status::WT_RENAMED) { Some('R') }
-            else if status.contains(Status::WT_TYPECHANGE) { Some('T') }
-            else if conflict { Some('U') }
-            else { None };
+        let index_status = if status.contains(Status::INDEX_NEW) {
+            Some('A')
+        } else if status.contains(Status::INDEX_MODIFIED) {
+            Some('M')
+        } else if status.contains(Status::INDEX_DELETED) {
+            Some('D')
+        } else if status.contains(Status::INDEX_RENAMED) {
+            Some('R')
+        } else if status.contains(Status::INDEX_TYPECHANGE) {
+            Some('T')
+        } else {
+            None
+        };
+        let work_status = if status.contains(Status::WT_NEW) {
+            Some('?')
+        } else if status.contains(Status::WT_MODIFIED) {
+            Some('M')
+        } else if status.contains(Status::WT_DELETED) {
+            Some('D')
+        } else if status.contains(Status::WT_RENAMED) {
+            Some('R')
+        } else if status.contains(Status::WT_TYPECHANGE) {
+            Some('T')
+        } else if conflict {
+            Some('U')
+        } else {
+            None
+        };
         if let Some(s) = index_status {
-            staged.push(GitEntry { path: path.clone(), code: format!("{s} "), status: s, conflict });
+            staged.push(GitEntry {
+                path: path.clone(),
+                code: format!("{s} "),
+                status: s,
+                conflict,
+            });
         }
         if let Some(s) = work_status {
-            unstaged.push(GitEntry { path, code: format!(" {s}"), status: s, conflict });
+            unstaged.push(GitEntry {
+                path,
+                code: format!(" {s}"),
+                status: s,
+                conflict,
+            });
         }
     }
     Ok((staged, unstaged))
 }
 
 fn log_entries(repo: &Repository) -> Vec<GitCommit> {
-    let Ok(mut walk) = repo.revwalk() else { return Vec::new() };
-    if walk.push_head().is_err() { return Vec::new(); }
+    let Ok(mut walk) = repo.revwalk() else {
+        return Vec::new();
+    };
+    if walk.push_head().is_err() {
+        return Vec::new();
+    }
     let _ = walk.set_sorting(Sort::TIME);
-    walk.take(60).filter_map(Result::ok).filter_map(|oid| repo.find_commit(oid).ok()).map(|c| {
-        let secs = c.time().seconds();
-        let date = chrono::DateTime::from_timestamp(secs, 0)
-            .map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
-        GitCommit {
-            hash: c.id().to_string(),
-            date,
-            author: c.author().name().unwrap_or("Unknown").to_owned(),
-            message: c.summary().ok().flatten().unwrap_or("").to_owned(),
-        }
-    }).collect()
+    walk.take(60)
+        .filter_map(Result::ok)
+        .filter_map(|oid| repo.find_commit(oid).ok())
+        .map(|c| {
+            let secs = c.time().seconds();
+            let date = chrono::DateTime::from_timestamp(secs, 0)
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default();
+            GitCommit {
+                hash: c.id().to_string(),
+                date,
+                author: c.author().name().unwrap_or("Unknown").to_owned(),
+                message: c.summary().ok().flatten().unwrap_or("").to_owned(),
+            }
+        })
+        .collect()
 }
 
 fn head_tree(repo: &Repository) -> Option<git2::Tree<'_>> {
     repo.head().ok()?.peel_to_tree().ok()
 }
 
-fn make_diff<'a>(repo: &'a Repository, staged: bool, path: Option<&str>) -> Result<Diff<'a>, String> {
+fn make_diff<'a>(
+    repo: &'a Repository,
+    staged: bool,
+    path: Option<&str>,
+) -> Result<Diff<'a>, String> {
     let mut opts = DiffOptions::new();
-    opts.include_untracked(true).recurse_untracked_dirs(true).show_untracked_content(true);
-    if let Some(path) = path { opts.pathspec(path); }
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show_untracked_content(true);
+    if let Some(path) = path {
+        opts.pathspec(path);
+    }
     if staged {
         let tree = head_tree(repo);
-        repo.diff_tree_to_index(tree.as_ref(), None, Some(&mut opts)).map_err(err)
+        repo.diff_tree_to_index(tree.as_ref(), None, Some(&mut opts))
+            .map_err(err)
     } else {
-        repo.diff_index_to_workdir(None, Some(&mut opts)).map_err(err)
+        repo.diff_index_to_workdir(None, Some(&mut opts))
+            .map_err(err)
     }
 }
 
@@ -251,29 +316,49 @@ fn diff_text(diff: &Diff<'_>) -> Result<String, String> {
         }
         bytes.extend_from_slice(line.content());
         true
-    }).map_err(err)?;
+    })
+    .map_err(err)?;
     Ok(truncate(&String::from_utf8_lossy(&bytes), MAX_DIFF_CHARS))
 }
 
 fn show_diff(repo: &Repository, path: &str, staged: bool) -> String {
-    make_diff(repo, staged, Some(path)).and_then(|d| diff_text(&d)).unwrap_or_else(|e| e)
+    make_diff(repo, staged, Some(path))
+        .and_then(|d| diff_text(&d))
+        .unwrap_or_else(|e| e)
 }
 
-fn working_tree_line_changes(repo: &Repository, unstaged: &[GitEntry]) -> HashMap<String, Vec<GitLineChange>> {
+fn working_tree_line_changes(
+    repo: &Repository,
+    unstaged: &[GitEntry],
+) -> HashMap<String, Vec<GitLineChange>> {
     let mut changes = HashMap::new();
     let mut line_opts = DiffOptions::new();
-    line_opts.include_untracked(true).recurse_untracked_dirs(true).context_lines(0);
+    line_opts
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .context_lines(0);
     let tree = head_tree(repo);
     if let Ok(diff) = repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut line_opts)) {
         let _ = diff.foreach(
             &mut |_delta, _| true,
             None,
             Some(&mut |delta, hunk| {
-                let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) else { return true };
-                let kind = if hunk.old_lines() == 0 { GitLineKind::Added } else { GitLineKind::Modified };
-                let list = changes.entry(path.to_string_lossy().into_owned()).or_insert_with(Vec::new);
+                let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) else {
+                    return true;
+                };
+                let kind = if hunk.old_lines() == 0 {
+                    GitLineKind::Added
+                } else {
+                    GitLineKind::Modified
+                };
+                let list = changes
+                    .entry(path.to_string_lossy().into_owned())
+                    .or_insert_with(Vec::new);
                 for n in hunk.new_start()..hunk.new_start().saturating_add(hunk.new_lines()) {
-                    list.push(GitLineChange { line: (n as usize).saturating_sub(1), kind });
+                    list.push(GitLineChange {
+                        line: (n as usize).saturating_sub(1),
+                        kind,
+                    });
                 }
                 true
             }),
@@ -283,33 +368,69 @@ fn working_tree_line_changes(repo: &Repository, unstaged: &[GitEntry]) -> HashMa
     if let Ok(root) = repo_root(repo) {
         for entry in unstaged.iter().filter(|e| e.status == '?') {
             if let Ok(content) = std::fs::read_to_string(root.join(&entry.path)) {
-                changes.insert(entry.path.clone(), (0..content.split('\n').count().max(1))
-                    .map(|line| GitLineChange { line, kind: GitLineKind::Added }).collect());
+                changes.insert(
+                    entry.path.clone(),
+                    (0..content.split('\n').count().max(1))
+                        .map(|line| GitLineChange {
+                            line,
+                            kind: GitLineKind::Added,
+                        })
+                        .collect(),
+                );
             }
         }
     }
     changes
 }
 
-fn snapshot(repo: &Repository, diff_pref: Option<(String, bool)>, preset: Option<(String, String)>, error: Option<String>) -> GitState {
+fn snapshot(
+    repo: &Repository,
+    diff_pref: Option<(String, bool)>,
+    preset: Option<(String, String)>,
+    error: Option<String>,
+) -> GitState {
     let branch = current_branch(repo);
     let branches = list_branches(repo);
     let (ahead, behind) = ahead_behind(repo);
     let (staged, unstaged) = status_entries(repo).unwrap_or_default();
     let line_changes = working_tree_line_changes(repo, &unstaged);
-    let diff = preset.or_else(|| diff_pref.as_ref().map(|(p, s)| {
-        (if *s { format!("Staged: {p}") } else { p.clone() }, show_diff(repo, p, *s))
-    }));
+    let diff = preset.or_else(|| {
+        diff_pref.as_ref().map(|(p, s)| {
+            (
+                if *s {
+                    format!("Staged: {p}")
+                } else {
+                    p.clone()
+                },
+                show_diff(repo, p, *s),
+            )
+        })
+    });
     GitState {
-        repo: true, branch, branches, ahead, behind, staged, unstaged, line_changes,
-        log: log_entries(repo), diff, error, busy: false, last_op: None,
+        repo: true,
+        branch,
+        branches,
+        ahead,
+        behind,
+        staged,
+        unstaged,
+        line_changes,
+        log: log_entries(repo),
+        diff,
+        error,
+        busy: false,
+        last_op: None,
         current_diff_path: diff_pref.as_ref().map(|x| x.0.clone()),
-        current_diff_staged: diff_pref.map(|x| x.1), commit_diff: None,
+        current_diff_staged: diff_pref.map(|x| x.1),
+        commit_diff: None,
     }
 }
 
 fn non_repo(error: Option<String>) -> GitState {
-    GitState { error, ..Default::default() }
+    GitState {
+        error,
+        ..Default::default()
+    }
 }
 
 fn handle_op(cwd: &str, op: GitOp) -> GitState {
@@ -333,16 +454,27 @@ fn handle_op(cwd: &str, op: GitOp) -> GitState {
             GitOp::ClearDiff => return Ok(Some(snapshot(&repo, None, None, None))),
             GitOp::ShowCommit(hash) => {
                 let text = show_commit(&repo, &hash)?;
-                return Ok(Some(snapshot(&repo, Some((hash.clone(), true)), Some((format!("Commit {hash}"), text)), None)));
+                return Ok(Some(snapshot(
+                    &repo,
+                    Some((hash.clone(), true)),
+                    Some((format!("Commit {hash}"), text)),
+                    None,
+                )));
             }
             GitOp::Fetch => fetch(&repo)?,
             GitOp::Pull => pull(&repo)?,
             GitOp::Push => push(&repo)?,
             GitOp::CollectCommitDiff => {
                 let staged = diff_text(&make_diff(&repo, true, None)?)?;
-                let combined = if staged.trim().is_empty() { diff_text(&make_diff(&repo, false, None)?)? } else { staged };
+                let combined = if staged.trim().is_empty() {
+                    diff_text(&make_diff(&repo, false, None)?)?
+                } else {
+                    staged
+                };
                 let mut state = snapshot(&repo, None, None, None);
-                if !combined.trim().is_empty() { state.commit_diff = Some(combined); }
+                if !combined.trim().is_empty() {
+                    state.commit_diff = Some(combined);
+                }
                 return Ok(Some(state));
             }
             GitOp::SetCwd(_) => {}
@@ -358,18 +490,30 @@ fn handle_op(cwd: &str, op: GitOp) -> GitState {
 
 fn stage(repo: &Repository, paths: &[String]) -> Result<(), String> {
     let mut index = repo.index().map_err(err)?;
-    index.add_all(paths.iter().map(String::as_str), IndexAddOption::DEFAULT, None).map_err(err)?;
+    index
+        .add_all(
+            paths.iter().map(String::as_str),
+            IndexAddOption::DEFAULT,
+            None,
+        )
+        .map_err(err)?;
     index.write().map_err(err)
 }
 
 fn unstage(repo: &Repository, paths: &[String]) -> Result<(), String> {
     if repo.is_empty().unwrap_or(true) {
         let mut index = repo.index().map_err(err)?;
-        for path in paths { let _ = index.remove_path(Path::new(path)); }
+        for path in paths {
+            let _ = index.remove_path(Path::new(path));
+        }
         return index.write().map_err(err);
     }
-    let head = repo.head().and_then(|h| h.peel(ObjectType::Commit)).map_err(err)?;
-    repo.reset_default(Some(&head), paths.iter().map(String::as_str)).map_err(err)
+    let head = repo
+        .head()
+        .and_then(|h| h.peel(ObjectType::Commit))
+        .map_err(err)?;
+    repo.reset_default(Some(&head), paths.iter().map(String::as_str))
+        .map_err(err)
 }
 
 fn discard(repo: &Repository, paths: &[String]) -> Result<(), String> {
@@ -377,12 +521,25 @@ fn discard(repo: &Repository, paths: &[String]) -> Result<(), String> {
     let mut checkout = CheckoutBuilder::new();
     checkout.force();
     for path in paths {
-        if repo.status_file(Path::new(path)).map_err(err)?.contains(Status::WT_NEW) {
+        if repo
+            .status_file(Path::new(path))
+            .map_err(err)?
+            .contains(Status::WT_NEW)
+        {
             let candidate = root.join(path);
-            let parent = candidate.parent().ok_or("Invalid path")?.canonicalize().map_err(|e| e.to_string())?;
-            if !parent.starts_with(&root) { return Err("Refusing to remove a path outside the repository".into()); }
-            if candidate.is_dir() { std::fs::remove_dir_all(candidate).map_err(|e| e.to_string())?; }
-            else { std::fs::remove_file(candidate).map_err(|e| e.to_string())?; }
+            let parent = candidate
+                .parent()
+                .ok_or("Invalid path")?
+                .canonicalize()
+                .map_err(|e| e.to_string())?;
+            if !parent.starts_with(&root) {
+                return Err("Refusing to remove a path outside the repository".into());
+            }
+            if candidate.is_dir() {
+                std::fs::remove_dir_all(candidate).map_err(|e| e.to_string())?;
+            } else {
+                std::fs::remove_file(candidate).map_err(|e| e.to_string())?;
+            }
         } else {
             checkout.path(path);
         }
@@ -391,19 +548,36 @@ fn discard(repo: &Repository, paths: &[String]) -> Result<(), String> {
 }
 
 fn commit(repo: &Repository, message: &str) -> Result<(), String> {
-    if message.trim().is_empty() { return Err("Commit message is empty".into()); }
+    if message.trim().is_empty() {
+        return Err("Commit message is empty".into());
+    }
     let sig = author_signature(repo)?;
     let mut index = repo.index().map_err(err)?;
     let tree_oid = index.write_tree().map_err(err)?;
     let tree = repo.find_tree(tree_oid).map_err(err)?;
-    let parents = repo.head().ok().and_then(|h| h.peel_to_commit().ok()).into_iter().collect::<Vec<_>>();
+    let parents = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .into_iter()
+        .collect::<Vec<_>>();
     let parent_refs = parents.iter().collect::<Vec<_>>();
-    repo.commit(Some("HEAD"), &sig, &sig, message.trim(), &tree, &parent_refs).map_err(err)?;
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        message.trim(),
+        &tree,
+        &parent_refs,
+    )
+    .map_err(err)?;
     Ok(())
 }
 
 fn checkout_branch(repo: &Repository, name: &str, create: bool) -> Result<(), String> {
-    if name.trim().is_empty() { return Err("Branch name is empty".into()); }
+    if name.trim().is_empty() {
+        return Err("Branch name is empty".into());
+    }
     if create {
         let head = repo.head().and_then(|h| h.peel_to_commit()).map_err(err)?;
         repo.branch(name, &head, false).map_err(err)?;
@@ -421,10 +595,18 @@ fn show_commit(repo: &Repository, hash: &str) -> Result<String, String> {
     let commit = repo.find_commit(oid).map_err(err)?;
     let tree = commit.tree().map_err(err)?;
     let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None).map_err(err)?;
-    let mut out = format!("commit {}\nAuthor: {}\nDate:   {}\n\n    {}\n\n", commit.id(), commit.author(),
-        chrono::DateTime::from_timestamp(commit.time().seconds(), 0).map(|d| d.to_rfc2822()).unwrap_or_default(),
-        commit.message().unwrap_or(""));
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+        .map_err(err)?;
+    let mut out = format!(
+        "commit {}\nAuthor: {}\nDate:   {}\n\n    {}\n\n",
+        commit.id(),
+        commit.author(),
+        chrono::DateTime::from_timestamp(commit.time().seconds(), 0)
+            .map(|d| d.to_rfc2822())
+            .unwrap_or_default(),
+        commit.message().unwrap_or("")
+    );
     out.push_str(&diff_text(&diff)?);
     Ok(truncate(&out, MAX_DIFF_CHARS))
 }
@@ -436,17 +618,25 @@ fn author_signature(repo: &Repository) -> Result<git2::Signature<'static>, Strin
     if !name.is_empty() && !email.is_empty() {
         return git2::Signature::now(name, email).map_err(err);
     }
-    let signature = repo.signature().map_err(|e| format!(
-        "Git author identity is not configured. Set name and email in Settings → GitHub: {e}"
-    ))?;
-    git2::Signature::now(signature.name().unwrap_or(""), signature.email().unwrap_or(""))
-        .map_err(err)
+    let signature = repo.signature().map_err(|e| {
+        format!(
+            "Git author identity is not configured. Set name and email in Settings → GitHub: {e}"
+        )
+    })?;
+    git2::Signature::now(
+        signature.name().unwrap_or(""),
+        signature.email().unwrap_or(""),
+    )
+    .map_err(err)
 }
 
 fn github_credentials() -> (String, String) {
     let settings = crate::settings::AppSettings::load();
     let secrets = crate::secrets::load_unified();
-    (settings.github_username.trim().to_owned(), secrets.github_token.trim().to_owned())
+    (
+        settings.github_username.trim().to_owned(),
+        secrets.github_token.trim().to_owned(),
+    )
 }
 
 fn remote_callbacks() -> RemoteCallbacks<'static> {
@@ -455,12 +645,16 @@ fn remote_callbacks() -> RemoteCallbacks<'static> {
     callbacks.credentials(move |url, username_url, allowed| {
         // GitHub accepts a PAT as the HTTP password and requires a non-empty username. Use the
         // configured account name when available; otherwise derive it from an HTTPS GitHub URL.
-        let url_username = url::Url::parse(url).ok()
-            .map(|u| u.username().to_owned()).filter(|u| !u.is_empty());
+        let url_username = url::Url::parse(url)
+            .ok()
+            .map(|u| u.username().to_owned())
+            .filter(|u| !u.is_empty());
         let username = if !configured_username.is_empty() {
             configured_username.as_str()
         } else {
-            username_url.or(url_username.as_deref()).unwrap_or("x-access-token")
+            username_url
+                .or(url_username.as_deref())
+                .unwrap_or("x-access-token")
         };
         if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) && !token.is_empty() {
             return Cred::userpass_plaintext(username, &token);
@@ -477,19 +671,23 @@ fn remote_callbacks() -> RemoteCallbacks<'static> {
 }
 
 fn remote_url(repo: &Repository, name: &str) -> String {
-    repo.find_remote(name).ok()
+    repo.find_remote(name)
+        .ok()
         .and_then(|r| r.url().ok().map(str::to_owned))
         .unwrap_or_default()
 }
 
 fn remote_error(repo: &Repository, remote: &str, operation: &str, error: git2::Error) -> String {
     let url = remote_url(repo, remote);
-    let is_github_https = url.starts_with("https://github.com/") || url.starts_with("http://github.com/");
+    let is_github_https =
+        url.starts_with("https://github.com/") || url.starts_with("http://github.com/");
     let is_403 = error.code() == git2::ErrorCode::Auth || error.message().contains("403");
     if is_github_https && is_403 {
         let (_, token) = github_credentials();
         if token.is_empty() {
-            return format!("GitHub rejected {operation}: no token is configured. Open Settings → GitHub and save a personal access token with repository Contents: Read and write permission.");
+            return format!(
+                "GitHub rejected {operation}: no token is configured. Open Settings → GitHub and save a personal access token with repository Contents: Read and write permission."
+            );
         }
         return format!(
             "GitHub rejected {operation} with HTTP 403. Authentication reached GitHub, but this token cannot write to the repository. For a fine-grained token, grant access to this repository and Repository permissions → Contents: Read and write. For an organization repository, also authorize the token for SSO and check that the organization approved it. Remote: {url}"
@@ -502,7 +700,8 @@ fn fetch(repo: &Repository) -> Result<(), String> {
     let mut remote = repo.find_remote("origin").map_err(err)?;
     let mut options = FetchOptions::new();
     options.remote_callbacks(remote_callbacks());
-    remote.fetch(&[] as &[&str], Some(&mut options), None)
+    remote
+        .fetch(&[] as &[&str], Some(&mut options), None)
         .map_err(|e| remote_error(repo, "origin", "fetch", e))
 }
 
@@ -521,10 +720,17 @@ fn integrate_upstream(repo: &Repository) -> Result<(), String> {
     let upstream = local
         .upstream()
         .map_err(|_| "The current branch has no upstream".to_string())?;
-    let upstream_name = upstream.name().ok().flatten().unwrap_or("upstream").to_owned();
+    let upstream_name = upstream
+        .name()
+        .ok()
+        .flatten()
+        .unwrap_or("upstream")
+        .to_owned();
     let upstream_ref = upstream.get();
     let upstream_oid = upstream_ref.target().ok_or("Upstream has no target")?;
-    let annotated = repo.reference_to_annotated_commit(upstream_ref).map_err(err)?;
+    let annotated = repo
+        .reference_to_annotated_commit(upstream_ref)
+        .map_err(err)?;
     let (analysis, _) = repo.merge_analysis(&[&annotated]).map_err(err)?;
     if analysis.is_up_to_date() {
         return Ok(());
@@ -532,7 +738,8 @@ fn integrate_upstream(repo: &Repository) -> Result<(), String> {
 
     let refname = format!("refs/heads/{branch}");
     if analysis.is_fast_forward() {
-        repo.reference(&refname, upstream_oid, true, "pull: fast-forward").map_err(err)?;
+        repo.reference(&refname, upstream_oid, true, "pull: fast-forward")
+            .map_err(err)?;
         repo.set_head(&refname).map_err(err)?;
         let mut checkout = CheckoutBuilder::new();
         checkout.safe();
@@ -555,7 +762,8 @@ fn integrate_upstream(repo: &Repository) -> Result<(), String> {
     let signature = author_signature(repo)?;
     let mut checkout = CheckoutBuilder::new();
     checkout.safe();
-    repo.merge(&[&annotated], None, Some(&mut checkout)).map_err(err)?;
+    repo.merge(&[&annotated], None, Some(&mut checkout))
+        .map_err(err)?;
 
     let mut index = repo.index().map_err(err)?;
     if index.has_conflicts() {
@@ -586,10 +794,14 @@ fn integrate_upstream(repo: &Repository) -> Result<(), String> {
         repo.cleanup_state().map_err(err)
     })();
     if let Err(error) = merge_result {
-        let rollback = repo.reset(original.as_object(), ResetType::Hard, None).map_err(err);
+        let rollback = repo
+            .reset(original.as_object(), ResetType::Hard, None)
+            .map_err(err);
         let _ = repo.cleanup_state();
         rollback?;
-        return Err(format!("Automatic sync failed and was rolled back safely: {error}"));
+        return Err(format!(
+            "Automatic sync failed and was rolled back safely: {error}"
+        ));
     }
     Ok(())
 }
@@ -627,14 +839,24 @@ fn push(repo: &Repository) -> Result<(), String> {
 
     let mut local = repo.find_branch(&branch, BranchType::Local).map_err(err)?;
     if local.upstream().is_err() {
-        local.set_upstream(Some(&format!("origin/{branch}"))).map_err(err)?;
+        local
+            .set_upstream(Some(&format!("origin/{branch}")))
+            .map_err(err)?;
     }
     Ok(())
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max { s.to_owned() }
-    else { format!("{}\n… [truncated]\n", s.chars().take(max).collect::<String>()) }
+    if s.chars().count() <= max {
+        s.to_owned()
+    } else {
+        format!(
+            "{}\n… [truncated]\n",
+            s.chars().take(max).collect::<String>()
+        )
+    }
 }
 
-fn err<E: std::fmt::Display>(e: E) -> String { e.to_string() }
+fn err<E: std::fmt::Display>(e: E) -> String {
+    e.to_string()
+}
