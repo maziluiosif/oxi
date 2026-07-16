@@ -31,9 +31,9 @@ impl OxiApp {
                     let sidebar_on = self.conv.sidebar_open;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_MENU, 20.0, sidebar_on)
                         .on_hover_text(if sidebar_on {
-                            "Hide sidebar"
+                            "Hide sidebar (Cmd/Ctrl+B)"
                         } else {
-                            "Show sidebar"
+                            "Show sidebar (Cmd/Ctrl+B)"
                         })
                         .clicked()
                     {
@@ -63,7 +63,7 @@ impl OxiApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let term_on = self.conv.terminal_open;
                         if crate::ui::chrome::icon_button_plain(ui, ICON_TERMINAL, 20.0, term_on)
-                            .on_hover_text("Toggle terminal panel")
+                            .on_hover_text("Toggle terminal panel (Cmd/Ctrl+`)")
                             .clicked()
                         {
                             self.request_settings_exit(

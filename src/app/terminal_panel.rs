@@ -97,7 +97,7 @@ impl OxiApp {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.add_space(6.0);
                     if crate::ui::chrome::icon_button_plain(ui, ICON_ANGLE_DOWN, 22.0, false)
-                        .on_hover_text("Hide terminal")
+                        .on_hover_text("Hide terminal (Cmd/Ctrl+`)")
                         .clicked()
                     {
                         self.toggle_terminal();

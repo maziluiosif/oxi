@@ -166,7 +166,7 @@ impl OxiApp {
                 );
                 let plus_resp = ui
                     .interact(plus_rect, ui.id().with(("ws_plus", wi)), Sense::click())
-                    .on_hover_text("New chat in this workspace");
+                    .on_hover_text("New chat in this workspace (Cmd/Ctrl+N)");
                 plus_hovered = plus_resp.hovered();
                 plus_clicked = plus_resp.clicked();
                 ui.painter().text(

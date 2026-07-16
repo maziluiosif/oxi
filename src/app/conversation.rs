@@ -110,7 +110,7 @@ impl OxiApp {
                                     .corner_radius(RADIUS_CHIP),
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text("Start a new chat in this workspace")
+                                .on_hover_text("Start a new chat in this workspace (Cmd/Ctrl+N)")
                                 .clicked()
                             {
                                 self.new_chat();
