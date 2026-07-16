@@ -42,6 +42,19 @@ jobs:
       - name: Test release changelog generator
         run: python .github/scripts/test_release_changelog.py
 
+      - name: Validate shell scripts
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          scripts = sorted(Path(".").rglob("*.sh"))
+          crlf = [str(path) for path in scripts if b"\r" in path.read_bytes()]
+          if crlf:
+              raise SystemExit("Shell scripts must use LF line endings: " + ", ".join(crlf))
+          PY
+          find . -type f -name '*.sh' -not -path './.git/*' -exec bash -n {} +
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
