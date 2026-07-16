@@ -39,7 +39,7 @@ url = "2"
 portable-pty = "0.9"
 vt100 = "0.16"
 keyring-core = "1"
-zip = { version = "4", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
 cpal = "0.15"
