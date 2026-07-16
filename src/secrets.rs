@@ -127,6 +127,9 @@ pub struct UnifiedSecrets {
     pub oauth: crate::oauth::OAuthStore,
     #[serde(default)]
     pub ssh: crate::compute::store::SshCredentialStore,
+    /// GitHub personal access token used by the native Git HTTPS transport.
+    #[serde(default)]
+    pub github_token: String,
 }
 
 const UNIFIED_ACCOUNT: &str = "oxi-secrets";

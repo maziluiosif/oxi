@@ -31,7 +31,7 @@ mod web;
 mod tests;
 
 pub use definitions::tool_definitions_json;
-pub(crate) use file_ops::{cleanup_stale_spill_files, floor_char_boundary};
+pub(crate) use file_ops::{cleanup_stale_spill_files, floor_char_boundary, make_unified_diff};
 pub use paths::resolve_under_cwd;
 pub use undo::TurnUndoJournal;
 

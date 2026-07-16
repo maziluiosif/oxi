@@ -73,6 +73,10 @@ pub const ICON_CHEVRON_RIGHT: &str = "\u{f054}";
 pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
 /// Hamburger menu — toggle sidebar (`nf-fa-bars`).
 pub const ICON_MENU: &str = "\u{f02a}";
+/// File explorer; uses the verified open-folder glyph from the bundled icon font.
+pub const ICON_EXPLORER: &str = "\u{f0770}";
+/// Regular file (`nf-fa-file-lines`).
+pub const ICON_FILE: &str = "\u{f15c}";
 /// Terminal — toggle the embedded terminal panel (`nf-fa-terminal`).
 pub const ICON_TERMINAL: &str = "\u{f120}";
 /// Git — source-control panel and header (`nf-fa-git`).

@@ -14,7 +14,8 @@ categories = ["development-tools", "gui"]
 [dependencies]
 eframe = { version = "0.35", default-features = false, features = ["accesskit", "default_fonts", "wayland", "wgpu", "x11"] }
 egui = "0.35"
-egui_extras = { version = "0.35", features = ["all_loaders"] }
+egui_extras = { version = "0.35", features = ["all_loaders", "syntect"] }
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 pulldown-cmark = "0.13"
@@ -29,6 +30,7 @@ futures-util = "0.3"
 bytes = "1"
 regex = "1"
 glob = "0.3"
+git2 = { version = "0.21", features = ["https", "ssh", "vendored-libgit2"] }
 walkdir = "2"
 fontdb = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

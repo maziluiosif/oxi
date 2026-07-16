@@ -30,7 +30,10 @@ const SETTINGS_NAV: &[SettingsNavGroup] = &[
     },
     SettingsNavGroup {
         caption: "Agent",
-        items: &[(SettingsTab::Agent, ICON_AGENT, "Tools & safety")],
+        items: &[
+            (SettingsTab::Agent, ICON_AGENT, "Tools & safety"),
+            (SettingsTab::GitHub, ICON_GIT, "GitHub"),
+        ],
     },
     SettingsNavGroup {
         caption: "App",
@@ -65,8 +68,27 @@ impl OxiApp {
                 self.conv.focus_chat_input_next_frame = true;
             }
             SettingsExitAction::ToggleSidebar => {
-                self.conv.sidebar_open = !self.conv.sidebar_open;
+                let chats_on = self.conv.sidebar_open
+                    && self.conv.sidebar_mode == crate::app::state::SidebarMode::Chats;
+                self.conv.sidebar_open = !chats_on;
+                if !chats_on {
+                    self.conv.sidebar_mode = crate::app::state::SidebarMode::Chats;
+                    if self.conv.editor.active.is_some() {
+                        self.conv.editor.hidden_active = self.conv.editor.active.take();
+                    }
+                }
                 self.conv.focus_chat_input_next_frame = true;
+            }
+            SettingsExitAction::ToggleExplorer => {
+                let explorer_on = self.conv.sidebar_open
+                    && self.conv.sidebar_mode == crate::app::state::SidebarMode::Explorer;
+                self.conv.sidebar_open = !explorer_on;
+                if !explorer_on {
+                    self.conv.sidebar_mode = crate::app::state::SidebarMode::Explorer;
+                    if self.conv.editor.active.is_none() {
+                        self.conv.editor.active = self.conv.editor.hidden_active.take();
+                    }
+                }
             }
             SettingsExitAction::ToggleTerminal => self.toggle_terminal(),
             SettingsExitAction::ToggleGitChanges => {
@@ -304,6 +326,7 @@ impl OxiApp {
         match tab {
             SettingsTab::Providers => "Models & providers",
             SettingsTab::Agent => "Tools & safety",
+            SettingsTab::GitHub => "GitHub",
             SettingsTab::Prompts => "Prompts",
             SettingsTab::Voice => "Voice",
             SettingsTab::Terminal => "Terminal",
@@ -420,6 +443,7 @@ impl OxiApp {
         match self.conv.settings_tab {
             SettingsTab::Providers => self.render_settings_providers_panel(ui),
             SettingsTab::Agent => self.render_settings_agent_panel(ui),
+            SettingsTab::GitHub => self.render_settings_github_panel(ui),
             SettingsTab::Prompts => self.render_settings_prompts_panel(ui),
             SettingsTab::Voice => self.render_settings_voice_panel(ui),
             SettingsTab::Terminal => self.render_settings_terminal_panel(ui),

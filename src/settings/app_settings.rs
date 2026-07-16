@@ -169,6 +169,19 @@ pub struct AppSettings {
     /// Local HF (`llama-server`) runtime tuning: port, context size, GPU layers.
     #[serde(default)]
     pub local_hf: LocalHfSettings,
+    /// Author identity used for commits created by the native Git engine. When empty, libgit2
+    /// falls back to the repository/global Git configuration.
+    #[serde(default)]
+    pub git_author_name: String,
+    #[serde(default)]
+    pub git_author_email: String,
+    /// GitHub account name used as the HTTPS username. The PAT remains the actual credential.
+    #[serde(default)]
+    pub github_username: String,
+    /// GitHub token is held in memory for editing but never serialized to settings.json.
+    /// [`Self::load`] hydrates it from the OS keychain and [`Self::save`] writes it back.
+    #[serde(default, skip_serializing)]
+    pub github_token: String,
     /// MCP servers to spawn (stdio). Tools appear as `mcp_<server>_<tool>`.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
@@ -410,6 +423,10 @@ impl Default for AppSettings {
             last_active_session_file: None,
             dictation: DictationSettings::default(),
             local_hf: LocalHfSettings::default(),
+            git_author_name: String::new(),
+            git_author_email: String::new(),
+            github_username: String::new(),
+            github_token: String::new(),
             mcp_servers: Vec::new(),
         }
     }
@@ -467,6 +484,7 @@ impl AppSettings {
         };
         settings.normalize();
         settings.migrate_secrets_to_keychain();
+        settings.github_token = crate::secrets::load_unified().github_token;
         if migrated {
             Self::migrate_ssh_credentials(&ssh_renames);
             // Rewrite settings.json in the new shape right away so the migration runs
@@ -770,6 +788,10 @@ impl AppSettings {
                 changed = true;
             }
         }
+        if unified.github_token != self.github_token {
+            unified.github_token = self.github_token.clone();
+            changed = true;
+        }
         if changed {
             crate::secrets::save_unified(&unified)
                 .map_err(|e| format!("Could not save credentials to the OS keychain: {e}"))?;
@@ -912,6 +934,17 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("sk-super-secret-value"));
         assert!(!json.contains("api_key"));
+    }
+
+    #[test]
+    fn github_token_not_serialized_to_json() {
+        let s = AppSettings {
+            github_token: "github_pat_super-secret-value".to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("github_pat_super-secret-value"));
+        assert!(!json.contains("github_token"));
     }
 
     /// The new shape must round-trip: the `#[serde(skip)]`ped `provider` field comes back

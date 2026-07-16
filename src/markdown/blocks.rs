@@ -292,12 +292,8 @@ pub(super) fn render_fenced_block(
                         } else {
                             buf.clone()
                         };
-                        let job = LayoutJob::simple(
-                            text,
-                            FontId::monospace(SZ_CODE),
-                            c_md_code_fg(),
-                            inner,
-                        );
+                        let mut job = highlight_code(&text, &lang, FontId::monospace(SZ_CODE));
+                        job.wrap.max_width = inner;
                         selectable_job(ui, job);
                     })
                     .response

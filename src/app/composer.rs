@@ -311,7 +311,7 @@ impl OxiApp {
                     crate::theme::c_on_accent(),
                     true,
                     ICON_STOP,
-                    "Stop generation",
+                    "Stop generation (Cmd/Ctrl+.)",
                 )
             } else if can_send {
                 (

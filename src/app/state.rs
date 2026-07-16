@@ -1,6 +1,7 @@
 //! Grouped application state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::Child;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -30,6 +31,7 @@ pub enum SettingsTab {
     #[default]
     Providers,
     Agent,
+    GitHub,
     Prompts,
     Voice,
     Terminal,
@@ -42,6 +44,7 @@ pub enum SettingsTab {
 pub enum SettingsExitAction {
     BackToChat,
     ToggleSidebar,
+    ToggleExplorer,
     ToggleTerminal,
     ToggleGitChanges,
     ToggleGitBranches,
@@ -55,6 +58,75 @@ pub enum ConfirmAction {
     GitDiscard { paths: Vec<String> },
     DeleteLocalModel { id: String },
     DeleteVoiceModel { id: String },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum SidebarMode {
+    #[default]
+    Chats,
+    Explorer,
+}
+
+#[derive(Default)]
+pub struct EditorState {
+    pub documents: Vec<EditorDocument>,
+    pub active: Option<usize>,
+    /// Active tab remembered while the chat/agent view is shown.
+    pub hidden_active: Option<usize>,
+    pub error: Option<String>,
+    pub find_open: bool,
+    pub find_query: String,
+    pub replace_query: String,
+    /// Selected occurrence in the active document's current search results.
+    pub find_active_match: usize,
+    pub find_last_query: String,
+    /// Move the editor selection/caret to `find_active_match` on the next render.
+    pub find_select_pending: bool,
+    pub show_diff: bool,
+    pub file_operation: Option<FileOperation>,
+    pub file_operation_name: String,
+    /// Cmd/Ctrl+P workspace file picker state.
+    pub file_picker_open: bool,
+    pub file_picker_query: String,
+    pub file_picker_last_query: String,
+    pub file_picker_selected: usize,
+    pub file_picker_files: Vec<PathBuf>,
+}
+
+#[derive(Clone)]
+pub enum FileOperation {
+    NewFile(PathBuf),
+    NewFolder(PathBuf),
+    Rename(PathBuf),
+    Delete(PathBuf),
+}
+
+pub struct EditorDocument {
+    pub path: PathBuf,
+    pub content: String,
+    pub saved_content: String,
+    pub disk_modified: Option<std::time::SystemTime>,
+    pub externally_modified: bool,
+}
+
+impl EditorDocument {
+    pub fn is_dirty(&self) -> bool {
+        self.content != self.saved_content
+    }
+}
+
+impl EditorState {
+    pub fn active_document(&self) -> Option<&EditorDocument> {
+        self.active.and_then(|index| self.documents.get(index))
+    }
+
+    pub fn active_document_mut(&mut self) -> Option<&mut EditorDocument> {
+        self.active.and_then(|index| self.documents.get_mut(index))
+    }
+
+    pub fn any_dirty(&self) -> bool {
+        self.documents.iter().any(EditorDocument::is_dirty)
+    }
 }
 
 /// One project root and its chat tabs.
@@ -266,6 +338,10 @@ pub struct ConversationState {
     pub focus_terminal_next_frame: bool,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
+    pub sidebar_mode: SidebarMode,
+    /// Directories expanded in the workspace explorer. Children are read only when expanded.
+    pub explorer_expanded: HashSet<PathBuf>,
+    pub editor: EditorState,
     /// Settings page left-nav width (independent of the chat sidebar).
     pub settings_sidebar_width: f32,
     /// Bottom terminal panel visibility and height (persisted in settings).

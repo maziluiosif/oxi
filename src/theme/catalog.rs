@@ -133,6 +133,19 @@ impl ThemeSpec {
                 "md_code_block_border" => p.md_code_block_border = c,
                 "md_quote_accent" => p.md_quote_accent = c,
                 "md_code_fg" => p.md_code_fg = c,
+                "syntax_foreground" => p.syntax.foreground = c,
+                "syntax_comment" => p.syntax.comment = c,
+                "syntax_keyword" => p.syntax.keyword = c,
+                "syntax_function" => p.syntax.function = c,
+                "syntax_type" => p.syntax.type_name = c,
+                "syntax_string" => p.syntax.string = c,
+                "syntax_number" => p.syntax.number = c,
+                "syntax_constant" => p.syntax.constant = c,
+                "syntax_variable" => p.syntax.variable = c,
+                "syntax_operator" => p.syntax.operator = c,
+                "syntax_tag" => p.syntax.tag = c,
+                "syntax_attribute" => p.syntax.attribute = c,
+                "syntax_regexp" => p.syntax.regexp = c,
                 _ => {}
             }
         }
