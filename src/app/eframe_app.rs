@@ -174,7 +174,7 @@ impl OxiApp {
         if toggle_sidebar {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleSidebar);
         }
-        if open_file && !self.conv.settings_open {
+        if open_file && !self.conv.settings_open && !self.conv.editor.file_picker_open {
             self.open_file_picker();
         }
         if save_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {

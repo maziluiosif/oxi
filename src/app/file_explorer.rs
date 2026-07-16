@@ -624,6 +624,8 @@ impl OxiApp {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
             )
         });
+        let keyboard_navigation = arrow_up || arrow_down;
+        let pointer_moved = ctx.input(|input| input.pointer.delta() != egui::Vec2::ZERO);
         if !matches.is_empty() {
             if arrow_down {
                 self.conv.editor.file_picker_selected =
@@ -641,12 +643,19 @@ impl OxiApp {
             .then(|| matches.get(self.conv.editor.file_picker_selected).cloned())
             .flatten();
         let mut open = true;
+        // Keep the palette geometry stable as filtering changes the number of matches. An
+        // auto-sized, top-anchored Window visibly jumps between frames for short result lists.
+        let available = ctx.content_rect().size();
+        let picker_size = egui::vec2(
+            560.0_f32.min((available.x - 32.0).max(280.0)),
+            440.0_f32.min((available.y - 104.0).max(220.0)),
+        );
         egui::Window::new("Open file")
             .id(egui::Id::new("workspace_file_picker"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 72.0))
-            .default_width(560.0)
+            .fixed_size(picker_size)
             .open(&mut open)
             .show(ctx, |ui| {
                 let response = ui.add(
@@ -655,9 +664,11 @@ impl OxiApp {
                         .hint_text("Type a file name or path…")
                         .desired_width(f32::INFINITY),
                 );
-                response.request_focus();
+                if !response.has_focus() {
+                    response.request_focus();
+                }
                 ui.add_space(6.0);
-                ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+                ScrollArea::vertical().show(ui, |ui| {
                     if matches.is_empty() {
                         ui.label(RichText::new("No matching files").color(c_text_muted()));
                     }
@@ -669,10 +680,15 @@ impl OxiApp {
                                 relative.to_string_lossy(),
                             )
                             .on_hover_text(path.display().to_string());
-                        if match_index == self.conv.editor.file_picker_selected {
+                        // Scrolling a hover-selected row every frame moves a different row under
+                        // the stationary pointer, which changes selection again and causes a
+                        // scroll/hover feedback loop. Only keyboard navigation needs auto-scroll.
+                        if keyboard_navigation
+                            && match_index == self.conv.editor.file_picker_selected
+                        {
                             response.scroll_to_me(Some(egui::Align::Center));
                         }
-                        if response.hovered() {
+                        if pointer_moved && response.hovered() {
                             self.conv.editor.file_picker_selected = match_index;
                         }
                         if response.clicked() {
