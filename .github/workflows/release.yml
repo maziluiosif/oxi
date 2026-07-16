@@ -26,13 +26,13 @@ jobs:
       version: ${{ steps.gen.outputs.version }}
       source_sha: ${{ steps.source.outputs.sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           # workflow_dispatch may be launched from another ref; releases always come from master.
           ref: master
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -49,7 +49,7 @@ jobs:
 
       - name: Upload generated release metadata
         if: steps.gen.outputs.released == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: release-metadata
           path: |
@@ -77,12 +77,12 @@ jobs:
             name: oxi-windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           ref: ${{ needs.changelog.outputs.source_sha }}
 
       - name: Apply generated version metadata
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: release-metadata
 
@@ -137,7 +137,7 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/oxi.exe" -DestinationPath "${{ matrix.name }}.zip"
 
       - name: Upload packaged binary
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
           path: ${{ matrix.name }}.*
@@ -148,13 +148,13 @@ jobs:
     if: needs.changelog.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ needs.changelog.outputs.source_sha }}
 
       - name: Download generated release metadata
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: release-metadata
 
@@ -170,14 +170,14 @@ jobs:
           git push --atomic origin HEAD:master "refs/tags/v${version}"
 
       - name: Download packaged binaries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           pattern: oxi-*
           path: dist
           merge-multiple: true
 
       - name: Publish one GitHub release with all platforms
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.changelog.outputs.version }}
           name: v${{ needs.changelog.outputs.version }}
@@ -206,6 +206,9 @@ jobs:
             pr=$(gh pr list --base dev --head master --state open --json number --jq '.[0].number')
           fi
           test -n "$pr"
+          # PRs created with GITHUB_TOKEN do not trigger pull_request workflows. Dispatch CI
+          # explicitly for the release commit so protected dev receives its required `ci` check.
+          gh workflow run ci.yml --ref master -f ref="v${{ needs.changelog.outputs.version }}"
           # dev requires the CI check, so the PR merges only after that check succeeds.
           gh pr merge "$pr" --auto --merge
 
