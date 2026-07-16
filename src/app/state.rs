@@ -107,6 +107,8 @@ pub struct EditorDocument {
     pub saved_content: String,
     pub disk_modified: Option<std::time::SystemTime>,
     pub externally_modified: bool,
+    /// Incremental Tree-sitter parse and query-highlight state for this document.
+    pub syntax_state: Option<crate::theme::EditorSyntaxState>,
 }
 
 impl EditorDocument {

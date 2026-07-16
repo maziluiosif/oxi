@@ -13,8 +13,13 @@ use super::{EditorDocument, OxiApp};
 const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const ALWAYS_SKIPPED_DIRS: &[&str] = &[".git"];
 
-type EditorScrollOutput =
-    egui::scroll_area::ScrollAreaOutput<(Vec<f32>, bool, Option<(usize, usize)>)>;
+type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
+    Vec<f32>,
+    bool,
+    Option<(usize, usize)>,
+    egui::text::LayoutJob,
+    String,
+)>;
 
 impl OxiApp {
     pub(crate) fn render_file_explorer(&mut self, ui: &mut Ui) {
@@ -494,6 +499,7 @@ impl OxiApp {
                     content,
                     disk_modified: metadata.modified().ok(),
                     externally_modified: false,
+                    syntax_state: None,
                 });
                 self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
                 self.conv.editor.error = None;
@@ -1033,7 +1039,6 @@ impl OxiApp {
             .unwrap_or_default();
         const MINIMAP_WIDTH: f32 = 96.0;
         let editor_view_size = ui.available_size();
-        let minimap_content = self.conv.editor.documents[index].content.clone();
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
 
@@ -1062,26 +1067,15 @@ impl OxiApp {
                         .show(ui, |ui| {
                             let mut layouter =
                                 |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                                    let mut job = themed_highlight(
-                                        ui,
-                                        text.as_str(),
-                                        &extension,
+                                    // TextEdit only needs glyph geometry here; the syntax-colored
+                                    // galley is painted once below. Running Syntect in both passes
+                                    // made every keystroke parse and lay out the whole file twice.
+                                    let mut job = egui::text::LayoutJob::simple(
+                                        text.as_str().to_owned(),
                                         FontId::monospace(FS_SMALL),
+                                        egui::Color32::TRANSPARENT,
+                                        wrap_width,
                                     );
-                                    apply_search_highlights(
-                                        &mut job,
-                                        &find_ranges,
-                                        active_find_match,
-                                    );
-                                    // TextEdit still uses this galley for cursor geometry, but we
-                                    // paint the visible syntax galley ourselves exactly once below.
-                                    // This prevents egui from flattening selected token colors.
-                                    for section in &mut job.sections {
-                                        section.format.color = egui::Color32::TRANSPARENT;
-                                        section.format.background = egui::Color32::TRANSPARENT;
-                                        section.format.underline = egui::Stroke::NONE;
-                                        section.format.strikethrough = egui::Stroke::NONE;
-                                    }
                                     job.wrap.max_width = wrap_width;
                                     ui.fonts_mut(|fonts| fonts.layout_job(job))
                                 };
@@ -1133,6 +1127,15 @@ impl OxiApp {
                                 ui.scroll_to_rect(caret, Some(egui::Align::Center));
                             }
                             let selection = output.cursor_range.filter(|range| !range.is_empty());
+                            // Draw indentation guides behind both selections and source text.
+                            paint_indent_guides(
+                                ui,
+                                &output.galley,
+                                output.galley_pos,
+                                output.text_clip_rect,
+                                &document.content,
+                            );
+
                             // Paint selection behind the visible galley. The previous order put a
                             // translucent wash over the glyphs; depending on the backend it looked
                             // opaque and left only our whitespace markers visible.
@@ -1140,7 +1143,7 @@ impl OxiApp {
                                 let selection_color = crate::theme::blend_color(
                                     c_bg_main(),
                                     active_palette().selection_bg,
-                                    0.62,
+                                    0.74,
                                 );
                                 let selection_painter =
                                     ui.painter().with_clip_rect(output.text_clip_rect);
@@ -1151,20 +1154,30 @@ impl OxiApp {
                                 }
                             }
 
-                            // TextEdit's layout pass is transparent. Paint one visible syntax galley
-                            // over the selection background; every glyph is now painted exactly once.
-                            let mut visible_job = themed_highlight(
-                                ui,
+                            // TextEdit's layout pass is transparent. Tree-sitter edits and reuses
+                            // the document's syntax tree, then queries the new tree immediately.
+                            let syntax_job = crate::theme::highlight_editor_code(
+                                &mut document.syntax_state,
                                 &document.content,
                                 &extension,
                                 FontId::monospace(FS_SMALL),
-                            );
+                            )
+                            .unwrap_or_else(|| {
+                                themed_highlight(
+                                    ui,
+                                    &document.content,
+                                    &extension,
+                                    FontId::monospace(FS_SMALL),
+                                )
+                            });
+                            let mut visible_job = syntax_job.clone();
                             apply_search_highlights(
                                 &mut visible_job,
                                 &find_ranges,
                                 active_find_match,
                             );
                             visible_job.wrap.max_width = output.galley.job.wrap.max_width;
+                            let minimap_job = syntax_job;
                             let visible_galley =
                                 ui.fonts_mut(|fonts| fonts.layout_job(visible_job));
                             ui.painter().with_clip_rect(output.text_clip_rect).galley(
@@ -1223,7 +1236,13 @@ impl OxiApp {
                                         .y
                                 })
                                 .collect::<Vec<_>>();
-                            (line_positions, output.response.dragged(), selected_lines)
+                            (
+                                line_positions,
+                                output.response.dragged(),
+                                selected_lines,
+                                minimap_job,
+                                document.content.clone(),
+                            )
                         })
                 })
                 .inner;
@@ -1294,11 +1313,11 @@ impl OxiApp {
             // after it, so the visual order is source → minimap → scrollbar.
             if let Some(fraction) = paint_minimap(
                 ui,
-                &minimap_content,
-                &extension,
+                &scroll_output.inner.4,
                 egui::vec2(MINIMAP_WIDTH, editor_view_size.y.max(24.0)),
                 &scroll_output,
                 scroll_output.inner.2,
+                &scroll_output.inner.3,
             ) {
                 let mut state = scroll_output.state;
                 let max_y =
@@ -1434,8 +1453,14 @@ fn paint_selected_whitespace(
     // tabs use a small arrow so
     // indentation remains distinguishable without showing invisibles throughout the whole file.
     let selected = range.as_sorted_char_range();
-    let marker_color =
-        crate::theme::blend_color(c_text_muted(), active_palette().selection_stroke, 0.35);
+    let marker_base =
+        crate::theme::blend_color(c_text_muted(), active_palette().selection_stroke, 0.25);
+    let marker_color = egui::Color32::from_rgba_unmultiplied(
+        marker_base.r(),
+        marker_base.g(),
+        marker_base.b(),
+        105,
+    );
     for (offset, character) in content
         .chars()
         .skip(selected.start.0)
@@ -1511,13 +1536,98 @@ fn themed_highlight(
     crate::theme::highlight_code(content, language, font_id)
 }
 
+/// Paint subtle dotted guides at each complete indentation level. Blank lines inherit the
+/// shallower indentation of their nearest non-empty neighbours so guides remain continuous across
+/// spacing inside a block.
+fn paint_indent_guides(
+    ui: &Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
+    content: &str,
+) {
+    const TAB_WIDTH: usize = 4;
+    const DASH_LENGTH: f32 = 1.5;
+    const DASH_GAP: f32 = 2.5;
+
+    let lines = content.split('\n').collect::<Vec<_>>();
+    let mut indent_columns = lines
+        .iter()
+        .map(|line| {
+            let mut column = 0usize;
+            for character in line.chars() {
+                match character {
+                    ' ' => column += 1,
+                    '\t' => column += TAB_WIDTH - column % TAB_WIDTH,
+                    _ => break,
+                }
+            }
+            (!line.trim().is_empty()).then_some(column)
+        })
+        .collect::<Vec<_>>();
+
+    // Preserve guides across empty separator lines, but do not invent a deeper indentation than
+    // either neighbouring block has. Keep this linear: searching both sides for every blank line
+    // caused quadratic work in files containing large whitespace regions.
+    let mut indentation_before = Vec::with_capacity(indent_columns.len());
+    let mut nearest = None;
+    for indentation in &indent_columns {
+        indentation_before.push(nearest);
+        if indentation.is_some() {
+            nearest = *indentation;
+        }
+    }
+    let mut nearest = None;
+    for index in (0..indent_columns.len()).rev() {
+        if indent_columns[index].is_some() {
+            nearest = indent_columns[index];
+        } else if let (Some(before), Some(after)) = (indentation_before[index], nearest) {
+            indent_columns[index] = Some(before.min(after));
+        }
+    }
+
+    let logical_rows = galley
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(row, _)| *row == 0 || galley.rows[*row - 1].ends_with_newline)
+        .map(|(_, row)| row.rect().translate(galley_pos.to_vec2()))
+        .collect::<Vec<_>>();
+    let glyph_width = ui.fonts_mut(|fonts| {
+        fonts
+            .glyph_width(&FontId::monospace(FS_SMALL), ' ')
+            .max(FS_SMALL * 0.25)
+    });
+    let color = crate::theme::blend_color(c_text_faint(), c_bg_main(), 0.38);
+    let painter = ui.painter().with_clip_rect(clip_rect);
+
+    for (line, row_rect) in logical_rows.iter().enumerate() {
+        let Some(columns) = indent_columns.get(line).copied().flatten() else {
+            continue;
+        };
+        for column in (TAB_WIDTH..=columns).step_by(TAB_WIDTH) {
+            let x = galley_pos.x + column as f32 * glyph_width;
+            let mut y = row_rect.top().max(clip_rect.top());
+            let bottom = row_rect.bottom().min(clip_rect.bottom());
+            while y < bottom {
+                painter.vline(
+                    x,
+                    y..=(y + DASH_LENGTH).min(bottom),
+                    egui::Stroke::new(1.0, color),
+                );
+                y += DASH_LENGTH + DASH_GAP;
+            }
+        }
+    }
+}
+
 fn paint_minimap(
     ui: &mut Ui,
     content: &str,
-    language: &str,
     size: egui::Vec2,
     scroll: &EditorScrollOutput,
     selected_lines: Option<(usize, usize)>,
+    highlight_job: &egui::text::LayoutJob,
 ) -> Option<f32> {
     const SCROLLBAR_WIDTH: f32 = 10.0;
     let (whole_rect, response) = ui.allocate_exact_size(
@@ -1540,7 +1650,9 @@ fn paint_minimap(
     // Every line must fit in the available height: clamping rows to at least one pixel used to
     // clip everything after roughly `minimap_rect.height()` lines in larger files.
     let lines = content.split('\n').collect::<Vec<_>>();
-    let job = themed_highlight(ui, content, language, FontId::monospace(2.0));
+    // Only section ranges and colors are used by the minimap. Reuse the editor's cached or
+    // incrementally adjusted highlight so the minimap neither reparses nor loses colors on input.
+    let job = highlight_job;
     let row_height = minimap_rect.height() / lines.len().max(1) as f32;
     let max_chars = lines
         .iter()
@@ -1551,8 +1663,14 @@ fn paint_minimap(
     let mut line_index = 0usize;
     let mut column = 0usize;
     for section in &job.sections {
-        let range = section.byte_range.start.0..section.byte_range.end.0;
-        for fragment in content[range].split_inclusive('\n') {
+        let start = section.byte_range.start.0.min(content.len());
+        let end = section.byte_range.end.0.min(content.len());
+        // Never let stale or malformed byte ranges take down the editor. Incremental highlight
+        // ranges are sanitized at creation too; this guard also protects cached legacy jobs.
+        let Some(section_text) = content.get(start..end) else {
+            continue;
+        };
+        for fragment in section_text.split_inclusive('\n') {
             let text = fragment.trim_end_matches('\n');
             let leading = text
                 .chars()
@@ -1781,8 +1899,10 @@ fn language_for_path(path: &Path) -> &'static str {
     {
         "rs" => "rs",
         "py" => "py",
-        "js" | "jsx" => "js",
-        "ts" | "tsx" => "ts",
+        "js" => "js",
+        "jsx" => "jsx",
+        "ts" => "ts",
+        "tsx" => "tsx",
         "json" => "json",
         "toml" => "toml",
         "yaml" | "yml" => "yaml",
