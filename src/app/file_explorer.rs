@@ -1536,17 +1536,18 @@ fn paint_minimap(
     ui.painter()
         .rect_filled(scrollbar_rect, 0.0, c_bg_elevated());
 
-    let lines = content.lines().collect::<Vec<_>>();
-    if lines.is_empty() {
-        return None;
-    }
+    // Keep the minimap's line count identical to the editor's, including a final empty line.
+    // Every line must fit in the available height: clamping rows to at least one pixel used to
+    // clip everything after roughly `minimap_rect.height()` lines in larger files.
+    let lines = content.split('\n').collect::<Vec<_>>();
     let job = themed_highlight(ui, content, language, FontId::monospace(2.0));
-    let row_height = (minimap_rect.height() / lines.len() as f32).clamp(1.0, 2.0);
+    let row_height = minimap_rect.height() / lines.len().max(1) as f32;
     let max_chars = lines
         .iter()
         .map(|line| line.chars().count())
         .max()
-        .unwrap_or(1);
+        .unwrap_or(1)
+        .max(1);
     let mut line_index = 0usize;
     let mut column = 0usize;
     for section in &job.sections {
