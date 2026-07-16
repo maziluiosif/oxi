@@ -484,77 +484,59 @@ pub(crate) fn tool_codebase_search(cwd: &Path, args: &Value) -> Result<String, S
     Ok(truncate_out(out))
 }
 
-/// Keep background CLI tools from opening a transient console window when oxi is built as a
-/// Windows GUI application. On other platforms this is intentionally a no-op.
-fn configure_background_command(cmd: &mut Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    #[cfg(not(windows))]
-    let _ = cmd;
-}
-
 pub(crate) fn tool_git_status(cwd: &Path, _args: &Value) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    configure_background_command(&mut cmd);
-    let output = cmd
-        .args(["status", "--short", "--branch"])
-        .current_dir(cwd)
-        .output()
-        .map_err(|e| format!("git status failed: {e}"))?;
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.stderr.is_empty() {
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
+    let repo = git2::Repository::discover(cwd).map_err(|e| format!("git status failed: {e}"))?;
+    let branch = repo
+        .head().ok().and_then(|h| h.shorthand().ok().map(str::to_owned))
+        .unwrap_or_else(|| "HEAD (detached)".into());
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true).recurse_untracked_dirs(true);
+    let statuses = repo.statuses(Some(&mut opts)).map_err(|e| e.to_string())?;
+    let mut text = format!("## {branch}\n");
+    for entry in statuses.iter() {
+        let s = entry.status();
+        let x = if s.contains(git2::Status::INDEX_NEW) { 'A' }
+            else if s.contains(git2::Status::INDEX_MODIFIED) { 'M' }
+            else if s.contains(git2::Status::INDEX_DELETED) { 'D' }
+            else if s.contains(git2::Status::INDEX_RENAMED) { 'R' } else { ' ' };
+        let y = if s.contains(git2::Status::WT_NEW) { '?' }
+            else if s.contains(git2::Status::WT_MODIFIED) { 'M' }
+            else if s.contains(git2::Status::WT_DELETED) { 'D' }
+            else if s.contains(git2::Status::WT_RENAMED) { 'R' } else { ' ' };
+        text.push_str(&format!("{x}{y} {}\n", entry.path().unwrap_or("(non-UTF-8 path)")));
     }
-    if text.trim().is_empty() {
-        text = "(clean working tree)".into();
-    }
-    if !output.status.success() {
-        return Err(truncate_out(text));
-    }
+    if statuses.is_empty() { text.push_str("(clean working tree)\n"); }
     Ok(truncate_out(text))
 }
 
 pub(crate) fn tool_git_diff(cwd: &Path, args: &Value) -> Result<String, String> {
-    let staged = args
-        .get("staged")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let staged = args.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
     let path = args.get("path").and_then(|v| v.as_str());
+    if let Some(p) = path { let _ = resolve_under_cwd(cwd, p)?; }
+    let repo = git2::Repository::discover(cwd).map_err(|e| format!("git diff failed: {e}"))?;
+    let mut opts = git2::DiffOptions::new();
+    opts.include_untracked(true).recurse_untracked_dirs(true).show_untracked_content(true);
+    if let Some(p) = path { opts.pathspec(p); }
     let revision = args.get("revision").and_then(|v| v.as_str());
-    let mut cmd = Command::new("git");
-    cmd.arg("diff");
-    if staged {
-        cmd.arg("--cached");
-    }
-    if let Some(rev) = revision {
-        cmd.arg(rev);
-    }
-    if let Some(p) = path {
-        let _ = resolve_under_cwd(cwd, p)?;
-        cmd.args(["--", p]);
-    }
-    configure_background_command(&mut cmd);
-    let output = cmd
-        .current_dir(cwd)
-        .output()
-        .map_err(|e| format!("git diff failed: {e}"))?;
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.stderr.is_empty() {
-        if !text.is_empty() {
-            text.push('\n');
+    let diff = if let Some(rev) = revision {
+        let tree = repo.revparse_single(rev).and_then(|o| o.peel_to_tree()).map_err(|e| e.to_string())?;
+        repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+    } else if staged {
+        let tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        repo.diff_tree_to_index(tree.as_ref(), None, Some(&mut opts))
+    } else {
+        repo.diff_index_to_workdir(None, Some(&mut opts))
+    }.map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    diff.print(git2::DiffFormat::Patch, |_d, _h, line| {
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            bytes.push(line.origin() as u8);
         }
-        text.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-    if text.trim().is_empty() {
-        text = "(no diff)".into();
-    }
-    if !output.status.success() {
-        return Err(truncate_out(text));
-    }
+        bytes.extend_from_slice(line.content());
+        true
+    }).map_err(|e| e.to_string())?;
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if text.trim().is_empty() { text = "(no diff)".into(); }
     Ok(truncate_out(text))
 }
 

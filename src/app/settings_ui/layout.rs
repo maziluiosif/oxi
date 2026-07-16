@@ -30,7 +30,10 @@ const SETTINGS_NAV: &[SettingsNavGroup] = &[
     },
     SettingsNavGroup {
         caption: "Agent",
-        items: &[(SettingsTab::Agent, ICON_AGENT, "Tools & safety")],
+        items: &[
+            (SettingsTab::Agent, ICON_AGENT, "Tools & safety"),
+            (SettingsTab::GitHub, ICON_GIT, "GitHub"),
+        ],
     },
     SettingsNavGroup {
         caption: "App",
@@ -323,6 +326,7 @@ impl OxiApp {
         match tab {
             SettingsTab::Providers => "Models & providers",
             SettingsTab::Agent => "Tools & safety",
+            SettingsTab::GitHub => "GitHub",
             SettingsTab::Prompts => "Prompts",
             SettingsTab::Voice => "Voice",
             SettingsTab::Terminal => "Terminal",
@@ -439,6 +443,7 @@ impl OxiApp {
         match self.conv.settings_tab {
             SettingsTab::Providers => self.render_settings_providers_panel(ui),
             SettingsTab::Agent => self.render_settings_agent_panel(ui),
+            SettingsTab::GitHub => self.render_settings_github_panel(ui),
             SettingsTab::Prompts => self.render_settings_prompts_panel(ui),
             SettingsTab::Voice => self.render_settings_voice_panel(ui),
             SettingsTab::Terminal => self.render_settings_terminal_panel(ui),

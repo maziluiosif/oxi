@@ -31,6 +31,7 @@ pub enum SettingsTab {
     #[default]
     Providers,
     Agent,
+    GitHub,
     Prompts,
     Voice,
     Terminal,
