@@ -191,12 +191,14 @@ jobs:
     if: needs.changelog.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Open a master-to-dev sync PR and enable auto-merge
+      - name: Reconcile master and dev after the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           version="v${{ needs.changelog.outputs.version }}"
+          release_sha=$(gh api "repos/${GH_REPO}/git/ref/heads/master" --jq .object.sha)
+          test -n "$release_sha"
           pr=$(gh pr list --base dev --head master --state open --json number --jq '.[0].number')
           if [ -z "$pr" ]; then
             gh pr create \
@@ -207,11 +209,44 @@ jobs:
             pr=$(gh pr list --base dev --head master --state open --json number --jq '.[0].number')
           fi
           test -n "$pr"
+
           # PRs created with GITHUB_TOKEN do not trigger pull_request workflows. Dispatch CI
-          # explicitly for the release commit so protected dev receives its required `ci` check.
-          gh workflow run ci.yml --ref master -f ref="v${{ needs.changelog.outputs.version }}"
-          # dev requires the CI check, so the PR merges only after that check succeeds.
+          # explicitly for the release commit so protected dev receives its required check.
+          gh workflow run ci.yml --ref master -f ref="${version}"
           gh pr merge "$pr" --auto --merge
+
+          # Wait for required checks and auto-merge, then fast-forward master to the sync
+          # merge commit. Both branches consequently end at the exact same SHA, rather
+          # than retaining a history-only difference which appears in the next release PR.
+          sync_sha=""
+          for _ in $(seq 1 120); do
+            state=$(gh pr view "$pr" --json state --jq .state)
+            if [ "$state" = "MERGED" ]; then
+              sync_sha=$(gh pr view "$pr" --json mergeCommit --jq .mergeCommit.oid)
+              break
+            fi
+            if [ "$state" = "CLOSED" ]; then
+              echo "Sync PR #${pr} was closed without merging." >&2
+              exit 1
+            fi
+            sleep 15
+          done
+          test -n "$sync_sha"
+
+          # Never promote work that reached dev while this sync PR was waiting for CI.
+          # In the normal release flow the sync merge changes history only, so its tree
+          # must be byte-for-byte identical to the verified release tree on master.
+          release_tree=$(gh api "repos/${GH_REPO}/git/commits/${release_sha}" --jq .tree.sha)
+          sync_tree=$(gh api "repos/${GH_REPO}/git/commits/${sync_sha}" --jq .tree.sha)
+          if [ "$release_tree" != "$sync_tree" ]; then
+            echo "dev changed while release ${version} was syncing; refusing to move master." >&2
+            exit 1
+          fi
+
+          # This is a non-forced fast-forward: the sync merge has the release commit
+          # on master as a parent. GitHub-token ref updates do not start another workflow.
+          gh api --method PATCH "repos/${GH_REPO}/git/refs/heads/master" \
+            -f sha="$sync_sha" -F force=false
 
   homebrew:
     needs: [changelog, publish]

@@ -294,8 +294,11 @@ def main() -> None:
     tag = last_tag()
     commits, files = collect_commits(tag)
 
-    if not commits:
-        print("No commits since last release; nothing to do.")
+    if not commits or not files:
+        # A release sync can add merge/history commits while leaving the tagged
+        # tree unchanged. Do not manufacture another release for that metadata-only
+        # reconciliation; a real release must change at least one tracked file.
+        print("No file changes since last release; nothing to do.")
         set_output("released", "false")
         return
 

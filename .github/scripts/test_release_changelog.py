@@ -2,9 +2,11 @@
 """Unit tests for deterministic parts of release_changelog.py."""
 
 import importlib.util
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).with_name("release_changelog.py")
 SPEC = importlib.util.spec_from_file_location("release_changelog", SCRIPT)
@@ -50,6 +52,21 @@ class ReleaseChangelogTests(unittest.TestCase):
             result, {"bump": "minor", "sections": {"Added": ["New tool"]}}
         )
 
+    def test_main_skips_history_only_changes(self) -> None:
+        with mock.patch.object(release, "current_version", return_value="1.2.3"), mock.patch.object(
+            release, "last_tag", return_value="v1.2.3"
+        ), mock.patch.object(
+            release,
+            "collect_commits",
+            return_value=("- Merge release metadata back to dev", []),
+        ), mock.patch.object(release, "call_llm") as call_llm, mock.patch.object(
+            release, "set_output"
+        ) as set_output:
+            release.main()
+
+        call_llm.assert_not_called()
+        set_output.assert_called_once_with("released", "false")
+
     def test_update_cargo_changes_only_oxi_versions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -63,8 +80,6 @@ class ReleaseChangelogTests(unittest.TestCase):
             )
             old_cwd = Path.cwd()
             try:
-                import os
-
                 os.chdir(root)
                 release.update_cargo("1.2.3", "1.3.0")
             finally:
