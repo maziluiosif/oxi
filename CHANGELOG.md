@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-16
+
+### Added
+- Agent now allows explicitly requested shell mutations
+
+### Fixed
+- Release workflow now keeps dev and master histories aligned
+- Release process preserves LF normalization across merges
+- Shell scripts enforce LF endings for consistency
+
+
 ## [0.15.1] - 2026-07-16
 
 ### Fixed
@@ -398,7 +409,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/maziluiosif/oxi/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/maziluiosif/oxi/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/maziluiosif/oxi/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/maziluiosif/oxi/compare/v0.14.0...v0.14.1
