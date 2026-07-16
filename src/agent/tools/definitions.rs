@@ -115,7 +115,7 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                 "type": "function",
                 "function": {
                     "name": "bash",
-                    "description": "Run a non-mutating shell command in the workspace directory (for example builds, checks, and tests). Never use bash to modify workspace files; use write/edit/delete/move/mkdir. Output beyond 40k chars is truncated — pipe through head/tail.",
+                    "description": "Run a shell command in the workspace directory. Normally use it only for non-mutating commands such as builds, checks, and tests; use write/edit/delete/move/mkdir for workspace file changes. If the user explicitly requests an operation that requires a mutating shell command, it may be used narrowly and remains subject to approval and hard safety checks. Output beyond 40k chars is truncated — pipe through head/tail.",
                     "parameters": {
                         "type": "object",
                         "properties": {
