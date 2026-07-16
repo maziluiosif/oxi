@@ -47,3 +47,20 @@ jobs:
 
       - name: cargo test
         run: cargo test
+
+  windows-check:
+    name: windows-check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-check
+
+      # Keep platform-specific APIs honest before a merge can reach the release pipeline.
+      - name: cargo check --all-targets
+        run: cargo check --all-targets

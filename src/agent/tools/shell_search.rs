@@ -195,16 +195,20 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<Strin
         .unwrap_or(BASH_DEFAULT_TIMEOUT_SECS.min(cap))
         .clamp(0.1, cap);
     let start = Instant::now();
-    let mut child = if cfg!(unix) {
+    // Use compile-time cfg blocks rather than cfg!(...), because cfg! only evaluates to a
+    // boolean and still type-checks both branches. The Unix-only CommandExt/libc calls would
+    // therefore break Windows builds even though that branch could never execute there.
+    #[cfg(unix)]
+    let mut child = {
+        use std::os::unix::process::CommandExt;
+
         let mut c = Command::new("/bin/sh");
         c.arg("-c")
             .arg(cmd)
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        // Strip inherited secrets / agent-hostile env from the child shell.
         sanitize_bash_env(&mut c);
-        use std::os::unix::process::CommandExt;
         // SAFETY: setpgid(0, 0) only changes the soon-to-exec child's process group and does
         // not access parent memory. It enables reliable whole-tree termination on timeout.
         unsafe {
@@ -216,24 +220,22 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<Strin
             });
         }
         c.spawn().map_err(|e| e.to_string())?
-    } else {
-        {
-            let mut c = Command::new("cmd");
-            c.args(["/C", cmd])
-                .current_dir(cwd)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            sanitize_bash_env(&mut c);
-            // No console on a Windows GUI process: without CREATE_NO_WINDOW every shell
-            // tool call would flash a `cmd` window. Keep the child headless.
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                c.creation_flags(CREATE_NO_WINDOW);
-            }
-            c.spawn().map_err(|e| e.to_string())?
-        }
+    };
+    #[cfg(windows)]
+    let mut child = {
+        use std::os::windows::process::CommandExt;
+
+        let mut c = Command::new("cmd");
+        c.args(["/C", cmd])
+            .current_dir(cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        sanitize_bash_env(&mut c);
+        // No console on a Windows GUI process: without CREATE_NO_WINDOW every shell
+        // tool call would flash a `cmd` window. Keep the child headless.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        c.creation_flags(CREATE_NO_WINDOW);
+        c.spawn().map_err(|e| e.to_string())?
     };
     let stdout_reader = child.stdout.take().map(spawn_pipe_reader);
     let stderr_reader = child.stderr.take().map(spawn_pipe_reader);
