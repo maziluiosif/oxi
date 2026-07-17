@@ -19,6 +19,7 @@ type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
     Option<(usize, usize)>,
     egui::text::LayoutJob,
     String,
+    Option<usize>,
 )>;
 
 impl OxiApp {
@@ -994,6 +995,18 @@ impl OxiApp {
             return;
         };
         let extension = language_for_path(&self.conv.editor.documents[index].path).to_owned();
+        let navigation_range = self
+            .conv
+            .editor
+            .navigation_target
+            .as_ref()
+            .filter(|(path, _)| path == &self.conv.editor.documents[index].path)
+            .map(|(_, range)| range.clone());
+        if navigation_range.is_some() {
+            self.conv.editor.navigation_target = None;
+        }
+        let goto_definition_requested =
+            std::mem::take(&mut self.conv.editor.goto_definition_requested);
         let find_ranges = if self.conv.editor.find_open {
             find_match_ranges(
                 &self.conv.editor.documents[index].content,
@@ -1039,6 +1052,7 @@ impl OxiApp {
             .unwrap_or_default();
         const MINIMAP_WIDTH: f32 = 96.0;
         let editor_view_size = ui.available_size();
+        let mut goto_definition_byte = None;
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
 
@@ -1105,8 +1119,11 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
-                            if select_find_match {
-                                let byte_range = &find_ranges[active_find_match.unwrap_or(0)];
+                            let selection_target = navigation_range.as_ref().or_else(|| {
+                                select_find_match
+                                    .then(|| &find_ranges[active_find_match.unwrap_or(0)])
+                            });
+                            if let Some(byte_range) = selection_target {
                                 let start = document.content[..byte_range.start].chars().count();
                                 let end =
                                     start + document.content[byte_range.clone()].chars().count();
@@ -1126,6 +1143,64 @@ impl OxiApp {
                                     .translate(output.galley_pos.to_vec2());
                                 ui.scroll_to_rect(caret, Some(egui::Align::Center));
                             }
+
+                            let caret_byte = output.cursor_range.map(|range| {
+                                char_index_to_byte(&document.content, range.primary.index.0)
+                            });
+                            let definition_modifier =
+                                ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+                            let hovered_definition = if extension == "rs"
+                                && definition_modifier
+                                && output.response.hovered()
+                            {
+                                ui.input(|input| input.pointer.hover_pos())
+                                    .filter(|position| output.text_clip_rect.contains(*position))
+                                    .and_then(|position| {
+                                        let cursor = output
+                                            .galley
+                                            .cursor_from_pos(position - output.galley_pos);
+                                        let byte =
+                                            char_index_to_byte(&document.content, cursor.index.0);
+                                        crate::rust_goto::identifier_at(&document.content, byte)
+                                            .map(|(_, range)| range)
+                                            .filter(|range| {
+                                                byte_range_rects(
+                                                    &output.galley,
+                                                    output.galley_pos,
+                                                    &document.content,
+                                                    range,
+                                                )
+                                                .iter()
+                                                .any(|rect| rect.contains(position))
+                                            })
+                                    })
+                            } else {
+                                None
+                            };
+                            if hovered_definition.is_some() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            let click_byte = (output.response.clicked() && definition_modifier)
+                                .then(|| hovered_definition.as_ref().map(|range| range.start))
+                                .flatten();
+                            let mut context_goto = false;
+                            output.response.context_menu(|ui| {
+                                if extension == "rs"
+                                    && ui.button("Go to definition    F12").clicked()
+                                {
+                                    context_goto = true;
+                                    ui.close();
+                                }
+                            });
+                            let navigation_request = if extension == "rs" {
+                                click_byte.or_else(|| {
+                                    (goto_definition_requested || context_goto)
+                                        .then_some(caret_byte)
+                                        .flatten()
+                                })
+                            } else {
+                                None
+                            };
                             let selection = output.cursor_range.filter(|range| !range.is_empty());
                             // Draw indentation guides behind both selections and source text.
                             paint_indent_guides(
@@ -1176,6 +1251,9 @@ impl OxiApp {
                                 &find_ranges,
                                 active_find_match,
                             );
+                            if let Some(range) = hovered_definition.as_ref() {
+                                apply_definition_underline(&mut visible_job, range);
+                            }
                             visible_job.wrap.max_width = output.galley.job.wrap.max_width;
                             let minimap_job = syntax_job;
                             let visible_galley =
@@ -1242,6 +1320,7 @@ impl OxiApp {
                                 selected_lines,
                                 minimap_job,
                                 document.content.clone(),
+                                navigation_request,
                             )
                         })
                 })
@@ -1309,6 +1388,8 @@ impl OxiApp {
                 ui.ctx().request_repaint();
             }
 
+            goto_definition_byte = scroll_output.inner.5;
+
             // The minimap is outside the editor ScrollArea. Its own narrow scroll strip is painted
             // after it, so the visual order is source → minimap → scrollbar.
             if let Some(fraction) = paint_minimap(
@@ -1327,6 +1408,44 @@ impl OxiApp {
                 ui.ctx().request_repaint();
             }
         });
+        if let Some(byte) = goto_definition_byte {
+            self.go_to_rust_definition(byte);
+        }
+    }
+
+    fn go_to_rust_definition(&mut self, cursor_byte: usize) {
+        let Some(document) = self.conv.editor.active_document() else {
+            return;
+        };
+        if language_for_path(&document.path) != "rs" {
+            return;
+        }
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        let current_path = document.path.clone();
+        let current_source = document.content.clone();
+        let open_buffers = self
+            .conv
+            .editor
+            .documents
+            .iter()
+            .map(|document| (document.path.clone(), document.content.clone()))
+            .collect::<Vec<_>>();
+        match crate::rust_goto::find_definition(
+            &root,
+            &current_path,
+            &current_source,
+            cursor_byte,
+            &open_buffers,
+        ) {
+            Some(location) => {
+                self.open_editor_file(location.path.clone());
+                self.conv.editor.navigation_target = Some((location.path, location.byte_range));
+                self.conv.editor.error = None;
+            }
+            None => {
+                self.conv.editor.error = Some("Rust definition not found.".into());
+            }
+        }
     }
 
     fn render_editor_diff(&mut self, ui: &mut Ui) {
@@ -1372,6 +1491,32 @@ impl OxiApp {
         self.conv.sidebar_mode = super::state::SidebarMode::Explorer;
         self.conv.sidebar_open = true;
     }
+}
+
+fn char_index_to_byte(content: &str, char_index: usize) -> usize {
+    content
+        .char_indices()
+        .nth(char_index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(content.len())
+}
+
+fn byte_range_rects(
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    content: &str,
+    range: &std::ops::Range<usize>,
+) -> Vec<egui::Rect> {
+    let start = content[..range.start].chars().count();
+    let end = start + content[range.clone()].chars().count();
+    selection_rects(
+        galley,
+        galley_pos,
+        egui::text::CCursorRange::two(
+            egui::text::CCursor::new(start),
+            egui::text::CCursor::new(end),
+        ),
+    )
 }
 
 fn selection_rects(
@@ -1875,6 +2020,35 @@ fn apply_search_highlights(
             let mut tail = section.clone();
             tail.byte_range = egui::text::ByteIndex(cursor)..egui::text::ByteIndex(section_end);
             sections.push(tail);
+        }
+    }
+    job.sections = sections;
+}
+
+fn apply_definition_underline(job: &mut egui::text::LayoutJob, range: &std::ops::Range<usize>) {
+    let mut sections = Vec::with_capacity(job.sections.len() + 2);
+    for section in &job.sections {
+        let section_start = section.byte_range.start.0;
+        let section_end = section.byte_range.end.0;
+        let start = range.start.max(section_start);
+        let end = range.end.min(section_end);
+        if start >= end {
+            sections.push(section.clone());
+            continue;
+        }
+        if section_start < start {
+            let mut before = section.clone();
+            before.byte_range = egui::text::ByteIndex(section_start)..egui::text::ByteIndex(start);
+            sections.push(before);
+        }
+        let mut underlined = section.clone();
+        underlined.byte_range = egui::text::ByteIndex(start)..egui::text::ByteIndex(end);
+        underlined.format.underline = egui::Stroke::new(1.0, c_accent());
+        sections.push(underlined);
+        if end < section_end {
+            let mut after = section.clone();
+            after.byte_range = egui::text::ByteIndex(end)..egui::text::ByteIndex(section_end);
+            sections.push(after);
         }
     }
     job.sections = sections;

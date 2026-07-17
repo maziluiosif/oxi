@@ -82,6 +82,10 @@ pub struct EditorState {
     pub find_last_query: String,
     /// Move the editor selection/caret to `find_active_match` on the next render.
     pub find_select_pending: bool,
+    /// Select and reveal this byte range after opening a definition target.
+    pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
+    /// Navigate from the editor caret on the next render (normally requested by F12).
+    pub goto_definition_requested: bool,
     pub show_diff: bool,
     pub file_operation: Option<FileOperation>,
     pub file_operation_name: String,

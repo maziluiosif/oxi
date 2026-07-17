@@ -147,23 +147,33 @@ impl OxiApp {
 
     /// Global shortcuts that work outside the composer TextEdit.
     /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B chats sidebar,
-    /// Cmd/Ctrl+P opens any workspace file, Cmd/Ctrl+S saves and Cmd/Ctrl+F finds in an
-    /// open editor, Cmd/Ctrl+. stops a run.
+    /// Cmd/Ctrl+P opens any workspace file, Cmd/Ctrl+S saves, Cmd/Ctrl+F finds and F12 navigates
+    /// to a Rust definition in an open editor, Cmd/Ctrl+. stops a run.
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
-        let (new_chat, toggle_term, toggle_sidebar, open_file, save_file, find_file, stop, escape) =
-            ctx.input(|i| {
-                (
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
-                    i.key_pressed(Key::Escape),
-                )
-            });
+        let (
+            new_chat,
+            toggle_term,
+            toggle_sidebar,
+            open_file,
+            save_file,
+            find_file,
+            goto_definition,
+            stop,
+            escape,
+        ) = ctx.input(|i| {
+            (
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
+                i.modifiers.is_none() && i.key_pressed(Key::F12),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
+                i.key_pressed(Key::Escape),
+            )
+        });
 
         if new_chat && !self.conv.settings_open {
             self.new_chat();
@@ -186,6 +196,14 @@ impl OxiApp {
             ctx.memory_mut(|memory| {
                 memory.request_focus(egui::Id::new("workspace_editor_find"));
             });
+        }
+        if goto_definition
+            && !self.conv.settings_open
+            && self.conv.editor.active_document().is_some_and(|document| {
+                document.path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+            })
+        {
+            self.conv.editor.goto_definition_requested = true;
         }
         if stop && self.any_waiting_response() {
             self.send_abort();
