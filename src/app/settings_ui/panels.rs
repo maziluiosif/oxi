@@ -19,6 +19,7 @@ const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
         "Local / self-hosted",
         &[
             LlmProviderKind::LocalHf,
+            LlmProviderKind::RemoteHf,
             LlmProviderKind::Ollama,
             LlmProviderKind::LmStudio,
         ],
@@ -1060,7 +1061,10 @@ impl OxiApp {
 fn provider_blurb(kind: LlmProviderKind) -> &'static str {
     match kind {
         LlmProviderKind::LocalHf => {
-            "Download GGUF models from HuggingFace and run them via oxi-managed llama-server."
+            "Download GGUF models and run them locally via oxi-managed llama-server."
+        }
+        LlmProviderKind::RemoteHf => {
+            "Download and run GGUF models on an SSH host via oxi-managed llama-server."
         }
         LlmProviderKind::Ollama => {
             "Talk to a local or LAN Ollama server (OpenAI-compatible /v1 API)."

@@ -181,7 +181,7 @@ impl OxiApp {
                     gpu_layers: settings.local_hf.gpu_layers,
                     ..Default::default()
                 },
-                local_model_rx: None,
+                local_model_rxs: Vec::new(),
                 local_runtime: None,
                 ssh_password_drafts: std::collections::HashMap::new(),
                 ssh_test: std::collections::HashMap::new(),

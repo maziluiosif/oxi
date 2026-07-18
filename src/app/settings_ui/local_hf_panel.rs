@@ -15,22 +15,29 @@ use super::super::OxiApp;
 use super::layout::active_pill;
 
 impl OxiApp {
-    pub(super) fn render_local_hf_section(&mut self, ui: &mut Ui) {
-        let is_remote = matches!(
-            self.conv
-                .settings
-                .provider(LlmProviderKind::LocalHf)
-                .location,
-            ComputeLocation::RemoteSsh(_)
-        );
+    pub(super) fn render_local_hf_section(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
+        let is_remote = kind == LlmProviderKind::RemoteHf;
+
+        if is_remote {
+            self.ensure_remote_models_listed(ui.ctx());
+        }
 
         // ── Runtime ────────────────────────────────────────────────────────
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let runtime_ok = !self.conv.local_models.runtime_path.trim().is_empty()
+            let runtime_ok = is_remote
+                || !self.conv.local_models.runtime_path.trim().is_empty()
                 || local_models::installed_runtime_path().is_some();
-            let has_model = !self.conv.local_models.downloaded.is_empty();
-            let running = self.conv.local_models.running_model_id.is_some();
+            let has_model = if is_remote {
+                !self.conv.local_models.remote_downloaded.is_empty()
+            } else {
+                !self.conv.local_models.downloaded.is_empty()
+            };
+            let running = if is_remote {
+                self.conv.local_models.remote_running_model_id.is_some()
+            } else {
+                self.conv.local_models.running_model_id.is_some()
+            };
             let steps = [
                 ("1 Runtime", runtime_ok),
                 ("2 Model", has_model),
@@ -132,12 +139,37 @@ impl OxiApp {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     field_label_first(ui, "Port");
-                    let mut port = self.conv.local_models.runtime_port.to_string();
-                    if settings_text_field_width(ui, &mut port, "8080", 90.0).changed()
+                    let configured_port = if is_remote {
+                        self.conv
+                            .settings
+                            .provider(LlmProviderKind::RemoteHf)
+                            .ssh_config()
+                            .map(|cfg| cfg.remote_runtime_port)
+                            .unwrap_or_else(|| {
+                                LlmProviderKind::RemoteHf.default_remote_runtime_port()
+                            })
+                    } else {
+                        self.conv.local_models.runtime_port
+                    };
+                    let mut port = configured_port.to_string();
+                    let port_hint = if is_remote { "18081" } else { "18080" };
+                    if settings_text_field_width(ui, &mut port, port_hint, 90.0).changed()
                         && let Ok(p) = port.parse::<u16>()
                     {
-                        self.conv.local_models.runtime_port = p;
-                        self.conv.settings.local_hf.runtime_port = p;
+                        if is_remote {
+                            if let ComputeLocation::RemoteSsh(cfg) = &mut self
+                                .conv
+                                .settings
+                                .provider_mut(LlmProviderKind::RemoteHf)
+                                .location
+                            {
+                                cfg.remote_runtime_port = p;
+                                self.conv.local_models.remote_list_for = None;
+                            }
+                        } else {
+                            self.conv.local_models.runtime_port = p;
+                            self.conv.settings.local_hf.runtime_port = p;
+                        }
                     }
                 });
                 ui.add_space(12.0);
@@ -170,6 +202,10 @@ impl OxiApp {
         // ── Search & download ──────────────────────────────────────────────
         ui.add_space(12.0);
         card_frame().show(ui, |ui| {
+            // Keep long HuggingFace repo/file names from increasing this card's minimum
+            // width (and therefore the width of the entire settings canvas).
+            ui.set_min_width(0.0);
+            ui.set_max_width(ui.available_width());
             settings_card_header(
                 ui,
                 "Search & download",
@@ -181,28 +217,29 @@ impl OxiApp {
             );
 
             field_label_first(ui, "Search HuggingFace");
+            // Whole row laid out right-to-left: button pinned to the right edge, field
+            // fills the rest flush-left (same idiom as the provider model row).
             ui.horizontal(|ui| {
-                let busy = self.conv.local_models.search_loading;
-                let search_clicked = ui
-                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_enabled(
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let busy = self.conv.local_models.search_loading;
+                    let search_clicked = ui
+                        .add_enabled(
                             !busy,
                             primary_button_icon_widget(
                                 ICON_SEARCH,
                                 if busy { "Searching…" } else { "Search" },
                             ),
                         )
-                        .clicked()
-                    })
-                    .inner;
-                settings_text_field(
-                    ui,
-                    &mut self.conv.local_models.search_query,
-                    "e.g. qwen coder gguf",
-                );
-                if search_clicked {
-                    self.spawn_hf_search(ui.ctx());
-                }
+                        .clicked();
+                    settings_text_field(
+                        ui,
+                        &mut self.conv.local_models.search_query,
+                        "e.g. qwen coder gguf",
+                    );
+                    if search_clicked {
+                        self.spawn_hf_search(ui.ctx());
+                    }
+                });
             });
 
             if let Some(e) = self.conv.local_models.search_error.clone() {
@@ -224,11 +261,14 @@ impl OxiApp {
                 for (i, hit) in hits.into_iter().enumerate() {
                     settings_list_row(ui, i + 1 < n, |ui| {
                         ui.vertical(|ui| {
-                            ui.label(
-                                RichText::new(&hit.model_id)
-                                    .size(FS_SMALL)
-                                    .color(c_text())
-                                    .strong(),
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&hit.model_id)
+                                        .size(FS_SMALL)
+                                        .color(c_text())
+                                        .strong(),
+                                )
+                                .wrap(),
                             );
                             ui.horizontal(|ui| {
                                 ui.label(icon_glyph_rich(ICON_DOWNLOAD, FS_TINY, c_text_faint()));
@@ -262,24 +302,23 @@ impl OxiApp {
 
             field_label_first(ui, "Repo / GGUF file");
             ui.horizontal(|ui| {
-                let load_clicked = ui
-                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_enabled(
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let load_clicked = ui
+                        .add_enabled(
                             !self.conv.local_models.files_loading,
                             crate::ui::chrome::ghost_button_widget("Load files", false),
                         )
-                        .clicked()
-                    })
-                    .inner;
-                settings_text_field(
-                    ui,
-                    &mut self.conv.local_models.selected_repo,
-                    "org/model-GGUF",
-                );
-                if load_clicked {
-                    let repo = self.conv.local_models.selected_repo.clone();
-                    self.spawn_hf_files(ui.ctx(), repo);
-                }
+                        .clicked();
+                    settings_text_field(
+                        ui,
+                        &mut self.conv.local_models.selected_repo,
+                        "org/model-GGUF",
+                    );
+                    if load_clicked {
+                        let repo = self.conv.local_models.selected_repo.clone();
+                        self.spawn_hf_files(ui.ctx(), repo);
+                    }
+                });
             });
 
             if let Some(e) = self.conv.local_models.files_error.clone() {
@@ -296,7 +335,7 @@ impl OxiApp {
                 };
                 egui::ComboBox::from_id_salt("local_hf_file_combo")
                     .selected_text(current)
-                    .width(f32::INFINITY)
+                    .width(ui.available_width())
                     .show_ui(ui, |ui| {
                         for f in self.conv.local_models.gguf_files.clone() {
                             if ui
@@ -348,20 +387,64 @@ impl OxiApp {
             settings_card_header(
                 ui,
                 "Downloaded models",
-                Some("Play starts llama-server. Make active points chat at that model."),
+                Some(if is_remote {
+                    "Models on the SSH host. Play starts llama-server there. \
+                     Make active points chat at that model."
+                } else {
+                    "Play starts llama-server. Make active points chat at that model."
+                }),
             );
 
-            if self.conv.local_models.downloaded.is_empty() {
+            if is_remote {
+                ui.horizontal(|ui| {
+                    let loading = self.conv.local_models.remote_list_loading;
+                    if loading {
+                        ui.label(
+                            RichText::new("Loading models from SSH host…")
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
+                        );
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                !loading,
+                                crate::ui::chrome::ghost_button_widget("Refresh", false),
+                            )
+                            .on_hover_text("Re-list models on the SSH host")
+                            .clicked()
+                        {
+                            self.spawn_remote_list(ui.ctx());
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+            }
+
+            let models = if is_remote {
+                self.conv.local_models.remote_downloaded.clone()
+            } else {
+                self.conv.local_models.downloaded.clone()
+            };
+            if models.is_empty() {
                 ui.label(
-                    RichText::new("No models downloaded yet.")
-                        .size(FS_TINY)
-                        .color(c_text_faint()),
+                    RichText::new(if is_remote {
+                        "No models on the SSH host yet."
+                    } else {
+                        "No models downloaded yet."
+                    })
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
                 );
             } else {
-                let models = self.conv.local_models.downloaded.clone();
                 let n = models.len();
                 for (i, m) in models.into_iter().enumerate() {
-                    let running = self.conv.local_models.running_model_id.as_deref() == Some(&m.id);
+                    let running_id = if is_remote {
+                        &self.conv.local_models.remote_running_model_id
+                    } else {
+                        &self.conv.local_models.running_model_id
+                    };
+                    let running = running_id.as_deref() == Some(&m.id);
                     settings_list_row(ui, i + 1 < n, |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
@@ -381,14 +464,19 @@ impl OxiApp {
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ghost_button_icon(ui, ICON_TRASH, "Delete", true).clicked() {
-                                self.request_confirm(
+                                self.request_confirm(if is_remote {
+                                    crate::app::state::ConfirmAction::DeleteRemoteModel {
+                                        id: m.id.clone(),
+                                        path: m.path.clone(),
+                                    }
+                                } else {
                                     crate::app::state::ConfirmAction::DeleteLocalModel {
                                         id: m.id.clone(),
-                                    },
-                                );
+                                    }
+                                });
                             }
                             if ghost_button(ui, "Make active", false).clicked() {
-                                self.activate_local_model(&m);
+                                self.activate_hf_model(&m, kind);
                             }
                             if running {
                                 if ghost_button_icon(ui, ICON_STOP, "Stop", true).clicked() {
@@ -414,7 +502,12 @@ impl OxiApp {
                 }
             }
 
-            if let Some(s) = self.conv.local_models.runtime_status.clone() {
+            let runtime_status = if is_remote {
+                self.conv.local_models.remote_runtime_status.clone()
+            } else {
+                self.conv.local_models.runtime_status.clone()
+            };
+            if let Some(s) = runtime_status {
                 ui.add_space(8.0);
                 alert_banner(
                     ui,
@@ -430,7 +523,7 @@ impl OxiApp {
         self.conv.local_models.runtime_install_progress = None;
         self.conv.local_models.runtime_status = None;
         let (tx, rx) = std::sync::mpsc::channel();
-        self.conv.local_model_rx = Some(rx);
+        self.conv.local_model_rxs.push(rx);
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
         let work_ctx = ctx.clone();
@@ -452,27 +545,28 @@ impl OxiApp {
         let cfg = self
             .conv
             .settings
-            .provider(LlmProviderKind::LocalHf)
+            .provider(LlmProviderKind::RemoteHf)
             .ssh_config()?
             .clone();
         let pw = self
             .conv
             .ssh_password_drafts
-            .get(&LlmProviderKind::LocalHf)
+            .get(&LlmProviderKind::RemoteHf)
             .cloned()
-            .unwrap_or_else(crate::local_models_remote::password_for_localhf);
+            .unwrap_or_else(crate::local_models_remote::password_for_remotehf);
         Some((cfg, pw))
     }
 
     fn spawn_remote_runtime_install(&mut self, ctx: &egui::Context) {
         let Some((cfg, password)) = self.remote_ssh_cfg_and_password() else {
-            self.conv.local_models.runtime_status = Some("Configure Remote SSH first.".into());
+            self.conv.local_models.remote_runtime_status =
+                Some("Configure Remote SSH first.".into());
             return;
         };
         self.conv.local_models.runtime_installing = true;
-        self.conv.local_models.runtime_status = None;
+        self.conv.local_models.remote_runtime_status = None;
         let (tx, rx) = std::sync::mpsc::channel();
-        self.conv.local_model_rx = Some(rx);
+        self.conv.local_model_rxs.push(rx);
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
         let work_ctx = ctx.clone();
@@ -494,7 +588,7 @@ impl OxiApp {
         self.conv.local_models.search_loading = true;
         self.conv.local_models.search_error = None;
         let (tx, rx) = std::sync::mpsc::channel();
-        self.conv.local_model_rx = Some(rx);
+        self.conv.local_model_rxs.push(rx);
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
         let work_ctx = ctx.clone();
@@ -520,7 +614,7 @@ impl OxiApp {
         self.conv.local_models.files_error = None;
         self.conv.local_models.selected_repo = repo.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        self.conv.local_model_rx = Some(rx);
+        self.conv.local_model_rxs.push(rx);
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
         let err_repo = repo.clone();
@@ -542,6 +636,119 @@ impl OxiApp {
         );
     }
 
+    /// SSH target key used to detect when the remote model list belongs to a
+    /// different host than the one currently configured.
+    fn remote_ssh_target(cfg: &crate::settings::SshConfig) -> String {
+        format!("{}@{}:{}", cfg.user, cfg.host, cfg.port)
+    }
+
+    /// Fetch the SSH host's model list the first time the panel shows in remote mode
+    /// (and again whenever the SSH target changes). Deferred while another local-model
+    /// task is in flight so its result channel isn't replaced mid-operation.
+    fn ensure_remote_models_listed(&mut self, ctx: &egui::Context) {
+        let lm = &self.conv.local_models;
+        if lm.remote_list_loading
+            || lm.downloading
+            || lm.runtime_installing
+            || lm.search_loading
+            || lm.files_loading
+        {
+            return;
+        }
+        let Some((cfg, _password)) = self.remote_ssh_cfg_and_password() else {
+            return;
+        };
+        // Without a host/user an attempt can only fail. An empty password is still a
+        // legitimate SSH credential on servers configured to allow it, so don't suppress
+        // the listing solely because the password field is empty.
+        if cfg.host.trim().is_empty() || cfg.user.trim().is_empty() {
+            return;
+        }
+        let target = Self::remote_ssh_target(&cfg);
+        if self.conv.local_models.remote_list_for.as_deref() == Some(target.as_str()) {
+            return;
+        }
+        self.spawn_remote_list(ctx);
+    }
+
+    /// Load Remote HF's catalog directly from the managed model directory over SSH.
+    /// This deliberately does not query `/v1/models`: the runtime may be stopped, and the
+    /// downloaded-model picker must still be usable so the user can start one.
+    pub(super) fn spawn_remote_list(&mut self, ctx: &egui::Context) {
+        let Some((cfg, password)) = self.remote_ssh_cfg_and_password() else {
+            let message = "Configure Remote SSH first.".to_string();
+            self.conv.local_models.remote_runtime_status = Some(message.clone());
+            let fetched = self
+                .conv
+                .fetched_models
+                .entry(LlmProviderKind::RemoteHf)
+                .or_default();
+            fetched.loading = false;
+            fetched.error = Some(message);
+            return;
+        };
+        self.conv.local_models.remote_list_loading = true;
+        self.conv.local_models.remote_list_for = Some(Self::remote_ssh_target(&cfg));
+        let fetched = self
+            .conv
+            .fetched_models
+            .entry(LlmProviderKind::RemoteHf)
+            .or_default();
+        fetched.loading = true;
+        fetched.error = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.conv.local_model_rxs.push(rx);
+        let err_tx = tx.clone();
+        let err_ctx = ctx.clone();
+        let work_ctx = ctx.clone();
+        spawn_async_task(
+            move |err| {
+                let _ = err_tx.send(LocalModelMsg::RemoteListDone(Err(err)));
+                err_ctx.request_repaint();
+            },
+            move |rt| {
+                let r = rt.block_on(crate::local_models_remote::list_models(&cfg, &password));
+                let _ = tx.send(LocalModelMsg::RemoteListDone(r));
+                work_ctx.request_repaint();
+            },
+        );
+    }
+
+    pub(crate) fn spawn_remote_model_delete(
+        &mut self,
+        ctx: &egui::Context,
+        id: String,
+        path: String,
+    ) {
+        let Some((cfg, password)) = self.remote_ssh_cfg_and_password() else {
+            self.conv.local_models.remote_runtime_status =
+                Some("Configure Remote SSH first.".into());
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.conv.local_model_rxs.push(rx);
+        let err_tx = tx.clone();
+        let err_ctx = ctx.clone();
+        let err_id = id.clone();
+        let work_ctx = ctx.clone();
+        spawn_async_task(
+            move |err| {
+                let _ = err_tx.send(LocalModelMsg::RemoteDeleteDone {
+                    id: err_id.clone(),
+                    result: Err(err),
+                });
+                err_ctx.request_repaint();
+            },
+            move |rt| {
+                let r = rt.block_on(crate::local_models_remote::delete_model(
+                    &cfg, &password, &path,
+                ));
+                let _ = tx.send(LocalModelMsg::RemoteDeleteDone { id, result: r });
+                work_ctx.request_repaint();
+            },
+        );
+    }
+
     fn spawn_remote_hf_download(&mut self, ctx: &egui::Context) {
         let repo = self.conv.local_models.selected_repo.clone();
         let file = self.conv.local_models.selected_file.clone();
@@ -549,14 +756,15 @@ impl OxiApp {
             return;
         }
         let Some((cfg, password)) = self.remote_ssh_cfg_and_password() else {
-            self.conv.local_models.runtime_status = Some("Configure Remote SSH first.".into());
+            self.conv.local_models.remote_runtime_status =
+                Some("Configure Remote SSH first.".into());
             return;
         };
         self.conv.local_models.downloading = true;
         self.conv.local_models.download_label = format!("remote: {repo}/{file}");
         self.conv.local_models.download_progress = None;
         let (tx, rx) = std::sync::mpsc::channel();
-        self.conv.local_model_rx = Some(rx);
+        self.conv.local_model_rxs.push(rx);
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
         let work_ctx = ctx.clone();
@@ -585,7 +793,7 @@ impl OxiApp {
         self.conv.local_models.download_label = format!("{repo}/{file}");
         self.conv.local_models.download_progress = None;
         let (tx, rx) = std::sync::mpsc::channel();
-        self.conv.local_model_rx = Some(rx);
+        self.conv.local_model_rxs.push(rx);
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
         let work_ctx = ctx.clone();
@@ -609,9 +817,19 @@ impl OxiApp {
     }
 
     pub(crate) fn drain_local_models(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.conv.local_model_rx.take() else {
-            return;
-        };
+        let receivers = std::mem::take(&mut self.conv.local_model_rxs);
+        for rx in receivers {
+            if self.drain_local_model_rx(ctx, &rx) {
+                self.conv.local_model_rxs.push(rx);
+            }
+        }
+    }
+
+    fn drain_local_model_rx(
+        &mut self,
+        ctx: &egui::Context,
+        rx: &std::sync::mpsc::Receiver<LocalModelMsg>,
+    ) -> bool {
         let mut keep = true;
         loop {
             match rx.try_recv() {
@@ -687,12 +905,103 @@ impl OxiApp {
                     self.conv.local_models.runtime_installing = false;
                     match r {
                         Ok(path) => {
-                            self.conv.local_models.runtime_status =
+                            self.conv.local_models.remote_runtime_status =
                                 Some(format!("Remote runtime installed: {path}"))
                         }
                         Err(e) => {
-                            self.conv.local_models.runtime_status =
+                            self.conv.local_models.remote_runtime_status =
                                 Some(format!("Remote runtime install failed: {e}"))
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+                Ok(LocalModelMsg::RemoteListDone(r)) => {
+                    self.conv.local_models.remote_list_loading = false;
+                    match r {
+                        Ok(list) => {
+                            // A fresh successful listing supersedes a stale listing error.
+                            if self
+                                .conv
+                                .local_models
+                                .remote_runtime_status
+                                .as_deref()
+                                .is_some_and(|s| s.starts_with("Could not list models"))
+                            {
+                                self.conv.local_models.remote_runtime_status = None;
+                            }
+                            self.conv.local_models.remote_downloaded = list.models;
+                            let fetched = self
+                                .conv
+                                .fetched_models
+                                .entry(LlmProviderKind::RemoteHf)
+                                .or_default();
+                            fetched.loading = false;
+                            fetched.error = None;
+                            fetched.models = self
+                                .conv
+                                .local_models
+                                .remote_downloaded
+                                .iter()
+                                .map(|m| m.id.clone())
+                                .collect();
+                            let is_remote = matches!(
+                                self.conv
+                                    .settings
+                                    .provider(LlmProviderKind::RemoteHf)
+                                    .location,
+                                ComputeLocation::RemoteSsh(_)
+                            );
+                            if is_remote {
+                                // Adopt the host's actual runtime state, so a server left
+                                // running from an earlier session shows up with a Stop
+                                // button instead of being invisible.
+                                self.conv.local_models.remote_running_model_id = list
+                                    .running_path
+                                    .as_ref()
+                                    .filter(|p| !p.is_empty())
+                                    .and_then(|p| {
+                                        self.conv
+                                            .local_models
+                                            .remote_downloaded
+                                            .iter()
+                                            .find(|m| &m.path == p)
+                                            .map(|m| m.id.clone())
+                                    });
+                                if matches!(list.running_path.as_deref(), Some("")) {
+                                    self.conv.local_models.remote_runtime_status = Some(
+                                        "A llama-server is running on the SSH host, but its \
+                                         model could not be identified. Press Play on a model \
+                                         to replace it."
+                                            .into(),
+                                    );
+                                }
+                            }
+                            self.refresh_local_hf_model_choices();
+                        }
+                        Err(e) => {
+                            let message = format!("Could not list models on SSH host: {e}");
+                            self.conv.local_models.remote_runtime_status = Some(message.clone());
+                            let fetched = self
+                                .conv
+                                .fetched_models
+                                .entry(LlmProviderKind::RemoteHf)
+                                .or_default();
+                            fetched.loading = false;
+                            fetched.error = Some(message);
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+                Ok(LocalModelMsg::RemoteDeleteDone { id, result }) => {
+                    match result {
+                        Ok(()) => self
+                            .conv
+                            .local_models
+                            .remote_downloaded
+                            .retain(|m| m.id != id),
+                        Err(e) => {
+                            self.conv.local_models.remote_runtime_status =
+                                Some(format!("Remote delete failed: {e}"))
                         }
                     }
                     ctx.request_repaint();
@@ -705,7 +1014,7 @@ impl OxiApp {
                             self.start_remote_model(ctx, m);
                         }
                         Err(e) => {
-                            self.conv.local_models.runtime_status =
+                            self.conv.local_models.remote_runtime_status =
                                 Some(format!("Remote download failed: {e}"))
                         }
                     }
@@ -714,21 +1023,23 @@ impl OxiApp {
                 Ok(LocalModelMsg::RemoteStartDone { model, result }) => {
                     match result {
                         Ok(msg) => {
-                            self.conv.local_models.running_model_id = Some(model.id.clone());
-                            self.conv.local_models.runtime_status = Some(msg);
-                            self.activate_local_model(&model);
+                            self.conv.local_models.remote_running_model_id = Some(model.id.clone());
+                            self.conv.local_models.remote_runtime_status = Some(msg);
+                            self.activate_hf_model(&model, LlmProviderKind::RemoteHf);
+                            self.notify_composer(format!("Remote HF is now running {}.", model.id));
                         }
                         Err(e) => {
-                            self.conv.local_models.running_model_id = None;
-                            self.conv.local_models.runtime_status =
+                            self.conv.local_models.remote_running_model_id = None;
+                            self.conv.local_models.remote_runtime_status =
                                 Some(format!("Remote start failed: {e}"));
+                            self.notify_composer(format!("Could not switch Remote HF model: {e}"));
                         }
                     }
                     ctx.request_repaint();
                 }
                 Ok(LocalModelMsg::RemoteStopDone(r)) => {
-                    self.conv.local_models.running_model_id = None;
-                    self.conv.local_models.runtime_status = Some(match r {
+                    self.conv.local_models.remote_running_model_id = None;
+                    self.conv.local_models.remote_runtime_status = Some(match r {
                         Ok(s) => format!("Remote runtime {s}"),
                         Err(e) => format!("Remote stop failed: {e}"),
                     });
@@ -741,21 +1052,13 @@ impl OxiApp {
                 }
             }
         }
-        if keep {
-            self.conv.local_model_rx = Some(rx);
-        }
+        keep
     }
 
-    fn activate_local_model(&mut self, m: &local_models::DownloadedModel) {
-        let is_remote = matches!(
-            self.conv
-                .settings
-                .provider(LlmProviderKind::LocalHf)
-                .location,
-            ComputeLocation::RemoteSsh(_)
-        );
+    fn activate_hf_model(&mut self, m: &local_models::DownloadedModel, kind: LlmProviderKind) {
+        let is_remote = kind == LlmProviderKind::RemoteHf;
         let port = self.conv.local_models.runtime_port;
-        let cfg = self.conv.settings.provider_mut(LlmProviderKind::LocalHf);
+        let cfg = self.conv.settings.provider_mut(kind);
         cfg.model_id = m.id.clone();
         if is_remote {
             // Chat requests go through compute::resolve_base_url, which opens/reuses the SSH tunnel.
@@ -763,28 +1066,70 @@ impl OxiApp {
         } else {
             cfg.base_url = format!("http://127.0.0.1:{port}/v1");
         }
-        self.conv.settings.active_provider = LlmProviderKind::LocalHf;
-        self.conv
-            .fetched_models
-            .entry(LlmProviderKind::LocalHf)
-            .or_default()
-            .models = self
-            .conv
-            .local_models
-            .downloaded
-            .iter()
-            .map(|m| m.id.clone())
-            .collect();
+        self.conv.settings.active_provider = kind;
+        self.refresh_local_hf_model_choices();
         let _ = self.conv.settings.save();
     }
 
+    /// Refresh both HF provider dropdowns without mixing local and SSH-host models.
+    pub(crate) fn refresh_local_hf_model_choices(&mut self) {
+        for (kind, source) in [
+            (LlmProviderKind::LocalHf, &self.conv.local_models.downloaded),
+            (
+                LlmProviderKind::RemoteHf,
+                &self.conv.local_models.remote_downloaded,
+            ),
+        ] {
+            self.conv.fetched_models.entry(kind).or_default().models =
+                source.iter().map(|m| m.id.clone()).collect();
+        }
+    }
+
     fn upsert_remote_downloaded(&mut self, m: local_models::DownloadedModel) {
-        self.conv.local_models.downloaded.retain(|x| x.id != m.id);
-        self.conv.local_models.downloaded.push(m);
-        self.conv
-            .local_models
-            .downloaded
-            .sort_by(|a, b| a.id.cmp(&b.id));
+        let list = &mut self.conv.local_models.remote_downloaded;
+        list.retain(|x| x.id != m.id);
+        list.push(m);
+        list.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+
+    /// Start the downloaded Local HF model chosen from the composer. The runtime helper
+    /// replaces the currently running model, so changing the dropdown is enough—no trip
+    /// through Settings for Stop/Play is required.
+    pub(crate) fn start_selected_local_hf_model(&mut self, ctx: &egui::Context, model_id: &str) {
+        let kind = self.conv.settings.active_provider;
+        let is_remote = kind == LlmProviderKind::RemoteHf;
+        let model = if is_remote {
+            self.conv
+                .local_models
+                .remote_downloaded
+                .iter()
+                .find(|m| m.id == model_id)
+                .cloned()
+        } else {
+            self.conv
+                .local_models
+                .downloaded
+                .iter()
+                .find(|m| m.id == model_id)
+                .cloned()
+        };
+        let Some(model) = model else {
+            self.notify_composer(format!(
+                "Model {model_id} is not present on the selected compute host. Refresh models in Settings."
+            ));
+            return;
+        };
+
+        self.notify_composer(format!(
+            "Switching {} runtime to {}…",
+            kind.label(),
+            model.id
+        ));
+        if is_remote {
+            self.start_remote_model(ctx, model);
+        } else {
+            self.start_local_model(ctx, model);
+        }
     }
 
     fn start_local_model(&mut self, _ctx: &egui::Context, m: local_models::DownloadedModel) {
@@ -822,7 +1167,7 @@ impl OxiApp {
                             model_id: m.id.clone(),
                             port,
                         });
-                        self.activate_local_model(&m);
+                        self.activate_hf_model(&m, LlmProviderKind::LocalHf);
                     }
                     Err(e) => {
                         self.conv.local_models.running_model_id = None;
@@ -839,15 +1184,16 @@ impl OxiApp {
 
     fn start_remote_model(&mut self, ctx: &egui::Context, m: local_models::DownloadedModel) {
         let Some((cfg, password)) = self.remote_ssh_cfg_and_password() else {
-            self.conv.local_models.runtime_status = Some("Configure Remote SSH first.".into());
+            self.conv.local_models.remote_runtime_status =
+                Some("Configure Remote SSH first.".into());
             return;
         };
-        self.conv.local_models.running_model_id = None;
-        self.conv.local_models.runtime_status = Some(format!("Starting remote {}…", m.id));
+        self.conv.local_models.remote_running_model_id = None;
+        self.conv.local_models.remote_runtime_status = Some(format!("Starting remote {}…", m.id));
         let context = self.conv.local_models.context_size;
         let gpu_layers = self.conv.local_models.gpu_layers;
         let (tx, rx) = std::sync::mpsc::channel();
-        self.conv.local_model_rx = Some(rx);
+        self.conv.local_model_rxs.push(rx);
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
         let err_model = m.clone();
@@ -884,7 +1230,7 @@ impl OxiApp {
             return;
         };
         let (tx, rx) = std::sync::mpsc::channel();
-        self.conv.local_model_rx = Some(rx);
+        self.conv.local_model_rxs.push(rx);
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
         let work_ctx = ctx.clone();

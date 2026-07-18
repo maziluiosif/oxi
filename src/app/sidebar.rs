@@ -716,10 +716,12 @@ impl OxiApp {
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        if sep.dragged() {
-            // Dragging the left edge left (negative dx) grows the panel.
-            let dx = ui.input(|i| i.pointer.delta().x);
-            self.conv.git_width = (self.conv.git_width - dx).clamp(
+        if sep.dragged()
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            // Position-based like the sidebar sep (see there for why deltas jitter).
+            // The panel's right edge is pinned to the window, so width = right - pointer.
+            self.conv.git_width = (ui.max_rect().right() - pos.x).clamp(
                 crate::app::git_panel::GIT_W_MIN,
                 crate::app::git_panel::GIT_W_MAX,
             );
@@ -753,9 +755,14 @@ impl OxiApp {
             ),
         );
         let sep = ui.interact(sep_rect, ui.id().with("sidebar_sep"), Sense::drag());
-        if sep.dragged() {
-            let delta_x = ui.input(|i| i.pointer.delta().x);
-            self.conv.sidebar_width = (self.conv.sidebar_width + delta_x).clamp(min_w, max_w);
+        if sep.dragged()
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            // Track the pointer's absolute position, not per-frame deltas: deltas keep
+            // applying while the width is clamped, so over-dragging past the minimum
+            // desyncs the edge from the pointer and the sidebar jitters on any
+            // back-and-forth pointer movement.
+            self.conv.sidebar_width = (pos.x - ui.min_rect().left()).clamp(min_w, max_w);
             self.conv.settings.sidebar_width = self.conv.sidebar_width;
         }
         if sep.drag_stopped()

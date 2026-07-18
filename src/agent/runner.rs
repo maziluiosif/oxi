@@ -446,7 +446,9 @@ pub fn spawn_agent_run(
                     )
                     .await
                 }
-                LlmProviderKind::LmStudio | LlmProviderKind::LocalHf => {
+                LlmProviderKind::LmStudio
+                | LlmProviderKind::LocalHf
+                | LlmProviderKind::RemoteHf => {
                     let key = configured_lmstudio_key(&cfg);
                     let base = match crate::compute::resolve_base_url(&cfg, &tunnels).await {
                         Ok(b) => b,

@@ -466,13 +466,15 @@ impl OxiApp {
             },
         );
 
-        // File diff on click.
+        // File diff on click. With editor tabs open, the diff appears as a pseudo-tab
+        // next to them so files stay editable; otherwise it overlays the chat column.
         if response.clicked() {
             self.request(GitOp::ShowDiff {
                 path: entry.path.clone(),
                 staged,
             });
             self.conv.diff_view_open = true;
+            self.conv.editor.diff_tab_active = true;
         }
         if hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -527,6 +529,18 @@ impl OxiApp {
                             self.request(GitOp::ClearDiff);
                             self.conv.diff_view_open = false;
                             self.conv.focus_chat_input_next_frame = true;
+                        }
+                        if self.conv.git.current_diff_path.is_some()
+                            && crate::ui::chrome::mini_button_icon_enabled(
+                                ui,
+                                ICON_PROMPTS,
+                                "Edit file",
+                                true,
+                            )
+                            .on_hover_text("Open this file in an editable tab")
+                            .clicked()
+                        {
+                            self.open_current_diff_file();
                         }
                     });
                 },

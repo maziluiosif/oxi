@@ -51,22 +51,43 @@ struct CodexModelsResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 struct CodexModelEntry {
-    slug: String,
+    /// ChatGPT Codex uses `slug`; llama-server responses may include two or more
+    /// of `id`, `model`, and `name` in the same object. Keep them separate instead
+    /// of serde aliases, which reject such valid responses as duplicate fields.
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     context_window: Option<i64>,
     #[serde(default)]
     max_context_window: Option<i64>,
 }
 
-impl From<CodexModelEntry> for ModelEntry {
-    fn from(m: CodexModelEntry) -> Self {
+impl TryFrom<CodexModelEntry> for ModelEntry {
+    type Error = String;
+
+    fn try_from(m: CodexModelEntry) -> Result<Self, Self::Error> {
         let context_window = m.context_window.or(m.max_context_window);
-        Self {
-            id: m.slug,
+        let id = m
+            .slug
+            .or(m.id)
+            .or(m.model)
+            .or(m.name)
+            .filter(|id| !id.trim().is_empty())
+            .ok_or_else(|| {
+                "model entry has none of `slug`, `id`, `model`, or `name`".to_string()
+            })?;
+        Ok(Self {
+            id,
             object: Some("model".to_string()),
             created: None,
             owned_by: context_window.map(|cw| format!("context_window={cw}")),
-        }
+        })
     }
 }
 
@@ -120,10 +141,19 @@ pub async fn fetch_models(
     }
     let value: Value = serde_json::from_str(&text)
         .map_err(|e| format!("models parse failed: invalid JSON: {e}"))?;
+    parse_models_response(value)
+}
+
+fn parse_models_response(value: Value) -> Result<Vec<ModelEntry>, String> {
     let mut models = if value.get("models").and_then(Value::as_array).is_some() {
         let parsed: CodexModelsResponse = serde_json::from_value(value)
-            .map_err(|e| format!("models parse failed (Codex format): {e}"))?;
-        parsed.models.into_iter().map(ModelEntry::from).collect()
+            .map_err(|e| format!("models parse failed (`models` format): {e}"))?;
+        parsed
+            .models
+            .into_iter()
+            .map(ModelEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("models parse failed (`models` format): {e}"))?
     } else if value.get("data").and_then(Value::as_array).is_some() {
         let parsed: ListModelsResponse = serde_json::from_value(value)
             .map_err(|e| format!("models parse failed (OpenAI format): {e}"))?;
@@ -139,6 +169,68 @@ pub async fn fetch_models(
 
 /// Normalize a model id for catalog matching: lowercase, strip common provider prefixes
 /// (`opencode/`, `openai/`, `openrouter/`, `anthropic/`, `opencode-go/`).
+#[cfg(test)]
+mod model_response_tests {
+    use super::*;
+
+    #[test]
+    fn parses_models_array_with_codex_slug() {
+        let value = serde_json::json!({
+            "models": [{ "slug": "gpt-5-codex", "context_window": 200000 }]
+        });
+        let models = parse_models_response(value).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-5-codex");
+    }
+
+    #[test]
+    fn parses_models_array_with_openai_id() {
+        let value = serde_json::json!({
+            "models": [{ "id": "google/gemma-4", "object": "model" }]
+        });
+        let models = parse_models_response(value).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "google/gemma-4");
+    }
+
+    #[test]
+    fn parses_models_array_with_runtime_model_name() {
+        let value = serde_json::json!({
+            "models": [{ "model": "google/gemma-4.gguf" }]
+        });
+        let models = parse_models_response(value).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "google/gemma-4.gguf");
+    }
+
+    #[test]
+    fn parses_runtime_entry_with_multiple_identity_fields() {
+        let value = serde_json::json!({
+            "models": [{
+                "id": "deepreinforce-ai/Ornith-1.0-9B-GGUF/ornith.gguf",
+                "model": "deepreinforce-ai/Ornith-1.0-9B-GGUF/ornith.gguf",
+                "name": "ornith"
+            }]
+        });
+        let models = parse_models_response(value).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(
+            models[0].id,
+            "deepreinforce-ai/Ornith-1.0-9B-GGUF/ornith.gguf"
+        );
+    }
+
+    #[test]
+    fn parses_standard_openai_data_array() {
+        let value = serde_json::json!({
+            "data": [{ "id": "local-model", "object": "model" }]
+        });
+        let models = parse_models_response(value).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "local-model");
+    }
+}
+
 fn normalize_model_key(model: &str) -> String {
     let mut m = model.trim().to_ascii_lowercase();
     for prefix in [

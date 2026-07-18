@@ -147,14 +147,19 @@ impl OxiApp {
 
     /// Global shortcuts that work outside the composer TextEdit.
     /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B chats sidebar,
-    /// Cmd/Ctrl+P opens any workspace file, Cmd/Ctrl+S saves, Cmd/Ctrl+F finds and F12 navigates
+    /// Cmd/Ctrl+E workspace explorer,
+    /// Cmd/Ctrl+Shift+B git changes panel, Cmd/Ctrl+P opens any workspace file,
+    /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds and F12 navigates
     /// to a Rust definition in an open editor, Cmd/Ctrl+. stops a run.
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
+        let cmd_shift = Modifiers::COMMAND.plus(Modifiers::SHIFT);
         let (
             new_chat,
             toggle_term,
             toggle_sidebar,
+            toggle_explorer,
+            toggle_git,
             open_file,
             save_file,
             find_file,
@@ -166,6 +171,8 @@ impl OxiApp {
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::E),
+                i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::B),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
@@ -183,6 +190,12 @@ impl OxiApp {
         }
         if toggle_sidebar {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleSidebar);
+        }
+        if toggle_explorer {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleExplorer);
+        }
+        if toggle_git {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleGitChanges);
         }
         if open_file && !self.conv.settings_open && !self.conv.editor.file_picker_open {
             self.open_file_picker();

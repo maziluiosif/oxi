@@ -4,7 +4,10 @@ use crate::compute;
 use crate::local_models::DownloadedModel;
 use crate::settings::SshConfig;
 
-const REMOTE_BASE: &str = "$HOME/.local/share/oxi/local-models";
+// Keep the SSH-managed runtime and downloads in their own namespace. In particular, an SSH
+// target may be this same machine (a common way to test Remote HF); sharing `local-models`
+// then made the remote switch kill/read the Local HF process, pid file, and log.
+const REMOTE_BASE: &str = "$HOME/.local/share/oxi/remote-hf";
 
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -35,13 +38,29 @@ async fn exec_ok(cfg: &SshConfig, password: &str, command: &str) -> Result<Strin
         .await
         .map_err(|e| e.to_string())?;
     if out.status == 0 {
-        Ok(out.stdout)
-    } else {
-        Err(format!(
-            "remote command failed with {}\nstdout:\n{}\nstderr:\n{}",
-            out.status, out.stdout, out.stderr
-        ))
+        return Ok(out.stdout);
     }
+
+    // Some SSH servers occasionally return only status 1 after a long command, with both
+    // output streams empty (for example when the transport closes just as the process exits).
+    // Preserve the useful status, but don't render misleading empty stdout/stderr sections.
+    let stdout = out.stdout.trim();
+    let stderr = out.stderr.trim();
+    let mut detail = format!("remote command failed with exit status {}", out.status);
+    if !stderr.is_empty() {
+        detail.push_str("\nstderr:\n");
+        detail.push_str(stderr);
+    }
+    if !stdout.is_empty() {
+        detail.push_str("\nstdout:\n");
+        detail.push_str(stdout);
+    }
+    if stdout.is_empty() && stderr.is_empty() {
+        detail.push_str(
+            "\nThe SSH host returned no diagnostic output. Check that llama-server is still running and retry.",
+        );
+    }
+    Err(detail)
 }
 
 pub async fn install_runtime(cfg: &SshConfig, password: &str) -> Result<String, String> {
@@ -120,9 +139,11 @@ pub async fn download_model(
     let cmd = format!(
         r#"set -eu
 base={base}
-dir="$base/models/{safe_repo}"
+# Keep shell-quoted user-controlled components outside double quotes. Putting
+# one inside `"$base/..."` made its quote characters part of the filename.
+dir="$base/models"/{safe_repo}
 mkdir -p "$dir"
-out="$dir/{base_name}"
+out="$dir"/{base_name}
 part="$out.download"
 if command -v curl >/dev/null 2>&1; then
   curl -L --fail -C - -o "$part" {url}
@@ -157,6 +178,141 @@ printf '%s\n%s' "$out" "$bytes"
     })
 }
 
+/// Result of [`list_models`]: GGUF files on the SSH host, plus what's running there.
+#[derive(Debug, Clone)]
+pub struct RemoteModelList {
+    pub models: Vec<DownloadedModel>,
+    /// `-m <path>` of the llama-server currently running on the host (per its pid
+    /// file). A non-empty path is guaranteed to have a row in `models` (synthesized
+    /// when the file sits outside the oxi models dir) so the UI can offer Stop.
+    /// Empty string = a server is running but its model could not be identified.
+    pub running_path: Option<String>,
+}
+
+/// List GGUF models present under the oxi models dir on the SSH host, and detect a
+/// llama-server left running there (e.g. from a previous oxi session).
+pub async fn list_models(cfg: &SshConfig, password: &str) -> Result<RemoteModelList, String> {
+    let cmd = format!(
+        r#"set -eu
+base={base}
+rt="$base/runtime"
+pid_file="$rt/llama-server.pid"
+running_args=""
+if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+  running_args=$(ps -o args= -p "$(cat "$pid_file")" 2>/dev/null || true)
+fi
+# Recover from a stale/overwritten pid file by inspecting only Oxi's managed binary.
+if [ -z "$running_args" ]; then
+  running_args=$(ps -axo command= 2>/dev/null | grep -F "$rt/llama-server" | grep -F -- '--port {port}' | head -n 1 || true)
+fi
+if [ -n "$running_args" ]; then
+  printf 'running\t%s\n' "$running_args"
+fi
+dir="$base/models"
+if [ -d "$dir" ]; then
+  # Avoid GNU-only -mindepth: remote hosts may use BSD find (macOS).
+  # The final two patterns also discover files written by older Oxi builds which
+  # accidentally included literal single quotes around the repo/file components.
+  find "$dir" -type f \( -name '*.gguf' -o -name '*.GGUF' -o -name "*.gguf'" -o -name "*.GGUF'" \) | while IFS= read -r f; do
+    bytes=$(wc -c < "$f" | tr -d ' ')
+    printf 'model\t%s\t%s\n' "$f" "$bytes"
+  done
+fi
+"#,
+        base = REMOTE_BASE,
+        port = cfg.remote_runtime_port,
+    );
+    let out = exec_ok(cfg, password, &cmd).await?;
+    let mut models = Vec::new();
+    let mut running_path: Option<String> = None;
+    for line in out.lines() {
+        if let Some(rest) = line.strip_prefix("model\t") {
+            let Some((path, bytes)) = rest.rsplit_once('\t') else {
+                continue;
+            };
+            let bytes = bytes.trim().parse::<u64>().unwrap_or(0);
+            if let Some(m) = model_from_remote_path(path, bytes) {
+                models.push(m);
+            }
+        } else if let Some(args) = line.strip_prefix("running\t") {
+            running_path = Some(model_arg_from_args(args).unwrap_or_default());
+        }
+    }
+    // A running model always gets a row, even when its file sits outside the oxi
+    // models dir, so the panel can show it with a Stop button.
+    if let Some(p) = running_path.clone()
+        && !p.is_empty()
+        && !models.iter().any(|m| m.path == p)
+        && let Some(m) = model_from_remote_path(&p, 0)
+    {
+        models.push(m);
+    }
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.path == b.path);
+    Ok(RemoteModelList {
+        models,
+        running_path,
+    })
+}
+
+/// Reconstruct a [`DownloadedModel`] from a file path on the SSH host.
+/// `download_model` flattens "org/model" into "org__model" for the directory name;
+/// undo the first separator to recover the repo id.
+fn model_from_remote_path(path: &str, bytes: u64) -> Option<DownloadedModel> {
+    let p = std::path::Path::new(path);
+    let raw_filename = p.file_name().and_then(|n| n.to_str())?;
+    let raw_safe_repo = p
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    // Oxi briefly produced paths such as models/'org__repo'/'model.gguf'. Keep
+    // the real path for launch/delete, but remove those accidental quotes from
+    // the model identity shown in the UI.
+    let filename = raw_filename
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .unwrap_or(raw_filename);
+    let safe_repo = raw_safe_repo
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .unwrap_or(raw_safe_repo);
+    let repo = safe_repo.replacen("__", "/", 1);
+    Some(DownloadedModel {
+        id: format!("{repo}/{filename}"),
+        repo,
+        filename: filename.to_string(),
+        path: path.to_string(),
+        bytes,
+    })
+}
+
+/// Extract the `-m <path>` argument from a llama-server command line.
+/// Paths with spaces aren't recoverable from `ps` output; callers treat a miss as
+/// "running, model unknown".
+fn model_arg_from_args(args: &str) -> Option<String> {
+    let mut it = args.split_whitespace();
+    while let Some(a) = it.next() {
+        if a == "-m" || a == "--model" {
+            return it.next().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// Delete a downloaded model file on the SSH host (and its repo dir if now empty).
+pub async fn delete_model(cfg: &SshConfig, password: &str, path: &str) -> Result<(), String> {
+    let cmd = format!(
+        r#"set -eu
+f={path}
+rm -f -- "$f"
+rmdir -- "$(dirname "$f")" 2>/dev/null || true
+"#,
+        path = sh_quote(path),
+    );
+    exec_ok(cfg, password, &cmd).await.map(|_| ())
+}
+
 pub async fn start_model(
     cfg: &SshConfig,
     password: &str,
@@ -184,8 +340,34 @@ rt="$base/runtime"
 log="$rt/llama-server.log"
 pid="$rt/llama-server.pid"
 model={model}
+# `set -e` can otherwise terminate on a host-specific shell/process utility failure
+# without producing any output. Always return enough context for the composer notice.
+on_exit() {{
+  oxi_status=$?
+  trap - 0
+  if [ "$oxi_status" -ne 0 ]; then
+    echo "Remote model switch failed (status $oxi_status)." >&2
+    if [ -f "$pid" ]; then
+      server_pid=$(cat "$pid" 2>/dev/null || true)
+      echo "Recorded llama-server pid: ${{server_pid:-none}}" >&2
+      if [ -n "$server_pid" ] && kill -0 "$server_pid" 2>/dev/null; then
+        echo "The recorded llama-server process is still running." >&2
+      else
+        echo "The recorded llama-server process is not running." >&2
+      fi
+    fi
+    if [ -f "$log" ]; then
+      echo "Last llama-server log lines ($log):" >&2
+      tail -n 120 "$log" >&2 || true
+    else
+      echo "llama-server log does not exist: $log" >&2
+    fi
+  fi
+  exit "$oxi_status"
+}}
+trap on_exit 0
 if [ ! -f "$model" ]; then
-  candidate="$base/models/{safe_repo}/{base_name}"
+  candidate="$base/models"/{safe_repo}/{base_name}
   if [ -f "$candidate" ]; then
     model="$candidate"
   else
@@ -196,10 +378,35 @@ if [ ! -f "$model" ]; then
     exit 1
   fi
 fi
-if [ -f "$pid" ] && kill -0 "$(cat "$pid")" 2>/dev/null; then
-  kill "$(cat "$pid")" 2>/dev/null || true
+# The pid file can become stale after a failed replacement. Stop every Oxi-managed
+# llama-server on this runtime port, but signal each process only once. llama-server may
+# spend several seconds freeing a large model; launching after the old 5-second wait made
+# the first switch lose the port race while a second attempt appeared to work.
+managed_pids() {{
+  ps -axo pid=,command= 2>/dev/null | while read -r old_pid old_args; do
+    case "$old_args" in
+      "$rt/llama-server "*"--port {port}"*) printf '%s\n' "$old_pid" ;;
+    esac
+  done
+}}
+old_pids=$(managed_pids)
+for old_pid in $old_pids; do
+  kill "$old_pid" 2>/dev/null || true
+done
+i=0
+while [ "$i" -lt 30 ] && [ -n "$(managed_pids)" ]; do
+  i=$((i + 1))
+  sleep 1
+done
+# Do not let a wedged old runtime make every replacement fail forever.
+remaining_pids=$(managed_pids)
+for old_pid in $remaining_pids; do
+  kill -9 "$old_pid" 2>/dev/null || true
+done
+if [ -n "$remaining_pids" ]; then
   sleep 1
 fi
+rm -f "$pid"
 cd "$rt"
 # Self-heal macOS/Linux runtime library aliases in case the runtime was installed
 # by an older oxi build. llama-server's LC_LOAD_DYLIB may ask for e.g.
@@ -231,11 +438,18 @@ while [ "$i" -lt 90 ]; do
     tail -n 120 "$log" >&2 || true
     exit 1
   fi
-  if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 {port} >/dev/null 2>&1; then
-    printf 'Remote llama-server ready on 127.0.0.1:%s. Log: %s' {port} "$log"
-    exit 0
-  fi
-  if command -v curl >/dev/null 2>&1 && curl -sS --max-time 1 -o /dev/null "http://127.0.0.1:{port}/health" >/dev/null 2>&1; then
+  if command -v curl >/dev/null 2>&1; then
+    # Do not require llama.cpp to echo the absolute model path: versions differ and
+    # often expose an alias/name instead. Process ownership plus a healthy API response
+    # proves this newly launched managed server owns the endpoint.
+    health=$(curl -sS --max-time 2 "http://127.0.0.1:{port}/health" 2>/dev/null || true)
+    models=$(curl -sS --max-time 2 "http://127.0.0.1:{port}/v1/models" 2>/dev/null || true)
+    if [ -n "$health" ] || [ -n "$models" ]; then
+      printf 'Remote llama-server ready with %s on 127.0.0.1:%s. Log: %s' "$model" {port} "$log"
+      exit 0
+    fi
+  elif command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 {port} >/dev/null 2>&1; then
+    # With no curl, process ownership plus an open port is the best available check.
     printf 'Remote llama-server ready on 127.0.0.1:%s. Log: %s' {port} "$log"
     exit 0
   fi
@@ -264,25 +478,80 @@ pub async fn stop_model(cfg: &SshConfig, password: &str) -> Result<String, Strin
         r#"set -eu
 rt={base}/runtime
 pid="$rt/llama-server.pid"
+port={port}
+stopped=0
 if [ -f "$pid" ] && kill -0 "$(cat "$pid")" 2>/dev/null; then
-  kill "$(cat "$pid")"
-  rm -f "$pid"
-  echo stopped
-else
-  echo not running
+  kill "$(cat "$pid")" 2>/dev/null || true
+  stopped=1
 fi
+# Also stop an older managed process if its pid file was overwritten or stale.
+ps -axo pid=,command= 2>/dev/null | while read -r old_pid old_args; do
+  case "$old_args" in
+    "$rt/llama-server "*"--port $port"*) kill "$old_pid" 2>/dev/null || true ;;
+  esac
+done
+rm -f "$pid"
+# Report stopped even when only the stale process scan found it; this command is idempotent.
+echo stopped
 "#,
         base = REMOTE_BASE,
+        port = cfg.remote_runtime_port,
     );
     exec_ok(cfg, password, &cmd)
         .await
         .map(|s| s.trim().to_string())
 }
 
-pub fn password_for_localhf() -> String {
+pub fn password_for_remotehf() -> String {
     let creds = compute::load_ssh_credentials();
     creds
-        .get(crate::settings::LlmProviderKind::LocalHf.slug())
+        .get(crate::settings::LlmProviderKind::RemoteHf.slug())
+        // Seamless migration: older builds stored Remote HF credentials under Local HF.
+        .or_else(|| creds.get(crate::settings::LlmProviderKind::LocalHf.slug()))
         .unwrap_or_default()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_path_recovers_repo_and_filename() {
+        let m = model_from_remote_path(
+            "/home/u/.local/share/oxi/local-models/models/unsloth__Qwen3-GGUF/q4.gguf",
+            42,
+        )
+        .unwrap();
+        assert_eq!(m.repo, "unsloth/Qwen3-GGUF");
+        assert_eq!(m.filename, "q4.gguf");
+        assert_eq!(m.id, "unsloth/Qwen3-GGUF/q4.gguf");
+        assert_eq!(m.bytes, 42);
+    }
+
+    #[test]
+    fn remote_path_recovers_identity_from_legacy_quoted_components() {
+        let m = model_from_remote_path(
+            "/Users/manu/.local/share/oxi/local-models/models/'deepreinforce-ai__Ornith-GGUF'/'ornith-Q4.gguf'",
+            99,
+        )
+        .unwrap();
+        assert_eq!(m.repo, "deepreinforce-ai/Ornith-GGUF");
+        assert_eq!(m.filename, "ornith-Q4.gguf");
+        assert_eq!(m.id, "deepreinforce-ai/Ornith-GGUF/ornith-Q4.gguf");
+        assert!(m.path.ends_with("/'ornith-Q4.gguf'"));
+    }
+
+    #[test]
+    fn model_arg_parses_short_and_long_flags() {
+        assert_eq!(
+            model_arg_from_args("/rt/llama-server -m /models/a.gguf --port 8080"),
+            Some("/models/a.gguf".to_string())
+        );
+        assert_eq!(
+            model_arg_from_args("llama-server --model /m/b.gguf -c 8192"),
+            Some("/m/b.gguf".to_string())
+        );
+        assert_eq!(model_arg_from_args("llama-server --port 8080"), None);
+    }
 }

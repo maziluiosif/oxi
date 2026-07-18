@@ -25,6 +25,8 @@ pub enum LlmProviderKind {
     Ollama,
     /// oxi-managed HuggingFace GGUF models run via a local llama.cpp `llama-server` process.
     LocalHf,
+    /// oxi-managed HuggingFace GGUF models run on an SSH host via `llama-server`.
+    RemoteHf,
     /// Claude Code driven over the Agent Client Protocol (ACP): oxi spawns the
     /// `claude-code-acp` adapter as a subprocess and speaks JSON-RPC over stdio, letting
     /// Claude Code run its own agent loop and tools. Unlike every other provider, oxi is an
@@ -36,8 +38,9 @@ impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 10] = [
+    pub const ALL: [LlmProviderKind; 11] = [
         LlmProviderKind::LocalHf,
+        LlmProviderKind::RemoteHf,
         LlmProviderKind::Ollama,
         LlmProviderKind::LmStudio,
         LlmProviderKind::ClaudeCodeAcp,
@@ -63,6 +66,7 @@ impl LlmProviderKind {
             LlmProviderKind::LmStudio => "lmstudio",
             LlmProviderKind::Ollama => "ollama",
             LlmProviderKind::LocalHf => "localhf",
+            LlmProviderKind::RemoteHf => "remotehf",
             LlmProviderKind::ClaudeCodeAcp => "claudecodeacp",
         }
     }
@@ -81,7 +85,7 @@ impl LlmProviderKind {
             LlmProviderKind::LmStudio => "http://localhost:1234/v1",
             // Ollama's OpenAI-compatible API lives under `/v1` on its default port 11434.
             LlmProviderKind::Ollama => "http://localhost:11434/v1",
-            LlmProviderKind::LocalHf => "http://127.0.0.1:18080/v1",
+            LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf => "http://127.0.0.1:18080/v1",
             // ACP does not use an HTTP base URL; it launches a subprocess (see `acp_command`).
             LlmProviderKind::ClaudeCodeAcp => "",
         }
@@ -98,6 +102,7 @@ impl LlmProviderKind {
             LlmProviderKind::LmStudio => "LM Studio",
             LlmProviderKind::Ollama => "Ollama",
             LlmProviderKind::LocalHf => "Local HF",
+            LlmProviderKind::RemoteHf => "Remote HF",
             LlmProviderKind::ClaudeCodeAcp => "Claude Code (ACP)",
         }
     }
@@ -115,6 +120,7 @@ impl LlmProviderKind {
             LlmProviderKind::LmStudio => "local-model",
             LlmProviderKind::Ollama => "qwen2.5-coder:7b",
             LlmProviderKind::LocalHf => "local-hf-model",
+            LlmProviderKind::RemoteHf => "remote-hf-model",
             // Informational only: Claude Code picks the model from its own config/login.
             LlmProviderKind::ClaudeCodeAcp => "sonnet",
         }
@@ -128,6 +134,8 @@ impl LlmProviderKind {
         match self {
             LlmProviderKind::LmStudio => 1234,
             LlmProviderKind::LocalHf => 18080,
+            // Different from Local HF so Remote HF can safely target this same machine over SSH.
+            LlmProviderKind::RemoteHf => 18081,
             _ => 11434,
         }
     }
@@ -143,6 +151,7 @@ impl LlmProviderKind {
             LlmProviderKind::LmStudio
                 | LlmProviderKind::Ollama
                 | LlmProviderKind::LocalHf
+                | LlmProviderKind::RemoteHf
                 | LlmProviderKind::AzureOpenAi
                 | LlmProviderKind::CustomAnthropic
         )
@@ -246,6 +255,14 @@ impl ProviderConfig {
         Self {
             provider,
             model_id: provider.default_model_id().to_string(),
+            location: if provider == LlmProviderKind::RemoteHf {
+                ComputeLocation::RemoteSsh(SshConfig {
+                    remote_runtime_port: provider.default_remote_runtime_port(),
+                    ..SshConfig::default()
+                })
+            } else {
+                ComputeLocation::Local
+            },
             ..Self::default()
         }
     }

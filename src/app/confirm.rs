@@ -39,7 +39,7 @@ impl OxiApp {
             ModalOutcome::Cancelled => self.conv.confirm_prompt = None,
             ModalOutcome::Confirmed => {
                 self.conv.confirm_prompt = None;
-                self.execute_confirmed(action);
+                self.execute_confirmed(ctx, action);
             }
         }
     }
@@ -100,6 +100,12 @@ impl OxiApp {
                 None,
                 "Delete".to_string(),
             ),
+            ConfirmAction::DeleteRemoteModel { id, .. } => (
+                "Delete remote model?".to_string(),
+                format!("{id} will be deleted from the SSH host."),
+                None,
+                "Delete".to_string(),
+            ),
             ConfirmAction::DeleteVoiceModel { id } => (
                 "Delete voice model?".to_string(),
                 format!("{id} will be deleted from disk."),
@@ -109,7 +115,7 @@ impl OxiApp {
         }
     }
 
-    fn execute_confirmed(&mut self, action: ConfirmAction) {
+    fn execute_confirmed(&mut self, ctx: &egui::Context, action: ConfirmAction) {
         match action {
             ConfirmAction::DeleteSession { wi, si } => {
                 // Sessions can only be deleted from the active workspace (the sidebar
@@ -127,6 +133,9 @@ impl OxiApp {
                     self.conv.local_models.runtime_status = Some(format!("Delete failed: {e}"));
                 }
                 self.conv.local_models.downloaded = crate::local_models::load_manifest().models;
+            }
+            ConfirmAction::DeleteRemoteModel { id, path } => {
+                self.spawn_remote_model_delete(ctx, id, path);
             }
             ConfirmAction::DeleteVoiceModel { id } => {
                 if let Err(e) = crate::voice_models::remove_downloaded(&id) {
