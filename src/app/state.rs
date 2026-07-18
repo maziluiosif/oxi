@@ -90,8 +90,12 @@ pub struct EditorState {
     pub find_active_match: usize,
     pub find_last_query: String,
     pub find_last_case_sensitive: bool,
-    /// Move the editor selection/caret to `find_active_match` on the next render.
+    /// Whether the current query has already navigated to its first match.
+    pub find_has_navigated: bool,
+    /// Move the editor caret to `find_active_match` on the next render.
     pub find_select_pending: bool,
+    /// Return keyboard focus to the editor after Find is closed, preserving its current match.
+    pub find_focus_editor_pending: bool,
     /// Move keyboard focus into the Find input on its next render.
     pub focus_find_next_frame: bool,
     /// Select and reveal this byte range after opening a definition target.
@@ -121,6 +125,9 @@ pub struct EditorState {
     pub file_picker_previous_diff_active: bool,
     /// Whether the preview tab was created by the picker and should be removed on cancel.
     pub file_picker_preview_created: bool,
+    /// File that the Explorer should expand to and scroll into view on its next render.
+    /// Ctrl/Cmd+P previews deliberately never set this.
+    pub explorer_reveal_pending: Option<PathBuf>,
 }
 
 #[derive(Clone)]

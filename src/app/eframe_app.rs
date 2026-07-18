@@ -209,13 +209,47 @@ impl OxiApp {
             && !self.conv.settings_open
             && self.conv.editor.active_document().is_some()
         {
-            self.conv.editor.find_open = true;
-            self.conv.editor.find_replace_open = find_replace;
-            self.conv.editor.find_select_pending = !self.conv.editor.find_query.is_empty();
-            self.conv.editor.focus_find_next_frame = true;
-            ctx.memory_mut(|memory| {
-                memory.request_focus(egui::Id::new("workspace_editor_find"));
-            });
+            let find_next = find_file
+                && self.conv.editor.find_open
+                && !self.conv.editor.find_query.is_empty();
+            if find_next {
+                let match_count = self
+                    .conv
+                    .editor
+                    .active_document()
+                    .map(|document| {
+                        super::file_explorer::find_match_ranges(
+                            &document.content,
+                            &self.conv.editor.find_query,
+                            self.conv.editor.find_case_sensitive,
+                        )
+                        .len()
+                    })
+                    .unwrap_or(0);
+                if match_count > 0 {
+                    self.conv.editor.find_active_match = if self.conv.editor.find_has_navigated {
+                        (self.conv.editor.find_active_match + 1) % match_count
+                    } else {
+                        0
+                    };
+                    self.conv.editor.find_has_navigated = true;
+                    self.conv.editor.find_select_pending = true;
+                    // Cmd/Ctrl+F is Find Next and must keep keyboard focus in the actual
+                    // Find widget after the editor scroll/caret update runs this frame.
+                    self.conv.editor.find_focus_editor_pending = false;
+                    self.conv.editor.focus_find_next_frame = true;
+                }
+            } else {
+                self.conv.editor.find_open = true;
+                self.conv.editor.find_replace_open = find_replace;
+                // Opening Find only focuses its field; it must not move the document.
+                self.conv.editor.find_select_pending = false;
+                self.conv.editor.find_has_navigated = false;
+                self.conv.editor.focus_find_next_frame = true;
+                ctx.memory_mut(|memory| {
+                    memory.request_focus(egui::Id::new("workspace_editor_find"));
+                });
+            }
         }
         if goto_definition
             && !self.conv.settings_open
@@ -236,7 +270,9 @@ impl OxiApp {
             self.cancel_file_picker();
         } else if escape && self.conv.editor.find_open {
             self.conv.editor.find_open = false;
-            self.conv.editor.find_select_pending = false;
+            // Preserve/apply the current result before returning focus to the editor.
+            self.conv.editor.find_select_pending = self.conv.editor.find_has_navigated;
+            self.conv.editor.find_focus_editor_pending = true;
         } else if escape
             && (!self.conv.terminal_open || self.conv.settings_open)
             && !self.confirm_prompt_open()

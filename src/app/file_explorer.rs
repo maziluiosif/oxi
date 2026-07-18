@@ -271,10 +271,16 @@ impl OxiApp {
                     self.render_explorer_directory(ui, root, &path, ignored, depth + 1);
                 }
             } else if kind.is_file() {
-                let selected = self
-                    .conv
-                    .editor
-                    .active_document()
+                // Ctrl/Cmd+P temporarily changes the active editor tab while previewing.
+                // Keep the Explorer selection on the previously committed tab until the
+                // picker result is accepted.
+                let selected_index = if self.conv.editor.file_picker_open {
+                    self.conv.editor.file_picker_previous_active
+                } else {
+                    self.conv.editor.active
+                };
+                let selected = selected_index
+                    .and_then(|index| self.conv.editor.documents.get(index))
                     .is_some_and(|document| document.path == path);
                 let git_status = self.git_status_for_path(root, &path);
                 let (rect, response) = ui.allocate_exact_size(
@@ -319,6 +325,16 @@ impl OxiApp {
                         });
                     },
                 );
+                if self
+                    .conv
+                    .editor
+                    .explorer_reveal_pending
+                    .as_deref()
+                    .is_some_and(|pending| pending == path)
+                {
+                    response.scroll_to_me(Some(Align::Center));
+                    self.conv.editor.explorer_reveal_pending = None;
+                }
                 let response = response.on_hover_text(path.display().to_string());
                 if response.clicked() {
                     self.open_editor_file(path.clone());
@@ -597,9 +613,35 @@ impl OxiApp {
         };
     }
 
-    fn open_editor_file(&mut self, path: PathBuf) {
+    fn reveal_editor_file_in_explorer(&mut self, path: &Path) {
         let root = PathBuf::from(&self.active_workspace().root_path);
-        let safe_root = std::fs::canonicalize(&root).unwrap_or(root);
+        let safe_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let safe_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if !safe_path.starts_with(&safe_root) {
+            return;
+        }
+
+        let relative = safe_path.strip_prefix(&safe_root).unwrap_or(&safe_path);
+        let explorer_path = root.join(relative);
+        self.conv.explorer_collapsed_roots.remove(&root);
+        let mut parent = explorer_path.parent();
+        while let Some(directory) = parent {
+            if directory == root {
+                break;
+            }
+            self.conv.explorer_expanded.insert(directory.to_path_buf());
+            parent = directory.parent();
+        }
+        self.conv.editor.explorer_reveal_pending = Some(explorer_path);
+    }
+
+    fn open_editor_file(&mut self, path: PathBuf) {
+        self.open_editor_file_impl(path, true);
+    }
+
+    fn open_editor_file_impl(&mut self, path: PathBuf, reveal_in_explorer: bool) {
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        let safe_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
         let safe_path = match std::fs::canonicalize(&path) {
             Ok(path) if path.starts_with(&safe_root) => path,
             _ => {
@@ -619,6 +661,9 @@ impl OxiApp {
         {
             self.conv.editor.active = Some(index);
             self.conv.editor.diff_tab_active = false;
+            if reveal_in_explorer {
+                self.reveal_editor_file_in_explorer(&safe_path);
+            }
             return;
         }
         let metadata = match std::fs::metadata(&safe_path) {
@@ -635,7 +680,7 @@ impl OxiApp {
         match std::fs::read_to_string(&safe_path) {
             Ok(content) => {
                 self.conv.editor.documents.push(EditorDocument {
-                    path: safe_path,
+                    path: safe_path.clone(),
                     saved_content: content.clone(),
                     content,
                     disk_modified: metadata.modified().ok(),
@@ -647,6 +692,9 @@ impl OxiApp {
                 self.conv.editor.show_diff = false;
                 // An open git diff stays reachable as an editor tab; just show the file.
                 self.conv.editor.diff_tab_active = false;
+                if reveal_in_explorer {
+                    self.reveal_editor_file_in_explorer(&safe_path);
+                }
             }
             Err(error) => {
                 self.conv.editor.error = Some(format!("Could not open text file: {error}"))
@@ -774,7 +822,7 @@ impl OxiApp {
             .any(|document| document.path == safe_path);
         self.conv.editor.file_picker_preview = None;
         self.conv.editor.file_picker_preview_created = false;
-        self.open_editor_file(path.to_path_buf());
+        self.open_editor_file_impl(path.to_path_buf(), false);
         if self
             .conv
             .editor
@@ -944,6 +992,7 @@ impl OxiApp {
             self.conv.editor.file_picker_preview = None;
             self.conv.editor.file_picker_preview_created = false;
             self.conv.editor.file_picker_open = false;
+            self.reveal_editor_file_in_explorer(&path);
         } else if !open {
             self.cancel_file_picker();
         } else {
@@ -994,28 +1043,29 @@ impl OxiApp {
         }
 
         if self.conv.editor.find_open {
-            // One or two 28 px rows, with 7 px between them and exactly 2 px
-            // of vertical padding at both panel edges.
+            // Find floats over the bottom of the editor instead of participating in layout.
+            // Opening/closing it therefore cannot resize the editor viewport or alter its scroll.
+            let editor_rect = ui.available_rect_before_wrap();
+            if self.conv.editor.show_diff {
+                self.render_editor_diff(ui);
+            } else {
+                self.render_editor_body(ui);
+            }
             let panel_height = if self.conv.editor.find_replace_open {
                 67.0
             } else {
                 32.0
             };
-            let editor_height = (ui.available_height() - panel_height).max(80.0);
-            // The search panel is docked: no layout gap between it and the editor/status bar.
-            ui.spacing_mut().item_spacing.y = 0.0;
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), editor_height),
-                Layout::top_down(Align::Min),
-                |ui| {
-                    if self.conv.editor.show_diff {
-                        self.render_editor_diff(ui);
-                    } else {
-                        self.render_editor_body(ui);
-                    }
-                },
+            let panel_rect = egui::Rect::from_min_size(
+                egui::pos2(editor_rect.left(), editor_rect.bottom() - panel_height),
+                egui::vec2(editor_rect.width(), panel_height),
             );
-            self.render_find_replace(ui);
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(panel_rect)
+                    .sense(egui::Sense::hover()),
+                |ui| self.render_find_replace(ui),
+            );
         } else if self.conv.editor.show_diff {
             self.render_editor_diff(ui);
         } else {
@@ -1335,6 +1385,15 @@ impl OxiApp {
         if let Some(index) = select {
             self.conv.editor.active = Some(index);
             self.conv.editor.diff_tab_active = false;
+            if let Some(path) = self
+                .conv
+                .editor
+                .documents
+                .get(index)
+                .map(|document| document.path.clone())
+            {
+                self.reveal_editor_file_in_explorer(&path);
+            }
         }
         if select_git_diff {
             self.conv.editor.diff_tab_active = true;
@@ -1366,7 +1425,6 @@ impl OxiApp {
     }
 
     fn render_find_replace(&mut self, ui: &mut Ui) {
-        let available_height = ui.available_height();
         let query_changed = self.conv.editor.find_query != self.conv.editor.find_last_query
             || self.conv.editor.find_case_sensitive
                 != self.conv.editor.find_last_case_sensitive;
@@ -1377,7 +1435,9 @@ impl OxiApp {
                 .clone_from(&self.conv.editor.find_query);
             self.conv.editor.find_last_case_sensitive = self.conv.editor.find_case_sensitive;
             self.conv.editor.find_active_match = 0;
-            self.conv.editor.find_select_pending = !self.conv.editor.find_query.is_empty();
+            self.conv.editor.find_has_navigated = false;
+            // Editing the query only refreshes highlights. Navigation is explicit via
+            // Enter, Find, Find Prev, or a repeated Cmd/Ctrl+F.
         }
         let ranges = self
             .conv
@@ -1412,9 +1472,6 @@ impl OxiApp {
                 bottom: 2,
             })
             .show(ui, |ui| {
-                // Expand the frame through all remaining central-panel space so its lower
-                // edge sits directly against the persistent status bar.
-                ui.set_min_height((available_height - 4.0).max(0.0));
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 7.0);
                 const TOGGLE_WIDTH: f32 = 56.0;
@@ -1507,14 +1564,18 @@ impl OxiApp {
                         .on_hover_text("Close find")
                         .clicked();
 
-                    if find_response.has_focus() {
-                        let (enter, shift_enter) = ui.input_mut(|input| {
-                            let shift = input.modifiers.shift;
-                            let enter = input.consume_key(input.modifiers, egui::Key::Enter);
-                            (enter && !shift, enter && shift)
-                        });
-                        next |= enter;
-                        previous |= shift_enter;
+                    // A single-line TextEdit gives up focus when Enter is pressed. Checking
+                    // `lost_focus` is therefore essential; `has_focus` alone misses the exact
+                    // frame carrying Enter and neither navigation nor focus restoration runs.
+                    let enter_while_editing =
+                        (find_response.has_focus() || find_response.lost_focus())
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    if enter_while_editing {
+                        if ui.input(|input| input.modifiers.shift) {
+                            previous = true;
+                        } else {
+                            next = true;
+                        }
                     }
                 });
 
@@ -1559,11 +1620,24 @@ impl OxiApp {
 
         if !ranges.is_empty() && (next || previous) {
             self.conv.editor.find_active_match = if previous {
-                self.conv.editor.find_active_match.checked_sub(1).unwrap_or(ranges.len() - 1)
-            } else {
+                if self.conv.editor.find_has_navigated {
+                    self.conv.editor.find_active_match.checked_sub(1).unwrap_or(ranges.len() - 1)
+                } else {
+                    ranges.len() - 1
+                }
+            } else if self.conv.editor.find_has_navigated {
                 (self.conv.editor.find_active_match + 1) % ranges.len()
+            } else {
+                0
             };
+            self.conv.editor.find_has_navigated = true;
             self.conv.editor.find_select_pending = true;
+            // Like VS Code, Enter/Shift+Enter and the navigation buttons move through
+            // matches while keyboard focus remains in the Find field.
+            self.conv.editor.find_focus_editor_pending = false;
+            // Restore the Find TextEdit after single-line Enter surrendered focus. This is
+            // applied through the actual widget Response on the next frame (not a guessed Id).
+            self.conv.editor.focus_find_next_frame = true;
         }
         if (replace_one || replace_all) && !ranges.is_empty() {
             let replacement = self.conv.editor.replace_query.clone();
@@ -1586,7 +1660,9 @@ impl OxiApp {
         }
         if close {
             self.conv.editor.find_open = false;
-            self.conv.editor.find_select_pending = false;
+            // Apply the current result on the following editor frame, then return focus.
+            self.conv.editor.find_select_pending = self.conv.editor.find_has_navigated;
+            self.conv.editor.find_focus_editor_pending = true;
         }
     }
 
@@ -1607,7 +1683,12 @@ impl OxiApp {
         }
         let goto_definition_requested =
             std::mem::take(&mut self.conv.editor.goto_definition_requested);
-        let find_ranges = if self.conv.editor.find_open {
+        // Keep match geometry for one extra frame while Find closes so Escape/X can
+        // apply the current match caret before the panel disappears.
+        let find_ranges = if self.conv.editor.find_open
+            || self.conv.editor.find_select_pending
+            || self.conv.editor.find_focus_editor_pending
+        {
             find_match_ranges(
                 &self.conv.editor.documents[index].content,
                 &self.conv.editor.find_query,
@@ -1623,6 +1704,8 @@ impl OxiApp {
                 .min(find_ranges.len() - 1)
         });
         let select_find_match = self.conv.editor.find_select_pending && active_find_match.is_some();
+        let focus_editor_for_find =
+            std::mem::take(&mut self.conv.editor.find_focus_editor_pending);
         self.conv.editor.find_select_pending = false;
         let logical_line_count = self.conv.editor.documents[index]
             .content
@@ -1735,29 +1818,47 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
-                            let selection_target = navigation_range.as_ref().or_else(|| {
-                                select_find_match
-                                    .then(|| &find_ranges[active_find_match.unwrap_or(0)])
-                            });
-                            if let Some(byte_range) = selection_target {
+                            let selection_target = navigation_range.as_ref();
+                            let find_caret_target = select_find_match
+                                .then(|| &find_ranges[active_find_match.unwrap_or(0)]);
+                            if let Some(byte_range) = selection_target.or(find_caret_target) {
                                 let start = document.content[..byte_range.start].chars().count();
                                 let end =
                                     start + document.content[byte_range.clone()].chars().count();
-                                output.state.cursor.set_char_range(Some(
+                                let cursor_range = if selection_target.is_some() {
                                     egui::text::CCursorRange::two(
                                         egui::text::CCursor::new(start),
                                         egui::text::CCursor::new(end),
-                                    ),
-                                ));
+                                    )
+                                } else {
+                                    // Find navigation places an insertion caret immediately after
+                                    // the match, ready to continue editing the document.
+                                    egui::text::CCursorRange::one(egui::text::CCursor::new(end))
+                                };
+                                output.state.cursor.set_char_range(Some(cursor_range));
                                 output.state.store(ui.ctx(), output.response.id);
+                                if focus_editor_for_find {
+                                    output.response.request_focus();
+                                } else if find_caret_target.is_some() {
+                                    // Programmatically updating the editor cursor can make egui
+                                    // transfer focus to this TextEdit. Explicitly restore Find so
+                                    // Enter continues to mean Find Next.
+                                    ui.ctx().memory_mut(|memory| {
+                                        memory.request_focus(egui::Id::new("workspace_editor_find"));
+                                    });
+                                }
                                 let caret = output
                                     .galley
                                     .pos_from_cursor(egui::text::CCursor {
-                                        index: egui::text::CharIndex(start),
+                                        index: egui::text::CharIndex(end),
                                         prefer_next_row: true,
                                     })
                                     .translate(output.galley_pos.to_vec2());
                                 ui.scroll_to_rect(caret, Some(egui::Align::Center));
+                            }
+
+                            if focus_editor_for_find && find_caret_target.is_none() {
+                                output.response.request_focus();
                             }
 
                             let caret_byte = output.cursor_range.map(|range| {
@@ -2865,7 +2966,7 @@ fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
     Some(score)
 }
 
-fn find_match_ranges(
+pub(crate) fn find_match_ranges(
     content: &str,
     query: &str,
     case_sensitive: bool,
