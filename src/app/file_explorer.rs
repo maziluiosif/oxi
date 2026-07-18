@@ -20,6 +20,7 @@ type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
     egui::text::LayoutJob,
     String,
     Option<usize>,
+    Option<usize>,
 )>;
 
 impl OxiApp {
@@ -609,7 +610,84 @@ impl OxiApp {
         self.conv.editor.file_picker_query.clear();
         self.conv.editor.file_picker_last_query.clear();
         self.conv.editor.file_picker_selected = 0;
+        self.conv.editor.file_picker_preview = None;
+        self.conv.editor.file_picker_previous_active = self.conv.editor.active;
+        self.conv.editor.file_picker_previous_diff_active = self.conv.editor.diff_tab_active;
+        self.conv.editor.file_picker_preview_created = false;
         self.conv.editor.file_picker_open = true;
+    }
+
+    fn preview_file_picker_path(&mut self, path: &Path) {
+        if self
+            .conv
+            .editor
+            .file_picker_preview
+            .as_deref()
+            .is_some_and(|preview| preview == path)
+        {
+            return;
+        }
+
+        if self.conv.editor.file_picker_preview_created {
+            if let Some(preview) = self.conv.editor.file_picker_preview.as_ref()
+                && let Some(index) = self
+                    .conv
+                    .editor
+                    .documents
+                    .iter()
+                    .position(|document| &document.path == preview)
+            {
+                self.conv.editor.documents.remove(index);
+            }
+        }
+
+        let safe_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let was_open = self
+            .conv
+            .editor
+            .documents
+            .iter()
+            .any(|document| document.path == safe_path);
+        self.conv.editor.file_picker_preview = None;
+        self.conv.editor.file_picker_preview_created = false;
+        self.open_editor_file(path.to_path_buf());
+        if self
+            .conv
+            .editor
+            .active_document()
+            .is_some_and(|document| document.path == safe_path)
+        {
+            self.conv.editor.file_picker_preview = Some(safe_path);
+            self.conv.editor.file_picker_preview_created = !was_open;
+        }
+    }
+
+    fn clear_file_picker_preview(&mut self) {
+        if self.conv.editor.file_picker_preview_created {
+            if let Some(preview) = self.conv.editor.file_picker_preview.as_ref()
+                && let Some(index) = self
+                    .conv
+                    .editor
+                    .documents
+                    .iter()
+                    .position(|document| &document.path == preview)
+            {
+                self.conv.editor.documents.remove(index);
+            }
+        }
+        self.conv.editor.active = self
+            .conv
+            .editor
+            .file_picker_previous_active
+            .filter(|&index| index < self.conv.editor.documents.len());
+        self.conv.editor.diff_tab_active = self.conv.editor.file_picker_previous_diff_active;
+        self.conv.editor.file_picker_preview = None;
+        self.conv.editor.file_picker_preview_created = false;
+    }
+
+    pub(crate) fn cancel_file_picker(&mut self) {
+        self.clear_file_picker_preview();
+        self.conv.editor.file_picker_open = false;
     }
 
     pub(crate) fn render_file_picker(&mut self, ctx: &egui::Context) {
@@ -666,12 +744,15 @@ impl OxiApp {
             .then(|| matches.get(self.conv.editor.file_picker_selected).cloned())
             .flatten();
         let mut open = true;
-        // Keep the palette geometry stable as filtering changes the number of matches. An
-        // auto-sized, top-anchored Window visibly jumps between frames for short result lists.
+        // Shrink for short result lists, but cap the picker so longer lists remain scrollable.
         let available = ctx.content_rect().size();
+        let max_picker_height = 440.0_f32.min((available.y - 104.0).max(120.0));
+        let row_height = 27.0; // 24 px row + the theme's 3 px item spacing.
+        let picker_height =
+            (88.0 + matches.len() as f32 * row_height).clamp(120.0, max_picker_height);
         let picker_size = egui::vec2(
             560.0_f32.min((available.x - 32.0).max(280.0)),
-            440.0_f32.min((available.y - 104.0).max(220.0)),
+            picker_height,
         );
         egui::Window::new("Open file")
             .id(egui::Id::new("workspace_file_picker"))
@@ -691,38 +772,63 @@ impl OxiApp {
                     response.request_focus();
                 }
                 ui.add_space(6.0);
-                ScrollArea::vertical().show(ui, |ui| {
-                    if matches.is_empty() {
-                        ui.label(RichText::new("No matching files").color(c_text_muted()));
-                    }
-                    for (match_index, path) in matches.iter().enumerate() {
-                        let relative = path.strip_prefix(&root).unwrap_or(path);
-                        let response = ui
-                            .selectable_label(
-                                match_index == self.conv.editor.file_picker_selected,
-                                relative.to_string_lossy(),
-                            )
-                            .on_hover_text(path.display().to_string());
-                        // Scrolling a hover-selected row every frame moves a different row under
-                        // the stationary pointer, which changes selection again and causes a
-                        // scroll/hover feedback loop. Only keyboard navigation needs auto-scroll.
-                        if keyboard_navigation
-                            && match_index == self.conv.editor.file_picker_selected
-                        {
-                            response.scroll_to_me(Some(egui::Align::Center));
+                // Fill the remaining window height even when every match fits. Otherwise the
+                // scroll area's clip edge can land on the final row as selection repaints.
+                ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .animated(false)
+                    .show(ui, |ui| {
+                        if matches.is_empty() {
+                            ui.label(RichText::new("No matching files").color(c_text_muted()));
                         }
-                        if pointer_moved && response.hovered() {
-                            self.conv.editor.file_picker_selected = match_index;
+                        for (match_index, path) in matches.iter().enumerate() {
+                            let relative = path.strip_prefix(&root).unwrap_or(path);
+                            let response = ui.add_sized(
+                                [ui.available_width(), ui.spacing().interact_size.y],
+                                egui::Button::selectable(
+                                    match_index == self.conv.editor.file_picker_selected,
+                                    relative.to_string_lossy(),
+                                )
+                                // Keep the label left-aligned while the selectable area fills the row.
+                                .right_text(()),
+                            );
+                            // Scrolling a hover-selected row every frame moves a different row under
+                            // the stationary pointer, which changes selection again and causes a
+                            // scroll/hover feedback loop. Only keyboard navigation needs auto-scroll.
+                            if keyboard_navigation
+                                && match_index == self.conv.editor.file_picker_selected
+                            {
+                                response.scroll_to_me(None);
+                            }
+                            // Keyboard navigation may scroll the list under the pointer. Do not let
+                            // that same frame's hover state override the arrow-selected row, otherwise
+                            // the selection can oscillate (most visibly on the last item).
+                            if pointer_moved && !keyboard_navigation && response.hovered() {
+                                self.conv.editor.file_picker_selected = match_index;
+                            }
+                            if response.clicked() {
+                                selected = Some(path.clone());
+                            }
                         }
-                        if response.clicked() {
-                            selected = Some(path.clone());
-                        }
-                    }
-                });
+                        // Keep the final row away from the scroll area's bottom clip boundary.
+                        ui.add_space(2.0);
+                    });
             });
-        self.conv.editor.file_picker_open = open && selected.is_none();
         if let Some(path) = selected {
-            self.open_editor_file(path);
+            // Enter/click promotes the temporary preview to a regular editor tab.
+            self.preview_file_picker_path(&path);
+            self.conv.editor.file_picker_preview = None;
+            self.conv.editor.file_picker_preview_created = false;
+            self.conv.editor.file_picker_open = false;
+        } else if !open {
+            self.cancel_file_picker();
+        } else {
+            self.conv.editor.file_picker_open = true;
+            if let Some(path) = matches.get(self.conv.editor.file_picker_selected) {
+                self.preview_file_picker_path(path);
+            } else {
+                self.clear_file_picker_preview();
+            }
         }
     }
 
@@ -1150,8 +1256,15 @@ impl OxiApp {
                 .glyph_width(&FontId::monospace(FS_SMALL), '0')
                 .max(FS_SMALL * 0.5)
         });
-        const GIT_MARKER_WIDTH: f32 = 4.0;
-        let gutter_width = gutter_digits * digit_width + 16.0 + GIT_MARKER_WIDTH;
+        const GIT_MARKER_WIDTH: f32 = 2.0;
+        // Keep the line numbers at their original position while placing the slimmer Git
+        // marker flush against the editor container's left boundary.
+        const GUTTER_LEFT_PADDING: f32 = 10.0;
+        const GUTTER_RIGHT_PADDING: f32 = 12.0;
+        let gutter_width = gutter_digits * digit_width
+            + GUTTER_LEFT_PADDING
+            + GUTTER_RIGHT_PADDING
+            + GIT_MARKER_WIDTH;
         let root = PathBuf::from(&self.active_workspace().root_path);
         let relative_path = self.conv.editor.documents[index]
             .path
@@ -1159,13 +1272,21 @@ impl OxiApp {
             .unwrap_or(&self.conv.editor.documents[index].path)
             .to_string_lossy()
             .replace('\\', "/");
-        let git_line_changes = self
+        let disk_git_line_changes = self
             .conv
             .git
             .line_changes
             .get(&relative_path)
             .cloned()
             .unwrap_or_default();
+        // Git itself only sees the saved file. When editing changes the number of lines,
+        // project those disk-based markers onto the in-memory buffer so the gutter follows
+        // inserted/deleted newlines without doing Git work on every keystroke.
+        let git_line_changes = live_git_line_changes(
+            &disk_git_line_changes,
+            &self.conv.editor.documents[index].saved_content,
+            &self.conv.editor.documents[index].content,
+        );
         const MINIMAP_WIDTH: f32 = 96.0;
         let editor_view_size = ui.available_size();
         let mut goto_definition_byte = None;
@@ -1262,6 +1383,14 @@ impl OxiApp {
 
                             let caret_byte = output.cursor_range.map(|range| {
                                 char_index_to_byte(&document.content, range.primary.index.0)
+                            });
+                            let active_line = output.cursor_range.map(|range| {
+                                document
+                                    .content
+                                    .chars()
+                                    .take(range.primary.index.0)
+                                    .filter(|character| *character == '\n')
+                                    .count()
                             });
                             let definition_modifier =
                                 ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
@@ -1433,6 +1562,7 @@ impl OxiApp {
                                 minimap_job,
                                 document.content.clone(),
                                 navigation_request,
+                                active_line,
                             )
                         })
                 })
@@ -1440,12 +1570,22 @@ impl OxiApp {
 
             let gutter_clip = gutter_rect.intersect(ui.clip_rect());
             for (line, y) in scroll_output.inner.0.iter().copied().enumerate() {
+                let line_height = FS_SMALL * 1.35;
+                if scroll_output.inner.6 == Some(line) {
+                    ui.painter().with_clip_rect(gutter_clip).rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(gutter_rect.center().x, y),
+                            egui::vec2(gutter_rect.width(), line_height),
+                        ),
+                        0.0,
+                        c_row_active(),
+                    );
+                }
                 if let Some(change) = git_line_changes.iter().find(|change| change.line == line) {
                     let color = match change.kind {
                         crate::git::GitLineKind::Added => c_diff_add_fg(),
                         crate::git::GitLineKind::Modified => c_warning_fg(),
                     };
-                    let line_height = FS_SMALL * 1.35;
                     ui.painter().with_clip_rect(gutter_clip).rect_filled(
                         egui::Rect::from_center_size(
                             egui::pos2(gutter_rect.left() + GIT_MARKER_WIDTH * 0.5, y),
@@ -1456,11 +1596,15 @@ impl OxiApp {
                     );
                 }
                 ui.painter().with_clip_rect(gutter_clip).text(
-                    egui::pos2(gutter_rect.right() - 8.0, y),
+                    egui::pos2(gutter_rect.right() - GUTTER_RIGHT_PADDING, y),
                     egui::Align2::RIGHT_CENTER,
                     line + 1,
                     FontId::monospace(FS_SMALL),
-                    c_text_faint(),
+                    if scroll_output.inner.6 == Some(line) {
+                        c_text_muted()
+                    } else {
+                        c_text_faint()
+                    },
                 );
             }
 
@@ -1686,6 +1830,77 @@ impl OxiApp {
         self.conv.sidebar_mode = super::state::SidebarMode::Explorer;
         self.conv.sidebar_open = true;
     }
+}
+
+fn live_git_line_changes(
+    disk_changes: &[crate::git::GitLineChange],
+    saved: &str,
+    current: &str,
+) -> Vec<crate::git::GitLineChange> {
+    let saved_lines = saved.split('\n').collect::<Vec<_>>();
+    let current_lines = current.split('\n').collect::<Vec<_>>();
+    if saved_lines.len() == current_lines.len() {
+        return disk_changes.to_vec();
+    }
+
+    let prefix = saved_lines
+        .iter()
+        .zip(&current_lines)
+        .take_while(|(saved, current)| saved == current)
+        .count();
+    let suffix = saved_lines[prefix..]
+        .iter()
+        .rev()
+        .zip(current_lines[prefix..].iter().rev())
+        .take_while(|(saved, current)| saved == current)
+        .count();
+    let old_end = saved_lines.len().saturating_sub(suffix);
+    let new_end = current_lines.len().saturating_sub(suffix);
+    let line_delta = current_lines.len() as isize - saved_lines.len() as isize;
+
+    let mut changes = disk_changes
+        .iter()
+        .filter_map(|change| {
+            let line = if change.line < prefix {
+                change.line
+            } else if change.line >= old_end {
+                change.line.saturating_add_signed(line_delta)
+            } else {
+                return None;
+            };
+            Some(crate::git::GitLineChange { line, ..*change })
+        })
+        .collect::<Vec<_>>();
+
+    let replaced_lines = old_end
+        .saturating_sub(prefix)
+        .min(new_end.saturating_sub(prefix));
+    for line in prefix..new_end {
+        let kind = if line < prefix + replaced_lines {
+            crate::git::GitLineKind::Modified
+        } else {
+            crate::git::GitLineKind::Added
+        };
+        if let Some(change) = changes.iter_mut().find(|change| change.line == line) {
+            // An inserted line is more specific than a pre-existing modified marker.
+            if kind == crate::git::GitLineKind::Added {
+                change.kind = kind;
+            }
+        } else {
+            changes.push(crate::git::GitLineChange { line, kind });
+        }
+    }
+    // A pure deletion has no new line to color; mark the line immediately after it instead.
+    if new_end == prefix && prefix < current_lines.len() {
+        if !changes.iter().any(|change| change.line == prefix) {
+            changes.push(crate::git::GitLineChange {
+                line: prefix,
+                kind: crate::git::GitLineKind::Modified,
+            });
+        }
+    }
+    changes.sort_by_key(|change| change.line);
+    changes
 }
 
 fn char_index_to_byte(content: &str, char_index: usize) -> usize {

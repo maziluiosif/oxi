@@ -226,7 +226,7 @@ impl OxiApp {
         // is hidden while Settings is open, so Escape works there regardless). Escape
         // for the shared confirm modal is handled by the modal itself.
         if escape && self.conv.editor.file_picker_open {
-            self.conv.editor.file_picker_open = false;
+            self.cancel_file_picker();
         } else if escape && self.conv.editor.find_open {
             self.conv.editor.find_open = false;
             self.conv.editor.find_select_pending = false;

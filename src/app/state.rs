@@ -100,6 +100,13 @@ pub struct EditorState {
     pub file_picker_last_query: String,
     pub file_picker_selected: usize,
     pub file_picker_files: Vec<PathBuf>,
+    /// File currently shown as a temporary editor tab behind the picker.
+    pub file_picker_preview: Option<PathBuf>,
+    /// Editor tab that was active before the picker opened.
+    pub file_picker_previous_active: Option<usize>,
+    pub file_picker_previous_diff_active: bool,
+    /// Whether the preview tab was created by the picker and should be removed on cancel.
+    pub file_picker_preview_created: bool,
 }
 
 #[derive(Clone)]

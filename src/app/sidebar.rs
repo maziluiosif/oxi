@@ -589,16 +589,23 @@ impl OxiApp {
                 egui::vec2(chat_w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    let editor_open = self.conv.editor.active_document().is_some();
                     Frame::new()
                         .fill(c_bg_main())
                         .inner_margin(Margin {
-                            left: CHAT_VIEW_MARGIN_LEFT as i8,
+                            // The editor gutter starts directly at the sidebar boundary; the chat
+                            // view keeps its usual breathing room.
+                            left: if editor_open {
+                                0
+                            } else {
+                                CHAT_VIEW_MARGIN_LEFT as i8
+                            },
                             right: CHAT_VIEW_MARGIN_RIGHT as i8,
                             top: CHAT_FRAME_TOP as i8,
                             bottom: CHAT_FRAME_BOTTOM as i8,
                         })
                         .show(ui, |ui| {
-                            if self.conv.editor.active_document().is_some() {
+                            if editor_open {
                                 self.render_text_editor(ui);
                                 return;
                             }
