@@ -37,7 +37,11 @@ impl OxiApp {
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_width(search_w);
-                    sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
+                    let _ = sidebar_text_field(
+                        ui,
+                        &mut self.conv.sidebar_search,
+                        "Search chats…",
+                    );
                 },
             );
 
@@ -90,7 +94,8 @@ impl OxiApp {
             }
         });
 
-        ui.expand_to_include_rect(ui.max_rect());
+        // The outer sidebar allocation already owns the full fixed width/height. Expanding
+        // again from content made Conversations report a subtly different size than Explorer.
     }
 
     fn render_sidebar_session_list(&mut self, ui: &mut Ui) {
@@ -489,7 +494,10 @@ impl OxiApp {
                     |ui| {
                         use eframe::egui::Label;
                         let title_color = if selected { c_text() } else { c_text_muted() };
-                        let resp = ui.add(
+                        // `Label::truncate` already provides the complete text on hover.
+                        // Adding another tooltip here caused two differently styled tooltip
+                        // layers, especially when the hover-only delete action overlapped it.
+                        ui.add(
                             Label::new(
                                 RichText::new(title.as_str())
                                     .size(FS_SMALL)
@@ -498,18 +506,6 @@ impl OxiApp {
                             .truncate()
                             .halign(Align::LEFT),
                         );
-                        let full_w = ui.fonts_mut(|f| {
-                            f.layout_no_wrap(
-                                title.clone(),
-                                FontId::proportional(FS_SMALL),
-                                title_color,
-                            )
-                            .rect
-                            .width()
-                        });
-                        if full_w > title_w {
-                            resp.on_hover_text(title.as_str());
-                        }
                     },
                 );
             });
@@ -602,7 +598,13 @@ impl OxiApp {
                             },
                             right: CHAT_VIEW_MARGIN_RIGHT as i8,
                             top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
-                            bottom: CHAT_FRAME_BOTTOM as i8,
+                            // The editor owns a bottom-docked find panel, so it must meet the
+                            // status bar without the chat view's composer breathing room.
+                            bottom: if editor_open {
+                                0
+                            } else {
+                                CHAT_FRAME_BOTTOM as i8
+                            },
                         })
                         .show(ui, |ui| {
                             if editor_open {

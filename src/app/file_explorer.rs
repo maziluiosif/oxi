@@ -47,6 +47,9 @@ impl OxiApp {
         // sidebar width, and the trailing label truncates instead of being overlapped
         // when the sidebar is dragged down to its minimum width.
         ui.horizontal(|ui| {
+            // Match the conversations sidebar's 24 px search toolbar exactly so switching
+            // modes does not move the first content row by a few pixels.
+            ui.set_height(24.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, false)
                     .on_hover_text("Open settings")
@@ -91,30 +94,65 @@ impl OxiApp {
                 });
             });
         });
-        ui.add_space(6.0);
+        // Keep the same toolbar-to-list rhythm as the conversations sidebar (8 px
+        // gap plus the list's 1 px leading breathing room).
+        ui.add_space(8.0);
+        ui.add_space(1.0);
 
         let label = root
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_else(|| root.to_str().unwrap_or("workspace"));
-        let root_response = ui
-            .label(
-                RichText::new(label)
-                    .strong()
-                    .size(FS_SMALL)
-                    .color(c_sidebar_section()),
-            )
-            .on_hover_text(root.display().to_string());
-        root_response.context_menu(|ui| {
-            if ui.button("New file").clicked() {
-                self.start_file_operation(FileOperation::NewFile(root.clone()));
-                ui.close();
+        let root_expanded = !self.conv.explorer_collapsed_roots.contains(&root);
+        let (root_rect, root_response) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 22.0),
+            egui::Sense::click(),
+        );
+        paint_explorer_row(ui, root_rect, root_response.hovered(), false);
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(root_rect.shrink2(egui::vec2(4.0, 0.0))),
+            |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(icon_glyph_rich(
+                        if root_expanded {
+                            ICON_ANGLE_DOWN
+                        } else {
+                            ICON_CHEVRON_RIGHT
+                        },
+                        FS_TINY,
+                        c_text_faint(),
+                    ));
+                    ui.label(icon_glyph_rich(
+                        if root_expanded {
+                            ICON_FOLDER_OPEN
+                        } else {
+                            ICON_FOLDER
+                        },
+                        FS_SMALL,
+                        c_text_muted(),
+                    ));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(label)
+                                .strong()
+                                .size(FS_SMALL)
+                                .color(c_sidebar_section()),
+                        )
+                        .truncate(),
+                    );
+                });
+            },
+        );
+        let root_response = root_response.on_hover_text(root.display().to_string());
+        if root_response.clicked() {
+            if root_expanded {
+                self.conv.explorer_collapsed_roots.insert(root.clone());
+            } else {
+                self.conv.explorer_collapsed_roots.remove(&root);
             }
-            if ui.button("New folder").clicked() {
-                self.start_file_operation(FileOperation::NewFolder(root.clone()));
-                ui.close();
-            }
-        });
+        }
+        root_response.context_menu(|ui| self.render_root_context_menu(ui, &root));
         ui.add_space(4.0);
 
         if let Some(operation) = self.conv.editor.file_operation.clone() {
@@ -122,12 +160,14 @@ impl OxiApp {
             ui.add_space(6.0);
         }
 
-        ScrollArea::vertical()
-            .id_salt("workspace_file_explorer")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                self.render_explorer_directory(ui, &root, &root, &ignored, 0)
-            });
+        if root_expanded {
+            ScrollArea::vertical()
+                .id_salt("workspace_file_explorer")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    self.render_explorer_directory(ui, &root, &root, &ignored, 1)
+                });
+        }
 
         if let Some(error) = self.conv.editor.error.clone() {
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
@@ -162,9 +202,10 @@ impl OxiApp {
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
-            if should_ignore(root, &path, kind.is_dir(), ignored) {
+            if kind.is_dir() && ALWAYS_SKIPPED_DIRS.contains(&name.as_str()) {
                 continue;
             }
+            let git_ignored = is_gitignored(root, &path, kind.is_dir(), ignored);
             let indent = depth as f32 * 14.0;
             if kind.is_dir() {
                 let expanded = self.conv.explorer_expanded.contains(&path);
@@ -199,7 +240,7 @@ impl OxiApp {
                                 folder,
                                 &name,
                                 FS_SMALL,
-                                c_text(),
+                                explorer_entry_color(c_text(), git_ignored),
                             ));
                             if let Some(status) = git_status {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -252,11 +293,14 @@ impl OxiApp {
                                 icon,
                                 &name,
                                 FS_SMALL,
-                                if selected {
-                                    crate::theme::blend_color(color, c_text_strong(), 0.28)
-                                } else {
-                                    color
-                                },
+                                explorer_entry_color(
+                                    if selected {
+                                        crate::theme::blend_color(color, c_text_strong(), 0.28)
+                                    } else {
+                                        color
+                                    },
+                                    git_ignored,
+                                ),
                             ));
                             if let Some(status) = git_status {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -315,27 +359,87 @@ impl OxiApp {
             .map(|entry| entry.status)
     }
 
+    fn render_root_context_menu(&mut self, ui: &mut Ui, root: &Path) {
+        ui.set_min_width(210.0);
+        if ui.button("New File").clicked() {
+            self.start_file_operation(FileOperation::NewFile(root.to_path_buf()));
+            ui.close();
+        }
+        if ui.button("Rename...").clicked() {
+            self.start_file_operation(FileOperation::Rename(root.to_path_buf()));
+            ui.close();
+        }
+        if ui.button("Open Folder...").clicked() {
+            self.open_workspace_folder();
+            ui.close();
+        }
+        if ui.button("Copy Path").clicked() {
+            ui.ctx().copy_text(root.display().to_string());
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("New Folder...").clicked() {
+            self.start_file_operation(FileOperation::NewFolder(root.to_path_buf()));
+            ui.close();
+        }
+        if ui.button("Find in Folder...").clicked() {
+            self.conv.editor.find_open = true;
+            self.conv.editor.find_replace_open = false;
+            self.conv.editor.focus_find_next_frame = true;
+            ui.close();
+        }
+    }
+
     fn render_path_context_menu(&mut self, ui: &mut Ui, path: &Path, directory: bool) {
+        ui.set_min_width(if directory { 210.0 } else { 170.0 });
         if directory {
-            if ui.button("New file").clicked() {
+            if ui.button("New File").clicked() {
                 self.start_file_operation(FileOperation::NewFile(path.to_path_buf()));
                 ui.close();
             }
-            if ui.button("New folder").clicked() {
+            if ui.button("Rename...").clicked() {
+                self.start_file_operation(FileOperation::Rename(path.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Open Folder...").clicked() {
+                reveal_path_in_file_manager(path);
+                ui.close();
+            }
+            if ui.button("Copy Path").clicked() {
+                ui.ctx().copy_text(path.display().to_string());
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("New Folder...").clicked() {
                 self.start_file_operation(FileOperation::NewFolder(path.to_path_buf()));
                 ui.close();
             }
-        } else if ui.button("Open").clicked() {
-            self.open_editor_file(path.to_path_buf());
-            ui.close();
-        }
-        if ui.button("Rename").clicked() {
-            self.start_file_operation(FileOperation::Rename(path.to_path_buf()));
-            ui.close();
-        }
-        if ui.button("Delete").clicked() {
-            self.start_file_operation(FileOperation::Delete(path.to_path_buf()));
-            ui.close();
+            if ui.button("Delete Folder").clicked() {
+                self.start_file_operation(FileOperation::Delete(path.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Find in Folder...").clicked() {
+                self.conv.editor.find_open = true;
+                self.conv.editor.find_replace_open = false;
+                ui.close();
+            }
+        } else {
+            if ui.button("Rename...").clicked() {
+                self.start_file_operation(FileOperation::Rename(path.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Delete File").clicked() {
+                self.start_file_operation(FileOperation::Delete(path.to_path_buf()));
+                ui.close();
+            }
+            if ui.button(reveal_label()).clicked() {
+                reveal_path_in_file_manager(path);
+                ui.close();
+            }
+            if ui.button("Copy Path").clicked() {
+                ui.ctx().copy_text(path.display().to_string());
+                ui.close();
+            }
         }
     }
 
@@ -348,6 +452,7 @@ impl OxiApp {
             _ => String::new(),
         };
         self.conv.editor.file_operation = Some(operation);
+        self.conv.editor.focus_file_operation_next_frame = true;
         self.conv.editor.error = None;
     }
 
@@ -360,10 +465,19 @@ impl OxiApp {
         };
         ui.label(RichText::new(label).size(FS_TINY).color(c_text_muted()));
         if !destructive {
-            ui.add(
+            let response = ui.add(
                 TextEdit::singleline(&mut self.conv.editor.file_operation_name)
+                    .id_salt("workspace_file_operation_name")
                     .desired_width(f32::INFINITY),
             );
+            if std::mem::take(&mut self.conv.editor.focus_file_operation_next_frame) {
+                response.request_focus();
+            }
+            if response.has_focus()
+                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+            {
+                self.apply_file_operation(operation.clone());
+            }
         }
         ui.horizontal(|ui| {
             if ui
@@ -396,8 +510,14 @@ impl OxiApp {
             }
             FileOperation::Rename(path) if !invalid_name => {
                 let destination = path.parent().unwrap_or(Path::new(".")).join(name);
+                let renames_workspace_root =
+                    path == PathBuf::from(&self.active_workspace().root_path);
                 let result = std::fs::rename(&path, &destination);
                 if result.is_ok() {
+                    if renames_workspace_root {
+                        self.active_workspace_mut().root_path = destination.display().to_string();
+                        self.sync_workspaces_to_settings();
+                    }
                     for document in &mut self.conv.editor.documents {
                         if document.path == path {
                             document.path = destination.clone();
@@ -869,14 +989,34 @@ impl OxiApp {
                 }
             });
         }
-        if self.conv.editor.find_open {
-            self.render_find_replace(ui);
-        }
         if let Some(error) = self.conv.editor.error.clone() {
             ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
         }
 
-        if self.conv.editor.show_diff {
+        if self.conv.editor.find_open {
+            // One or two 28 px rows, with 7 px between them and exactly 2 px
+            // of vertical padding at both panel edges.
+            let panel_height = if self.conv.editor.find_replace_open {
+                67.0
+            } else {
+                32.0
+            };
+            let editor_height = (ui.available_height() - panel_height).max(80.0);
+            // The search panel is docked: no layout gap between it and the editor/status bar.
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), editor_height),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    if self.conv.editor.show_diff {
+                        self.render_editor_diff(ui);
+                    } else {
+                        self.render_editor_body(ui);
+                    }
+                },
+            );
+            self.render_find_replace(ui);
+        } else if self.conv.editor.show_diff {
             self.render_editor_diff(ui);
         } else {
             self.render_editor_body(ui);
@@ -1226,12 +1366,16 @@ impl OxiApp {
     }
 
     fn render_find_replace(&mut self, ui: &mut Ui) {
-        let query_changed = self.conv.editor.find_query != self.conv.editor.find_last_query;
+        let available_height = ui.available_height();
+        let query_changed = self.conv.editor.find_query != self.conv.editor.find_last_query
+            || self.conv.editor.find_case_sensitive
+                != self.conv.editor.find_last_case_sensitive;
         if query_changed {
             self.conv
                 .editor
                 .find_last_query
                 .clone_from(&self.conv.editor.find_query);
+            self.conv.editor.find_last_case_sensitive = self.conv.editor.find_case_sensitive;
             self.conv.editor.find_active_match = 0;
             self.conv.editor.find_select_pending = !self.conv.editor.find_query.is_empty();
         }
@@ -1239,7 +1383,13 @@ impl OxiApp {
             .conv
             .editor
             .active_document()
-            .map(|document| find_match_ranges(&document.content, &self.conv.editor.find_query))
+            .map(|document| {
+                find_match_ranges(
+                    &document.content,
+                    &self.conv.editor.find_query,
+                    self.conv.editor.find_case_sensitive,
+                )
+            })
             .unwrap_or_default();
         if ranges.is_empty() {
             self.conv.editor.find_active_match = 0;
@@ -1249,83 +1399,191 @@ impl OxiApp {
 
         let mut previous = false;
         let mut next = false;
+        let mut replace_one = false;
+        let mut replace_all = false;
         let mut close = false;
-        ui.horizontal(|ui| {
-            let find_response = ui.add(
-                TextEdit::singleline(&mut self.conv.editor.find_query)
-                    .id_salt("workspace_editor_find")
-                    .hint_text("Find"),
-            );
-            if query_changed {
-                find_response.request_focus();
-            }
-            previous = ui
-                .button("↑")
-                .on_hover_text("Previous match (Shift+Enter)")
-                .clicked();
-            next = ui.button("↓").on_hover_text("Next match (Enter)").clicked();
-            let position = if ranges.is_empty() {
-                "0/0".to_owned()
-            } else {
-                format!(
-                    "{}/{}",
-                    self.conv.editor.find_active_match + 1,
-                    ranges.len()
-                )
-            };
-            ui.label(position);
-            close = ui
-                .button(RichText::new(ICON_CLOSE).family(icon_font()).size(FS_TINY))
-                .on_hover_text("Close find and replace")
-                .clicked();
+        Frame::new()
+            .fill(c_bg_elevated_2())
+            .stroke(egui::Stroke::new(1.0, c_border_subtle()))
+            .inner_margin(Margin {
+                left: 12,
+                right: 12,
+                top: 2,
+                bottom: 2,
+            })
+            .show(ui, |ui| {
+                // Expand the frame through all remaining central-panel space so its lower
+                // edge sits directly against the persistent status bar.
+                ui.set_min_height((available_height - 4.0).max(0.0));
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 7.0);
+                const TOGGLE_WIDTH: f32 = 56.0;
+                const LABEL_WIDTH: f32 = 64.0;
+                const ACTION_WIDTH: f32 = 92.0;
+                const CLOSE_WIDTH: f32 = 28.0;
+                const ROW_HEIGHT: f32 = 28.0;
+                const FIELD_HEIGHT: f32 = 24.0;
+                let input_width = (ui.available_width()
+                    - TOGGLE_WIDTH
+                    - 32.0
+                    - LABEL_WIDTH
+                    - ACTION_WIDTH * 2.0
+                    - CLOSE_WIDTH
+                    - 7.0 * 8.0)
+                    .max(80.0);
 
-            if find_response.has_focus() {
-                let (enter, shift_enter) = ui.input_mut(|input| {
-                    let shift = input.modifiers.shift;
-                    let enter = input.consume_key(input.modifiers, egui::Key::Enter);
-                    (enter && !shift, enter && shift)
+                ui.horizontal(|ui| {
+                    let replace_toggle = ui
+                        .add_sized(
+                            [TOGGLE_WIDTH, 28.0],
+                            egui::Button::selectable(self.conv.editor.find_replace_open, "AB"),
+                        )
+                        .on_hover_text("Show replace field");
+                    if replace_toggle.clicked() {
+                        self.conv.editor.find_replace_open = !self.conv.editor.find_replace_open;
+                    }
+                    let case_toggle = ui
+                        .add_sized(
+                            [32.0, ROW_HEIGHT],
+                            egui::Button::selectable(
+                                self.conv.editor.find_case_sensitive,
+                                "Aa",
+                            ),
+                        )
+                        .on_hover_text(if self.conv.editor.find_case_sensitive {
+                            "Case sensitive"
+                        } else {
+                            "Case insensitive"
+                        });
+                    if case_toggle.clicked() {
+                        self.conv.editor.find_case_sensitive =
+                            !self.conv.editor.find_case_sensitive;
+                    }
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.label(
+                                RichText::new("Find:").size(FS_SMALL).color(c_text_muted()),
+                            );
+                        },
+                    );
+                    let find_response = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(input_width, ROW_HEIGHT),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.add_sized(
+                                    [input_width, FIELD_HEIGHT],
+                                    TextEdit::singleline(&mut self.conv.editor.find_query)
+                                        .id_salt("workspace_editor_find")
+                                        .margin(Margin::symmetric(6, 2))
+                                        .hint_text("Find"),
+                                )
+                            },
+                        )
+                        .inner;
+                    if query_changed
+                        || std::mem::take(&mut self.conv.editor.focus_find_next_frame)
+                    {
+                        find_response.request_focus();
+                    }
+                    next = ui
+                        .add_sized([ACTION_WIDTH, 28.0], egui::Button::new("Find"))
+                        .clicked();
+                    previous = ui
+                        .add_sized([ACTION_WIDTH, 28.0], egui::Button::new("Find Prev"))
+                        .clicked();
+                    close = ui
+                        .add_sized(
+                            [CLOSE_WIDTH, 28.0],
+                            egui::Button::new(icon_glyph_rich(
+                                ICON_CLOSE,
+                                FS_TINY,
+                                c_text_muted(),
+                            ))
+                            .frame(false),
+                        )
+                        .on_hover_text("Close find")
+                        .clicked();
+
+                    if find_response.has_focus() {
+                        let (enter, shift_enter) = ui.input_mut(|input| {
+                            let shift = input.modifiers.shift;
+                            let enter = input.consume_key(input.modifiers, egui::Key::Enter);
+                            (enter && !shift, enter && shift)
+                        });
+                        next |= enter;
+                        previous |= shift_enter;
+                    }
                 });
-                next |= enter;
-                previous |= shift_enter;
-            }
-        });
+
+                if self.conv.editor.find_replace_open {
+                    ui.horizontal(|ui| {
+                        ui.allocate_exact_size(
+                            egui::vec2(TOGGLE_WIDTH + 32.0 + 8.0, ROW_HEIGHT),
+                            egui::Sense::hover(),
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
+                            Layout::right_to_left(Align::Center),
+                            |ui| {
+                                ui.label(
+                                    RichText::new("Replace:")
+                                        .size(FS_SMALL)
+                                        .color(c_text_muted()),
+                                );
+                            },
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(input_width, ROW_HEIGHT),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.add_sized(
+                                    [input_width, FIELD_HEIGHT],
+                                    TextEdit::singleline(&mut self.conv.editor.replace_query)
+                                        .margin(Margin::symmetric(6, 2))
+                                        .hint_text("Replace"),
+                                );
+                            },
+                        );
+                        replace_one = ui
+                            .add_sized([ACTION_WIDTH, 28.0], egui::Button::new("Replace"))
+                            .clicked();
+                        replace_all = ui
+                            .add_sized([ACTION_WIDTH, 28.0], egui::Button::new("Replace All"))
+                            .clicked();
+                    });
+                }
+            });
+
         if !ranges.is_empty() && (next || previous) {
-            if previous {
-                self.conv.editor.find_active_match = if self.conv.editor.find_active_match == 0 {
-                    ranges.len() - 1
-                } else {
-                    self.conv.editor.find_active_match - 1
-                };
+            self.conv.editor.find_active_match = if previous {
+                self.conv.editor.find_active_match.checked_sub(1).unwrap_or(ranges.len() - 1)
             } else {
-                self.conv.editor.find_active_match =
-                    (self.conv.editor.find_active_match + 1) % ranges.len();
+                (self.conv.editor.find_active_match + 1) % ranges.len()
+            };
+            self.conv.editor.find_select_pending = true;
+        }
+        if (replace_one || replace_all) && !ranges.is_empty() {
+            let replacement = self.conv.editor.replace_query.clone();
+            let active = self.conv.editor.find_active_match;
+            if let Some(document) = self.conv.editor.active_document_mut() {
+                if replace_all {
+                    for range in ranges.iter().rev() {
+                        document.content.replace_range(range.clone(), &replacement);
+                    }
+                } else {
+                    document
+                        .content
+                        .replace_range(ranges[active].clone(), &replacement);
+                }
+            }
+            if replace_all {
+                self.conv.editor.find_active_match = 0;
             }
             self.conv.editor.find_select_pending = true;
         }
-
-        ui.horizontal(|ui| {
-            ui.add(TextEdit::singleline(&mut self.conv.editor.replace_query).hint_text("Replace"));
-            let replace_one = ui.button("Replace").clicked();
-            let replace_all = ui.button("Replace all").clicked();
-            if (replace_one || replace_all) && !ranges.is_empty() {
-                let replacement = self.conv.editor.replace_query.clone();
-                let find = self.conv.editor.find_query.clone();
-                let active = self.conv.editor.find_active_match;
-                if let Some(document) = self.conv.editor.active_document_mut() {
-                    if replace_all {
-                        document.content = document.content.replace(&find, &replacement);
-                    } else {
-                        document
-                            .content
-                            .replace_range(ranges[active].clone(), &replacement);
-                    }
-                }
-                if replace_all {
-                    self.conv.editor.find_active_match = 0;
-                }
-                self.conv.editor.find_select_pending = true;
-            }
-        });
         if close {
             self.conv.editor.find_open = false;
             self.conv.editor.find_select_pending = false;
@@ -1353,6 +1611,7 @@ impl OxiApp {
             find_match_ranges(
                 &self.conv.editor.documents[index].content,
                 &self.conv.editor.find_query,
+                self.conv.editor.find_case_sensitive,
             )
         } else {
             Vec::new()
@@ -2513,6 +2772,46 @@ fn paint_minimap(
     }
 }
 
+fn explorer_entry_color(color: egui::Color32, git_ignored: bool) -> egui::Color32 {
+    if git_ignored {
+        crate::theme::blend_color(color, c_bg_sidebar(), 0.48)
+    } else {
+        color
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_label() -> &'static str {
+    "Reveal in Finder"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reveal_label() -> &'static str {
+    "Reveal in File Manager"
+}
+
+fn reveal_path_in_file_manager(path: &Path) {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(path);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer");
+        command.arg(format!("/select,{}", path.display()));
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path.parent().unwrap_or(path));
+        command
+    };
+    let _ = command.spawn();
+}
+
 fn paint_explorer_row(ui: &Ui, rect: egui::Rect, hovered: bool, selected: bool) {
     let fill = if selected {
         c_row_active()
@@ -2566,13 +2865,40 @@ fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
     Some(score)
 }
 
-fn find_match_ranges(content: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+fn find_match_ranges(
+    content: &str,
+    query: &str,
+    case_sensitive: bool,
+) -> Vec<std::ops::Range<usize>> {
     if query.is_empty() {
         return Vec::new();
     }
-    content
-        .match_indices(query)
-        .map(|(start, matched)| start..start + matched.len())
+    if case_sensitive {
+        return content
+            .match_indices(query)
+            .map(|(start, matched)| start..start + matched.len())
+            .collect();
+    }
+
+    // Unicode lowercasing can expand a character and change byte lengths. Build the folded
+    // string together with a source span for every folded character, then map matches back.
+    let mut folded_content = String::new();
+    let mut source_spans = Vec::new();
+    for (start, character) in content.char_indices() {
+        let end = start + character.len_utf8();
+        for folded in character.to_lowercase() {
+            folded_content.push(folded);
+            source_spans.push(start..end);
+        }
+    }
+    let folded_query = query.to_lowercase();
+    folded_content
+        .match_indices(&folded_query)
+        .filter_map(|(start, matched)| {
+            let start_char = folded_content[..start].chars().count();
+            let end_char = start_char + matched.chars().count();
+            Some(source_spans.get(start_char)?.start..source_spans.get(end_char - 1)?.end)
+        })
         .collect()
 }
 
@@ -2731,11 +3057,20 @@ fn should_ignore(root: &Path, path: &Path, directory: bool, patterns: &[String])
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
+    (directory && ALWAYS_SKIPPED_DIRS.contains(&name))
+        || is_gitignored(root, path, directory, patterns)
+}
+
+fn is_gitignored(root: &Path, path: &Path, directory: bool, patterns: &[String]) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
     if name == ".gitignore" {
         return false;
     }
     if directory && ALWAYS_SKIPPED_DIRS.contains(&name) {
-        return true;
+        return false;
     }
     let relative = path
         .strip_prefix(root)
@@ -2785,8 +3120,13 @@ mod tests {
 
     #[test]
     fn search_ranges_use_non_overlapping_matches() {
-        assert_eq!(find_match_ranges("one two one", "one"), vec![0..3, 8..11]);
-        assert!(find_match_ranges("anything", "").is_empty());
+        assert_eq!(
+            find_match_ranges("one two one", "one", true),
+            vec![0..3, 8..11]
+        );
+        assert_eq!(find_match_ranges("One ONE", "one", false), vec![0..3, 4..7]);
+        assert!(find_match_ranges("One ONE", "one", true).is_empty());
+        assert!(find_match_ranges("anything", "", false).is_empty());
     }
 
     #[test]

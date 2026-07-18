@@ -80,13 +80,20 @@ pub struct EditorState {
     pub diff_tab_active: bool,
     pub error: Option<String>,
     pub find_open: bool,
+    /// Whether the bottom search panel also shows replacement controls.
+    pub find_replace_open: bool,
     pub find_query: String,
+    /// Match letter casing exactly when searching.
+    pub find_case_sensitive: bool,
     pub replace_query: String,
     /// Selected occurrence in the active document's current search results.
     pub find_active_match: usize,
     pub find_last_query: String,
+    pub find_last_case_sensitive: bool,
     /// Move the editor selection/caret to `find_active_match` on the next render.
     pub find_select_pending: bool,
+    /// Move keyboard focus into the Find input on its next render.
+    pub focus_find_next_frame: bool,
     /// Select and reveal this byte range after opening a definition target.
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
@@ -99,6 +106,8 @@ pub struct EditorState {
     pub show_diff: bool,
     pub file_operation: Option<FileOperation>,
     pub file_operation_name: String,
+    /// Move keyboard focus into the inline file/folder name field on its next render.
+    pub focus_file_operation_next_frame: bool,
     /// Cmd/Ctrl+P workspace file picker state.
     pub file_picker_open: bool,
     pub file_picker_query: String,
@@ -377,6 +386,8 @@ pub struct ConversationState {
     pub sidebar_mode: SidebarMode,
     /// Directories expanded in the workspace explorer. Children are read only when expanded.
     pub explorer_expanded: HashSet<PathBuf>,
+    /// Workspace roots are open by default; this records roots explicitly folded by the user.
+    pub explorer_collapsed_roots: HashSet<PathBuf>,
     pub editor: EditorState,
     /// Settings page left-nav width (independent of the chat sidebar).
     pub settings_sidebar_width: f32,

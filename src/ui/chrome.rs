@@ -10,8 +10,8 @@ use crate::theme::*;
 mod copy_modal;
 pub use copy_modal::*;
 
-pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
-    Frame::new()
+pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    let response = Frame::new()
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
         .corner_radius(RADIUS_BUTTON)
@@ -24,9 +24,10 @@ pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) {
                     .font(FontId::proportional(FS_TINY))
                     .desired_width(ui.available_width())
                     .hint_text(hint),
-            );
-        });
-    ui.add_space(3.0);
+            )
+        })
+        .inner;
+    response
 }
 
 /// Framed single-line settings input — matches the sidebar field language so settings

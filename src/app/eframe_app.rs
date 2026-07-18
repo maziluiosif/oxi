@@ -163,6 +163,7 @@ impl OxiApp {
             open_file,
             save_file,
             find_file,
+            find_replace,
             goto_definition,
             stop,
             escape,
@@ -176,6 +177,7 @@ impl OxiApp {
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::H),
                 i.modifiers.is_none() && i.key_pressed(Key::F12),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
                 i.key_pressed(Key::Escape),
@@ -203,9 +205,14 @@ impl OxiApp {
         if save_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {
             self.save_editor_file();
         }
-        if find_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {
+        if (find_file || find_replace)
+            && !self.conv.settings_open
+            && self.conv.editor.active_document().is_some()
+        {
             self.conv.editor.find_open = true;
+            self.conv.editor.find_replace_open = find_replace;
             self.conv.editor.find_select_pending = !self.conv.editor.find_query.is_empty();
+            self.conv.editor.focus_find_next_frame = true;
             ctx.memory_mut(|memory| {
                 memory.request_focus(egui::Id::new("workspace_editor_find"));
             });

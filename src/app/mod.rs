@@ -138,6 +138,7 @@ impl OxiApp {
                 sidebar_width: settings.sidebar_width,
                 sidebar_mode: state::SidebarMode::default(),
                 explorer_expanded: std::collections::HashSet::new(),
+                explorer_collapsed_roots: std::collections::HashSet::new(),
                 editor: state::EditorState::default(),
                 settings_sidebar_width: 220.0,
                 terminal_open: settings.terminal_open,
