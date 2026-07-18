@@ -479,6 +479,7 @@ impl OxiApp {
             .position(|document| document.path == safe_path)
         {
             self.conv.editor.active = Some(index);
+            self.conv.editor.diff_tab_active = false;
             return;
         }
         let metadata = match std::fs::metadata(&safe_path) {
@@ -505,7 +506,8 @@ impl OxiApp {
                 self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
                 self.conv.editor.error = None;
                 self.conv.editor.show_diff = false;
-                self.conv.diff_view_open = false;
+                // An open git diff stays reachable as an editor tab; just show the file.
+                self.conv.editor.diff_tab_active = false;
             }
             Err(error) => {
                 self.conv.editor.error = Some(format!("Could not open text file: {error}"))
@@ -713,6 +715,13 @@ impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
         self.check_external_file_changes();
         self.render_editor_tabs(ui);
+        if self.conv.editor.diff_tab_active
+            && self.conv.diff_view_open
+            && self.conv.git.diff.is_some()
+        {
+            self.render_editor_git_diff(ui);
+            return;
+        }
         if self.conv.editor.active_document().is_none() {
             return;
         }
@@ -750,6 +759,10 @@ impl OxiApp {
         let mut save = false;
         let mut reveal = false;
         let mut toggle_diff = false;
+        let mut select_git_diff = false;
+        let mut close_git_diff = false;
+        let git_diff_tab = self.conv.diff_view_open && self.conv.git.diff.is_some();
+        let git_diff_active = git_diff_tab && self.conv.editor.diff_tab_active;
         ScrollArea::horizontal()
             .id_salt("editor_tabs")
             .show(ui, |ui| {
@@ -766,7 +779,7 @@ impl OxiApp {
                         } else {
                             name.into_owned()
                         };
-                        let active = self.conv.editor.active == Some(index);
+                        let active = !git_diff_active && self.conv.editor.active == Some(index);
                         let font = FontId::proportional(FS_SMALL);
                         let label_width = ui.fonts_mut(|fonts| {
                             fonts
@@ -828,11 +841,13 @@ impl OxiApp {
                         if close_response.hovered() || hovered {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
-                        if close_response.clicked() {
+                        if close_response.clicked() || response.middle_clicked() {
                             close = Some(index);
                         } else if response.clicked() {
                             select = Some(index);
                         }
+                        let response =
+                            response.on_hover_text(document.path.display().to_string());
                         response.context_menu(|ui| {
                             if ui.button("Save").clicked() {
                                 select = Some(index);
@@ -844,7 +859,7 @@ impl OxiApp {
                                 reveal = true;
                                 ui.close();
                             }
-                            if ui.button("Toggle diff").clicked() {
+                            if ui.button("Unsaved changes diff").clicked() {
                                 select = Some(index);
                                 toggle_diff = true;
                                 ui.close();
@@ -855,10 +870,98 @@ impl OxiApp {
                             }
                         });
                     }
+
+                    // Git diff pseudo-tab: keeps the diff one click away from the
+                    // editable file tabs instead of replacing the whole chat area.
+                    if git_diff_tab {
+                        let title = self
+                            .conv
+                            .git
+                            .current_diff_path
+                            .as_deref()
+                            .map(|path| path.rsplit_once('/').map_or(path, |(_, file)| file))
+                            .unwrap_or("diff")
+                            .to_owned();
+                        let label = format!("Diff: {title}");
+                        let font = FontId::proportional(FS_SMALL);
+                        let label_width = ui.fonts_mut(|fonts| {
+                            fonts
+                                .layout_no_wrap(label.clone(), font.clone(), c_text())
+                                .rect
+                                .width()
+                        });
+                        let tab_width = label_width + 42.0;
+                        let (rect, response) = ui
+                            .allocate_exact_size(egui::vec2(tab_width, 28.0), egui::Sense::click());
+                        let hovered = ui.rect_contains_pointer(rect);
+                        let fill = if git_diff_active {
+                            c_row_active()
+                        } else if hovered {
+                            c_row_hover()
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        if fill != egui::Color32::TRANSPARENT {
+                            ui.painter().rect_filled(
+                                rect,
+                                egui::CornerRadius::same(RADIUS_ROW),
+                                fill,
+                            );
+                        }
+                        ui.painter().text(
+                            egui::pos2(rect.left() + 10.0, rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            label,
+                            font,
+                            if git_diff_active {
+                                c_text_strong()
+                            } else {
+                                c_text_muted()
+                            },
+                        );
+                        let close_rect = egui::Rect::from_center_size(
+                            egui::pos2(rect.right() - 13.0, rect.center().y),
+                            egui::vec2(22.0, rect.height()),
+                        );
+                        let close_response = ui.interact(
+                            close_rect,
+                            ui.id().with("editor_git_diff_tab_close"),
+                            egui::Sense::click(),
+                        );
+                        ui.painter().text(
+                            close_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            ICON_CLOSE,
+                            FontId::new(FS_TINY, icon_font()),
+                            if close_response.hovered() {
+                                c_accent()
+                            } else {
+                                c_text_faint()
+                            },
+                        );
+                        if close_response.hovered() || hovered {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if close_response.clicked() || response.middle_clicked() {
+                            close_git_diff = true;
+                        } else if response.clicked() {
+                            select_git_diff = true;
+                        }
+                        if let Some(path) = self.conv.git.current_diff_path.as_deref() {
+                            response.on_hover_text(path);
+                        }
+                    }
                 });
             });
         if let Some(index) = select {
             self.conv.editor.active = Some(index);
+            self.conv.editor.diff_tab_active = false;
+        }
+        if select_git_diff {
+            self.conv.editor.diff_tab_active = true;
+        }
+        if close_git_diff {
+            self.close_editor_git_diff();
         }
         if save {
             self.save_editor_file();
@@ -1215,11 +1318,7 @@ impl OxiApp {
                             // translucent wash over the glyphs; depending on the backend it looked
                             // opaque and left only our whitespace markers visible.
                             if let Some(selection) = selection {
-                                let selection_color = crate::theme::blend_color(
-                                    c_bg_main(),
-                                    active_palette().selection_bg,
-                                    0.74,
-                                );
+                                let selection_color = crate::theme::editor_selection_fill();
                                 let selection_painter =
                                     ui.painter().with_clip_rect(output.text_clip_rect);
                                 for rect in
@@ -1446,6 +1545,92 @@ impl OxiApp {
                 self.conv.editor.error = Some("Rust definition not found.".into());
             }
         }
+    }
+
+    fn close_editor_git_diff(&mut self) {
+        self.request(crate::git::GitOp::ClearDiff);
+        self.conv.diff_view_open = false;
+        self.conv.editor.diff_tab_active = false;
+    }
+
+    /// Open the file behind the currently shown git diff in an editable tab.
+    pub(crate) fn open_current_diff_file(&mut self) {
+        let Some(relative) = self.conv.git.current_diff_path.clone() else {
+            return;
+        };
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        self.open_editor_file(root.join(relative));
+    }
+
+    /// The git diff rendered as an editor tab: files stay open and editable next to it.
+    fn render_editor_git_diff(&mut self, ui: &mut Ui) {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.close_editor_git_diff();
+            return;
+        }
+        let Some((title, diff_text)) = self.conv.git.diff.clone() else {
+            return;
+        };
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(RichText::new("Diff").size(FS_H3).color(c_text()).strong());
+            ui.label(
+                RichText::new(&title)
+                    .size(FS_SMALL)
+                    .color(c_text_muted())
+                    .monospace(),
+            );
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
+                        .on_hover_text("Close diff (Esc)")
+                        .clicked()
+                    {
+                        self.close_editor_git_diff();
+                    }
+                    if self.conv.git.current_diff_path.is_some()
+                        && crate::ui::chrome::mini_button_icon_enabled(
+                            ui,
+                            ICON_PROMPTS,
+                            "Edit file",
+                            true,
+                        )
+                        .on_hover_text("Open this file in an editable tab")
+                        .clicked()
+                    {
+                        self.open_current_diff_file();
+                    }
+                },
+            );
+        });
+        ui.add_space(2.0);
+        crate::ui::chrome::hairline(ui);
+        ui.add_space(4.0);
+
+        let wrap_width = ui.available_width().max(200.0);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&title, &mut hasher);
+        std::hash::Hash::hash(&diff_text, &mut hasher);
+        let key = (std::hash::Hasher::finish(&hasher), wrap_width.to_bits());
+        let cached = self
+            .conv
+            .diff_job_cache
+            .as_ref()
+            .is_some_and(|(hash, width, _)| (*hash, *width) == key);
+        if !cached {
+            let job = crate::ui::diff::diff_layout_job(&diff_text, wrap_width);
+            self.conv.diff_job_cache = Some((key.0, key.1, job));
+        }
+        ScrollArea::vertical()
+            .id_salt("editor_git_diff_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if let Some((_, _, job)) = &self.conv.diff_job_cache {
+                    ui.add(egui::Label::new(job.clone()).selectable(true));
+                }
+            });
     }
 
     fn render_editor_diff(&mut self, ui: &mut Ui) {
@@ -1791,20 +1976,52 @@ fn paint_minimap(
     ui.painter()
         .rect_filled(scrollbar_rect, 0.0, c_bg_elevated());
 
+    // Fixed-scale rows, VS Code style. Stretching the whole file across the available height made
+    // short files look sparse and crushed large files into sub-pixel noise; neither resembled the
+    // source. When the file outgrows the strip, the map scrolls in sync with the editor instead.
+    const ROW_HEIGHT: f32 = 2.0;
+    const TAB_WIDTH: usize = 4;
+    const MIN_COLUMNS: usize = 60;
+
+    fn advance_columns(mut column: usize, text: &str) -> usize {
+        for character in text.chars() {
+            column += match character {
+                '\t' => TAB_WIDTH - column % TAB_WIDTH,
+                _ => 1,
+            };
+        }
+        column
+    }
+
     // Keep the minimap's line count identical to the editor's, including a final empty line.
-    // Every line must fit in the available height: clamping rows to at least one pixel used to
-    // clip everything after roughly `minimap_rect.height()` lines in larger files.
     let lines = content.split('\n').collect::<Vec<_>>();
     // Only section ranges and colors are used by the minimap. Reuse the editor's cached or
     // incrementally adjusted highlight so the minimap neither reparses nor loses colors on input.
     let job = highlight_job;
-    let row_height = minimap_rect.height() / lines.len().max(1) as f32;
-    let max_chars = lines
+    let row_height = ROW_HEIGHT;
+    let natural_height = lines.len() as f32 * row_height;
+    // Tab-expanded columns so tab-indented files keep their editor silhouette; the floor keeps
+    // short-lined files from being stretched to the full strip width.
+    let max_columns = lines
         .iter()
-        .map(|line| line.chars().count())
+        .map(|line| advance_columns(0, line))
         .max()
         .unwrap_or(1)
-        .max(1);
+        .max(MIN_COLUMNS);
+
+    let max_y = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
+    let exact_viewport_fraction =
+        (scroll.inner_rect.height() / scroll.content_size.y.max(1.0)).clamp(0.0, 1.0);
+    let offset_fraction = if max_y > 0.0 {
+        (scroll.state.offset.y / max_y).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let map_offset = offset_fraction * (natural_height - minimap_rect.height()).max(0.0);
+    let line_top =
+        |line: usize| minimap_rect.top() + line as f32 * row_height - map_offset;
+
+    let map_painter = ui.painter().with_clip_rect(minimap_rect);
     let mut line_index = 0usize;
     let mut column = 0usize;
     for section in &job.sections {
@@ -1817,62 +2034,63 @@ fn paint_minimap(
         };
         for fragment in section_text.split_inclusive('\n') {
             let text = fragment.trim_end_matches('\n');
-            let leading = text
-                .chars()
-                .take_while(|character| character.is_whitespace())
-                .count();
-            let visible = text.trim().chars().count();
-            let y = minimap_rect.top() + line_index as f32 * row_height;
-            if y < minimap_rect.bottom() && visible > 0 {
-                let width = (visible as f32 / max_chars as f32 * minimap_rect.width()).max(1.0);
-                let x = minimap_rect.left()
-                    + (column + leading) as f32 / max_chars as f32 * minimap_rect.width();
-                ui.painter().hline(
-                    x..=(x + width).min(minimap_rect.right()),
-                    y,
-                    egui::Stroke::new(
-                        row_height.min(1.35),
-                        crate::theme::blend_color(section.format.color, c_bg_main(), 0.58),
-                    ),
-                );
+            let y = line_top(line_index);
+            if y >= minimap_rect.top() - row_height && y < minimap_rect.bottom() {
+                let leading_text: String = text
+                    .chars()
+                    .take_while(|character| character.is_whitespace())
+                    .collect();
+                let visible_start = advance_columns(column, &leading_text);
+                let visible_end = advance_columns(visible_start, text.trim());
+                if visible_end > visible_start {
+                    let scale = minimap_rect.width() / max_columns as f32;
+                    let x = minimap_rect.left() + visible_start as f32 * scale;
+                    let width = ((visible_end - visible_start) as f32 * scale).max(1.0);
+                    map_painter.hline(
+                        x..=(x + width).min(minimap_rect.right()),
+                        y,
+                        egui::Stroke::new(
+                            1.35,
+                            crate::theme::blend_color(section.format.color, c_bg_main(), 0.58),
+                        ),
+                    );
+                }
             }
             if fragment.ends_with('\n') {
                 line_index += 1;
                 column = 0;
             } else {
-                column += text.chars().count();
+                column = advance_columns(column, text);
             }
         }
     }
 
-    let max_y = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
-    let exact_viewport_fraction =
-        (scroll.inner_rect.height() / scroll.content_size.y.max(1.0)).clamp(0.0, 1.0);
-    let offset_fraction = if max_y > 0.0 {
-        (scroll.state.offset.y / max_y).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-
     if let Some((start_line, end_line)) = selected_lines {
-        let top = minimap_rect.top() + start_line as f32 * row_height;
-        let bottom =
-            (minimap_rect.top() + (end_line + 1) as f32 * row_height).min(minimap_rect.bottom());
-        let selection = active_palette().selection_stroke;
-        ui.painter().rect_filled(
-            egui::Rect::from_min_max(
-                egui::pos2(minimap_rect.left(), top),
-                egui::pos2(minimap_rect.right(), bottom.max(top + 1.0)),
-            ),
-            0.0,
-            egui::Color32::from_rgba_unmultiplied(selection.r(), selection.g(), selection.b(), 38),
-        );
+        let top = line_top(start_line).max(minimap_rect.top());
+        let bottom = line_top(end_line + 1).min(minimap_rect.bottom());
+        if bottom > minimap_rect.top() && top < minimap_rect.bottom() {
+            let selection = active_palette().selection_stroke;
+            map_painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(minimap_rect.left(), top),
+                    egui::pos2(minimap_rect.right(), bottom.max(top + 1.0)),
+                ),
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(
+                    selection.r(),
+                    selection.g(),
+                    selection.b(),
+                    38,
+                ),
+            );
+        }
     }
 
     // Show which part of the file is currently visible without overpowering the code map.
-    let viewport_height = (minimap_rect.height() * exact_viewport_fraction).max(8.0);
+    let content_height = natural_height.min(minimap_rect.height());
+    let viewport_height = (natural_height * exact_viewport_fraction).max(8.0);
     let viewport_top =
-        minimap_rect.top() + offset_fraction * (minimap_rect.height() - viewport_height).max(0.0);
+        minimap_rect.top() + offset_fraction * (content_height - viewport_height).max(0.0);
     let viewport_rect = egui::Rect::from_min_size(
         egui::pos2(minimap_rect.left() + 1.0, viewport_top),
         egui::vec2((minimap_rect.width() - 2.0).max(0.0), viewport_height),
@@ -1909,9 +2127,10 @@ fn paint_minimap(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if response.clicked() || response.dragged() {
-        response
-            .interact_pointer_pos()
-            .map(|position| ((position.y - whole_rect.top()) / whole_rect.height()).clamp(0.0, 1.0))
+        // Map through the (possibly scrolled) map space so clicking a line jumps to that line.
+        response.interact_pointer_pos().map(|position| {
+            ((position.y - whole_rect.top() + map_offset) / natural_height.max(1.0)).clamp(0.0, 1.0)
+        })
     } else {
         None
     }

@@ -79,8 +79,8 @@ pub const ICON_EXPLORER: &str = "\u{f0770}";
 pub const ICON_FILE: &str = "\u{f15c}";
 /// Terminal — toggle the embedded terminal panel (`nf-fa-terminal`).
 pub const ICON_TERMINAL: &str = "\u{f120}";
-/// Git — source-control panel and header (`nf-fa-git`).
-pub const ICON_GIT: &str = "\u{f1d3}";
+/// Git — source-control panel and header (`nf-cod-source_control`, the VS Code glyph).
+pub const ICON_GIT: &str = "\u{ea68}";
 /// Rotate / refresh (`nf-fa-refresh`).
 pub const ICON_REFRESH: &str = "\u{f021}";
 /// Arrow pointing up — send message button (`nf-fa-arrow-up`).

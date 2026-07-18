@@ -73,6 +73,10 @@ pub struct EditorState {
     pub active: Option<usize>,
     /// Active tab remembered while the chat/agent view is shown.
     pub hidden_active: Option<usize>,
+    /// The git diff pseudo-tab is the selected editor tab. The diff itself lives in
+    /// `git.diff`; this only tracks which tab the editor shows so files stay editable
+    /// while a diff is open.
+    pub diff_tab_active: bool,
     pub error: Option<String>,
     pub find_open: bool,
     pub find_query: String,

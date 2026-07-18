@@ -70,18 +70,7 @@ pub(super) fn selectable_layout_job(ui: &mut Ui, job: LayoutJob, allow_select: b
         return;
     }
 
-    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-    let (rect, response) =
-        ui.allocate_exact_size(galley.size(), eframe::egui::Sense::click_and_drag());
-    let galley_pos = rect.left_top();
-    eframe::egui::text_selection::LabelSelectionState::label_text_selection(
-        ui,
-        &response,
-        galley_pos,
-        galley,
-        ui.style().visuals.text_color(),
-        Stroke::NONE,
-    );
+    crate::theme::selectable_text_job(ui, job);
 }
 
 pub(super) fn block_state_tag(streaming: bool) -> &'static str {
