@@ -91,6 +91,11 @@ pub struct EditorState {
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
     pub goto_definition_requested: bool,
+    /// Definition-navigation history, independent from the order of open tabs.
+    pub navigation_back: Vec<(PathBuf, std::ops::Range<usize>)>,
+    pub navigation_forward: Vec<(PathBuf, std::ops::Range<usize>)>,
+    /// Last caret byte observed in the active editor document.
+    pub navigation_cursor_byte: usize,
     pub show_diff: bool,
     pub file_operation: Option<FileOperation>,
     pub file_operation_name: String,

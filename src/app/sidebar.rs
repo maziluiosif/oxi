@@ -601,7 +601,7 @@ impl OxiApp {
                                 CHAT_VIEW_MARGIN_LEFT as i8
                             },
                             right: CHAT_VIEW_MARGIN_RIGHT as i8,
-                            top: CHAT_FRAME_TOP as i8,
+                            top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
                             bottom: CHAT_FRAME_BOTTOM as i8,
                         })
                         .show(ui, |ui| {
