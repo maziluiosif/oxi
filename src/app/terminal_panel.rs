@@ -54,11 +54,13 @@ impl OxiApp {
         if resp.hovered() || resp.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
         }
-        if resp.dragged() {
-            let dy = ui.input(|i| i.pointer.delta().y);
-            // Dragging the top edge upward (negative dy) grows the panel.
+        if resp.dragged()
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            // Position-based like the sidebar sep (see there for why deltas jitter).
+            // The panel's bottom edge is pinned, so height = bottom - pointer.
             self.conv.terminal_height =
-                (self.conv.terminal_height - dy).clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
+                (ui.max_rect().bottom() - pos.y).clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
             self.conv.settings.terminal_height = self.conv.terminal_height;
         }
         if resp.drag_stopped() {

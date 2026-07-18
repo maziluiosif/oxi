@@ -30,7 +30,16 @@ pub async fn resolve_base_url(
     };
     let key = config.provider.slug();
     let creds = load_ssh_credentials();
-    let password = creds.get(key).unwrap_or_default();
+    let password = creds
+        .get(key)
+        // Remote HF was formerly represented by Local HF + Remote SSH. Preserve that
+        // credential during the provider split, including for chat/model-list tunnels.
+        .or_else(|| {
+            (config.provider == crate::settings::LlmProviderKind::RemoteHf)
+                .then(|| creds.get(crate::settings::LlmProviderKind::LocalHf.slug()))
+                .flatten()
+        })
+        .unwrap_or_default();
     let ok = tunnels
         .ensure_tunnel(key, ssh, password)
         .await

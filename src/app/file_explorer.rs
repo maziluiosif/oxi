@@ -38,13 +38,10 @@ impl OxiApp {
                 .map(|tx| tx.send(crate::git::GitOp::Refresh));
         }
 
+        // Whole row right-to-left: the icons stay pinned to the right edge at any
+        // sidebar width, and the trailing label truncates instead of being overlapped
+        // when the sidebar is dragged down to its minimum width.
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("EXPLORER")
-                    .size(FS_TINY)
-                    .strong()
-                    .color(c_text_muted()),
-            );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, false)
                     .on_hover_text("Open settings")
@@ -76,6 +73,17 @@ impl OxiApp {
                 {
                     self.start_file_operation(FileOperation::NewFolder(root.clone()));
                 }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("EXPLORER")
+                                .size(FS_TINY)
+                                .strong()
+                                .color(c_text_muted()),
+                        )
+                        .truncate(),
+                    );
+                });
             });
         });
         ui.add_space(6.0);
@@ -190,6 +198,9 @@ impl OxiApp {
                             ));
                             if let Some(status) = git_status {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    // Keep clear of the floating scrollbar, which is
+                                    // painted over the row's right edge.
+                                    ui.add_space(10.0);
                                     ui.label(
                                         RichText::new(status)
                                             .monospace()
@@ -244,6 +255,9 @@ impl OxiApp {
                             ));
                             if let Some(status) = git_status {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    // Keep clear of the floating scrollbar, which is
+                                    // painted over the row's right edge.
+                                    ui.add_space(10.0);
                                     ui.label(
                                         RichText::new(status)
                                             .monospace()
@@ -846,8 +860,7 @@ impl OxiApp {
                         } else if response.clicked() {
                             select = Some(index);
                         }
-                        let response =
-                            response.on_hover_text(document.path.display().to_string());
+                        let response = response.on_hover_text(document.path.display().to_string());
                         response.context_menu(|ui| {
                             if ui.button("Save").clicked() {
                                 select = Some(index);
@@ -1581,29 +1594,26 @@ impl OxiApp {
                     .color(c_text_muted())
                     .monospace(),
             );
-            ui.with_layout(
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
-                        .on_hover_text("Close diff (Esc)")
-                        .clicked()
-                    {
-                        self.close_editor_git_diff();
-                    }
-                    if self.conv.git.current_diff_path.is_some()
-                        && crate::ui::chrome::mini_button_icon_enabled(
-                            ui,
-                            ICON_PROMPTS,
-                            "Edit file",
-                            true,
-                        )
-                        .on_hover_text("Open this file in an editable tab")
-                        .clicked()
-                    {
-                        self.open_current_diff_file();
-                    }
-                },
-            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
+                    .on_hover_text("Close diff (Esc)")
+                    .clicked()
+                {
+                    self.close_editor_git_diff();
+                }
+                if self.conv.git.current_diff_path.is_some()
+                    && crate::ui::chrome::mini_button_icon_enabled(
+                        ui,
+                        ICON_PROMPTS,
+                        "Edit file",
+                        true,
+                    )
+                    .on_hover_text("Open this file in an editable tab")
+                    .clicked()
+                {
+                    self.open_current_diff_file();
+                }
+            });
         });
         ui.add_space(2.0);
         crate::ui::chrome::hairline(ui);
@@ -2018,8 +2028,7 @@ fn paint_minimap(
         0.0
     };
     let map_offset = offset_fraction * (natural_height - minimap_rect.height()).max(0.0);
-    let line_top =
-        |line: usize| minimap_rect.top() + line as f32 * row_height - map_offset;
+    let line_top = |line: usize| minimap_rect.top() + line as f32 * row_height - map_offset;
 
     let map_painter = ui.painter().with_clip_rect(minimap_rect);
     let mut line_index = 0usize;

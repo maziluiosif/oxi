@@ -57,6 +57,7 @@ pub enum ConfirmAction {
     DeleteWorkspace { wi: usize },
     GitDiscard { paths: Vec<String> },
     DeleteLocalModel { id: String },
+    DeleteRemoteModel { id: String, path: String },
     DeleteVoiceModel { id: String },
 }
 
@@ -260,14 +261,27 @@ pub struct LocalModelsUiState {
     pub download_label: String,
     pub download_progress: Option<(u64, Option<u64>)>,
     pub downloaded: Vec<crate::local_models::DownloadedModel>,
+    /// Models present on the Remote SSH host — kept separate from the local manifest so
+    /// switching the Local HF compute location swaps the "Downloaded models" list.
+    pub remote_downloaded: Vec<crate::local_models::DownloadedModel>,
+    pub remote_list_loading: bool,
+    /// SSH target ("user@host:port") `remote_downloaded` was fetched for; `None` = never
+    /// fetched. A mismatch with the current SSH config triggers a refetch.
+    pub remote_list_for: Option<String>,
     pub runtime_path: String,
     pub runtime_installing: bool,
     pub runtime_install_progress: Option<(u64, Option<u64>)>,
     pub runtime_port: u16,
     pub context_size: usize,
     pub gpu_layers: i32,
+    /// Model running in the local managed llama-server process.
     pub running_model_id: Option<String>,
+    /// Model running in the SSH-managed llama-server process. Kept separate so an SSH
+    /// connection to this machine cannot make Local HF appear to run the remote model.
+    pub remote_running_model_id: Option<String>,
     pub runtime_status: Option<String>,
+    /// Runtime diagnostics produced by Remote HF operations only.
+    pub remote_runtime_status: Option<String>,
 }
 
 pub struct LocalRuntimeState {
@@ -412,7 +426,10 @@ pub struct ConversationState {
     /// receiver is overwritten.
     pub model_rxs: Vec<std::sync::mpsc::Receiver<ModelFetchMsg>>,
     pub local_models: LocalModelsUiState,
-    pub local_model_rx: Option<std::sync::mpsc::Receiver<crate::local_models::LocalModelMsg>>,
+    /// Receivers for local/remote model operations. Several operations can overlap (for
+    /// example, an automatic SSH listing and a HuggingFace search), so replacing a single
+    /// receiver here would lose the older operation's result and leave its loading flag stuck.
+    pub local_model_rxs: Vec<std::sync::mpsc::Receiver<crate::local_models::LocalModelMsg>>,
     pub local_runtime: Option<LocalRuntimeState>,
     /// Draft (in-memory only) SSH passwords for Remote SSH compute targets, keyed by
     /// provider kind. Loaded lazily from the credential store on first edit, written
@@ -438,7 +455,7 @@ pub struct ConversationState {
     /// UI state for Settings → Voice + the composer mic button.
     pub voice_ui: VoiceUiState,
     /// Per-download-operation channel for the voice model catalog (drained each frame),
-    /// same take/put-back pattern as `local_model_rx`.
+    /// using the same take/put-back pattern as the local-model receivers.
     pub voice_model_rx: Option<std::sync::mpsc::Receiver<crate::voice_models::VoiceModelMsg>>,
     /// Long-lived channel from the background [`crate::voice_engine::VoiceManager`] thread
     /// (created once at startup, never disconnects — `OxiApp::voice` keeps a sender alive

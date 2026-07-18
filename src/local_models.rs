@@ -60,6 +60,11 @@ pub enum LocalModelMsg {
     RuntimeInstallDone(Result<String, String>),
     RemoteRuntimeInstallDone(Result<String, String>),
     RemoteDownloadDone(Result<DownloadedModel, String>),
+    RemoteListDone(Result<crate::local_models_remote::RemoteModelList, String>),
+    RemoteDeleteDone {
+        id: String,
+        result: Result<(), String>,
+    },
     RemoteStartDone {
         model: DownloadedModel,
         result: Result<String, String>,

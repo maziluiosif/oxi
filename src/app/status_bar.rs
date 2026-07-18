@@ -47,9 +47,9 @@ impl OxiApp {
                         && self.conv.sidebar_mode == crate::app::state::SidebarMode::Explorer;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_EXPLORER, 20.0, explorer_on)
                         .on_hover_text(if explorer_on {
-                            "Hide workspace explorer"
+                            "Hide workspace explorer (Cmd/Ctrl+E)"
                         } else {
-                            "Open workspace explorer"
+                            "Open workspace explorer (Cmd/Ctrl+E)"
                         })
                         .clicked()
                     {
@@ -68,21 +68,6 @@ impl OxiApp {
                                 crate::app::state::SettingsExitAction::ToggleTerminal,
                             );
                         }
-                        let branches_on =
-                            self.conv.git_open && self.conv.git_tab == GitTab::Branches;
-                        if crate::ui::chrome::icon_button_plain(ui, ICON_BRANCH, 20.0, branches_on)
-                            .on_hover_text(if branches_on {
-                                "Hide git panel"
-                            } else {
-                                "Open git branches"
-                            })
-                            .clicked()
-                        {
-                            self.request_settings_exit(
-                                crate::app::state::SettingsExitAction::ToggleGitBranches,
-                            );
-                        }
-
                         let changes_on = self.conv.git_open && self.conv.git_tab == GitTab::Changes;
                         if crate::ui::chrome::icon_button_plain(ui, ICON_GIT, 20.0, changes_on)
                             .on_hover_text(if changes_on {
@@ -98,6 +83,8 @@ impl OxiApp {
                         }
 
                         if self.conv.git.repo {
+                            let branches_on =
+                                self.conv.git_open && self.conv.git_tab == GitTab::Branches;
                             let mut label = self.conv.git.branch.clone();
                             if self.conv.git.ahead > 0 {
                                 label.push_str(&format!(" \u{2191}{}", self.conv.git.ahead));
@@ -105,12 +92,31 @@ impl OxiApp {
                             if self.conv.git.behind > 0 {
                                 label.push_str(&format!(" \u{2193}{}", self.conv.git.behind));
                             }
-                            ui.label(
-                                egui::RichText::new(label)
-                                    .size(FS_TINY)
-                                    .color(c_text_muted()),
-                            )
-                            .on_hover_text("Current branch");
+                            if ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(label).size(FS_TINY).color(
+                                            if branches_on {
+                                                c_accent()
+                                            } else {
+                                                c_text_muted()
+                                            },
+                                        ),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(if branches_on {
+                                    "Hide git panel"
+                                } else {
+                                    "Open git branches"
+                                })
+                                .clicked()
+                            {
+                                self.request_settings_exit(
+                                    crate::app::state::SettingsExitAction::ToggleGitBranches,
+                                );
+                            }
                         }
                     });
                 });
