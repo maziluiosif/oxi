@@ -1435,9 +1435,12 @@ impl OxiApp {
                 .clone_from(&self.conv.editor.find_query);
             self.conv.editor.find_last_case_sensitive = self.conv.editor.find_case_sensitive;
             self.conv.editor.find_active_match = 0;
-            self.conv.editor.find_has_navigated = false;
-            // Editing the query only refreshes highlights. Navigation is explicit via
-            // Enter, Find, Find Prev, or a repeated Cmd/Ctrl+F.
+            // Typing previews and reveals the first result, but deliberately does not update
+            // the editor TextEdit's cursor state: doing so can steal focus from the Find input.
+            self.conv.editor.find_has_navigated = !self.conv.editor.find_query.is_empty();
+            self.conv.editor.find_select_pending = false;
+            self.conv.editor.find_reveal_pending = !self.conv.editor.find_query.is_empty();
+            self.conv.editor.find_focus_editor_pending = false;
         }
         let ranges = self
             .conv
@@ -1631,9 +1634,11 @@ impl OxiApp {
                 0
             };
             self.conv.editor.find_has_navigated = true;
-            self.conv.editor.find_select_pending = true;
-            // Like VS Code, Enter/Shift+Enter and the navigation buttons move through
-            // matches while keyboard focus remains in the Find field.
+            // While Find is open, navigation changes the active highlight and scroll only.
+            // The editor caret is committed when Find closes, avoiding a competing TextEdit
+            // cursor update that could take keyboard focus from the query field.
+            self.conv.editor.find_select_pending = false;
+            self.conv.editor.find_reveal_pending = true;
             self.conv.editor.find_focus_editor_pending = false;
             // Restore the Find TextEdit after single-line Enter surrendered focus. This is
             // applied through the actual widget Response on the next frame (not a guessed Id).
@@ -1656,7 +1661,8 @@ impl OxiApp {
             if replace_all {
                 self.conv.editor.find_active_match = 0;
             }
-            self.conv.editor.find_select_pending = true;
+            self.conv.editor.find_select_pending = false;
+            self.conv.editor.find_reveal_pending = true;
         }
         if close {
             self.conv.editor.find_open = false;
@@ -1704,9 +1710,12 @@ impl OxiApp {
                 .min(find_ranges.len() - 1)
         });
         let select_find_match = self.conv.editor.find_select_pending && active_find_match.is_some();
+        let reveal_find_match = (select_find_match || self.conv.editor.find_reveal_pending)
+            && active_find_match.is_some();
         let focus_editor_for_find =
             std::mem::take(&mut self.conv.editor.find_focus_editor_pending);
         self.conv.editor.find_select_pending = false;
+        self.conv.editor.find_reveal_pending = false;
         let logical_line_count = self.conv.editor.documents[index]
             .content
             .split('\n')
@@ -1839,14 +1848,17 @@ impl OxiApp {
                                 output.state.store(ui.ctx(), output.response.id);
                                 if focus_editor_for_find {
                                     output.response.request_focus();
-                                } else if find_caret_target.is_some() {
-                                    // Programmatically updating the editor cursor can make egui
-                                    // transfer focus to this TextEdit. Explicitly restore Find so
-                                    // Enter continues to mean Find Next.
-                                    ui.ctx().memory_mut(|memory| {
-                                        memory.request_focus(egui::Id::new("workspace_editor_find"));
-                                    });
                                 }
+                            }
+
+                            // Scrolling only needs match geometry. Keep it separate from cursor
+                            // mutation so live query updates cannot disturb the focused Find field.
+                            let reveal_target = selection_target.or_else(|| {
+                                reveal_find_match
+                                    .then(|| &find_ranges[active_find_match.unwrap_or(0)])
+                            });
+                            if let Some(byte_range) = reveal_target {
+                                let end = document.content[..byte_range.end].chars().count();
                                 let caret = output
                                     .galley
                                     .pos_from_cursor(egui::text::CCursor {

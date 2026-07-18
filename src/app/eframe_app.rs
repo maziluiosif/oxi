@@ -233,7 +233,8 @@ impl OxiApp {
                         0
                     };
                     self.conv.editor.find_has_navigated = true;
-                    self.conv.editor.find_select_pending = true;
+                    self.conv.editor.find_select_pending = false;
+                    self.conv.editor.find_reveal_pending = true;
                     // Cmd/Ctrl+F is Find Next and must keep keyboard focus in the actual
                     // Find widget after the editor scroll/caret update runs this frame.
                     self.conv.editor.find_focus_editor_pending = false;
@@ -244,6 +245,7 @@ impl OxiApp {
                 self.conv.editor.find_replace_open = find_replace;
                 // Opening Find only focuses its field; it must not move the document.
                 self.conv.editor.find_select_pending = false;
+                self.conv.editor.find_reveal_pending = false;
                 self.conv.editor.find_has_navigated = false;
                 self.conv.editor.focus_find_next_frame = true;
                 ctx.memory_mut(|memory| {

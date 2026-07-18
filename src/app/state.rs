@@ -94,6 +94,8 @@ pub struct EditorState {
     pub find_has_navigated: bool,
     /// Move the editor caret to `find_active_match` on the next render.
     pub find_select_pending: bool,
+    /// Reveal `find_active_match` without moving the editor caret or taking focus from Find.
+    pub find_reveal_pending: bool,
     /// Return keyboard focus to the editor after Find is closed, preserving its current match.
     pub find_focus_editor_pending: bool,
     /// Move keyboard focus into the Find input on its next render.
