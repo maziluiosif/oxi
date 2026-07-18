@@ -145,7 +145,9 @@ impl OxiApp {
                             .provider(LlmProviderKind::RemoteHf)
                             .ssh_config()
                             .map(|cfg| cfg.remote_runtime_port)
-                            .unwrap_or_else(|| LlmProviderKind::RemoteHf.default_remote_runtime_port())
+                            .unwrap_or_else(|| {
+                                LlmProviderKind::RemoteHf.default_remote_runtime_port()
+                            })
                     } else {
                         self.conv.local_models.runtime_port
                     };
