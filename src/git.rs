@@ -736,23 +736,28 @@ fn integrate_upstream(repo: &Repository) -> Result<(), String> {
         return Ok(());
     }
 
+    // Updating the branch reference changes what both the index and worktree are compared
+    // against. Do not move it while either contains local changes: besides risking an overwrite,
+    // a safe checkout after moving the reference can leave the old index behind and make every
+    // pulled file appear staged.
+    if !repo.statuses(None).map_err(err)?.is_empty() {
+        return Err(
+            "The working tree has uncommitted changes. Commit, stash, or discard them before pulling."
+                .into(),
+        );
+    }
+
     let refname = format!("refs/heads/{branch}");
     if analysis.is_fast_forward() {
         repo.reference(&refname, upstream_oid, true, "pull: fast-forward")
             .map_err(err)?;
         repo.set_head(&refname).map_err(err)?;
+        // The repository was verified clean above. A forced checkout is intentional here: HEAD
+        // already points at the fetched commit, so CheckoutBuilder::safe() treats the still-old
+        // index as local staged changes and preserves it instead of completing the fast-forward.
         let mut checkout = CheckoutBuilder::new();
-        checkout.safe();
+        checkout.force();
         return repo.checkout_head(Some(&mut checkout)).map_err(err);
-    }
-
-    // A normal merge may touch many files. Refuse it when local staged/unstaged changes exist,
-    // rather than relying on checkout conflict heuristics and surprising the user.
-    if !repo.statuses(None).map_err(err)?.is_empty() {
-        return Err(
-            "Local and remote histories diverged, but the working tree has uncommitted changes. Commit or discard them, then Pull/Push again."
-                .into(),
-        );
     }
 
     let original = repo.head().and_then(|h| h.peel_to_commit()).map_err(err)?;
