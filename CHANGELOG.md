@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-19
+
+### Added
+- Case-sensitive find and replace with Cmd/Ctrl+H
+- Collapsible roots and richer explorer context menus in file explorer
+- Back and forward history for definition jumps in editor tab navigation
+- New-file and open-tab controls to the tab strip
+- Preview selected files while navigating the file picker
+- Git diff pseudo-tab with edit-file action and Cmd/Ctrl+Shift+B shortcut
+- Rust go-to-definition with Tree-sitter symbol resolution, F12 navigation, and command-click support
+- Dedicated Remote HF provider for SSH-hosted GGUF downloads and model management
+- Ignored entries displayed dimmed instead of hidden in explorer
+- Active line highlighting and improved gutter spacing
+- Git markers aligned with unsaved line changes
+
+### Changed
+- Docked and refined editor search panel
+- Separated local and remote runtime state, ports, and model catalogs
+- Improved model response parsing and concurrent operation handling
+- Stabilized picker sizing, scrolling, and hover selection
+- Improved minimap scaling, scrolling, and tab alignment
+- Refined active tab styling and header layout
+- Unified selectable text styling with editor selections
+
+### Fixed
+- Preserve find input focus while revealing search results
+- Stabilized navigation and scrolling with separate match scrolling from editor caret updates
+- Keep Find focused while navigating and restore editor on close
+- Overlay Find without resizing editor viewport
+- Reveal committed files in Explorer while ignoring picker previews
+- Hold conversation scroll at bottom during layout settling
+- Avoid previewing files before picker input begins
+- Restore previous tab when picker selection is canceled
+- Preserve index during fast-forward pull
+- Reject all pulls when working tree has uncommitted changes
+- Force checkout after advancing HEAD to refresh index and worktree
+- Fix composer drafts, panel resizing, and explorer shortcuts/layout
+- Support middle-click tab closing and path tooltips
+
+
 ## [0.18.0] - 2026-07-16
 
 ### Added
@@ -449,7 +489,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/maziluiosif/oxi/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/maziluiosif/oxi/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/maziluiosif/oxi/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/maziluiosif/oxi/compare/v0.15.1...v0.16.0
