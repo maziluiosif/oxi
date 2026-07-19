@@ -336,6 +336,7 @@ impl OxiApp {
                 let response = response.on_hover_text(path.display().to_string());
                 if response.clicked() {
                     self.open_editor_file(path.clone());
+                    self.conv.editor.focus_editor_next_frame = true;
                 }
                 response.context_menu(|ui| self.render_path_context_menu(ui, &path, false));
             }
@@ -989,6 +990,9 @@ impl OxiApp {
             self.conv.editor.file_picker_preview_created = false;
             self.conv.editor.file_picker_open = false;
             self.reveal_editor_file_in_explorer(&path);
+            // The file becomes a permanent tab: hand focus to the editor now that the
+            // picker window (which owned keyboard focus) is gone.
+            self.conv.editor.focus_editor_next_frame = true;
         } else if !open {
             self.cancel_file_picker();
         } else {
@@ -1391,6 +1395,7 @@ impl OxiApp {
         if let Some(index) = select {
             self.conv.editor.active = Some(index);
             self.conv.editor.diff_tab_active = false;
+            self.conv.editor.focus_editor_next_frame = true;
             if let Some(path) = self
                 .conv
                 .editor
@@ -1426,6 +1431,9 @@ impl OxiApp {
                 } else {
                     Some(index.min(self.conv.editor.documents.len() - 1))
                 };
+                if self.conv.editor.active.is_some() {
+                    self.conv.editor.focus_editor_next_frame = true;
+                }
             }
         }
     }
@@ -1712,6 +1720,8 @@ impl OxiApp {
         let reveal_find_match = (select_find_match || self.conv.editor.find_reveal_pending)
             && active_find_match.is_some();
         let focus_editor_for_find = std::mem::take(&mut self.conv.editor.find_focus_editor_pending);
+        let focus_editor_requested = focus_editor_for_find
+            || std::mem::take(&mut self.conv.editor.focus_editor_next_frame);
         self.conv.editor.find_select_pending = false;
         self.conv.editor.find_reveal_pending = false;
         let logical_line_count = self.conv.editor.documents[index]
@@ -1844,7 +1854,7 @@ impl OxiApp {
                                 };
                                 output.state.cursor.set_char_range(Some(cursor_range));
                                 output.state.store(ui.ctx(), output.response.id);
-                                if focus_editor_for_find {
+                                if focus_editor_requested {
                                     output.response.request_focus();
                                 }
                             }
@@ -1867,7 +1877,7 @@ impl OxiApp {
                                 ui.scroll_to_rect(caret, Some(egui::Align::Center));
                             }
 
-                            if focus_editor_for_find && find_caret_target.is_none() {
+                            if focus_editor_requested && find_caret_target.is_none() {
                                 output.response.request_focus();
                             }
 
@@ -2195,6 +2205,9 @@ impl OxiApp {
                 self.conv.editor.navigation_forward.clear();
                 self.open_editor_file(location.path.clone());
                 self.conv.editor.navigation_target = Some((location.path, location.byte_range));
+                // Jumping to a definition opens/reuses a tab without focus: hand focus back
+                // so the caret is live at the target selection, ready to keep editing.
+                self.conv.editor.focus_editor_next_frame = true;
                 self.conv.editor.error = None;
             }
             None => {
@@ -2225,6 +2238,8 @@ impl OxiApp {
         }
         self.open_editor_file(path.clone());
         self.conv.editor.navigation_target = Some((path, range));
+        // History jumps land on a selection like definition jumps; keep the caret live.
+        self.conv.editor.focus_editor_next_frame = true;
     }
 
     fn close_editor_git_diff(&mut self) {
@@ -2240,6 +2255,7 @@ impl OxiApp {
         };
         let root = PathBuf::from(&self.active_workspace().root_path);
         self.open_editor_file(root.join(relative));
+        self.conv.editor.focus_editor_next_frame = true;
     }
 
     /// The git diff rendered as an editor tab: files stay open and editable next to it.

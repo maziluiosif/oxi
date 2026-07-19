@@ -21,7 +21,7 @@ impl OxiApp {
             self.conv.focus_terminal_next_frame = true;
         } else {
             self.conv.focus_terminal_next_frame = false;
-            self.conv.focus_chat_input_next_frame = true;
+            self.focus_active_view_next_frame();
         }
         self.save_settings_quietly();
     }

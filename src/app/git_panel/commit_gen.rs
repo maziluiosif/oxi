@@ -14,7 +14,7 @@ impl OxiApp {
         if self.conv.git_open && self.conv.git_tab == tab {
             self.conv.git_open = false;
             self.conv.settings.git_open = false;
-            self.conv.focus_chat_input_next_frame = true;
+            self.focus_active_view_next_frame();
             if let Err(e) = self.conv.settings.save() {
                 self.run_state_mut(self.active_session_key()).stream_error =
                     Some(format!("Save settings: {e}"));
@@ -33,7 +33,7 @@ impl OxiApp {
         }
         self.ensure_git_channels();
         let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
-        self.conv.focus_chat_input_next_frame = true;
+        self.focus_active_view_next_frame();
     }
 
     pub(crate) fn bind_git_ctx(&mut self, ctx: &egui::Context) {

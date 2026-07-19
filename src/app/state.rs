@@ -98,6 +98,8 @@ pub struct EditorState {
     pub find_focus_editor_pending: bool,
     /// Move keyboard focus into the Find input on its next render.
     pub focus_find_next_frame: bool,
+    /// Return keyboard focus to the editor on its next render (Escape, definition jumps).
+    pub focus_editor_next_frame: bool,
     /// Select and reveal this byte range after opening a definition target.
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
@@ -166,6 +168,23 @@ impl EditorState {
     pub fn any_dirty(&self) -> bool {
         self.documents.iter().any(EditorDocument::is_dirty)
     }
+
+    /// Choose which widget should own keyboard focus given the current view: the editor
+    /// when a document is showing, the chat composer otherwise. Callers then set the
+    /// matching `focus_*_next_frame` flag instead of assuming the chat is visible.
+    pub fn focus_target(&self) -> EditorFocusTarget {
+        if self.active.is_some() {
+            EditorFocusTarget::Editor
+        } else {
+            EditorFocusTarget::ChatInput
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EditorFocusTarget {
+    Editor,
+    ChatInput,
 }
 
 /// One project root and its chat tabs.

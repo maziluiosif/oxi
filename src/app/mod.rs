@@ -60,6 +60,16 @@ pub struct OxiApp {
 }
 
 impl OxiApp {
+    /// Move keyboard focus to whatever view is actually showing: the editor when a
+    /// document tab is active, the chat composer otherwise. Use this instead of setting
+    /// `focus_chat_input_next_frame` directly so focus never lands on a hidden widget.
+    pub(crate) fn focus_active_view_next_frame(&mut self) {
+        match self.conv.editor.focus_target() {
+            state::EditorFocusTarget::Editor => self.conv.editor.focus_editor_next_frame = true,
+            state::EditorFocusTarget::ChatInput => self.conv.focus_chat_input_next_frame = true,
+        }
+    }
+
     pub fn new() -> Self {
         crate::agent::tools::cleanup_stale_spill_files();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -373,7 +383,7 @@ impl OxiApp {
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
         self.conv.scroll_to_bottom_once = true;
-        self.conv.focus_chat_input_next_frame = true;
+        self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
         self.persist_active_session_selection();
         self.refresh_git_cwd();
@@ -393,7 +403,7 @@ impl OxiApp {
             && session_idx == self.conv.workspaces[workspace_idx].active
         {
             self.ensure_active_session_loaded();
-            self.conv.focus_chat_input_next_frame = true;
+            self.focus_active_view_next_frame();
             return;
         }
         let workspace_changed = workspace_idx != self.conv.active_workspace;
@@ -410,7 +420,7 @@ impl OxiApp {
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
         self.conv.scroll_to_bottom_once = true;
-        self.conv.focus_chat_input_next_frame = true;
+        self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
         self.persist_active_session_selection();
         if workspace_changed {

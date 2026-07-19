@@ -263,10 +263,10 @@ impl OxiApp {
         if stop && self.any_waiting_response() {
             self.send_abort();
         }
-        // Escape: leave settings, or hand focus back to the composer. Skip when the
-        // terminal panel is showing so Escape stays available to the PTY (the terminal
-        // is hidden while Settings is open, so Escape works there regardless). Escape
-        // for the shared confirm modal is handled by the modal itself.
+        // Escape: leave settings, close the editor find panel, or hand focus back to the
+        // editor/composer. Skip when the terminal panel is showing so Escape stays available to
+        // the PTY (the terminal is hidden while Settings is open, so Escape works there
+        // regardless). Escape for the shared confirm modal is handled by the modal itself.
         if escape && self.conv.editor.file_picker_open {
             self.cancel_file_picker();
         } else if escape && self.conv.editor.find_open {
@@ -274,22 +274,24 @@ impl OxiApp {
             // Preserve/apply the current result before returning focus to the editor.
             self.conv.editor.find_select_pending = self.conv.editor.find_has_navigated;
             self.conv.editor.find_focus_editor_pending = true;
-        } else if escape
-            && (!self.conv.terminal_open || self.conv.settings_open)
-            && !self.confirm_prompt_open()
-        {
-            if self.conv.settings_open {
-                if self.conv.settings_exit_prompt.is_some() {
-                    // Modal already up: Escape means "Stay".
-                    self.conv.settings_exit_prompt = None;
-                } else if self.settings_dirty() {
-                    self.request_settings_exit(super::state::SettingsExitAction::BackToChat);
-                } else {
-                    self.close_settings_page();
-                }
+        } else if escape && self.conv.settings_open {
+            if self.conv.settings_exit_prompt.is_some() {
+                // Modal already up: Escape means "Stay".
+                self.conv.settings_exit_prompt = None;
+            } else if self.settings_dirty() {
+                self.request_settings_exit(super::state::SettingsExitAction::BackToChat);
             } else {
-                self.conv.focus_chat_input_next_frame = true;
+                self.close_settings_page();
             }
+        } else if escape
+            && !self.conv.terminal_open
+            && !self.confirm_prompt_open()
+            && self.conv.editor.active_document().is_some()
+        {
+            // Typing in the editor: keep Escape inside the editing surface.
+            self.conv.editor.focus_editor_next_frame = true;
+        } else if escape && !self.conv.terminal_open && !self.confirm_prompt_open() {
+            self.focus_active_view_next_frame();
         }
     }
 }
