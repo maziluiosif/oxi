@@ -10,6 +10,7 @@ mod local_models_remote;
 mod markdown;
 mod model;
 mod oauth;
+mod rust_goto;
 mod secrets;
 mod session_store;
 mod settings;

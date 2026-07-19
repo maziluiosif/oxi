@@ -37,7 +37,7 @@ impl OxiApp {
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_width(search_w);
-                    sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
+                    let _ = sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
                 },
             );
 
@@ -90,7 +90,8 @@ impl OxiApp {
             }
         });
 
-        ui.expand_to_include_rect(ui.max_rect());
+        // The outer sidebar allocation already owns the full fixed width/height. Expanding
+        // again from content made Conversations report a subtly different size than Explorer.
     }
 
     fn render_sidebar_session_list(&mut self, ui: &mut Ui) {
@@ -489,7 +490,10 @@ impl OxiApp {
                     |ui| {
                         use eframe::egui::Label;
                         let title_color = if selected { c_text() } else { c_text_muted() };
-                        let resp = ui.add(
+                        // `Label::truncate` already provides the complete text on hover.
+                        // Adding another tooltip here caused two differently styled tooltip
+                        // layers, especially when the hover-only delete action overlapped it.
+                        ui.add(
                             Label::new(
                                 RichText::new(title.as_str())
                                     .size(FS_SMALL)
@@ -498,18 +502,6 @@ impl OxiApp {
                             .truncate()
                             .halign(Align::LEFT),
                         );
-                        let full_w = ui.fonts_mut(|f| {
-                            f.layout_no_wrap(
-                                title.clone(),
-                                FontId::proportional(FS_SMALL),
-                                title_color,
-                            )
-                            .rect
-                            .width()
-                        });
-                        if full_w > title_w {
-                            resp.on_hover_text(title.as_str());
-                        }
                     },
                 );
             });
@@ -589,16 +581,29 @@ impl OxiApp {
                 egui::vec2(chat_w, full_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    let editor_open = self.conv.editor.active_document().is_some();
                     Frame::new()
                         .fill(c_bg_main())
                         .inner_margin(Margin {
-                            left: CHAT_VIEW_MARGIN_LEFT as i8,
+                            // The editor gutter starts directly at the sidebar boundary; the chat
+                            // view keeps its usual breathing room.
+                            left: if editor_open {
+                                0
+                            } else {
+                                CHAT_VIEW_MARGIN_LEFT as i8
+                            },
                             right: CHAT_VIEW_MARGIN_RIGHT as i8,
-                            top: CHAT_FRAME_TOP as i8,
-                            bottom: CHAT_FRAME_BOTTOM as i8,
+                            top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
+                            // The editor owns a bottom-docked find panel, so it must meet the
+                            // status bar without the chat view's composer breathing room.
+                            bottom: if editor_open {
+                                0
+                            } else {
+                                CHAT_FRAME_BOTTOM as i8
+                            },
                         })
                         .show(ui, |ui| {
-                            if self.conv.editor.active_document().is_some() {
+                            if editor_open {
                                 self.render_text_editor(ui);
                                 return;
                             }
@@ -716,10 +721,12 @@ impl OxiApp {
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        if sep.dragged() {
-            // Dragging the left edge left (negative dx) grows the panel.
-            let dx = ui.input(|i| i.pointer.delta().x);
-            self.conv.git_width = (self.conv.git_width - dx).clamp(
+        if sep.dragged()
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            // Position-based like the sidebar sep (see there for why deltas jitter).
+            // The panel's right edge is pinned to the window, so width = right - pointer.
+            self.conv.git_width = (ui.max_rect().right() - pos.x).clamp(
                 crate::app::git_panel::GIT_W_MIN,
                 crate::app::git_panel::GIT_W_MAX,
             );
@@ -753,9 +760,14 @@ impl OxiApp {
             ),
         );
         let sep = ui.interact(sep_rect, ui.id().with("sidebar_sep"), Sense::drag());
-        if sep.dragged() {
-            let delta_x = ui.input(|i| i.pointer.delta().x);
-            self.conv.sidebar_width = (self.conv.sidebar_width + delta_x).clamp(min_w, max_w);
+        if sep.dragged()
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            // Track the pointer's absolute position, not per-frame deltas: deltas keep
+            // applying while the width is clamped, so over-dragging past the minimum
+            // desyncs the edge from the pointer and the sidebar jitters on any
+            // back-and-forth pointer movement.
+            self.conv.sidebar_width = (pos.x - ui.min_rect().left()).clamp(min_w, max_w);
             self.conv.settings.sidebar_width = self.conv.sidebar_width;
         }
         if sep.drag_stopped()

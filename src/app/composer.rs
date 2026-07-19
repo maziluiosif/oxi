@@ -660,10 +660,17 @@ impl OxiApp {
                         if ui.selectable_label(selected, kind.label()).clicked() && !selected {
                             self.conv.settings.active_provider = *kind;
                             self.save_settings_quietly();
-                            // Refresh the model list for the newly active provider so the
-                            // model dropdown offers the full catalog; the config keeps
-                            // whatever model id it last had selected in the meantime.
-                            self.spawn_model_fetch(ui.ctx(), *kind);
+                            // Remote/local HF choices come from its downloaded-model list;
+                            // `/v1/models` only reports the one model currently loaded.
+                            if !matches!(
+                                kind,
+                                crate::settings::LlmProviderKind::LocalHf
+                                    | crate::settings::LlmProviderKind::RemoteHf
+                            ) {
+                                self.spawn_model_fetch(ui.ctx(), *kind);
+                            } else {
+                                self.refresh_local_hf_model_choices();
+                            }
                         }
                     }
                 });
@@ -675,12 +682,26 @@ impl OxiApp {
         // model list (falling back to just the current model id so it's never empty).
         let kind = self.conv.settings.active_provider;
         let current = self.conv.settings.active_config().model_id.clone();
-        let fetched = self
-            .conv
-            .fetched_models
-            .get(&kind)
-            .map(|f| f.models.clone())
-            .unwrap_or_default();
+        // Local HF's runtime endpoint only exposes the model currently loaded. Its
+        // composer dropdown must instead use every downloaded model, otherwise refreshing
+        // `/v1/models` makes all switch targets except the old running model disappear.
+        let fetched = if matches!(
+            kind,
+            crate::settings::LlmProviderKind::LocalHf | crate::settings::LlmProviderKind::RemoteHf
+        ) {
+            let downloaded = if kind == crate::settings::LlmProviderKind::RemoteHf {
+                &self.conv.local_models.remote_downloaded
+            } else {
+                &self.conv.local_models.downloaded
+            };
+            downloaded.iter().map(|m| m.id.clone()).collect()
+        } else {
+            self.conv
+                .fetched_models
+                .get(&kind)
+                .map(|f| f.models.clone())
+                .unwrap_or_default()
+        };
         let items: Vec<String> = if !fetched.is_empty() {
             fetched
         } else if !current.is_empty() {
@@ -689,6 +710,7 @@ impl OxiApp {
             Vec::new()
         };
 
+        let mut selected_model: Option<String> = None;
         ui.scope(|ui| {
             quiet_combo_style(ui);
 
@@ -706,9 +728,9 @@ impl OxiApp {
                 .height(300.0)
                 .show_ui(ui, |ui| {
                     for m in &items {
-                        if ui.selectable_label(m == &current, m.clone()).clicked() {
-                            self.conv.settings.provider_mut(kind).model_id = m.clone();
-                            self.save_settings_quietly();
+                        if ui.selectable_label(m == &current, m.clone()).clicked() && m != &current
+                        {
+                            selected_model = Some(m.clone());
                         }
                     }
                 });
@@ -716,6 +738,23 @@ impl OxiApp {
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(&current);
         });
+
+        if let Some(model_id) = selected_model {
+            if matches!(
+                kind,
+                crate::settings::LlmProviderKind::LocalHf
+                    | crate::settings::LlmProviderKind::RemoteHf
+            ) {
+                // HF selection is a runtime operation, not merely a config edit. Keep the
+                // currently active id until llama-server confirms that the replacement is
+                // healthy. Otherwise a failed remote switch leaves the failed id selected
+                // and the user cannot retry it from this combo without switching away first.
+                self.start_selected_local_hf_model(ui.ctx(), &model_id);
+            } else {
+                self.conv.settings.provider_mut(kind).model_id = model_id;
+                self.save_settings_quietly();
+            }
+        }
     }
 
     /// Image attachment thumbnails shown at the top of the composer, each with a

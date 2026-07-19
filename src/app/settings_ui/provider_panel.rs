@@ -228,7 +228,9 @@ impl OxiApp {
                 LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
                 LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
                 LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
-                LlmProviderKind::LocalHf => "Optional (llama-server usually ignores it)",
+                LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf => {
+                    "Optional (llama-server usually ignores it)"
+                }
                 LlmProviderKind::ClaudeCodeAcp => {
                     "Optional ANTHROPIC_API_KEY (else Claude Code's own login is used)"
                 }
@@ -262,10 +264,22 @@ impl OxiApp {
             }
         });
 
-        // ── Compute target / Local HF ──────────────────────────────────────
+        // ── Compute target / managed HF runtimes ───────────────────────────
         if kind == LlmProviderKind::LocalHf {
+            self.render_local_hf_section(ui, kind);
+        } else if kind == LlmProviderKind::RemoteHf {
+            if !matches!(
+                self.conv.settings.provider(kind).location,
+                ComputeLocation::RemoteSsh(_)
+            ) {
+                self.conv.settings.provider_mut(kind).location =
+                    ComputeLocation::RemoteSsh(SshConfig {
+                        remote_runtime_port: kind.default_remote_runtime_port(),
+                        ..SshConfig::default()
+                    });
+            }
             self.render_compute_target_section(ui, kind);
-            self.render_local_hf_section(ui);
+            self.render_local_hf_section(ui, kind);
         } else if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
             self.render_compute_target_section(ui, kind);
         }
@@ -285,19 +299,21 @@ impl OxiApp {
                 self.conv.settings.provider(kind).location,
                 ComputeLocation::RemoteSsh(_)
             );
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                if pill_tab(ui, "Local", !is_remote) && is_remote {
-                    self.conv.settings.provider_mut(kind).location = ComputeLocation::Local;
-                }
-                if pill_tab(ui, "Remote (SSH)", is_remote) && !is_remote {
-                    self.conv.settings.provider_mut(kind).location =
-                        ComputeLocation::RemoteSsh(SshConfig {
-                            remote_runtime_port: kind.default_remote_runtime_port(),
-                            ..SshConfig::default()
-                        });
-                }
-            });
+            if kind != LlmProviderKind::RemoteHf {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if pill_tab(ui, "Local", !is_remote) && is_remote {
+                        self.conv.settings.provider_mut(kind).location = ComputeLocation::Local;
+                    }
+                    if pill_tab(ui, "Remote (SSH)", is_remote) && !is_remote {
+                        self.conv.settings.provider_mut(kind).location =
+                            ComputeLocation::RemoteSsh(SshConfig {
+                                remote_runtime_port: kind.default_remote_runtime_port(),
+                                ..SshConfig::default()
+                            });
+                    }
+                });
+            }
 
             if let ComputeLocation::RemoteSsh(cfg) =
                 &mut self.conv.settings.provider_mut(kind).location
@@ -305,7 +321,7 @@ impl OxiApp {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(
-                        if kind == LlmProviderKind::LocalHf {
+                        if kind == LlmProviderKind::RemoteHf {
                             "Runs the oxi-managed HF model on another host over SSH. oxi can install llama-server, download GGUF files, start/stop the runtime, and tunnel chat to it."
                         } else {
                             "Runs the model on another host (e.g. a machine on your LAN) over SSH. The runtime must listen on 127.0.0.1 there; oxi forwards a local port to it."
@@ -343,16 +359,19 @@ impl OxiApp {
                         field_label_first(ui, "SSH user");
                         settings_text_field_width(ui, &mut cfg.user, "e.g. ioan", 220.0);
                     });
-                    ui.add_space(8.0);
-                    ui.vertical(|ui| {
-                        field_label_first(ui, "Remote runtime port");
-                        let mut rport_str = cfg.remote_runtime_port.to_string();
-                        if settings_text_field_width(ui, &mut rport_str, "11434", 80.0).changed()
-                            && let Ok(p) = rport_str.trim().parse::<u16>()
-                        {
-                            cfg.remote_runtime_port = p;
-                        }
-                    });
+                    if kind != LlmProviderKind::RemoteHf {
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            field_label_first(ui, "Remote runtime port");
+                            let mut rport_str = cfg.remote_runtime_port.to_string();
+                            if settings_text_field_width(ui, &mut rport_str, "11434", 80.0)
+                                .changed()
+                                && let Ok(p) = rport_str.trim().parse::<u16>()
+                            {
+                                cfg.remote_runtime_port = p;
+                            }
+                        });
+                    }
                 });
             }
         });
@@ -370,7 +389,17 @@ impl OxiApp {
             .entry(kind)
             .or_insert_with(|| {
                 let creds = crate::compute::load_ssh_credentials();
-                creds.get(kind.slug()).unwrap_or_default().to_string()
+                creds
+                    .get(kind.slug())
+                    // Remote HF used the Local HF credential key before the providers
+                    // were split. Keep that setup working without asking for the password again.
+                    .or_else(|| {
+                        (kind == LlmProviderKind::RemoteHf)
+                            .then(|| creds.get(LlmProviderKind::LocalHf.slug()))
+                            .flatten()
+                    })
+                    .unwrap_or_default()
+                    .to_string()
             });
 
         ui.add_space(12.0);
@@ -568,6 +597,12 @@ impl OxiApp {
         loop {
             match rx.try_recv() {
                 Ok(msg) => {
+                    // A working Remote HF connection means credentials are good now —
+                    // drop the cached (possibly failed) remote model listing so the
+                    // panel refetches it.
+                    if msg.provider == LlmProviderKind::RemoteHf && msg.result.is_ok() {
+                        self.conv.local_models.remote_list_for = None;
+                    }
                     let entry = self.conv.ssh_test.entry(msg.provider).or_default();
                     entry.loading = false;
                     entry.result = Some(msg.result);
@@ -764,6 +799,17 @@ impl OxiApp {
     /// Kick off a background `/v1/models` fetch for `kind`, if one isn't already in
     /// flight. Results arrive on `conv.model_rxs` and are drained each frame.
     pub(crate) fn spawn_model_fetch(&mut self, ctx: &egui::Context, kind: LlmProviderKind) {
+        // Remote HF's useful catalog is the GGUF files downloaded on the SSH host. It must be
+        // available while llama-server is stopped (so a model can be selected and started),
+        // therefore list the managed directory over SSH rather than opening a runtime tunnel and
+        // calling `/v1/models`.
+        if kind == LlmProviderKind::RemoteHf {
+            if self.conv.local_models.remote_list_loading {
+                return;
+            }
+            self.spawn_remote_list(ctx);
+            return;
+        }
         // Claude Code (ACP) has no HTTP `/v1/models` endpoint — the agent advertises its models
         // over the protocol, so warm the subprocess and read them from `session/new` instead.
         if kind == LlmProviderKind::ClaudeCodeAcp {
@@ -907,6 +953,8 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
             Ok(String::new())
         }
-        LlmProviderKind::LocalHf | LlmProviderKind::ClaudeCodeAcp => Ok(String::new()),
+        LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf | LlmProviderKind::ClaudeCodeAcp => {
+            Ok(String::new())
+        }
     }
 }

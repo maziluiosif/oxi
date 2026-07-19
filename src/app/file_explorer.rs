@@ -1,11 +1,14 @@
 //! Workspace file explorer and multi-tab text editor.
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
-use eframe::egui::{self, Align, FontId, Layout, Margin, RichText, ScrollArea, TextEdit, Ui};
+use eframe::egui::{
+    self, Align, FontId, Frame, Layout, Margin, RichText, ScrollArea, TextEdit, Ui,
+};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::theme::*;
+use crate::ui::chrome::icon_glyph_rich;
 
 use super::state::FileOperation;
 use super::{EditorDocument, OxiApp};
@@ -19,6 +22,9 @@ type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
     Option<(usize, usize)>,
     egui::text::LayoutJob,
     String,
+    Option<usize>,
+    Option<usize>,
+    Option<usize>,
 )>;
 
 impl OxiApp {
@@ -37,13 +43,13 @@ impl OxiApp {
                 .map(|tx| tx.send(crate::git::GitOp::Refresh));
         }
 
+        // Whole row right-to-left: the icons stay pinned to the right edge at any
+        // sidebar width, and the trailing label truncates instead of being overlapped
+        // when the sidebar is dragged down to its minimum width.
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("EXPLORER")
-                    .size(FS_TINY)
-                    .strong()
-                    .color(c_text_muted()),
-            );
+            // Match the conversations sidebar's 24 px search toolbar exactly so switching
+            // modes does not move the first content row by a few pixels.
+            ui.set_height(24.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, false)
                     .on_hover_text("Open settings")
@@ -75,32 +81,76 @@ impl OxiApp {
                 {
                     self.start_file_operation(FileOperation::NewFolder(root.clone()));
                 }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("EXPLORER")
+                                .size(FS_TINY)
+                                .strong()
+                                .color(c_text_muted()),
+                        )
+                        .truncate(),
+                    );
+                });
             });
         });
-        ui.add_space(6.0);
+        // Keep the same toolbar-to-list rhythm as the conversations sidebar (8 px
+        // gap plus the list's 1 px leading breathing room).
+        ui.add_space(8.0);
+        ui.add_space(1.0);
 
         let label = root
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_else(|| root.to_str().unwrap_or("workspace"));
-        let root_response = ui
-            .label(
-                RichText::new(label)
-                    .strong()
-                    .size(FS_SMALL)
-                    .color(c_sidebar_section()),
-            )
-            .on_hover_text(root.display().to_string());
-        root_response.context_menu(|ui| {
-            if ui.button("New file").clicked() {
-                self.start_file_operation(FileOperation::NewFile(root.clone()));
-                ui.close();
+        let root_expanded = !self.conv.explorer_collapsed_roots.contains(&root);
+        let (root_rect, root_response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
+        paint_explorer_row(ui, root_rect, root_response.hovered(), false);
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(root_rect.shrink2(egui::vec2(4.0, 0.0))),
+            |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(icon_glyph_rich(
+                        if root_expanded {
+                            ICON_ANGLE_DOWN
+                        } else {
+                            ICON_CHEVRON_RIGHT
+                        },
+                        FS_TINY,
+                        c_text_faint(),
+                    ));
+                    ui.label(icon_glyph_rich(
+                        if root_expanded {
+                            ICON_FOLDER_OPEN
+                        } else {
+                            ICON_FOLDER
+                        },
+                        FS_SMALL,
+                        c_text_muted(),
+                    ));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(label)
+                                .strong()
+                                .size(FS_SMALL)
+                                .color(c_sidebar_section()),
+                        )
+                        .truncate(),
+                    );
+                });
+            },
+        );
+        let root_response = root_response.on_hover_text(root.display().to_string());
+        if root_response.clicked() {
+            if root_expanded {
+                self.conv.explorer_collapsed_roots.insert(root.clone());
+            } else {
+                self.conv.explorer_collapsed_roots.remove(&root);
             }
-            if ui.button("New folder").clicked() {
-                self.start_file_operation(FileOperation::NewFolder(root.clone()));
-                ui.close();
-            }
-        });
+        }
+        root_response.context_menu(|ui| self.render_root_context_menu(ui, &root));
         ui.add_space(4.0);
 
         if let Some(operation) = self.conv.editor.file_operation.clone() {
@@ -108,12 +158,14 @@ impl OxiApp {
             ui.add_space(6.0);
         }
 
-        ScrollArea::vertical()
-            .id_salt("workspace_file_explorer")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                self.render_explorer_directory(ui, &root, &root, &ignored, 0)
-            });
+        if root_expanded {
+            ScrollArea::vertical()
+                .id_salt("workspace_file_explorer")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    self.render_explorer_directory(ui, &root, &root, &ignored, 1)
+                });
+        }
 
         if let Some(error) = self.conv.editor.error.clone() {
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
@@ -148,9 +200,10 @@ impl OxiApp {
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
-            if should_ignore(root, &path, kind.is_dir(), ignored) {
+            if kind.is_dir() && ALWAYS_SKIPPED_DIRS.contains(&name.as_str()) {
                 continue;
             }
+            let git_ignored = is_gitignored(root, &path, kind.is_dir(), ignored);
             let indent = depth as f32 * 14.0;
             if kind.is_dir() {
                 let expanded = self.conv.explorer_expanded.contains(&path);
@@ -185,10 +238,13 @@ impl OxiApp {
                                 folder,
                                 &name,
                                 FS_SMALL,
-                                c_text(),
+                                explorer_entry_color(c_text(), git_ignored),
                             ));
                             if let Some(status) = git_status {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    // Keep clear of the floating scrollbar, which is
+                                    // painted over the row's right edge.
+                                    ui.add_space(10.0);
                                     ui.label(
                                         RichText::new(status)
                                             .monospace()
@@ -213,10 +269,16 @@ impl OxiApp {
                     self.render_explorer_directory(ui, root, &path, ignored, depth + 1);
                 }
             } else if kind.is_file() {
-                let selected = self
-                    .conv
-                    .editor
-                    .active_document()
+                // Ctrl/Cmd+P temporarily changes the active editor tab while previewing.
+                // Keep the Explorer selection on the previously committed tab until the
+                // picker result is accepted.
+                let selected_index = if self.conv.editor.file_picker_open {
+                    self.conv.editor.file_picker_previous_active
+                } else {
+                    self.conv.editor.active
+                };
+                let selected = selected_index
+                    .and_then(|index| self.conv.editor.documents.get(index))
                     .is_some_and(|document| document.path == path);
                 let git_status = self.git_status_for_path(root, &path);
                 let (rect, response) = ui.allocate_exact_size(
@@ -235,14 +297,20 @@ impl OxiApp {
                                 icon,
                                 &name,
                                 FS_SMALL,
-                                if selected {
-                                    crate::theme::blend_color(color, c_text_strong(), 0.28)
-                                } else {
-                                    color
-                                },
+                                explorer_entry_color(
+                                    if selected {
+                                        crate::theme::blend_color(color, c_text_strong(), 0.28)
+                                    } else {
+                                        color
+                                    },
+                                    git_ignored,
+                                ),
                             ));
                             if let Some(status) = git_status {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    // Keep clear of the floating scrollbar, which is
+                                    // painted over the row's right edge.
+                                    ui.add_space(10.0);
                                     ui.label(
                                         RichText::new(status)
                                             .monospace()
@@ -255,6 +323,16 @@ impl OxiApp {
                         });
                     },
                 );
+                if self
+                    .conv
+                    .editor
+                    .explorer_reveal_pending
+                    .as_deref()
+                    .is_some_and(|pending| pending == path)
+                {
+                    response.scroll_to_me(Some(Align::Center));
+                    self.conv.editor.explorer_reveal_pending = None;
+                }
                 let response = response.on_hover_text(path.display().to_string());
                 if response.clicked() {
                     self.open_editor_file(path.clone());
@@ -295,27 +373,87 @@ impl OxiApp {
             .map(|entry| entry.status)
     }
 
+    fn render_root_context_menu(&mut self, ui: &mut Ui, root: &Path) {
+        ui.set_min_width(210.0);
+        if ui.button("New File").clicked() {
+            self.start_file_operation(FileOperation::NewFile(root.to_path_buf()));
+            ui.close();
+        }
+        if ui.button("Rename...").clicked() {
+            self.start_file_operation(FileOperation::Rename(root.to_path_buf()));
+            ui.close();
+        }
+        if ui.button("Open Folder...").clicked() {
+            self.open_workspace_folder();
+            ui.close();
+        }
+        if ui.button("Copy Path").clicked() {
+            ui.ctx().copy_text(root.display().to_string());
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("New Folder...").clicked() {
+            self.start_file_operation(FileOperation::NewFolder(root.to_path_buf()));
+            ui.close();
+        }
+        if ui.button("Find in Folder...").clicked() {
+            self.conv.editor.find_open = true;
+            self.conv.editor.find_replace_open = false;
+            self.conv.editor.focus_find_next_frame = true;
+            ui.close();
+        }
+    }
+
     fn render_path_context_menu(&mut self, ui: &mut Ui, path: &Path, directory: bool) {
+        ui.set_min_width(if directory { 210.0 } else { 170.0 });
         if directory {
-            if ui.button("New file").clicked() {
+            if ui.button("New File").clicked() {
                 self.start_file_operation(FileOperation::NewFile(path.to_path_buf()));
                 ui.close();
             }
-            if ui.button("New folder").clicked() {
+            if ui.button("Rename...").clicked() {
+                self.start_file_operation(FileOperation::Rename(path.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Open Folder...").clicked() {
+                reveal_path_in_file_manager(path);
+                ui.close();
+            }
+            if ui.button("Copy Path").clicked() {
+                ui.ctx().copy_text(path.display().to_string());
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("New Folder...").clicked() {
                 self.start_file_operation(FileOperation::NewFolder(path.to_path_buf()));
                 ui.close();
             }
-        } else if ui.button("Open").clicked() {
-            self.open_editor_file(path.to_path_buf());
-            ui.close();
-        }
-        if ui.button("Rename").clicked() {
-            self.start_file_operation(FileOperation::Rename(path.to_path_buf()));
-            ui.close();
-        }
-        if ui.button("Delete").clicked() {
-            self.start_file_operation(FileOperation::Delete(path.to_path_buf()));
-            ui.close();
+            if ui.button("Delete Folder").clicked() {
+                self.start_file_operation(FileOperation::Delete(path.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Find in Folder...").clicked() {
+                self.conv.editor.find_open = true;
+                self.conv.editor.find_replace_open = false;
+                ui.close();
+            }
+        } else {
+            if ui.button("Rename...").clicked() {
+                self.start_file_operation(FileOperation::Rename(path.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Delete File").clicked() {
+                self.start_file_operation(FileOperation::Delete(path.to_path_buf()));
+                ui.close();
+            }
+            if ui.button(reveal_label()).clicked() {
+                reveal_path_in_file_manager(path);
+                ui.close();
+            }
+            if ui.button("Copy Path").clicked() {
+                ui.ctx().copy_text(path.display().to_string());
+                ui.close();
+            }
         }
     }
 
@@ -328,6 +466,7 @@ impl OxiApp {
             _ => String::new(),
         };
         self.conv.editor.file_operation = Some(operation);
+        self.conv.editor.focus_file_operation_next_frame = true;
         self.conv.editor.error = None;
     }
 
@@ -340,10 +479,19 @@ impl OxiApp {
         };
         ui.label(RichText::new(label).size(FS_TINY).color(c_text_muted()));
         if !destructive {
-            ui.add(
+            let response = ui.add(
                 TextEdit::singleline(&mut self.conv.editor.file_operation_name)
+                    .id_salt("workspace_file_operation_name")
                     .desired_width(f32::INFINITY),
             );
+            if std::mem::take(&mut self.conv.editor.focus_file_operation_next_frame) {
+                response.request_focus();
+            }
+            if response.has_focus()
+                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+            {
+                self.apply_file_operation(operation.clone());
+            }
         }
         ui.horizontal(|ui| {
             if ui
@@ -376,8 +524,14 @@ impl OxiApp {
             }
             FileOperation::Rename(path) if !invalid_name => {
                 let destination = path.parent().unwrap_or(Path::new(".")).join(name);
+                let renames_workspace_root =
+                    path.as_path() == Path::new(&self.active_workspace().root_path);
                 let result = std::fs::rename(&path, &destination);
                 if result.is_ok() {
+                    if renames_workspace_root {
+                        self.active_workspace_mut().root_path = destination.display().to_string();
+                        self.sync_workspaces_to_settings();
+                    }
                     for document in &mut self.conv.editor.documents {
                         if document.path == path {
                             document.path = destination.clone();
@@ -457,9 +611,35 @@ impl OxiApp {
         };
     }
 
-    fn open_editor_file(&mut self, path: PathBuf) {
+    fn reveal_editor_file_in_explorer(&mut self, path: &Path) {
         let root = PathBuf::from(&self.active_workspace().root_path);
-        let safe_root = std::fs::canonicalize(&root).unwrap_or(root);
+        let safe_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+        let safe_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if !safe_path.starts_with(&safe_root) {
+            return;
+        }
+
+        let relative = safe_path.strip_prefix(&safe_root).unwrap_or(&safe_path);
+        let explorer_path = root.join(relative);
+        self.conv.explorer_collapsed_roots.remove(&root);
+        let mut parent = explorer_path.parent();
+        while let Some(directory) = parent {
+            if directory == root {
+                break;
+            }
+            self.conv.explorer_expanded.insert(directory.to_path_buf());
+            parent = directory.parent();
+        }
+        self.conv.editor.explorer_reveal_pending = Some(explorer_path);
+    }
+
+    fn open_editor_file(&mut self, path: PathBuf) {
+        self.open_editor_file_impl(path, true);
+    }
+
+    fn open_editor_file_impl(&mut self, path: PathBuf, reveal_in_explorer: bool) {
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        let safe_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
         let safe_path = match std::fs::canonicalize(&path) {
             Ok(path) if path.starts_with(&safe_root) => path,
             _ => {
@@ -478,6 +658,10 @@ impl OxiApp {
             .position(|document| document.path == safe_path)
         {
             self.conv.editor.active = Some(index);
+            self.conv.editor.diff_tab_active = false;
+            if reveal_in_explorer {
+                self.reveal_editor_file_in_explorer(&safe_path);
+            }
             return;
         }
         let metadata = match std::fs::metadata(&safe_path) {
@@ -494,7 +678,7 @@ impl OxiApp {
         match std::fs::read_to_string(&safe_path) {
             Ok(content) => {
                 self.conv.editor.documents.push(EditorDocument {
-                    path: safe_path,
+                    path: safe_path.clone(),
                     saved_content: content.clone(),
                     content,
                     disk_modified: metadata.modified().ok(),
@@ -504,7 +688,11 @@ impl OxiApp {
                 self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
                 self.conv.editor.error = None;
                 self.conv.editor.show_diff = false;
-                self.conv.diff_view_open = false;
+                // An open git diff stays reachable as an editor tab; just show the file.
+                self.conv.editor.diff_tab_active = false;
+                if reveal_in_explorer {
+                    self.reveal_editor_file_in_explorer(&safe_path);
+                }
             }
             Err(error) => {
                 self.conv.editor.error = Some(format!("Could not open text file: {error}"))
@@ -592,7 +780,82 @@ impl OxiApp {
         self.conv.editor.file_picker_query.clear();
         self.conv.editor.file_picker_last_query.clear();
         self.conv.editor.file_picker_selected = 0;
+        self.conv.editor.file_picker_preview = None;
+        self.conv.editor.file_picker_previous_active = self.conv.editor.active;
+        self.conv.editor.file_picker_previous_diff_active = self.conv.editor.diff_tab_active;
+        self.conv.editor.file_picker_preview_created = false;
         self.conv.editor.file_picker_open = true;
+    }
+
+    fn preview_file_picker_path(&mut self, path: &Path) {
+        if self
+            .conv
+            .editor
+            .file_picker_preview
+            .as_deref()
+            .is_some_and(|preview| preview == path)
+        {
+            return;
+        }
+
+        if self.conv.editor.file_picker_preview_created
+            && let Some(preview) = self.conv.editor.file_picker_preview.as_ref()
+            && let Some(index) = self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .position(|document| &document.path == preview)
+        {
+            self.conv.editor.documents.remove(index);
+        }
+
+        let safe_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let was_open = self
+            .conv
+            .editor
+            .documents
+            .iter()
+            .any(|document| document.path == safe_path);
+        self.conv.editor.file_picker_preview = None;
+        self.conv.editor.file_picker_preview_created = false;
+        self.open_editor_file_impl(path.to_path_buf(), false);
+        if self
+            .conv
+            .editor
+            .active_document()
+            .is_some_and(|document| document.path == safe_path)
+        {
+            self.conv.editor.file_picker_preview = Some(safe_path);
+            self.conv.editor.file_picker_preview_created = !was_open;
+        }
+    }
+
+    fn clear_file_picker_preview(&mut self) {
+        if self.conv.editor.file_picker_preview_created
+            && let Some(preview) = self.conv.editor.file_picker_preview.as_ref()
+            && let Some(index) = self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .position(|document| &document.path == preview)
+        {
+            self.conv.editor.documents.remove(index);
+        }
+        self.conv.editor.active = self
+            .conv
+            .editor
+            .file_picker_previous_active
+            .filter(|&index| index < self.conv.editor.documents.len());
+        self.conv.editor.diff_tab_active = self.conv.editor.file_picker_previous_diff_active;
+        self.conv.editor.file_picker_preview = None;
+        self.conv.editor.file_picker_preview_created = false;
+    }
+
+    pub(crate) fn cancel_file_picker(&mut self) {
+        self.clear_file_picker_preview();
+        self.conv.editor.file_picker_open = false;
     }
 
     pub(crate) fn render_file_picker(&mut self, ctx: &egui::Context) {
@@ -649,12 +912,15 @@ impl OxiApp {
             .then(|| matches.get(self.conv.editor.file_picker_selected).cloned())
             .flatten();
         let mut open = true;
-        // Keep the palette geometry stable as filtering changes the number of matches. An
-        // auto-sized, top-anchored Window visibly jumps between frames for short result lists.
+        // Shrink for short result lists, but cap the picker so longer lists remain scrollable.
         let available = ctx.content_rect().size();
+        let max_picker_height = 440.0_f32.min((available.y - 104.0).max(120.0));
+        let row_height = 27.0; // 24 px row + the theme's 3 px item spacing.
+        let picker_height =
+            (88.0 + matches.len() as f32 * row_height).clamp(120.0, max_picker_height);
         let picker_size = egui::vec2(
             560.0_f32.min((available.x - 32.0).max(280.0)),
-            440.0_f32.min((available.y - 104.0).max(220.0)),
+            picker_height,
         );
         egui::Window::new("Open file")
             .id(egui::Id::new("workspace_file_picker"))
@@ -674,44 +940,83 @@ impl OxiApp {
                     response.request_focus();
                 }
                 ui.add_space(6.0);
-                ScrollArea::vertical().show(ui, |ui| {
-                    if matches.is_empty() {
-                        ui.label(RichText::new("No matching files").color(c_text_muted()));
-                    }
-                    for (match_index, path) in matches.iter().enumerate() {
-                        let relative = path.strip_prefix(&root).unwrap_or(path);
-                        let response = ui
-                            .selectable_label(
-                                match_index == self.conv.editor.file_picker_selected,
-                                relative.to_string_lossy(),
-                            )
-                            .on_hover_text(path.display().to_string());
-                        // Scrolling a hover-selected row every frame moves a different row under
-                        // the stationary pointer, which changes selection again and causes a
-                        // scroll/hover feedback loop. Only keyboard navigation needs auto-scroll.
-                        if keyboard_navigation
-                            && match_index == self.conv.editor.file_picker_selected
-                        {
-                            response.scroll_to_me(Some(egui::Align::Center));
+                // Fill the remaining window height even when every match fits. Otherwise the
+                // scroll area's clip edge can land on the final row as selection repaints.
+                ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .animated(false)
+                    .show(ui, |ui| {
+                        if matches.is_empty() {
+                            ui.label(RichText::new("No matching files").color(c_text_muted()));
                         }
-                        if pointer_moved && response.hovered() {
-                            self.conv.editor.file_picker_selected = match_index;
+                        for (match_index, path) in matches.iter().enumerate() {
+                            let relative = path.strip_prefix(&root).unwrap_or(path);
+                            let response = ui.add_sized(
+                                [ui.available_width(), ui.spacing().interact_size.y],
+                                egui::Button::selectable(
+                                    match_index == self.conv.editor.file_picker_selected,
+                                    relative.to_string_lossy(),
+                                )
+                                // Keep the label left-aligned while the selectable area fills the row.
+                                .right_text(()),
+                            );
+                            // Scrolling a hover-selected row every frame moves a different row under
+                            // the stationary pointer, which changes selection again and causes a
+                            // scroll/hover feedback loop. Only keyboard navigation needs auto-scroll.
+                            if keyboard_navigation
+                                && match_index == self.conv.editor.file_picker_selected
+                            {
+                                response.scroll_to_me(None);
+                            }
+                            // Keyboard navigation may scroll the list under the pointer. Do not let
+                            // that same frame's hover state override the arrow-selected row, otherwise
+                            // the selection can oscillate (most visibly on the last item).
+                            if pointer_moved && !keyboard_navigation && response.hovered() {
+                                self.conv.editor.file_picker_selected = match_index;
+                            }
+                            if response.clicked() {
+                                selected = Some(path.clone());
+                            }
                         }
-                        if response.clicked() {
-                            selected = Some(path.clone());
-                        }
-                    }
-                });
+                        // Keep the final row away from the scroll area's bottom clip boundary.
+                        ui.add_space(2.0);
+                    });
             });
-        self.conv.editor.file_picker_open = open && selected.is_none();
         if let Some(path) = selected {
-            self.open_editor_file(path);
+            // Enter/click promotes the temporary preview to a regular editor tab.
+            self.preview_file_picker_path(&path);
+            self.conv.editor.file_picker_preview = None;
+            self.conv.editor.file_picker_preview_created = false;
+            self.conv.editor.file_picker_open = false;
+            self.reveal_editor_file_in_explorer(&path);
+        } else if !open {
+            self.cancel_file_picker();
+        } else {
+            self.conv.editor.file_picker_open = true;
+            if !query.is_empty() {
+                if let Some(path) = matches.get(self.conv.editor.file_picker_selected) {
+                    self.preview_file_picker_path(path);
+                } else {
+                    self.clear_file_picker_preview();
+                }
+            } else {
+                // Cmd/Ctrl+P initially lists files without changing the editor. Preview starts only
+                // after the user types at least one character.
+                self.clear_file_picker_preview();
+            }
         }
     }
 
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
         self.check_external_file_changes();
         self.render_editor_tabs(ui);
+        if self.conv.editor.diff_tab_active
+            && self.conv.diff_view_open
+            && self.conv.git.diff.is_some()
+        {
+            self.render_editor_git_diff(ui);
+            return;
+        }
         if self.conv.editor.active_document().is_none() {
             return;
         }
@@ -729,14 +1034,35 @@ impl OxiApp {
                 }
             });
         }
-        if self.conv.editor.find_open {
-            self.render_find_replace(ui);
-        }
         if let Some(error) = self.conv.editor.error.clone() {
             ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
         }
 
-        if self.conv.editor.show_diff {
+        if self.conv.editor.find_open {
+            // Find floats over the bottom of the editor instead of participating in layout.
+            // Opening/closing it therefore cannot resize the editor viewport or alter its scroll.
+            let editor_rect = ui.available_rect_before_wrap();
+            if self.conv.editor.show_diff {
+                self.render_editor_diff(ui);
+            } else {
+                self.render_editor_body(ui);
+            }
+            let panel_height = if self.conv.editor.find_replace_open {
+                67.0
+            } else {
+                32.0
+            };
+            let panel_rect = egui::Rect::from_min_size(
+                egui::pos2(editor_rect.left(), editor_rect.bottom() - panel_height),
+                egui::vec2(editor_rect.width(), panel_height),
+            );
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(panel_rect)
+                    .sense(egui::Sense::hover()),
+                |ui| self.render_find_replace(ui),
+            );
+        } else if self.conv.editor.show_diff {
             self.render_editor_diff(ui);
         } else {
             self.render_editor_body(ui);
@@ -749,115 +1075,337 @@ impl OxiApp {
         let mut save = false;
         let mut reveal = false;
         let mut toggle_diff = false;
-        ScrollArea::horizontal()
-            .id_salt("editor_tabs")
+        let mut select_git_diff = false;
+        let mut close_git_diff = false;
+        let mut new_file = false;
+        let mut navigate_back = false;
+        let mut navigate_forward = false;
+        let git_diff_tab = self.conv.diff_view_open && self.conv.git.diff.is_some();
+        let git_diff_active = git_diff_tab && self.conv.editor.diff_tab_active;
+        let can_go_back = !self.conv.editor.navigation_back.is_empty();
+        let can_go_forward = !self.conv.editor.navigation_forward.is_empty();
+        let tab_strip_width = (ui.available_width() - 126.0).max(80.0);
+
+        Frame::new()
+            .fill(c_bg_elevated_2())
+            .inner_margin(Margin::symmetric(6, 0))
             .show(ui, |ui| {
+                ui.set_height(34.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    for (index, document) in self.conv.editor.documents.iter().enumerate() {
-                        let name = document
-                            .path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy();
-                        let label = if document.is_dirty() {
-                            format!("{name}  ●")
-                        } else {
-                            name.into_owned()
-                        };
-                        let active = self.conv.editor.active == Some(index);
-                        let font = FontId::proportional(FS_SMALL);
-                        let label_width = ui.fonts_mut(|fonts| {
-                            fonts
-                                .layout_no_wrap(label.clone(), font.clone(), c_text())
-                                .rect
-                                .width()
-                        });
-                        let tab_width = label_width + 42.0;
-                        let (rect, response) = ui
-                            .allocate_exact_size(egui::vec2(tab_width, 28.0), egui::Sense::click());
-                        // The close hit target overlaps the tab response. Test the full rectangle
-                        // so the name and close icon still share one hover surface.
-                        let hovered = ui.rect_contains_pointer(rect);
-                        let fill = if active {
-                            c_row_active()
-                        } else if hovered {
-                            c_row_hover()
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        if fill != egui::Color32::TRANSPARENT {
-                            ui.painter().rect_filled(
-                                rect,
-                                egui::CornerRadius::same(RADIUS_ROW),
-                                fill,
-                            );
-                        }
-                        ui.painter().text(
-                            egui::pos2(rect.left() + 10.0, rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            label,
-                            font,
-                            if active {
-                                c_text_strong()
-                            } else {
-                                c_text_muted()
-                            },
-                        );
-                        let close_rect = egui::Rect::from_center_size(
-                            egui::pos2(rect.right() - 13.0, rect.center().y),
-                            egui::vec2(22.0, rect.height()),
-                        );
-                        let close_response = ui.interact(
-                            close_rect,
-                            ui.id().with(("editor_tab_close", index)),
-                            egui::Sense::click(),
-                        );
-                        ui.painter().text(
-                            close_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            ICON_CLOSE,
-                            FontId::new(FS_TINY, icon_font()),
-                            if close_response.hovered() {
-                                c_accent()
-                            } else {
-                                c_text_faint()
-                            },
-                        );
-                        if close_response.hovered() || hovered {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if close_response.clicked() {
-                            close = Some(index);
-                        } else if response.clicked() {
-                            select = Some(index);
-                        }
-                        response.context_menu(|ui| {
-                            if ui.button("Save").clicked() {
-                                select = Some(index);
-                                save = true;
-                                ui.close();
-                            }
-                            if ui.button("Reveal in Explorer").clicked() {
-                                select = Some(index);
-                                reveal = true;
-                                ui.close();
-                            }
-                            if ui.button("Toggle diff").clicked() {
-                                select = Some(index);
-                                toggle_diff = true;
-                                ui.close();
-                            }
-                            if ui.button("Close").clicked() {
-                                close = Some(index);
-                                ui.close();
-                            }
-                        });
+                    let back = ui.add_enabled(
+                        can_go_back,
+                        egui::Button::new(icon_glyph_rich(
+                            ICON_CHEVRON_LEFT,
+                            FS_SMALL,
+                            c_text_muted(),
+                        ))
+                        .frame(false)
+                        .min_size(egui::vec2(24.0, 30.0)),
+                    );
+                    if back.clicked() {
+                        navigate_back = true;
                     }
+                    let forward = ui.add_enabled(
+                        can_go_forward,
+                        egui::Button::new(icon_glyph_rich(
+                            ICON_CHEVRON_RIGHT,
+                            FS_SMALL,
+                            c_text_muted(),
+                        ))
+                        .frame(false)
+                        .min_size(egui::vec2(24.0, 30.0)),
+                    );
+                    if forward.clicked() {
+                        navigate_forward = true;
+                    }
+
+                    ScrollArea::horizontal()
+                        .id_salt("editor_tabs")
+                        .max_width(tab_strip_width)
+                        .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                for (index, document) in
+                                    self.conv.editor.documents.iter().enumerate()
+                                {
+                                    let name = document
+                                        .path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy();
+                                    let label = if document.is_dirty() {
+                                        format!("{name}  ●")
+                                    } else {
+                                        name.into_owned()
+                                    };
+                                    let active =
+                                        !git_diff_active && self.conv.editor.active == Some(index);
+                                    let font = FontId::proportional(FS_SMALL);
+                                    let label_width = ui.fonts_mut(|fonts| {
+                                        fonts
+                                            .layout_no_wrap(label.clone(), font.clone(), c_text())
+                                            .rect
+                                            .width()
+                                    });
+                                    let tab_width = label_width + 42.0;
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(tab_width, 28.0),
+                                        egui::Sense::click(),
+                                    );
+                                    // The close hit target overlaps the tab response. Test the full rectangle
+                                    // so the name and close icon still share one hover surface.
+                                    let hovered = ui.rect_contains_pointer(rect);
+                                    let fill = if active {
+                                        c_bg_main()
+                                    } else if hovered {
+                                        c_row_hover()
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    };
+                                    if fill != egui::Color32::TRANSPARENT {
+                                        let mut fill_rect = rect;
+                                        if active || hovered {
+                                            // Active and hovered tabs share the same silhouette, extending through
+                                            // the header's lower edge instead of looking like floating pills.
+                                            fill_rect.max.y += RADIUS_ROW as f32 + 4.0;
+                                        }
+                                        ui.painter().rect_filled(
+                                            fill_rect,
+                                            egui::CornerRadius::same(RADIUS_ROW),
+                                            fill,
+                                        );
+                                    }
+                                    ui.painter().text(
+                                        egui::pos2(rect.left() + 10.0, rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        label,
+                                        font,
+                                        if active {
+                                            c_text_strong()
+                                        } else {
+                                            c_text_muted()
+                                        },
+                                    );
+                                    let close_rect = egui::Rect::from_center_size(
+                                        egui::pos2(rect.right() - 13.0, rect.center().y),
+                                        egui::vec2(22.0, rect.height()),
+                                    );
+                                    let close_response = ui.interact(
+                                        close_rect,
+                                        ui.id().with(("editor_tab_close", index)),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().text(
+                                        close_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        ICON_CLOSE,
+                                        FontId::new(FS_TINY, icon_font()),
+                                        if close_response.hovered() {
+                                            c_accent()
+                                        } else {
+                                            c_text_faint()
+                                        },
+                                    );
+                                    if close_response.hovered() || hovered {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    if close_response.clicked() || response.middle_clicked() {
+                                        close = Some(index);
+                                    } else if response.clicked() {
+                                        select = Some(index);
+                                    }
+                                    let response =
+                                        response.on_hover_text(document.path.display().to_string());
+                                    response.context_menu(|ui| {
+                                        if ui.button("Save").clicked() {
+                                            select = Some(index);
+                                            save = true;
+                                            ui.close();
+                                        }
+                                        if ui.button("Reveal in Explorer").clicked() {
+                                            select = Some(index);
+                                            reveal = true;
+                                            ui.close();
+                                        }
+                                        if ui.button("Unsaved changes diff").clicked() {
+                                            select = Some(index);
+                                            toggle_diff = true;
+                                            ui.close();
+                                        }
+                                        if ui.button("Close").clicked() {
+                                            close = Some(index);
+                                            ui.close();
+                                        }
+                                    });
+                                }
+
+                                // Git diff pseudo-tab: keeps the diff one click away from the
+                                // editable file tabs instead of replacing the whole chat area.
+                                if git_diff_tab {
+                                    let title = self
+                                        .conv
+                                        .git
+                                        .current_diff_path
+                                        .as_deref()
+                                        .map(|path| {
+                                            path.rsplit_once('/').map_or(path, |(_, file)| file)
+                                        })
+                                        .unwrap_or("diff")
+                                        .to_owned();
+                                    let label = format!("Diff: {title}");
+                                    let font = FontId::proportional(FS_SMALL);
+                                    let label_width = ui.fonts_mut(|fonts| {
+                                        fonts
+                                            .layout_no_wrap(label.clone(), font.clone(), c_text())
+                                            .rect
+                                            .width()
+                                    });
+                                    let tab_width = label_width + 42.0;
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(tab_width, 28.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let hovered = ui.rect_contains_pointer(rect);
+                                    let fill = if git_diff_active {
+                                        c_bg_main()
+                                    } else if hovered {
+                                        c_row_hover()
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    };
+                                    if fill != egui::Color32::TRANSPARENT {
+                                        let mut fill_rect = rect;
+                                        if git_diff_active || hovered {
+                                            fill_rect.max.y += RADIUS_ROW as f32 + 4.0;
+                                        }
+                                        ui.painter().rect_filled(
+                                            fill_rect,
+                                            egui::CornerRadius::same(RADIUS_ROW),
+                                            fill,
+                                        );
+                                    }
+                                    ui.painter().text(
+                                        egui::pos2(rect.left() + 10.0, rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        label,
+                                        font,
+                                        if git_diff_active {
+                                            c_text_strong()
+                                        } else {
+                                            c_text_muted()
+                                        },
+                                    );
+                                    let close_rect = egui::Rect::from_center_size(
+                                        egui::pos2(rect.right() - 13.0, rect.center().y),
+                                        egui::vec2(22.0, rect.height()),
+                                    );
+                                    let close_response = ui.interact(
+                                        close_rect,
+                                        ui.id().with("editor_git_diff_tab_close"),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().text(
+                                        close_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        ICON_CLOSE,
+                                        FontId::new(FS_TINY, icon_font()),
+                                        if close_response.hovered() {
+                                            c_accent()
+                                        } else {
+                                            c_text_faint()
+                                        },
+                                    );
+                                    if close_response.hovered() || hovered {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    if close_response.clicked() || response.middle_clicked() {
+                                        close_git_diff = true;
+                                    } else if response.clicked() {
+                                        select_git_diff = true;
+                                    }
+                                    if let Some(path) = self.conv.git.current_diff_path.as_deref() {
+                                        response.on_hover_text(path);
+                                    }
+                                }
+                            });
+                        });
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.menu_button(
+                            RichText::new("▾").size(FS_SMALL).color(c_text_muted()),
+                            |ui| {
+                                ui.set_min_width(180.0);
+                                for (index, document) in
+                                    self.conv.editor.documents.iter().enumerate()
+                                {
+                                    let name = document
+                                        .path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy();
+                                    if ui
+                                        .selectable_label(
+                                            !git_diff_active
+                                                && self.conv.editor.active == Some(index),
+                                            name,
+                                        )
+                                        .clicked()
+                                    {
+                                        select = Some(index);
+                                        ui.close();
+                                    }
+                                }
+                            },
+                        )
+                        .response
+                        .on_hover_text("Open tabs");
+                        if ui
+                            .add(
+                                egui::Button::new(icon_glyph_rich(
+                                    ICON_PLUS,
+                                    FS_SMALL,
+                                    c_text_muted(),
+                                ))
+                                .frame(false)
+                                .min_size(egui::vec2(24.0, 30.0)),
+                            )
+                            .on_hover_text("New file")
+                            .clicked()
+                        {
+                            new_file = true;
+                        }
+                    });
                 });
             });
+        if new_file {
+            let root = PathBuf::from(&self.active_workspace().root_path);
+            self.start_file_operation(FileOperation::NewFile(root));
+        }
+        if navigate_back {
+            self.navigate_editor_history(false);
+        } else if navigate_forward {
+            self.navigate_editor_history(true);
+        }
         if let Some(index) = select {
             self.conv.editor.active = Some(index);
+            self.conv.editor.diff_tab_active = false;
+            if let Some(path) = self
+                .conv
+                .editor
+                .documents
+                .get(index)
+                .map(|document| document.path.clone())
+            {
+                self.reveal_editor_file_in_explorer(&path);
+            }
+        }
+        if select_git_diff {
+            self.conv.editor.diff_tab_active = true;
+        }
+        if close_git_diff {
+            self.close_editor_git_diff();
         }
         if save {
             self.save_editor_file();
@@ -883,20 +1431,33 @@ impl OxiApp {
     }
 
     fn render_find_replace(&mut self, ui: &mut Ui) {
-        let query_changed = self.conv.editor.find_query != self.conv.editor.find_last_query;
+        let query_changed = self.conv.editor.find_query != self.conv.editor.find_last_query
+            || self.conv.editor.find_case_sensitive != self.conv.editor.find_last_case_sensitive;
         if query_changed {
             self.conv
                 .editor
                 .find_last_query
                 .clone_from(&self.conv.editor.find_query);
+            self.conv.editor.find_last_case_sensitive = self.conv.editor.find_case_sensitive;
             self.conv.editor.find_active_match = 0;
-            self.conv.editor.find_select_pending = !self.conv.editor.find_query.is_empty();
+            // Typing previews and reveals the first result, but deliberately does not update
+            // the editor TextEdit's cursor state: doing so can steal focus from the Find input.
+            self.conv.editor.find_has_navigated = !self.conv.editor.find_query.is_empty();
+            self.conv.editor.find_select_pending = false;
+            self.conv.editor.find_reveal_pending = !self.conv.editor.find_query.is_empty();
+            self.conv.editor.find_focus_editor_pending = false;
         }
         let ranges = self
             .conv
             .editor
             .active_document()
-            .map(|document| find_match_ranges(&document.content, &self.conv.editor.find_query))
+            .map(|document| {
+                find_match_ranges(
+                    &document.content,
+                    &self.conv.editor.find_query,
+                    self.conv.editor.find_case_sensitive,
+                )
+            })
             .unwrap_or_default();
         if ranges.is_empty() {
             self.conv.editor.find_active_match = 0;
@@ -906,86 +1467,207 @@ impl OxiApp {
 
         let mut previous = false;
         let mut next = false;
+        let mut replace_one = false;
+        let mut replace_all = false;
         let mut close = false;
-        ui.horizontal(|ui| {
-            let find_response = ui.add(
-                TextEdit::singleline(&mut self.conv.editor.find_query)
-                    .id_salt("workspace_editor_find")
-                    .hint_text("Find"),
-            );
-            if query_changed {
-                find_response.request_focus();
-            }
-            previous = ui
-                .button("↑")
-                .on_hover_text("Previous match (Shift+Enter)")
-                .clicked();
-            next = ui.button("↓").on_hover_text("Next match (Enter)").clicked();
-            let position = if ranges.is_empty() {
-                "0/0".to_owned()
-            } else {
-                format!(
-                    "{}/{}",
-                    self.conv.editor.find_active_match + 1,
-                    ranges.len()
-                )
-            };
-            ui.label(position);
-            close = ui
-                .button(RichText::new(ICON_CLOSE).family(icon_font()).size(FS_TINY))
-                .on_hover_text("Close find and replace")
-                .clicked();
+        Frame::new()
+            .fill(c_bg_elevated_2())
+            .stroke(egui::Stroke::new(1.0, c_border_subtle()))
+            .inner_margin(Margin {
+                left: 12,
+                right: 12,
+                top: 2,
+                bottom: 2,
+            })
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 7.0);
+                const TOGGLE_WIDTH: f32 = 56.0;
+                const LABEL_WIDTH: f32 = 64.0;
+                const ACTION_WIDTH: f32 = 92.0;
+                const CLOSE_WIDTH: f32 = 28.0;
+                const ROW_HEIGHT: f32 = 28.0;
+                const FIELD_HEIGHT: f32 = 24.0;
+                let input_width = (ui.available_width()
+                    - TOGGLE_WIDTH
+                    - 32.0
+                    - LABEL_WIDTH
+                    - ACTION_WIDTH * 2.0
+                    - CLOSE_WIDTH
+                    - 7.0 * 8.0)
+                    .max(80.0);
 
-            if find_response.has_focus() {
-                let (enter, shift_enter) = ui.input_mut(|input| {
-                    let shift = input.modifiers.shift;
-                    let enter = input.consume_key(input.modifiers, egui::Key::Enter);
-                    (enter && !shift, enter && shift)
-                });
-                next |= enter;
-                previous |= shift_enter;
-            }
-        });
-        if !ranges.is_empty() && (next || previous) {
-            if previous {
-                self.conv.editor.find_active_match = if self.conv.editor.find_active_match == 0 {
-                    ranges.len() - 1
-                } else {
-                    self.conv.editor.find_active_match - 1
-                };
-            } else {
-                self.conv.editor.find_active_match =
-                    (self.conv.editor.find_active_match + 1) % ranges.len();
-            }
-            self.conv.editor.find_select_pending = true;
-        }
-
-        ui.horizontal(|ui| {
-            ui.add(TextEdit::singleline(&mut self.conv.editor.replace_query).hint_text("Replace"));
-            let replace_one = ui.button("Replace").clicked();
-            let replace_all = ui.button("Replace all").clicked();
-            if (replace_one || replace_all) && !ranges.is_empty() {
-                let replacement = self.conv.editor.replace_query.clone();
-                let find = self.conv.editor.find_query.clone();
-                let active = self.conv.editor.find_active_match;
-                if let Some(document) = self.conv.editor.active_document_mut() {
-                    if replace_all {
-                        document.content = document.content.replace(&find, &replacement);
-                    } else {
-                        document
-                            .content
-                            .replace_range(ranges[active].clone(), &replacement);
+                ui.horizontal(|ui| {
+                    let replace_toggle = ui
+                        .add_sized(
+                            [TOGGLE_WIDTH, 28.0],
+                            egui::Button::selectable(self.conv.editor.find_replace_open, "AB"),
+                        )
+                        .on_hover_text("Show replace field");
+                    if replace_toggle.clicked() {
+                        self.conv.editor.find_replace_open = !self.conv.editor.find_replace_open;
                     }
+                    let case_toggle = ui
+                        .add_sized(
+                            [32.0, ROW_HEIGHT],
+                            egui::Button::selectable(self.conv.editor.find_case_sensitive, "Aa"),
+                        )
+                        .on_hover_text(if self.conv.editor.find_case_sensitive {
+                            "Case sensitive"
+                        } else {
+                            "Case insensitive"
+                        });
+                    if case_toggle.clicked() {
+                        self.conv.editor.find_case_sensitive =
+                            !self.conv.editor.find_case_sensitive;
+                    }
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.label(RichText::new("Find:").size(FS_SMALL).color(c_text_muted()));
+                        },
+                    );
+                    let find_response = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(input_width, ROW_HEIGHT),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.add_sized(
+                                    [input_width, FIELD_HEIGHT],
+                                    TextEdit::singleline(&mut self.conv.editor.find_query)
+                                        .id_salt("workspace_editor_find")
+                                        .margin(Margin::symmetric(6, 2))
+                                        .hint_text("Find"),
+                                )
+                            },
+                        )
+                        .inner;
+                    if query_changed || std::mem::take(&mut self.conv.editor.focus_find_next_frame)
+                    {
+                        find_response.request_focus();
+                    }
+                    next = ui
+                        .add_sized([ACTION_WIDTH, 28.0], egui::Button::new("Find"))
+                        .clicked();
+                    previous = ui
+                        .add_sized([ACTION_WIDTH, 28.0], egui::Button::new("Find Prev"))
+                        .clicked();
+                    close = ui
+                        .add_sized(
+                            [CLOSE_WIDTH, 28.0],
+                            egui::Button::new(icon_glyph_rich(ICON_CLOSE, FS_TINY, c_text_muted()))
+                                .frame(false),
+                        )
+                        .on_hover_text("Close find")
+                        .clicked();
+
+                    // A single-line TextEdit gives up focus when Enter is pressed. Checking
+                    // `lost_focus` is therefore essential; `has_focus` alone misses the exact
+                    // frame carrying Enter and neither navigation nor focus restoration runs.
+                    let enter_while_editing = (find_response.has_focus()
+                        || find_response.lost_focus())
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    if enter_while_editing {
+                        if ui.input(|input| input.modifiers.shift) {
+                            previous = true;
+                        } else {
+                            next = true;
+                        }
+                    }
+                });
+
+                if self.conv.editor.find_replace_open {
+                    ui.horizontal(|ui| {
+                        ui.allocate_exact_size(
+                            egui::vec2(TOGGLE_WIDTH + 32.0 + 8.0, ROW_HEIGHT),
+                            egui::Sense::hover(),
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
+                            Layout::right_to_left(Align::Center),
+                            |ui| {
+                                ui.label(
+                                    RichText::new("Replace:")
+                                        .size(FS_SMALL)
+                                        .color(c_text_muted()),
+                                );
+                            },
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(input_width, ROW_HEIGHT),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.add_sized(
+                                    [input_width, FIELD_HEIGHT],
+                                    TextEdit::singleline(&mut self.conv.editor.replace_query)
+                                        .margin(Margin::symmetric(6, 2))
+                                        .hint_text("Replace"),
+                                );
+                            },
+                        );
+                        replace_one = ui
+                            .add_sized([ACTION_WIDTH, 28.0], egui::Button::new("Replace"))
+                            .clicked();
+                        replace_all = ui
+                            .add_sized([ACTION_WIDTH, 28.0], egui::Button::new("Replace All"))
+                            .clicked();
+                    });
                 }
+            });
+
+        if !ranges.is_empty() && (next || previous) {
+            self.conv.editor.find_active_match = if previous {
+                if self.conv.editor.find_has_navigated {
+                    self.conv
+                        .editor
+                        .find_active_match
+                        .checked_sub(1)
+                        .unwrap_or(ranges.len() - 1)
+                } else {
+                    ranges.len() - 1
+                }
+            } else if self.conv.editor.find_has_navigated {
+                (self.conv.editor.find_active_match + 1) % ranges.len()
+            } else {
+                0
+            };
+            self.conv.editor.find_has_navigated = true;
+            // While Find is open, navigation changes the active highlight and scroll only.
+            // The editor caret is committed when Find closes, avoiding a competing TextEdit
+            // cursor update that could take keyboard focus from the query field.
+            self.conv.editor.find_select_pending = false;
+            self.conv.editor.find_reveal_pending = true;
+            self.conv.editor.find_focus_editor_pending = false;
+            // Restore the Find TextEdit after single-line Enter surrendered focus. This is
+            // applied through the actual widget Response on the next frame (not a guessed Id).
+            self.conv.editor.focus_find_next_frame = true;
+        }
+        if (replace_one || replace_all) && !ranges.is_empty() {
+            let replacement = self.conv.editor.replace_query.clone();
+            let active = self.conv.editor.find_active_match;
+            if let Some(document) = self.conv.editor.active_document_mut() {
                 if replace_all {
-                    self.conv.editor.find_active_match = 0;
+                    for range in ranges.iter().rev() {
+                        document.content.replace_range(range.clone(), &replacement);
+                    }
+                } else {
+                    document
+                        .content
+                        .replace_range(ranges[active].clone(), &replacement);
                 }
-                self.conv.editor.find_select_pending = true;
             }
-        });
+            if replace_all {
+                self.conv.editor.find_active_match = 0;
+            }
+            self.conv.editor.find_select_pending = false;
+            self.conv.editor.find_reveal_pending = true;
+        }
         if close {
             self.conv.editor.find_open = false;
-            self.conv.editor.find_select_pending = false;
+            // Apply the current result on the following editor frame, then return focus.
+            self.conv.editor.find_select_pending = self.conv.editor.find_has_navigated;
+            self.conv.editor.find_focus_editor_pending = true;
         }
     }
 
@@ -994,10 +1676,28 @@ impl OxiApp {
             return;
         };
         let extension = language_for_path(&self.conv.editor.documents[index].path).to_owned();
-        let find_ranges = if self.conv.editor.find_open {
+        let navigation_range = self
+            .conv
+            .editor
+            .navigation_target
+            .as_ref()
+            .filter(|(path, _)| path == &self.conv.editor.documents[index].path)
+            .map(|(_, range)| range.clone());
+        if navigation_range.is_some() {
+            self.conv.editor.navigation_target = None;
+        }
+        let goto_definition_requested =
+            std::mem::take(&mut self.conv.editor.goto_definition_requested);
+        // Keep match geometry for one extra frame while Find closes so Escape/X can
+        // apply the current match caret before the panel disappears.
+        let find_ranges = if self.conv.editor.find_open
+            || self.conv.editor.find_select_pending
+            || self.conv.editor.find_focus_editor_pending
+        {
             find_match_ranges(
                 &self.conv.editor.documents[index].content,
                 &self.conv.editor.find_query,
+                self.conv.editor.find_case_sensitive,
             )
         } else {
             Vec::new()
@@ -1009,7 +1709,11 @@ impl OxiApp {
                 .min(find_ranges.len() - 1)
         });
         let select_find_match = self.conv.editor.find_select_pending && active_find_match.is_some();
+        let reveal_find_match = (select_find_match || self.conv.editor.find_reveal_pending)
+            && active_find_match.is_some();
+        let focus_editor_for_find = std::mem::take(&mut self.conv.editor.find_focus_editor_pending);
         self.conv.editor.find_select_pending = false;
+        self.conv.editor.find_reveal_pending = false;
         let logical_line_count = self.conv.editor.documents[index]
             .content
             .split('\n')
@@ -1021,8 +1725,15 @@ impl OxiApp {
                 .glyph_width(&FontId::monospace(FS_SMALL), '0')
                 .max(FS_SMALL * 0.5)
         });
-        const GIT_MARKER_WIDTH: f32 = 4.0;
-        let gutter_width = gutter_digits * digit_width + 16.0 + GIT_MARKER_WIDTH;
+        const GIT_MARKER_WIDTH: f32 = 2.0;
+        // Keep the line numbers at their original position while placing the slimmer Git
+        // marker flush against the editor container's left boundary.
+        const GUTTER_LEFT_PADDING: f32 = 10.0;
+        const GUTTER_RIGHT_PADDING: f32 = 12.0;
+        let gutter_width = gutter_digits * digit_width
+            + GUTTER_LEFT_PADDING
+            + GUTTER_RIGHT_PADDING
+            + GIT_MARKER_WIDTH;
         let root = PathBuf::from(&self.active_workspace().root_path);
         let relative_path = self.conv.editor.documents[index]
             .path
@@ -1030,15 +1741,24 @@ impl OxiApp {
             .unwrap_or(&self.conv.editor.documents[index].path)
             .to_string_lossy()
             .replace('\\', "/");
-        let git_line_changes = self
+        let disk_git_line_changes = self
             .conv
             .git
             .line_changes
             .get(&relative_path)
             .cloned()
             .unwrap_or_default();
+        // Git itself only sees the saved file. When editing changes the number of lines,
+        // project those disk-based markers onto the in-memory buffer so the gutter follows
+        // inserted/deleted newlines without doing Git work on every keystroke.
+        let git_line_changes = live_git_line_changes(
+            &disk_git_line_changes,
+            &self.conv.editor.documents[index].saved_content,
+            &self.conv.editor.documents[index].content,
+        );
         const MINIMAP_WIDTH: f32 = 96.0;
         let editor_view_size = ui.available_size();
+        let mut goto_definition_byte = None;
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
 
@@ -1105,27 +1825,117 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
-                            if select_find_match {
-                                let byte_range = &find_ranges[active_find_match.unwrap_or(0)];
+                            let selection_target = navigation_range.as_ref();
+                            let find_caret_target = select_find_match
+                                .then(|| &find_ranges[active_find_match.unwrap_or(0)]);
+                            if let Some(byte_range) = selection_target.or(find_caret_target) {
                                 let start = document.content[..byte_range.start].chars().count();
                                 let end =
                                     start + document.content[byte_range.clone()].chars().count();
-                                output.state.cursor.set_char_range(Some(
+                                let cursor_range = if selection_target.is_some() {
                                     egui::text::CCursorRange::two(
                                         egui::text::CCursor::new(start),
                                         egui::text::CCursor::new(end),
-                                    ),
-                                ));
+                                    )
+                                } else {
+                                    // Find navigation places an insertion caret immediately after
+                                    // the match, ready to continue editing the document.
+                                    egui::text::CCursorRange::one(egui::text::CCursor::new(end))
+                                };
+                                output.state.cursor.set_char_range(Some(cursor_range));
                                 output.state.store(ui.ctx(), output.response.id);
+                                if focus_editor_for_find {
+                                    output.response.request_focus();
+                                }
+                            }
+
+                            // Scrolling only needs match geometry. Keep it separate from cursor
+                            // mutation so live query updates cannot disturb the focused Find field.
+                            let reveal_target = selection_target.or_else(|| {
+                                reveal_find_match
+                                    .then(|| &find_ranges[active_find_match.unwrap_or(0)])
+                            });
+                            if let Some(byte_range) = reveal_target {
+                                let end = document.content[..byte_range.end].chars().count();
                                 let caret = output
                                     .galley
                                     .pos_from_cursor(egui::text::CCursor {
-                                        index: egui::text::CharIndex(start),
+                                        index: egui::text::CharIndex(end),
                                         prefer_next_row: true,
                                     })
                                     .translate(output.galley_pos.to_vec2());
                                 ui.scroll_to_rect(caret, Some(egui::Align::Center));
                             }
+
+                            if focus_editor_for_find && find_caret_target.is_none() {
+                                output.response.request_focus();
+                            }
+
+                            let caret_byte = output.cursor_range.map(|range| {
+                                char_index_to_byte(&document.content, range.primary.index.0)
+                            });
+                            let active_line = output.cursor_range.map(|range| {
+                                document
+                                    .content
+                                    .chars()
+                                    .take(range.primary.index.0)
+                                    .filter(|character| *character == '\n')
+                                    .count()
+                            });
+                            let definition_modifier =
+                                ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+                            let hovered_definition = if extension == "rs"
+                                && definition_modifier
+                                && output.response.hovered()
+                            {
+                                ui.input(|input| input.pointer.hover_pos())
+                                    .filter(|position| output.text_clip_rect.contains(*position))
+                                    .and_then(|position| {
+                                        let cursor = output
+                                            .galley
+                                            .cursor_from_pos(position - output.galley_pos);
+                                        let byte =
+                                            char_index_to_byte(&document.content, cursor.index.0);
+                                        crate::rust_goto::identifier_at(&document.content, byte)
+                                            .map(|(_, range)| range)
+                                            .filter(|range| {
+                                                byte_range_rects(
+                                                    &output.galley,
+                                                    output.galley_pos,
+                                                    &document.content,
+                                                    range,
+                                                )
+                                                .iter()
+                                                .any(|rect| rect.contains(position))
+                                            })
+                                    })
+                            } else {
+                                None
+                            };
+                            if hovered_definition.is_some() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            let click_byte = (output.response.clicked() && definition_modifier)
+                                .then(|| hovered_definition.as_ref().map(|range| range.start))
+                                .flatten();
+                            let mut context_goto = false;
+                            output.response.context_menu(|ui| {
+                                if extension == "rs"
+                                    && ui.button("Go to definition    F12").clicked()
+                                {
+                                    context_goto = true;
+                                    ui.close();
+                                }
+                            });
+                            let navigation_request = if extension == "rs" {
+                                click_byte.or_else(|| {
+                                    (goto_definition_requested || context_goto)
+                                        .then_some(caret_byte)
+                                        .flatten()
+                                })
+                            } else {
+                                None
+                            };
                             let selection = output.cursor_range.filter(|range| !range.is_empty());
                             // Draw indentation guides behind both selections and source text.
                             paint_indent_guides(
@@ -1140,11 +1950,7 @@ impl OxiApp {
                             // translucent wash over the glyphs; depending on the backend it looked
                             // opaque and left only our whitespace markers visible.
                             if let Some(selection) = selection {
-                                let selection_color = crate::theme::blend_color(
-                                    c_bg_main(),
-                                    active_palette().selection_bg,
-                                    0.74,
-                                );
+                                let selection_color = crate::theme::editor_selection_fill();
                                 let selection_painter =
                                     ui.painter().with_clip_rect(output.text_clip_rect);
                                 for rect in
@@ -1176,6 +1982,9 @@ impl OxiApp {
                                 &find_ranges,
                                 active_find_match,
                             );
+                            if let Some(range) = hovered_definition.as_ref() {
+                                apply_definition_underline(&mut visible_job, range);
+                            }
                             visible_job.wrap.max_width = output.galley.job.wrap.max_width;
                             let minimap_job = syntax_job;
                             let visible_galley =
@@ -1242,6 +2051,9 @@ impl OxiApp {
                                 selected_lines,
                                 minimap_job,
                                 document.content.clone(),
+                                navigation_request,
+                                active_line,
+                                caret_byte,
                             )
                         })
                 })
@@ -1249,12 +2061,22 @@ impl OxiApp {
 
             let gutter_clip = gutter_rect.intersect(ui.clip_rect());
             for (line, y) in scroll_output.inner.0.iter().copied().enumerate() {
+                let line_height = FS_SMALL * 1.35;
+                if scroll_output.inner.6 == Some(line) {
+                    ui.painter().with_clip_rect(gutter_clip).rect_filled(
+                        egui::Rect::from_center_size(
+                            egui::pos2(gutter_rect.center().x, y),
+                            egui::vec2(gutter_rect.width(), line_height),
+                        ),
+                        0.0,
+                        c_row_active(),
+                    );
+                }
                 if let Some(change) = git_line_changes.iter().find(|change| change.line == line) {
                     let color = match change.kind {
                         crate::git::GitLineKind::Added => c_diff_add_fg(),
                         crate::git::GitLineKind::Modified => c_warning_fg(),
                     };
-                    let line_height = FS_SMALL * 1.35;
                     ui.painter().with_clip_rect(gutter_clip).rect_filled(
                         egui::Rect::from_center_size(
                             egui::pos2(gutter_rect.left() + GIT_MARKER_WIDTH * 0.5, y),
@@ -1265,11 +2087,15 @@ impl OxiApp {
                     );
                 }
                 ui.painter().with_clip_rect(gutter_clip).text(
-                    egui::pos2(gutter_rect.right() - 8.0, y),
+                    egui::pos2(gutter_rect.right() - GUTTER_RIGHT_PADDING, y),
                     egui::Align2::RIGHT_CENTER,
                     line + 1,
                     FontId::monospace(FS_SMALL),
-                    c_text_faint(),
+                    if scroll_output.inner.6 == Some(line) {
+                        c_text_muted()
+                    } else {
+                        c_text_faint()
+                    },
                 );
             }
 
@@ -1309,6 +2135,11 @@ impl OxiApp {
                 ui.ctx().request_repaint();
             }
 
+            goto_definition_byte = scroll_output.inner.5;
+            if let Some(caret_byte) = scroll_output.inner.7 {
+                self.conv.editor.navigation_cursor_byte = caret_byte;
+            }
+
             // The minimap is outside the editor ScrollArea. Its own narrow scroll strip is painted
             // after it, so the visual order is source → minimap → scrollbar.
             if let Some(fraction) = paint_minimap(
@@ -1327,6 +2158,156 @@ impl OxiApp {
                 ui.ctx().request_repaint();
             }
         });
+        if let Some(byte) = goto_definition_byte {
+            self.go_to_rust_definition(byte);
+        }
+    }
+
+    fn go_to_rust_definition(&mut self, cursor_byte: usize) {
+        let Some(document) = self.conv.editor.active_document() else {
+            return;
+        };
+        if language_for_path(&document.path) != "rs" {
+            return;
+        }
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        let current_path = document.path.clone();
+        let current_source = document.content.clone();
+        let open_buffers = self
+            .conv
+            .editor
+            .documents
+            .iter()
+            .map(|document| (document.path.clone(), document.content.clone()))
+            .collect::<Vec<_>>();
+        match crate::rust_goto::find_definition(
+            &root,
+            &current_path,
+            &current_source,
+            cursor_byte,
+            &open_buffers,
+        ) {
+            Some(location) => {
+                self.conv
+                    .editor
+                    .navigation_back
+                    .push((current_path, cursor_byte..cursor_byte));
+                self.conv.editor.navigation_forward.clear();
+                self.open_editor_file(location.path.clone());
+                self.conv.editor.navigation_target = Some((location.path, location.byte_range));
+                self.conv.editor.error = None;
+            }
+            None => {
+                self.conv.editor.error = Some("Rust definition not found.".into());
+            }
+        }
+    }
+
+    fn navigate_editor_history(&mut self, forward: bool) {
+        let target = if forward {
+            self.conv.editor.navigation_forward.pop()
+        } else {
+            self.conv.editor.navigation_back.pop()
+        };
+        let Some((path, range)) = target else {
+            return;
+        };
+        if let Some(current) = self.conv.editor.active_document() {
+            let current_location = (
+                current.path.clone(),
+                self.conv.editor.navigation_cursor_byte..self.conv.editor.navigation_cursor_byte,
+            );
+            if forward {
+                self.conv.editor.navigation_back.push(current_location);
+            } else {
+                self.conv.editor.navigation_forward.push(current_location);
+            }
+        }
+        self.open_editor_file(path.clone());
+        self.conv.editor.navigation_target = Some((path, range));
+    }
+
+    fn close_editor_git_diff(&mut self) {
+        self.request(crate::git::GitOp::ClearDiff);
+        self.conv.diff_view_open = false;
+        self.conv.editor.diff_tab_active = false;
+    }
+
+    /// Open the file behind the currently shown git diff in an editable tab.
+    pub(crate) fn open_current_diff_file(&mut self) {
+        let Some(relative) = self.conv.git.current_diff_path.clone() else {
+            return;
+        };
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        self.open_editor_file(root.join(relative));
+    }
+
+    /// The git diff rendered as an editor tab: files stay open and editable next to it.
+    fn render_editor_git_diff(&mut self, ui: &mut Ui) {
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.close_editor_git_diff();
+            return;
+        }
+        let Some((title, diff_text)) = self.conv.git.diff.clone() else {
+            return;
+        };
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.label(RichText::new("Diff").size(FS_H3).color(c_text()).strong());
+            ui.label(
+                RichText::new(&title)
+                    .size(FS_SMALL)
+                    .color(c_text_muted())
+                    .monospace(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
+                    .on_hover_text("Close diff (Esc)")
+                    .clicked()
+                {
+                    self.close_editor_git_diff();
+                }
+                if self.conv.git.current_diff_path.is_some()
+                    && crate::ui::chrome::mini_button_icon_enabled(
+                        ui,
+                        ICON_PROMPTS,
+                        "Edit file",
+                        true,
+                    )
+                    .on_hover_text("Open this file in an editable tab")
+                    .clicked()
+                {
+                    self.open_current_diff_file();
+                }
+            });
+        });
+        ui.add_space(2.0);
+        crate::ui::chrome::hairline(ui);
+        ui.add_space(4.0);
+
+        let wrap_width = ui.available_width().max(200.0);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&title, &mut hasher);
+        std::hash::Hash::hash(&diff_text, &mut hasher);
+        let key = (std::hash::Hasher::finish(&hasher), wrap_width.to_bits());
+        let cached = self
+            .conv
+            .diff_job_cache
+            .as_ref()
+            .is_some_and(|(hash, width, _)| (*hash, *width) == key);
+        if !cached {
+            let job = crate::ui::diff::diff_layout_job(&diff_text, wrap_width);
+            self.conv.diff_job_cache = Some((key.0, key.1, job));
+        }
+        ScrollArea::vertical()
+            .id_salt("editor_git_diff_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if let Some((_, _, job)) = &self.conv.diff_job_cache {
+                    ui.add(egui::Label::new(job.clone()).selectable(true));
+                }
+            });
     }
 
     fn render_editor_diff(&mut self, ui: &mut Ui) {
@@ -1372,6 +2353,104 @@ impl OxiApp {
         self.conv.sidebar_mode = super::state::SidebarMode::Explorer;
         self.conv.sidebar_open = true;
     }
+}
+
+fn live_git_line_changes(
+    disk_changes: &[crate::git::GitLineChange],
+    saved: &str,
+    current: &str,
+) -> Vec<crate::git::GitLineChange> {
+    let saved_lines = saved.split('\n').collect::<Vec<_>>();
+    let current_lines = current.split('\n').collect::<Vec<_>>();
+    if saved_lines.len() == current_lines.len() {
+        return disk_changes.to_vec();
+    }
+
+    let prefix = saved_lines
+        .iter()
+        .zip(&current_lines)
+        .take_while(|(saved, current)| saved == current)
+        .count();
+    let suffix = saved_lines[prefix..]
+        .iter()
+        .rev()
+        .zip(current_lines[prefix..].iter().rev())
+        .take_while(|(saved, current)| saved == current)
+        .count();
+    let old_end = saved_lines.len().saturating_sub(suffix);
+    let new_end = current_lines.len().saturating_sub(suffix);
+    let line_delta = current_lines.len() as isize - saved_lines.len() as isize;
+
+    let mut changes = disk_changes
+        .iter()
+        .filter_map(|change| {
+            let line = if change.line < prefix {
+                change.line
+            } else if change.line >= old_end {
+                change.line.saturating_add_signed(line_delta)
+            } else {
+                return None;
+            };
+            Some(crate::git::GitLineChange { line, ..*change })
+        })
+        .collect::<Vec<_>>();
+
+    let replaced_lines = old_end
+        .saturating_sub(prefix)
+        .min(new_end.saturating_sub(prefix));
+    for line in prefix..new_end {
+        let kind = if line < prefix + replaced_lines {
+            crate::git::GitLineKind::Modified
+        } else {
+            crate::git::GitLineKind::Added
+        };
+        if let Some(change) = changes.iter_mut().find(|change| change.line == line) {
+            // An inserted line is more specific than a pre-existing modified marker.
+            if kind == crate::git::GitLineKind::Added {
+                change.kind = kind;
+            }
+        } else {
+            changes.push(crate::git::GitLineChange { line, kind });
+        }
+    }
+    // A pure deletion has no new line to color; mark the line immediately after it instead.
+    if new_end == prefix
+        && prefix < current_lines.len()
+        && !changes.iter().any(|change| change.line == prefix)
+    {
+        changes.push(crate::git::GitLineChange {
+            line: prefix,
+            kind: crate::git::GitLineKind::Modified,
+        });
+    }
+    changes.sort_by_key(|change| change.line);
+    changes
+}
+
+fn char_index_to_byte(content: &str, char_index: usize) -> usize {
+    content
+        .char_indices()
+        .nth(char_index)
+        .map(|(byte, _)| byte)
+        .unwrap_or(content.len())
+}
+
+fn byte_range_rects(
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    content: &str,
+    range: &std::ops::Range<usize>,
+) -> Vec<egui::Rect> {
+    let start = content[..range.start].chars().count();
+    let end = start + content[range.clone()].chars().count();
+    selection_rects(
+        galley,
+        galley_pos,
+        egui::text::CCursorRange::two(
+            egui::text::CCursor::new(start),
+            egui::text::CCursor::new(end),
+        ),
+    )
 }
 
 fn selection_rects(
@@ -1646,20 +2725,51 @@ fn paint_minimap(
     ui.painter()
         .rect_filled(scrollbar_rect, 0.0, c_bg_elevated());
 
+    // Fixed-scale rows, VS Code style. Stretching the whole file across the available height made
+    // short files look sparse and crushed large files into sub-pixel noise; neither resembled the
+    // source. When the file outgrows the strip, the map scrolls in sync with the editor instead.
+    const ROW_HEIGHT: f32 = 2.0;
+    const TAB_WIDTH: usize = 4;
+    const MIN_COLUMNS: usize = 60;
+
+    fn advance_columns(mut column: usize, text: &str) -> usize {
+        for character in text.chars() {
+            column += match character {
+                '\t' => TAB_WIDTH - column % TAB_WIDTH,
+                _ => 1,
+            };
+        }
+        column
+    }
+
     // Keep the minimap's line count identical to the editor's, including a final empty line.
-    // Every line must fit in the available height: clamping rows to at least one pixel used to
-    // clip everything after roughly `minimap_rect.height()` lines in larger files.
     let lines = content.split('\n').collect::<Vec<_>>();
     // Only section ranges and colors are used by the minimap. Reuse the editor's cached or
     // incrementally adjusted highlight so the minimap neither reparses nor loses colors on input.
     let job = highlight_job;
-    let row_height = minimap_rect.height() / lines.len().max(1) as f32;
-    let max_chars = lines
+    let row_height = ROW_HEIGHT;
+    let natural_height = lines.len() as f32 * row_height;
+    // Tab-expanded columns so tab-indented files keep their editor silhouette; the floor keeps
+    // short-lined files from being stretched to the full strip width.
+    let max_columns = lines
         .iter()
-        .map(|line| line.chars().count())
+        .map(|line| advance_columns(0, line))
         .max()
         .unwrap_or(1)
-        .max(1);
+        .max(MIN_COLUMNS);
+
+    let max_y = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
+    let exact_viewport_fraction =
+        (scroll.inner_rect.height() / scroll.content_size.y.max(1.0)).clamp(0.0, 1.0);
+    let offset_fraction = if max_y > 0.0 {
+        (scroll.state.offset.y / max_y).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let map_offset = offset_fraction * (natural_height - minimap_rect.height()).max(0.0);
+    let line_top = |line: usize| minimap_rect.top() + line as f32 * row_height - map_offset;
+
+    let map_painter = ui.painter().with_clip_rect(minimap_rect);
     let mut line_index = 0usize;
     let mut column = 0usize;
     for section in &job.sections {
@@ -1672,62 +2782,63 @@ fn paint_minimap(
         };
         for fragment in section_text.split_inclusive('\n') {
             let text = fragment.trim_end_matches('\n');
-            let leading = text
-                .chars()
-                .take_while(|character| character.is_whitespace())
-                .count();
-            let visible = text.trim().chars().count();
-            let y = minimap_rect.top() + line_index as f32 * row_height;
-            if y < minimap_rect.bottom() && visible > 0 {
-                let width = (visible as f32 / max_chars as f32 * minimap_rect.width()).max(1.0);
-                let x = minimap_rect.left()
-                    + (column + leading) as f32 / max_chars as f32 * minimap_rect.width();
-                ui.painter().hline(
-                    x..=(x + width).min(minimap_rect.right()),
-                    y,
-                    egui::Stroke::new(
-                        row_height.min(1.35),
-                        crate::theme::blend_color(section.format.color, c_bg_main(), 0.58),
-                    ),
-                );
+            let y = line_top(line_index);
+            if y >= minimap_rect.top() - row_height && y < minimap_rect.bottom() {
+                let leading_text: String = text
+                    .chars()
+                    .take_while(|character| character.is_whitespace())
+                    .collect();
+                let visible_start = advance_columns(column, &leading_text);
+                let visible_end = advance_columns(visible_start, text.trim());
+                if visible_end > visible_start {
+                    let scale = minimap_rect.width() / max_columns as f32;
+                    let x = minimap_rect.left() + visible_start as f32 * scale;
+                    let width = ((visible_end - visible_start) as f32 * scale).max(1.0);
+                    map_painter.hline(
+                        x..=(x + width).min(minimap_rect.right()),
+                        y,
+                        egui::Stroke::new(
+                            1.35,
+                            crate::theme::blend_color(section.format.color, c_bg_main(), 0.58),
+                        ),
+                    );
+                }
             }
             if fragment.ends_with('\n') {
                 line_index += 1;
                 column = 0;
             } else {
-                column += text.chars().count();
+                column = advance_columns(column, text);
             }
         }
     }
 
-    let max_y = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
-    let exact_viewport_fraction =
-        (scroll.inner_rect.height() / scroll.content_size.y.max(1.0)).clamp(0.0, 1.0);
-    let offset_fraction = if max_y > 0.0 {
-        (scroll.state.offset.y / max_y).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-
     if let Some((start_line, end_line)) = selected_lines {
-        let top = minimap_rect.top() + start_line as f32 * row_height;
-        let bottom =
-            (minimap_rect.top() + (end_line + 1) as f32 * row_height).min(minimap_rect.bottom());
-        let selection = active_palette().selection_stroke;
-        ui.painter().rect_filled(
-            egui::Rect::from_min_max(
-                egui::pos2(minimap_rect.left(), top),
-                egui::pos2(minimap_rect.right(), bottom.max(top + 1.0)),
-            ),
-            0.0,
-            egui::Color32::from_rgba_unmultiplied(selection.r(), selection.g(), selection.b(), 38),
-        );
+        let top = line_top(start_line).max(minimap_rect.top());
+        let bottom = line_top(end_line + 1).min(minimap_rect.bottom());
+        if bottom > minimap_rect.top() && top < minimap_rect.bottom() {
+            let selection = active_palette().selection_stroke;
+            map_painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(minimap_rect.left(), top),
+                    egui::pos2(minimap_rect.right(), bottom.max(top + 1.0)),
+                ),
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(
+                    selection.r(),
+                    selection.g(),
+                    selection.b(),
+                    38,
+                ),
+            );
+        }
     }
 
     // Show which part of the file is currently visible without overpowering the code map.
-    let viewport_height = (minimap_rect.height() * exact_viewport_fraction).max(8.0);
+    let content_height = natural_height.min(minimap_rect.height());
+    let viewport_height = (natural_height * exact_viewport_fraction).max(8.0);
     let viewport_top =
-        minimap_rect.top() + offset_fraction * (minimap_rect.height() - viewport_height).max(0.0);
+        minimap_rect.top() + offset_fraction * (content_height - viewport_height).max(0.0);
     let viewport_rect = egui::Rect::from_min_size(
         egui::pos2(minimap_rect.left() + 1.0, viewport_top),
         egui::vec2((minimap_rect.width() - 2.0).max(0.0), viewport_height),
@@ -1764,12 +2875,53 @@ fn paint_minimap(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if response.clicked() || response.dragged() {
-        response
-            .interact_pointer_pos()
-            .map(|position| ((position.y - whole_rect.top()) / whole_rect.height()).clamp(0.0, 1.0))
+        // Map through the (possibly scrolled) map space so clicking a line jumps to that line.
+        response.interact_pointer_pos().map(|position| {
+            ((position.y - whole_rect.top() + map_offset) / natural_height.max(1.0)).clamp(0.0, 1.0)
+        })
     } else {
         None
     }
+}
+
+fn explorer_entry_color(color: egui::Color32, git_ignored: bool) -> egui::Color32 {
+    if git_ignored {
+        crate::theme::blend_color(color, c_bg_sidebar(), 0.48)
+    } else {
+        color
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_label() -> &'static str {
+    "Reveal in Finder"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reveal_label() -> &'static str {
+    "Reveal in File Manager"
+}
+
+fn reveal_path_in_file_manager(path: &Path) {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = std::process::Command::new("open");
+        command.arg("-R").arg(path);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("explorer");
+        command.arg(format!("/select,{}", path.display()));
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(path.parent().unwrap_or(path));
+        command
+    };
+    let _ = command.spawn();
 }
 
 fn paint_explorer_row(ui: &Ui, rect: egui::Rect, hovered: bool, selected: bool) {
@@ -1825,13 +2977,40 @@ fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
     Some(score)
 }
 
-fn find_match_ranges(content: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn find_match_ranges(
+    content: &str,
+    query: &str,
+    case_sensitive: bool,
+) -> Vec<std::ops::Range<usize>> {
     if query.is_empty() {
         return Vec::new();
     }
-    content
-        .match_indices(query)
-        .map(|(start, matched)| start..start + matched.len())
+    if case_sensitive {
+        return content
+            .match_indices(query)
+            .map(|(start, matched)| start..start + matched.len())
+            .collect();
+    }
+
+    // Unicode lowercasing can expand a character and change byte lengths. Build the folded
+    // string together with a source span for every folded character, then map matches back.
+    let mut folded_content = String::new();
+    let mut source_spans = Vec::new();
+    for (start, character) in content.char_indices() {
+        let end = start + character.len_utf8();
+        for folded in character.to_lowercase() {
+            folded_content.push(folded);
+            source_spans.push(start..end);
+        }
+    }
+    let folded_query = query.to_lowercase();
+    folded_content
+        .match_indices(&folded_query)
+        .filter_map(|(start, matched)| {
+            let start_char = folded_content[..start].chars().count();
+            let end_char = start_char + matched.chars().count();
+            Some(source_spans.get(start_char)?.start..source_spans.get(end_char - 1)?.end)
+        })
         .collect()
 }
 
@@ -1875,6 +3054,35 @@ fn apply_search_highlights(
             let mut tail = section.clone();
             tail.byte_range = egui::text::ByteIndex(cursor)..egui::text::ByteIndex(section_end);
             sections.push(tail);
+        }
+    }
+    job.sections = sections;
+}
+
+fn apply_definition_underline(job: &mut egui::text::LayoutJob, range: &std::ops::Range<usize>) {
+    let mut sections = Vec::with_capacity(job.sections.len() + 2);
+    for section in &job.sections {
+        let section_start = section.byte_range.start.0;
+        let section_end = section.byte_range.end.0;
+        let start = range.start.max(section_start);
+        let end = range.end.min(section_end);
+        if start >= end {
+            sections.push(section.clone());
+            continue;
+        }
+        if section_start < start {
+            let mut before = section.clone();
+            before.byte_range = egui::text::ByteIndex(section_start)..egui::text::ByteIndex(start);
+            sections.push(before);
+        }
+        let mut underlined = section.clone();
+        underlined.byte_range = egui::text::ByteIndex(start)..egui::text::ByteIndex(end);
+        underlined.format.underline = egui::Stroke::new(1.0, c_accent());
+        sections.push(underlined);
+        if end < section_end {
+            let mut after = section.clone();
+            after.byte_range = egui::text::ByteIndex(end)..egui::text::ByteIndex(section_end);
+            sections.push(after);
         }
     }
     job.sections = sections;
@@ -1961,11 +3169,20 @@ fn should_ignore(root: &Path, path: &Path, directory: bool, patterns: &[String])
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
+    (directory && ALWAYS_SKIPPED_DIRS.contains(&name))
+        || is_gitignored(root, path, directory, patterns)
+}
+
+fn is_gitignored(root: &Path, path: &Path, directory: bool, patterns: &[String]) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
     if name == ".gitignore" {
         return false;
     }
     if directory && ALWAYS_SKIPPED_DIRS.contains(&name) {
-        return true;
+        return false;
     }
     let relative = path
         .strip_prefix(root)
@@ -2015,8 +3232,13 @@ mod tests {
 
     #[test]
     fn search_ranges_use_non_overlapping_matches() {
-        assert_eq!(find_match_ranges("one two one", "one"), vec![0..3, 8..11]);
-        assert!(find_match_ranges("anything", "").is_empty());
+        assert_eq!(
+            find_match_ranges("one two one", "one", true),
+            vec![0..3, 8..11]
+        );
+        assert_eq!(find_match_ranges("One ONE", "one", false), vec![0..3, 4..7]);
+        assert!(find_match_ranges("One ONE", "one", true).is_empty());
+        assert!(find_match_ranges("anything", "", false).is_empty());
     }
 
     #[test]

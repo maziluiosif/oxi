@@ -314,20 +314,5 @@ pub(super) fn render_inline_until(
 }
 
 pub(super) fn selectable_job(ui: &mut Ui, job: LayoutJob) {
-    if job.text.is_empty() {
-        return;
-    }
-
-    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-    let (rect, response) =
-        ui.allocate_exact_size(galley.size(), eframe::egui::Sense::click_and_drag());
-    let galley_pos = rect.left_top();
-    eframe::egui::text_selection::LabelSelectionState::label_text_selection(
-        ui,
-        &response,
-        galley_pos,
-        galley,
-        ui.style().visuals.text_color(),
-        Stroke::NONE,
-    );
+    crate::theme::selectable_text_job(ui, job);
 }

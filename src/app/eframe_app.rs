@@ -147,23 +147,42 @@ impl OxiApp {
 
     /// Global shortcuts that work outside the composer TextEdit.
     /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B chats sidebar,
-    /// Cmd/Ctrl+P opens any workspace file, Cmd/Ctrl+S saves and Cmd/Ctrl+F finds in an
-    /// open editor, Cmd/Ctrl+. stops a run.
+    /// Cmd/Ctrl+E workspace explorer,
+    /// Cmd/Ctrl+Shift+B git changes panel, Cmd/Ctrl+P opens any workspace file,
+    /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds and F12 navigates
+    /// to a Rust definition in an open editor, Cmd/Ctrl+. stops a run.
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
         let cmd = Modifiers::COMMAND;
-        let (new_chat, toggle_term, toggle_sidebar, open_file, save_file, find_file, stop, escape) =
-            ctx.input(|i| {
-                (
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
-                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
-                    i.key_pressed(Key::Escape),
-                )
-            });
+        let cmd_shift = Modifiers::COMMAND.plus(Modifiers::SHIFT);
+        let (
+            new_chat,
+            toggle_term,
+            toggle_sidebar,
+            toggle_explorer,
+            toggle_git,
+            open_file,
+            save_file,
+            find_file,
+            find_replace,
+            goto_definition,
+            stop,
+            escape,
+        ) = ctx.input(|i| {
+            (
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Backtick),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::B),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::E),
+                i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::B),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::H),
+                i.modifiers.is_none() && i.key_pressed(Key::F12),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
+                i.key_pressed(Key::Escape),
+            )
+        });
 
         if new_chat && !self.conv.settings_open {
             self.new_chat();
@@ -174,18 +193,72 @@ impl OxiApp {
         if toggle_sidebar {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleSidebar);
         }
+        if toggle_explorer {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleExplorer);
+        }
+        if toggle_git {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleGitChanges);
+        }
         if open_file && !self.conv.settings_open && !self.conv.editor.file_picker_open {
             self.open_file_picker();
         }
         if save_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {
             self.save_editor_file();
         }
-        if find_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {
-            self.conv.editor.find_open = true;
-            self.conv.editor.find_select_pending = !self.conv.editor.find_query.is_empty();
-            ctx.memory_mut(|memory| {
-                memory.request_focus(egui::Id::new("workspace_editor_find"));
-            });
+        if (find_file || find_replace)
+            && !self.conv.settings_open
+            && self.conv.editor.active_document().is_some()
+        {
+            let find_next =
+                find_file && self.conv.editor.find_open && !self.conv.editor.find_query.is_empty();
+            if find_next {
+                let match_count = self
+                    .conv
+                    .editor
+                    .active_document()
+                    .map(|document| {
+                        super::file_explorer::find_match_ranges(
+                            &document.content,
+                            &self.conv.editor.find_query,
+                            self.conv.editor.find_case_sensitive,
+                        )
+                        .len()
+                    })
+                    .unwrap_or(0);
+                if match_count > 0 {
+                    self.conv.editor.find_active_match = if self.conv.editor.find_has_navigated {
+                        (self.conv.editor.find_active_match + 1) % match_count
+                    } else {
+                        0
+                    };
+                    self.conv.editor.find_has_navigated = true;
+                    self.conv.editor.find_select_pending = false;
+                    self.conv.editor.find_reveal_pending = true;
+                    // Cmd/Ctrl+F is Find Next and must keep keyboard focus in the actual
+                    // Find widget after the editor scroll/caret update runs this frame.
+                    self.conv.editor.find_focus_editor_pending = false;
+                    self.conv.editor.focus_find_next_frame = true;
+                }
+            } else {
+                self.conv.editor.find_open = true;
+                self.conv.editor.find_replace_open = find_replace;
+                // Opening Find only focuses its field; it must not move the document.
+                self.conv.editor.find_select_pending = false;
+                self.conv.editor.find_reveal_pending = false;
+                self.conv.editor.find_has_navigated = false;
+                self.conv.editor.focus_find_next_frame = true;
+                ctx.memory_mut(|memory| {
+                    memory.request_focus(egui::Id::new("workspace_editor_find"));
+                });
+            }
+        }
+        if goto_definition
+            && !self.conv.settings_open
+            && self.conv.editor.active_document().is_some_and(|document| {
+                document.path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+            })
+        {
+            self.conv.editor.goto_definition_requested = true;
         }
         if stop && self.any_waiting_response() {
             self.send_abort();
@@ -195,10 +268,12 @@ impl OxiApp {
         // is hidden while Settings is open, so Escape works there regardless). Escape
         // for the shared confirm modal is handled by the modal itself.
         if escape && self.conv.editor.file_picker_open {
-            self.conv.editor.file_picker_open = false;
+            self.cancel_file_picker();
         } else if escape && self.conv.editor.find_open {
             self.conv.editor.find_open = false;
-            self.conv.editor.find_select_pending = false;
+            // Preserve/apply the current result before returning focus to the editor.
+            self.conv.editor.find_select_pending = self.conv.editor.find_has_navigated;
+            self.conv.editor.find_focus_editor_pending = true;
         } else if escape
             && (!self.conv.terminal_open || self.conv.settings_open)
             && !self.confirm_prompt_open()

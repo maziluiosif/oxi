@@ -644,6 +644,7 @@ impl AppSettings {
             | LlmProviderKind::LmStudio
             | LlmProviderKind::Ollama
             | LlmProviderKind::LocalHf
+            | LlmProviderKind::RemoteHf
             | LlmProviderKind::ClaudeCodeAcp => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;
@@ -689,6 +690,37 @@ impl AppSettings {
             crate::theme::CHAT_COLUMN_WIDTH_MIN,
             crate::theme::CHAT_COLUMN_WIDTH_MAX,
         );
+        // Split the former dual-purpose Local HF config into dedicated providers. Preserve
+        // an existing SSH setup by moving it to Remote HF the first time this version loads.
+        if !self.providers.contains_key(&LlmProviderKind::RemoteHf)
+            && let Some(local) = self.providers.get(&LlmProviderKind::LocalHf).cloned()
+            && matches!(local.location, ComputeLocation::RemoteSsh(_))
+        {
+            let mut remote = local;
+            remote.provider = LlmProviderKind::RemoteHf;
+            self.providers.insert(LlmProviderKind::RemoteHf, remote);
+            self.providers.insert(
+                LlmProviderKind::LocalHf,
+                ProviderConfig::new(LlmProviderKind::LocalHf),
+            );
+            if self.active_provider == LlmProviderKind::LocalHf {
+                self.active_provider = LlmProviderKind::RemoteHf;
+            }
+            if self.commit_msg_provider == Some(LlmProviderKind::LocalHf) {
+                self.commit_msg_provider = Some(LlmProviderKind::RemoteHf);
+            }
+        }
+
+        // Remote HF used to inherit Local HF's managed port. Move that old default to the
+        // dedicated Remote HF port; custom non-default ports remain untouched. This matters
+        // when the SSH target is this same machine, where both runtimes otherwise bind 18080.
+        if let Some(remote) = self.providers.get_mut(&LlmProviderKind::RemoteHf)
+            && let ComputeLocation::RemoteSsh(ssh) = &mut remote.location
+            && ssh.remote_runtime_port == LlmProviderKind::LocalHf.default_remote_runtime_port()
+        {
+            ssh.remote_runtime_port = LlmProviderKind::RemoteHf.default_remote_runtime_port();
+        }
+
         // Every provider kind gets an entry (files written by older versions, or with
         // kinds added since, may miss some), and the `#[serde(skip)]`ped `provider` field
         // is re-stamped from the map key it was deserialized under.
@@ -865,9 +897,10 @@ impl AppSettings {
         LlmProviderKind::ALL
             .into_iter()
             .filter(|&kind| match kind {
-                LlmProviderKind::LmStudio | LlmProviderKind::Ollama | LlmProviderKind::LocalHf => {
-                    true
-                }
+                LlmProviderKind::LmStudio
+                | LlmProviderKind::Ollama
+                | LlmProviderKind::LocalHf
+                | LlmProviderKind::RemoteHf => true,
                 // Claude Code handles its own auth (subscription login or ANTHROPIC_API_KEY),
                 // so it's always offered; the subprocess reports a clear error if not logged in.
                 LlmProviderKind::ClaudeCodeAcp => true,

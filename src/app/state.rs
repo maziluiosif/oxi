@@ -57,6 +57,7 @@ pub enum ConfirmAction {
     DeleteWorkspace { wi: usize },
     GitDiscard { paths: Vec<String> },
     DeleteLocalModel { id: String },
+    DeleteRemoteModel { id: String, path: String },
     DeleteVoiceModel { id: String },
 }
 
@@ -73,24 +74,62 @@ pub struct EditorState {
     pub active: Option<usize>,
     /// Active tab remembered while the chat/agent view is shown.
     pub hidden_active: Option<usize>,
+    /// The git diff pseudo-tab is the selected editor tab. The diff itself lives in
+    /// `git.diff`; this only tracks which tab the editor shows so files stay editable
+    /// while a diff is open.
+    pub diff_tab_active: bool,
     pub error: Option<String>,
     pub find_open: bool,
+    /// Whether the bottom search panel also shows replacement controls.
+    pub find_replace_open: bool,
     pub find_query: String,
+    /// Match letter casing exactly when searching.
+    pub find_case_sensitive: bool,
     pub replace_query: String,
     /// Selected occurrence in the active document's current search results.
     pub find_active_match: usize,
     pub find_last_query: String,
-    /// Move the editor selection/caret to `find_active_match` on the next render.
+    pub find_last_case_sensitive: bool,
+    /// Whether the current query has already navigated to its first match.
+    pub find_has_navigated: bool,
+    /// Move the editor caret to `find_active_match` on the next render.
     pub find_select_pending: bool,
+    /// Reveal `find_active_match` without moving the editor caret or taking focus from Find.
+    pub find_reveal_pending: bool,
+    /// Return keyboard focus to the editor after Find is closed, preserving its current match.
+    pub find_focus_editor_pending: bool,
+    /// Move keyboard focus into the Find input on its next render.
+    pub focus_find_next_frame: bool,
+    /// Select and reveal this byte range after opening a definition target.
+    pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
+    /// Navigate from the editor caret on the next render (normally requested by F12).
+    pub goto_definition_requested: bool,
+    /// Definition-navigation history, independent from the order of open tabs.
+    pub navigation_back: Vec<(PathBuf, std::ops::Range<usize>)>,
+    pub navigation_forward: Vec<(PathBuf, std::ops::Range<usize>)>,
+    /// Last caret byte observed in the active editor document.
+    pub navigation_cursor_byte: usize,
     pub show_diff: bool,
     pub file_operation: Option<FileOperation>,
     pub file_operation_name: String,
+    /// Move keyboard focus into the inline file/folder name field on its next render.
+    pub focus_file_operation_next_frame: bool,
     /// Cmd/Ctrl+P workspace file picker state.
     pub file_picker_open: bool,
     pub file_picker_query: String,
     pub file_picker_last_query: String,
     pub file_picker_selected: usize,
     pub file_picker_files: Vec<PathBuf>,
+    /// File currently shown as a temporary editor tab behind the picker.
+    pub file_picker_preview: Option<PathBuf>,
+    /// Editor tab that was active before the picker opened.
+    pub file_picker_previous_active: Option<usize>,
+    pub file_picker_previous_diff_active: bool,
+    /// Whether the preview tab was created by the picker and should be removed on cancel.
+    pub file_picker_preview_created: bool,
+    /// File that the Explorer should expand to and scroll into view on its next render.
+    /// Ctrl/Cmd+P previews deliberately never set this.
+    pub explorer_reveal_pending: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -252,14 +291,27 @@ pub struct LocalModelsUiState {
     pub download_label: String,
     pub download_progress: Option<(u64, Option<u64>)>,
     pub downloaded: Vec<crate::local_models::DownloadedModel>,
+    /// Models present on the Remote SSH host — kept separate from the local manifest so
+    /// switching the Local HF compute location swaps the "Downloaded models" list.
+    pub remote_downloaded: Vec<crate::local_models::DownloadedModel>,
+    pub remote_list_loading: bool,
+    /// SSH target ("user@host:port") `remote_downloaded` was fetched for; `None` = never
+    /// fetched. A mismatch with the current SSH config triggers a refetch.
+    pub remote_list_for: Option<String>,
     pub runtime_path: String,
     pub runtime_installing: bool,
     pub runtime_install_progress: Option<(u64, Option<u64>)>,
     pub runtime_port: u16,
     pub context_size: usize,
     pub gpu_layers: i32,
+    /// Model running in the local managed llama-server process.
     pub running_model_id: Option<String>,
+    /// Model running in the SSH-managed llama-server process. Kept separate so an SSH
+    /// connection to this machine cannot make Local HF appear to run the remote model.
+    pub remote_running_model_id: Option<String>,
     pub runtime_status: Option<String>,
+    /// Runtime diagnostics produced by Remote HF operations only.
+    pub remote_runtime_status: Option<String>,
 }
 
 pub struct LocalRuntimeState {
@@ -343,6 +395,8 @@ pub struct ConversationState {
     pub sidebar_mode: SidebarMode,
     /// Directories expanded in the workspace explorer. Children are read only when expanded.
     pub explorer_expanded: HashSet<PathBuf>,
+    /// Workspace roots are open by default; this records roots explicitly folded by the user.
+    pub explorer_collapsed_roots: HashSet<PathBuf>,
     pub editor: EditorState,
     /// Settings page left-nav width (independent of the chat sidebar).
     pub settings_sidebar_width: f32,
@@ -404,7 +458,10 @@ pub struct ConversationState {
     /// receiver is overwritten.
     pub model_rxs: Vec<std::sync::mpsc::Receiver<ModelFetchMsg>>,
     pub local_models: LocalModelsUiState,
-    pub local_model_rx: Option<std::sync::mpsc::Receiver<crate::local_models::LocalModelMsg>>,
+    /// Receivers for local/remote model operations. Several operations can overlap (for
+    /// example, an automatic SSH listing and a HuggingFace search), so replacing a single
+    /// receiver here would lose the older operation's result and leave its loading flag stuck.
+    pub local_model_rxs: Vec<std::sync::mpsc::Receiver<crate::local_models::LocalModelMsg>>,
     pub local_runtime: Option<LocalRuntimeState>,
     /// Draft (in-memory only) SSH passwords for Remote SSH compute targets, keyed by
     /// provider kind. Loaded lazily from the credential store on first edit, written
@@ -430,7 +487,7 @@ pub struct ConversationState {
     /// UI state for Settings → Voice + the composer mic button.
     pub voice_ui: VoiceUiState,
     /// Per-download-operation channel for the voice model catalog (drained each frame),
-    /// same take/put-back pattern as `local_model_rx`.
+    /// using the same take/put-back pattern as the local-model receivers.
     pub voice_model_rx: Option<std::sync::mpsc::Receiver<crate::voice_models::VoiceModelMsg>>,
     /// Long-lived channel from the background [`crate::voice_engine::VoiceManager`] thread
     /// (created once at startup, never disconnects — `OxiApp::voice` keeps a sender alive

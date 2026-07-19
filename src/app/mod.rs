@@ -138,6 +138,7 @@ impl OxiApp {
                 sidebar_width: settings.sidebar_width,
                 sidebar_mode: state::SidebarMode::default(),
                 explorer_expanded: std::collections::HashSet::new(),
+                explorer_collapsed_roots: std::collections::HashSet::new(),
                 editor: state::EditorState::default(),
                 settings_sidebar_width: 220.0,
                 terminal_open: settings.terminal_open,
@@ -181,7 +182,7 @@ impl OxiApp {
                     gpu_layers: settings.local_hf.gpu_layers,
                     ..Default::default()
                 },
-                local_model_rx: None,
+                local_model_rxs: Vec::new(),
                 local_runtime: None,
                 ssh_password_drafts: std::collections::HashMap::new(),
                 ssh_test: std::collections::HashMap::new(),

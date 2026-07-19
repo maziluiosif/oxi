@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{Color32, FontId, Label, Painter, Pos2, Ui};
+use eframe::egui::{Color32, FontId, Label, Painter, Pos2, Sense, Stroke, Ui};
 
-use super::palette::{c_accent, c_text_muted};
+use super::palette::{active_palette, c_accent, c_bg_main, c_text_muted};
 
 /// Human-readable byte size (B / MB / GB).
 pub fn fmt_bytes(n: u64) -> String {
@@ -33,6 +33,48 @@ pub fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {
         lerp(from.b(), to.b()),
         lerp(from.a(), to.a()),
     )
+}
+
+/// The workspace editor's selection wash: `selection_bg` blended over the main background.
+/// Shared by the editor and every selectable text run so selections look identical app-wide.
+pub fn editor_selection_fill() -> Color32 {
+    blend_color(c_bg_main(), active_palette().selection_bg, 0.74)
+}
+
+/// Lay out `job` and run egui's label text selection styled like the workspace editor.
+/// egui recolors selected glyphs to `selection.stroke.color`; feeding it the job's dominant
+/// section color keeps the text visually unchanged, so only the wash marks the selection.
+pub fn selectable_text_job(ui: &mut Ui, job: LayoutJob) {
+    if job.text.is_empty() {
+        return;
+    }
+    let dominant = job
+        .sections
+        .iter()
+        .max_by_key(|section| {
+            section
+                .byte_range
+                .end
+                .0
+                .saturating_sub(section.byte_range.start.0)
+        })
+        .map(|section| section.format.color)
+        .unwrap_or_else(|| ui.style().visuals.text_color());
+    let fallback = ui.style().visuals.text_color();
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::click_and_drag());
+    let saved = ui.visuals().selection;
+    ui.visuals_mut().selection.bg_fill = editor_selection_fill();
+    ui.visuals_mut().selection.stroke.color = dominant;
+    eframe::egui::text_selection::LabelSelectionState::label_text_selection(
+        ui,
+        &response,
+        rect.left_top(),
+        galley,
+        fallback,
+        Stroke::NONE,
+    );
+    ui.visuals_mut().selection = saved;
 }
 
 pub fn animated_status_job(label: &str, size: f32, time: f64) -> LayoutJob {

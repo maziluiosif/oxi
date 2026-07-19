@@ -80,7 +80,20 @@ impl OxiApp {
             format!("Chat {}", w.sessions.len() + 1)
         };
 
+        // The composer is app-level UI state while drafts belong to sessions. Stash the
+        // current draft before changing the active index; otherwise the new blank chat shows
+        // the previous chat's text/images until the user switches away and back.
+        self.cancel_edit_last_prompt();
         let active_workspace = self.conv.active_workspace;
+        let old_session = self.active_workspace().active;
+        self.conv.workspaces[active_workspace].sessions[old_session].input_text =
+            std::mem::take(&mut self.conv.input);
+        self.conv.workspaces[active_workspace].sessions[old_session].pending_images =
+            std::mem::take(&mut self.conv.pending_images);
+        self.conv.input_history_index = None;
+        self.conv.input_history_draft.clear();
+        self.conv.composer_notice = None;
+
         let old_states = std::mem::take(&mut self.flow.sessions);
         self.active_workspace_mut()
             .sessions

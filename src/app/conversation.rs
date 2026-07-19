@@ -536,7 +536,10 @@ impl OxiApp {
                 // at the bottom edge.
                 ui.add_space(bottom_overlay_h.max(0.0));
 
-                if force_scroll_bottom && !user_has_selection {
+                if (force_scroll_bottom || hold_stick) && !user_has_selection {
+                    // Request the bottom using the final in-content cursor, after every message
+                    // and the composer overlay spacer have been laid out. Repeat during the short
+                    // startup hold because markdown/code blocks can settle over several frames.
                     ui.scroll_to_cursor(Some(Align::BOTTOM));
                 }
             });
@@ -590,6 +593,9 @@ impl OxiApp {
         // re-armed it for the next frame.
         if force_scroll_bottom && self.conv.scroll_to_bottom_once {
             self.conv.scroll_to_bottom_once = false;
+            // Startup/session-load layout is not stable in one pass. Holding stick-to-bottom
+            // briefly ensures the restored conversation opens at its actual final message.
+            self.conv.stick_bottom_hold_frames = self.conv.stick_bottom_hold_frames.max(3);
         }
         if self.conv.stick_bottom_hold_frames > 0 {
             self.conv.stick_bottom_hold_frames -= 1;
