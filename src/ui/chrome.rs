@@ -11,7 +11,7 @@ mod copy_modal;
 pub use copy_modal::*;
 
 pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
-    let response = Frame::new()
+    Frame::new()
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
         .corner_radius(RADIUS_BUTTON)
@@ -26,8 +26,7 @@ pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Respons
                     .hint_text(hint),
             )
         })
-        .inner;
-    response
+        .inner
 }
 
 /// Framed single-line settings input — matches the sidebar field language so settings

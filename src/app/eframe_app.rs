@@ -209,9 +209,8 @@ impl OxiApp {
             && !self.conv.settings_open
             && self.conv.editor.active_document().is_some()
         {
-            let find_next = find_file
-                && self.conv.editor.find_open
-                && !self.conv.editor.find_query.is_empty();
+            let find_next =
+                find_file && self.conv.editor.find_open && !self.conv.editor.find_query.is_empty();
             if find_next {
                 let match_count = self
                     .conv

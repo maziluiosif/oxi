@@ -104,10 +104,8 @@ impl OxiApp {
             .and_then(|name| name.to_str())
             .unwrap_or_else(|| root.to_str().unwrap_or("workspace"));
         let root_expanded = !self.conv.explorer_collapsed_roots.contains(&root);
-        let (root_rect, root_response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), 22.0),
-            egui::Sense::click(),
-        );
+        let (root_rect, root_response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
         paint_explorer_row(ui, root_rect, root_response.hovered(), false);
         ui.scope_builder(
             egui::UiBuilder::new().max_rect(root_rect.shrink2(egui::vec2(4.0, 0.0))),
@@ -527,7 +525,7 @@ impl OxiApp {
             FileOperation::Rename(path) if !invalid_name => {
                 let destination = path.parent().unwrap_or(Path::new(".")).join(name);
                 let renames_workspace_root =
-                    path == PathBuf::from(&self.active_workspace().root_path);
+                    path.as_path() == Path::new(&self.active_workspace().root_path);
                 let result = std::fs::rename(&path, &destination);
                 if result.is_ok() {
                     if renames_workspace_root {
@@ -800,17 +798,16 @@ impl OxiApp {
             return;
         }
 
-        if self.conv.editor.file_picker_preview_created {
-            if let Some(preview) = self.conv.editor.file_picker_preview.as_ref()
-                && let Some(index) = self
-                    .conv
-                    .editor
-                    .documents
-                    .iter()
-                    .position(|document| &document.path == preview)
-            {
-                self.conv.editor.documents.remove(index);
-            }
+        if self.conv.editor.file_picker_preview_created
+            && let Some(preview) = self.conv.editor.file_picker_preview.as_ref()
+            && let Some(index) = self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .position(|document| &document.path == preview)
+        {
+            self.conv.editor.documents.remove(index);
         }
 
         let safe_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -835,17 +832,16 @@ impl OxiApp {
     }
 
     fn clear_file_picker_preview(&mut self) {
-        if self.conv.editor.file_picker_preview_created {
-            if let Some(preview) = self.conv.editor.file_picker_preview.as_ref()
-                && let Some(index) = self
-                    .conv
-                    .editor
-                    .documents
-                    .iter()
-                    .position(|document| &document.path == preview)
-            {
-                self.conv.editor.documents.remove(index);
-            }
+        if self.conv.editor.file_picker_preview_created
+            && let Some(preview) = self.conv.editor.file_picker_preview.as_ref()
+            && let Some(index) = self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .position(|document| &document.path == preview)
+        {
+            self.conv.editor.documents.remove(index);
         }
         self.conv.editor.active = self
             .conv
@@ -1131,198 +1127,208 @@ impl OxiApp {
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
-                    for (index, document) in self.conv.editor.documents.iter().enumerate() {
-                        let name = document
-                            .path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy();
-                        let label = if document.is_dirty() {
-                            format!("{name}  ●")
-                        } else {
-                            name.into_owned()
-                        };
-                        let active = !git_diff_active && self.conv.editor.active == Some(index);
-                        let font = FontId::proportional(FS_SMALL);
-                        let label_width = ui.fonts_mut(|fonts| {
-                            fonts
-                                .layout_no_wrap(label.clone(), font.clone(), c_text())
-                                .rect
-                                .width()
-                        });
-                        let tab_width = label_width + 42.0;
-                        let (rect, response) = ui
-                            .allocate_exact_size(egui::vec2(tab_width, 28.0), egui::Sense::click());
-                        // The close hit target overlaps the tab response. Test the full rectangle
-                        // so the name and close icon still share one hover surface.
-                        let hovered = ui.rect_contains_pointer(rect);
-                        let fill = if active {
-                            c_bg_main()
-                        } else if hovered {
-                            c_row_hover()
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        if fill != egui::Color32::TRANSPARENT {
-                            let mut fill_rect = rect;
-                            if active || hovered {
-                                // Active and hovered tabs share the same silhouette, extending through
-                                // the header's lower edge instead of looking like floating pills.
-                                fill_rect.max.y += RADIUS_ROW as f32 + 4.0;
-                            }
-                            ui.painter().rect_filled(
-                                fill_rect,
-                                egui::CornerRadius::same(RADIUS_ROW),
-                                fill,
-                            );
-                        }
-                        ui.painter().text(
-                            egui::pos2(rect.left() + 10.0, rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            label,
-                            font,
-                            if active {
-                                c_text_strong()
-                            } else {
-                                c_text_muted()
-                            },
-                        );
-                        let close_rect = egui::Rect::from_center_size(
-                            egui::pos2(rect.right() - 13.0, rect.center().y),
-                            egui::vec2(22.0, rect.height()),
-                        );
-                        let close_response = ui.interact(
-                            close_rect,
-                            ui.id().with(("editor_tab_close", index)),
-                            egui::Sense::click(),
-                        );
-                        ui.painter().text(
-                            close_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            ICON_CLOSE,
-                            FontId::new(FS_TINY, icon_font()),
-                            if close_response.hovered() {
-                                c_accent()
-                            } else {
-                                c_text_faint()
-                            },
-                        );
-                        if close_response.hovered() || hovered {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if close_response.clicked() || response.middle_clicked() {
-                            close = Some(index);
-                        } else if response.clicked() {
-                            select = Some(index);
-                        }
-                        let response = response.on_hover_text(document.path.display().to_string());
-                        response.context_menu(|ui| {
-                            if ui.button("Save").clicked() {
-                                select = Some(index);
-                                save = true;
-                                ui.close();
-                            }
-                            if ui.button("Reveal in Explorer").clicked() {
-                                select = Some(index);
-                                reveal = true;
-                                ui.close();
-                            }
-                            if ui.button("Unsaved changes diff").clicked() {
-                                select = Some(index);
-                                toggle_diff = true;
-                                ui.close();
-                            }
-                            if ui.button("Close").clicked() {
-                                close = Some(index);
-                                ui.close();
-                            }
-                        });
-                    }
+                                for (index, document) in
+                                    self.conv.editor.documents.iter().enumerate()
+                                {
+                                    let name = document
+                                        .path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy();
+                                    let label = if document.is_dirty() {
+                                        format!("{name}  ●")
+                                    } else {
+                                        name.into_owned()
+                                    };
+                                    let active =
+                                        !git_diff_active && self.conv.editor.active == Some(index);
+                                    let font = FontId::proportional(FS_SMALL);
+                                    let label_width = ui.fonts_mut(|fonts| {
+                                        fonts
+                                            .layout_no_wrap(label.clone(), font.clone(), c_text())
+                                            .rect
+                                            .width()
+                                    });
+                                    let tab_width = label_width + 42.0;
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(tab_width, 28.0),
+                                        egui::Sense::click(),
+                                    );
+                                    // The close hit target overlaps the tab response. Test the full rectangle
+                                    // so the name and close icon still share one hover surface.
+                                    let hovered = ui.rect_contains_pointer(rect);
+                                    let fill = if active {
+                                        c_bg_main()
+                                    } else if hovered {
+                                        c_row_hover()
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    };
+                                    if fill != egui::Color32::TRANSPARENT {
+                                        let mut fill_rect = rect;
+                                        if active || hovered {
+                                            // Active and hovered tabs share the same silhouette, extending through
+                                            // the header's lower edge instead of looking like floating pills.
+                                            fill_rect.max.y += RADIUS_ROW as f32 + 4.0;
+                                        }
+                                        ui.painter().rect_filled(
+                                            fill_rect,
+                                            egui::CornerRadius::same(RADIUS_ROW),
+                                            fill,
+                                        );
+                                    }
+                                    ui.painter().text(
+                                        egui::pos2(rect.left() + 10.0, rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        label,
+                                        font,
+                                        if active {
+                                            c_text_strong()
+                                        } else {
+                                            c_text_muted()
+                                        },
+                                    );
+                                    let close_rect = egui::Rect::from_center_size(
+                                        egui::pos2(rect.right() - 13.0, rect.center().y),
+                                        egui::vec2(22.0, rect.height()),
+                                    );
+                                    let close_response = ui.interact(
+                                        close_rect,
+                                        ui.id().with(("editor_tab_close", index)),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().text(
+                                        close_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        ICON_CLOSE,
+                                        FontId::new(FS_TINY, icon_font()),
+                                        if close_response.hovered() {
+                                            c_accent()
+                                        } else {
+                                            c_text_faint()
+                                        },
+                                    );
+                                    if close_response.hovered() || hovered {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    if close_response.clicked() || response.middle_clicked() {
+                                        close = Some(index);
+                                    } else if response.clicked() {
+                                        select = Some(index);
+                                    }
+                                    let response =
+                                        response.on_hover_text(document.path.display().to_string());
+                                    response.context_menu(|ui| {
+                                        if ui.button("Save").clicked() {
+                                            select = Some(index);
+                                            save = true;
+                                            ui.close();
+                                        }
+                                        if ui.button("Reveal in Explorer").clicked() {
+                                            select = Some(index);
+                                            reveal = true;
+                                            ui.close();
+                                        }
+                                        if ui.button("Unsaved changes diff").clicked() {
+                                            select = Some(index);
+                                            toggle_diff = true;
+                                            ui.close();
+                                        }
+                                        if ui.button("Close").clicked() {
+                                            close = Some(index);
+                                            ui.close();
+                                        }
+                                    });
+                                }
 
-                    // Git diff pseudo-tab: keeps the diff one click away from the
-                    // editable file tabs instead of replacing the whole chat area.
-                    if git_diff_tab {
-                        let title = self
-                            .conv
-                            .git
-                            .current_diff_path
-                            .as_deref()
-                            .map(|path| path.rsplit_once('/').map_or(path, |(_, file)| file))
-                            .unwrap_or("diff")
-                            .to_owned();
-                        let label = format!("Diff: {title}");
-                        let font = FontId::proportional(FS_SMALL);
-                        let label_width = ui.fonts_mut(|fonts| {
-                            fonts
-                                .layout_no_wrap(label.clone(), font.clone(), c_text())
-                                .rect
-                                .width()
-                        });
-                        let tab_width = label_width + 42.0;
-                        let (rect, response) = ui
-                            .allocate_exact_size(egui::vec2(tab_width, 28.0), egui::Sense::click());
-                        let hovered = ui.rect_contains_pointer(rect);
-                        let fill = if git_diff_active {
-                            c_bg_main()
-                        } else if hovered {
-                            c_row_hover()
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        if fill != egui::Color32::TRANSPARENT {
-                            let mut fill_rect = rect;
-                            if git_diff_active || hovered {
-                                fill_rect.max.y += RADIUS_ROW as f32 + 4.0;
-                            }
-                            ui.painter().rect_filled(
-                                fill_rect,
-                                egui::CornerRadius::same(RADIUS_ROW),
-                                fill,
-                            );
-                        }
-                        ui.painter().text(
-                            egui::pos2(rect.left() + 10.0, rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            label,
-                            font,
-                            if git_diff_active {
-                                c_text_strong()
-                            } else {
-                                c_text_muted()
-                            },
-                        );
-                        let close_rect = egui::Rect::from_center_size(
-                            egui::pos2(rect.right() - 13.0, rect.center().y),
-                            egui::vec2(22.0, rect.height()),
-                        );
-                        let close_response = ui.interact(
-                            close_rect,
-                            ui.id().with("editor_git_diff_tab_close"),
-                            egui::Sense::click(),
-                        );
-                        ui.painter().text(
-                            close_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            ICON_CLOSE,
-                            FontId::new(FS_TINY, icon_font()),
-                            if close_response.hovered() {
-                                c_accent()
-                            } else {
-                                c_text_faint()
-                            },
-                        );
-                        if close_response.hovered() || hovered {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        if close_response.clicked() || response.middle_clicked() {
-                            close_git_diff = true;
-                        } else if response.clicked() {
-                            select_git_diff = true;
-                        }
-                        if let Some(path) = self.conv.git.current_diff_path.as_deref() {
-                            response.on_hover_text(path);
-                        }
-                    }
+                                // Git diff pseudo-tab: keeps the diff one click away from the
+                                // editable file tabs instead of replacing the whole chat area.
+                                if git_diff_tab {
+                                    let title = self
+                                        .conv
+                                        .git
+                                        .current_diff_path
+                                        .as_deref()
+                                        .map(|path| {
+                                            path.rsplit_once('/').map_or(path, |(_, file)| file)
+                                        })
+                                        .unwrap_or("diff")
+                                        .to_owned();
+                                    let label = format!("Diff: {title}");
+                                    let font = FontId::proportional(FS_SMALL);
+                                    let label_width = ui.fonts_mut(|fonts| {
+                                        fonts
+                                            .layout_no_wrap(label.clone(), font.clone(), c_text())
+                                            .rect
+                                            .width()
+                                    });
+                                    let tab_width = label_width + 42.0;
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(tab_width, 28.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let hovered = ui.rect_contains_pointer(rect);
+                                    let fill = if git_diff_active {
+                                        c_bg_main()
+                                    } else if hovered {
+                                        c_row_hover()
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    };
+                                    if fill != egui::Color32::TRANSPARENT {
+                                        let mut fill_rect = rect;
+                                        if git_diff_active || hovered {
+                                            fill_rect.max.y += RADIUS_ROW as f32 + 4.0;
+                                        }
+                                        ui.painter().rect_filled(
+                                            fill_rect,
+                                            egui::CornerRadius::same(RADIUS_ROW),
+                                            fill,
+                                        );
+                                    }
+                                    ui.painter().text(
+                                        egui::pos2(rect.left() + 10.0, rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        label,
+                                        font,
+                                        if git_diff_active {
+                                            c_text_strong()
+                                        } else {
+                                            c_text_muted()
+                                        },
+                                    );
+                                    let close_rect = egui::Rect::from_center_size(
+                                        egui::pos2(rect.right() - 13.0, rect.center().y),
+                                        egui::vec2(22.0, rect.height()),
+                                    );
+                                    let close_response = ui.interact(
+                                        close_rect,
+                                        ui.id().with("editor_git_diff_tab_close"),
+                                        egui::Sense::click(),
+                                    );
+                                    ui.painter().text(
+                                        close_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        ICON_CLOSE,
+                                        FontId::new(FS_TINY, icon_font()),
+                                        if close_response.hovered() {
+                                            c_accent()
+                                        } else {
+                                            c_text_faint()
+                                        },
+                                    );
+                                    if close_response.hovered() || hovered {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    if close_response.clicked() || response.middle_clicked() {
+                                        close_git_diff = true;
+                                    } else if response.clicked() {
+                                        select_git_diff = true;
+                                    }
+                                    if let Some(path) = self.conv.git.current_diff_path.as_deref() {
+                                        response.on_hover_text(path);
+                                    }
+                                }
                             });
                         });
 
@@ -1426,8 +1432,7 @@ impl OxiApp {
 
     fn render_find_replace(&mut self, ui: &mut Ui) {
         let query_changed = self.conv.editor.find_query != self.conv.editor.find_last_query
-            || self.conv.editor.find_case_sensitive
-                != self.conv.editor.find_last_case_sensitive;
+            || self.conv.editor.find_case_sensitive != self.conv.editor.find_last_case_sensitive;
         if query_changed {
             self.conv
                 .editor
@@ -1505,10 +1510,7 @@ impl OxiApp {
                     let case_toggle = ui
                         .add_sized(
                             [32.0, ROW_HEIGHT],
-                            egui::Button::selectable(
-                                self.conv.editor.find_case_sensitive,
-                                "Aa",
-                            ),
+                            egui::Button::selectable(self.conv.editor.find_case_sensitive, "Aa"),
                         )
                         .on_hover_text(if self.conv.editor.find_case_sensitive {
                             "Case sensitive"
@@ -1523,9 +1525,7 @@ impl OxiApp {
                         egui::vec2(LABEL_WIDTH, ROW_HEIGHT),
                         Layout::right_to_left(Align::Center),
                         |ui| {
-                            ui.label(
-                                RichText::new("Find:").size(FS_SMALL).color(c_text_muted()),
-                            );
+                            ui.label(RichText::new("Find:").size(FS_SMALL).color(c_text_muted()));
                         },
                     );
                     let find_response = ui
@@ -1543,8 +1543,7 @@ impl OxiApp {
                             },
                         )
                         .inner;
-                    if query_changed
-                        || std::mem::take(&mut self.conv.editor.focus_find_next_frame)
+                    if query_changed || std::mem::take(&mut self.conv.editor.focus_find_next_frame)
                     {
                         find_response.request_focus();
                     }
@@ -1557,12 +1556,8 @@ impl OxiApp {
                     close = ui
                         .add_sized(
                             [CLOSE_WIDTH, 28.0],
-                            egui::Button::new(icon_glyph_rich(
-                                ICON_CLOSE,
-                                FS_TINY,
-                                c_text_muted(),
-                            ))
-                            .frame(false),
+                            egui::Button::new(icon_glyph_rich(ICON_CLOSE, FS_TINY, c_text_muted()))
+                                .frame(false),
                         )
                         .on_hover_text("Close find")
                         .clicked();
@@ -1570,9 +1565,9 @@ impl OxiApp {
                     // A single-line TextEdit gives up focus when Enter is pressed. Checking
                     // `lost_focus` is therefore essential; `has_focus` alone misses the exact
                     // frame carrying Enter and neither navigation nor focus restoration runs.
-                    let enter_while_editing =
-                        (find_response.has_focus() || find_response.lost_focus())
-                            && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    let enter_while_editing = (find_response.has_focus()
+                        || find_response.lost_focus())
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
                     if enter_while_editing {
                         if ui.input(|input| input.modifiers.shift) {
                             previous = true;
@@ -1624,7 +1619,11 @@ impl OxiApp {
         if !ranges.is_empty() && (next || previous) {
             self.conv.editor.find_active_match = if previous {
                 if self.conv.editor.find_has_navigated {
-                    self.conv.editor.find_active_match.checked_sub(1).unwrap_or(ranges.len() - 1)
+                    self.conv
+                        .editor
+                        .find_active_match
+                        .checked_sub(1)
+                        .unwrap_or(ranges.len() - 1)
                 } else {
                     ranges.len() - 1
                 }
@@ -1712,8 +1711,7 @@ impl OxiApp {
         let select_find_match = self.conv.editor.find_select_pending && active_find_match.is_some();
         let reveal_find_match = (select_find_match || self.conv.editor.find_reveal_pending)
             && active_find_match.is_some();
-        let focus_editor_for_find =
-            std::mem::take(&mut self.conv.editor.find_focus_editor_pending);
+        let focus_editor_for_find = std::mem::take(&mut self.conv.editor.find_focus_editor_pending);
         self.conv.editor.find_select_pending = false;
         self.conv.editor.find_reveal_pending = false;
         let logical_line_count = self.conv.editor.documents[index]
@@ -2416,13 +2414,14 @@ fn live_git_line_changes(
         }
     }
     // A pure deletion has no new line to color; mark the line immediately after it instead.
-    if new_end == prefix && prefix < current_lines.len() {
-        if !changes.iter().any(|change| change.line == prefix) {
-            changes.push(crate::git::GitLineChange {
-                line: prefix,
-                kind: crate::git::GitLineKind::Modified,
-            });
-        }
+    if new_end == prefix
+        && prefix < current_lines.len()
+        && !changes.iter().any(|change| change.line == prefix)
+    {
+        changes.push(crate::git::GitLineChange {
+            line: prefix,
+            kind: crate::git::GitLineKind::Modified,
+        });
     }
     changes.sort_by_key(|change| change.line);
     changes

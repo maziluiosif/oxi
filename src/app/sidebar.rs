@@ -37,11 +37,7 @@ impl OxiApp {
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_width(search_w);
-                    let _ = sidebar_text_field(
-                        ui,
-                        &mut self.conv.sidebar_search,
-                        "Search chats…",
-                    );
+                    let _ = sidebar_text_field(ui, &mut self.conv.sidebar_search, "Search chats…");
                 },
             );
 
