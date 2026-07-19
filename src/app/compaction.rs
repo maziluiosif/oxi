@@ -231,6 +231,8 @@ impl OxiApp {
                         },
                     );
                 }
+                // Invalidate before saving so restart cannot resurrect the un-compacted cache.
+                self.invalidate_wire_cache(key);
                 let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
                 if let Err(e) = crate::session_store::save_session_messages(
                     &root_path,
@@ -238,10 +240,6 @@ impl OxiApp {
                 ) {
                     self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
                 }
-                // The cached wire history still holds the un-compacted prefix; drop it so the
-                // next run is rebuilt from the compacted transcript.
-                self.run_state_mut(key).wire_history = None;
-
                 if let Some(queued) = active.queued_send {
                     self.conv.input = queued.text;
                     self.conv.pending_images = queued.images;

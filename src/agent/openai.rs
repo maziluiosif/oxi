@@ -84,7 +84,6 @@ async fn run_chat_loop_at(
     let mut stream_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
-            let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
             break;
         }
         round += 1;
@@ -179,7 +178,6 @@ async fn run_chat_loop_at(
         // completed. No tool has been executed yet, so re-sending the round is safe.
         if let Some(err) = stream_error {
             if cancel.load(Ordering::SeqCst) {
-                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
                 break;
             }
             stream_retries += 1;
@@ -191,7 +189,6 @@ async fn run_chat_loop_at(
                 reason: err,
             });
             if !sleep_cancellable(backoff_delay(stream_retries), cancel).await {
-                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
                 break;
             }
             round -= 1;
@@ -233,20 +230,7 @@ async fn run_chat_loop_at(
             // Execute tool calls in parallel where safe.
             // Mutating tools (write, edit, bash) are run sequentially to avoid races.
             // Read-only tools (read, grep, find, ls) can run concurrently.
-            let is_readonly = |name: &str| {
-                matches!(
-                    name,
-                    "read"
-                        | "grep"
-                        | "find"
-                        | "ls"
-                        | "codebase_search"
-                        | "git_status"
-                        | "git_diff"
-                        | "web_search"
-                        | "web_fetch"
-                )
-            };
+            let is_readonly = crate::agent::tools::tool_is_parallel_safe;
 
             // Split into consecutive groups: each group is either all-readonly (parallel) or a single mutating call.
             struct ToolCall {
@@ -364,7 +348,6 @@ async fn run_chat_loop_at(
             "role": "assistant",
             "content": assistant_text,
         }));
-        let _ = tx.send(AgentEvent::ProviderDone);
         break;
     }
     Ok(())
@@ -721,7 +704,11 @@ mod integration_tests {
                 ..
             }
         )));
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::ProviderDone)));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::AssistantMessageDone))
+        );
     }
 
     #[tokio::test]

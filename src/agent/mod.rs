@@ -18,7 +18,7 @@ pub mod tools;
 
 pub use approval::ApprovalDecision;
 pub use complete::{CompleteEvent, CompleteRequest, spawn_completion};
-pub use events::{AgentEvent, TokenUsage};
+pub use events::{AgentEvent, AgentOutcome, TokenUsage};
 pub(crate) use history::flatten_assistant;
 pub use history::{
     DEFAULT_CHARS_PER_TOKEN, calibrate_chars_per_token, context_char_budget_from_tokens,

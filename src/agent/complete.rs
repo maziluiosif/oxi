@@ -411,7 +411,12 @@ async fn collect_deltas(
                     break;
                 }
             }
-            AgentEvent::StreamError(e) => return Err(e),
+            AgentEvent::Finished(crate::agent::AgentOutcome::Failed { error }) => {
+                return Err(error);
+            }
+            AgentEvent::Finished(crate::agent::AgentOutcome::Cancelled) => {
+                return Err("Cancelled".to_string());
+            }
             // The round is being re-sent after a dropped stream: discard the partial
             // text so the retried generation does not get appended to it.
             AgentEvent::StreamRetry { .. } => out.clear(),

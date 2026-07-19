@@ -442,7 +442,6 @@ pub async fn run_codex_responses_loop(
     let mut stream_retries = 0u32;
     loop {
         if cancel.load(Ordering::SeqCst) {
-            let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
             break;
         }
         round += 1;
@@ -541,7 +540,6 @@ pub async fn run_codex_responses_loop(
         // completed. No tool has been executed yet, so re-sending the round is safe.
         if let Some(err) = stream_error {
             if cancel.load(Ordering::SeqCst) {
-                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
                 break;
             }
             stream_retries += 1;
@@ -553,7 +551,6 @@ pub async fn run_codex_responses_loop(
                 reason: err,
             });
             if !sleep_cancellable(backoff_delay(stream_retries), cancel).await {
-                let _ = tx.send(AgentEvent::StreamError("Cancelled".into()));
                 break;
             }
             round -= 1;
@@ -589,20 +586,7 @@ pub async fn run_codex_responses_loop(
             }
             messages.push(msg);
             // Execute tool calls in parallel where safe.
-            let is_readonly = |name: &str| {
-                matches!(
-                    name,
-                    "read"
-                        | "grep"
-                        | "find"
-                        | "ls"
-                        | "codebase_search"
-                        | "git_status"
-                        | "git_diff"
-                        | "web_search"
-                        | "web_fetch"
-                )
-            };
+            let is_readonly = crate::agent::tools::tool_is_parallel_safe;
             struct ToolCallP {
                 id: String,
                 name: String,
@@ -713,7 +697,6 @@ pub async fn run_codex_responses_loop(
             "role": "assistant",
             "content": assistant_text,
         }));
-        let _ = tx.send(AgentEvent::ProviderDone);
         break;
     }
     Ok(())

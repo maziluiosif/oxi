@@ -20,6 +20,29 @@ pub struct ToolResult {
 
 pub(crate) const MAX_TOOL_OUTPUT_CHARS: usize = 40_000;
 
+/// Side-effect metadata shared by provider orchestration and approval policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolSideEffect {
+    ReadOnly,
+    WorkspaceMutation,
+    Shell,
+    UnknownExternal,
+}
+
+pub fn tool_side_effect(name: &str) -> ToolSideEffect {
+    match name {
+        "read" | "grep" | "find" | "ls" | "codebase_search" | "git_status" | "git_diff"
+        | "web_search" | "web_fetch" => ToolSideEffect::ReadOnly,
+        "write" | "edit" | "delete" | "move" | "mkdir" => ToolSideEffect::WorkspaceMutation,
+        "bash" => ToolSideEffect::Shell,
+        _ => ToolSideEffect::UnknownExternal,
+    }
+}
+
+pub fn tool_is_parallel_safe(name: &str) -> bool {
+    tool_side_effect(name) == ToolSideEffect::ReadOnly
+}
+
 mod definitions;
 mod file_ops;
 mod paths;

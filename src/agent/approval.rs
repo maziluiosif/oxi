@@ -39,14 +39,11 @@ impl ApprovalPolicy {
     }
 
     pub fn requires_approval(self, name: &str) -> bool {
-        match name {
-            "bash" => self.bash,
-            "write" | "edit" | "delete" | "move" | "mkdir" => self.write_edit,
-            // MCP servers are third-party processes and their tools may mutate files, external
-            // systems, or credentials. Unknown capabilities must fail closed rather than being
-            // treated like built-in read-only tools.
-            name if crate::agent::mcp::McpManager::is_mcp_tool(name) => true,
-            _ => false,
+        match crate::agent::tools::tool_side_effect(name) {
+            crate::agent::tools::ToolSideEffect::ReadOnly => false,
+            crate::agent::tools::ToolSideEffect::WorkspaceMutation => self.write_edit,
+            crate::agent::tools::ToolSideEffect::Shell => self.bash,
+            crate::agent::tools::ToolSideEffect::UnknownExternal => true,
         }
     }
 }

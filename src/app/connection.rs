@@ -11,6 +11,7 @@ impl OxiApp {
     }
 
     pub(crate) fn stop_agent_run(&mut self, key: SessionKey) {
+        self.invalidate_wire_cache(key);
         if let Some(state) = self.flow.sessions.get_mut(&key) {
             state.clear_agent();
             state.reset_after_disconnect();

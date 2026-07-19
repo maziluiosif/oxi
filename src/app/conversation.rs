@@ -13,6 +13,73 @@ use crate::ui::messages::{render_assistant_message_run, render_message};
 
 use super::{OxiApp, PendingApproval};
 
+/// Bound expensive immediate-mode transcript rendering by source size rather than message count:
+/// one answer containing many large code blocks can dwarf hundreds of short chat turns.
+const TRANSCRIPT_LOAD_MORE_BUDGET: usize = crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET;
+
+fn message_render_weight(message: &crate::model::ChatMessage) -> usize {
+    let attachments = message.attachments.len().saturating_mul(4 * 1024);
+    let blocks = message.blocks.iter().fold(0usize, |total, block| {
+        let size = match block {
+            crate::model::AssistantBlock::Thinking(text)
+            | crate::model::AssistantBlock::Answer(text) => text.len(),
+            crate::model::AssistantBlock::Tool {
+                args_summary,
+                output,
+                diff,
+                ..
+            } => {
+                args_summary.as_deref().map_or(0, str::len)
+                    + output.len()
+                    + diff.as_deref().map_or(0, str::len)
+            }
+        };
+        total.saturating_add(size)
+    });
+    message
+        .text
+        .len()
+        .saturating_add(attachments)
+        .saturating_add(blocks)
+        .max(1)
+}
+
+fn transcript_visible_start(messages: &[crate::model::ChatMessage], budget: usize) -> usize {
+    let mut remaining = budget.max(1);
+    let mut start = messages.len();
+    while start > 0 {
+        let weight = message_render_weight(&messages[start - 1]);
+        // Always include the newest message, even if it alone exceeds the transcript budget.
+        if start < messages.len() && weight > remaining {
+            break;
+        }
+        start -= 1;
+        remaining = remaining.saturating_sub(weight);
+    }
+    start
+}
+
+/// Increase the budget by at least one normal batch, but also guarantee that the next hidden
+/// message becomes visible. A fixed increment alone appears to drop clicks when that message is
+/// larger than the increment (several clicks mutate state without changing the transcript).
+fn transcript_load_more_budget(
+    messages: &[crate::model::ChatMessage],
+    visible_start: usize,
+    current_budget: usize,
+) -> usize {
+    if visible_start == 0 {
+        return current_budget;
+    }
+    let required = messages[visible_start - 1..]
+        .iter()
+        .fold(0usize, |sum, message| {
+            sum.saturating_add(message_render_weight(message))
+        });
+    current_budget
+        .saturating_add(TRANSCRIPT_LOAD_MORE_BUDGET)
+        .max(required)
+}
+
 impl OxiApp {
     /// Error banner rendered above the transcript.
     pub(crate) fn render_status_banner(&mut self, ui: &mut Ui) {
@@ -449,11 +516,37 @@ impl OxiApp {
                     }
                     ui.vertical(|ui| {
                         ui.set_width(col_w);
-                        let messages = &self.conv.workspaces[wi].sessions[si].messages;
-                        if messages.is_empty() {
+                        let message_count = self.conv.workspaces[wi].sessions[si].messages.len();
+                        if message_count == 0 {
                             self.render_empty_state(ui);
                         } else {
-                            let mut mi = 0;
+                            let visible_budget =
+                                self.conv.workspaces[wi].sessions[si].transcript_visible_budget;
+                            let visible_start = transcript_visible_start(
+                                &self.conv.workspaces[wi].sessions[si].messages,
+                                visible_budget,
+                            );
+                            if visible_start > 0 {
+                                ui.vertical_centered(|ui| {
+                                    let remaining = visible_start;
+                                    let label = format!("Load older messages ({remaining} hidden)");
+                                    if crate::ui::chrome::ghost_button(ui, &label, false).clicked()
+                                    {
+                                        let session = &mut self.conv.workspaces[wi].sessions[si];
+                                        session.transcript_visible_budget =
+                                            transcript_load_more_budget(
+                                                &session.messages,
+                                                visible_start,
+                                                session.transcript_visible_budget,
+                                            );
+                                        ui.ctx().request_repaint();
+                                    }
+                                });
+                                ui.add_space(10.0);
+                            }
+
+                            let messages = &self.conv.workspaces[wi].sessions[si].messages;
+                            let mut mi = visible_start;
                             while mi < messages.len() {
                                 let msg = &messages[mi];
                                 if msg.role == MsgRole::Assistant {
@@ -699,4 +792,54 @@ pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> (egui::Vec2, bool)
     }
 
     (delta, label_selection_dragging)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AssistantBlock, ChatMessage};
+
+    fn answer(size: usize) -> ChatMessage {
+        ChatMessage {
+            role: MsgRole::Assistant,
+            text: String::new(),
+            is_summary: false,
+            attachments: Vec::new(),
+            blocks: vec![AssistantBlock::Answer("x".repeat(size))],
+            streaming: false,
+            started_at: None,
+            worked_duration: None,
+        }
+    }
+
+    #[test]
+    fn transcript_budget_accounts_for_large_answers() {
+        let messages = vec![answer(30_000), answer(30_000), answer(30_000)];
+        assert_eq!(transcript_visible_start(&messages, 48_000), 2);
+    }
+
+    #[test]
+    fn transcript_budget_always_keeps_latest_message() {
+        let messages = vec![answer(1_000), answer(100_000)];
+        assert_eq!(transcript_visible_start(&messages, 48_000), 1);
+    }
+
+    #[test]
+    fn load_more_reveals_next_message_even_when_it_exceeds_one_batch() {
+        let messages = vec![answer(200_000), answer(1_000)];
+        let visible_start = transcript_visible_start(&messages, 48_000);
+        assert_eq!(visible_start, 1);
+
+        let next_budget = transcript_load_more_budget(&messages, visible_start, 48_000);
+        assert_eq!(transcript_visible_start(&messages, next_budget), 0);
+    }
+
+    #[test]
+    fn load_more_still_advances_by_a_normal_batch_for_small_messages() {
+        let messages = vec![answer(30_000), answer(30_000), answer(30_000)];
+        let visible_start = transcript_visible_start(&messages, 48_000);
+        let next_budget = transcript_load_more_budget(&messages, visible_start, 48_000);
+        assert_eq!(next_budget, 48_000 + TRANSCRIPT_LOAD_MORE_BUDGET);
+        assert_eq!(transcript_visible_start(&messages, next_budget), 0);
+    }
 }

@@ -9,8 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Instant;
 
-use serde_json::Value;
-
 use eframe::egui;
 
 use crate::agent::{AgentEvent, ApprovalDecision, TokenUsage};
@@ -203,11 +201,6 @@ pub struct SessionRunState {
     /// new turn is running before the provider reports current-turn usage.
     pub last_turn_usage: TokenUsage,
     pub session_usage: TokenUsage,
-    /// In-memory canonical provider wire history reused across turns to preserve
-    /// byte-for-byte cacheable prefixes. Not persisted; provider caches are short-lived.
-    pub wire_history: Option<Vec<Value>>,
-    pub wire_fingerprint: u64,
-    pub wire_session_file: Option<String>,
     /// Path states captured by reversible built-in filesystem calls in the most recent turn.
     pub undo_journal: Option<Arc<Mutex<crate::agent::tools::TurnUndoJournal>>>,
     /// Unexpanded text entered by the user for the most recent turn (the transcript may contain

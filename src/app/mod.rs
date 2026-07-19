@@ -41,6 +41,8 @@ pub struct OxiApp {
     pub conv: ConversationState,
     /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
     pub terminal: Option<crate::terminal::TerminalSession>,
+    /// Shared async executor for all agent runs.
+    pub agent_executor: crate::agent::runner::AgentExecutor,
     /// SSH tunnels for `RemoteSsh` provider configs (e.g. Ollama/LM Studio on a LAN host).
     /// Cheap to clone; the actual tunnels live on a dedicated background thread/runtime
     /// started once here and kept alive for the life of the app.
@@ -200,6 +202,8 @@ impl OxiApp {
                 voice_rx,
             },
             terminal: None,
+            agent_executor: crate::agent::runner::AgentExecutor::new()
+                .expect("failed to initialize shared agent runtime"),
             tunnels: crate::compute::TunnelManager::spawn(),
             acp: crate::agent::acp::AcpManager::spawn(),
             voice,
@@ -426,8 +430,8 @@ impl OxiApp {
             pending_images: Vec::new(),
             modified: std::time::SystemTime::now(),
             chars_per_token: None,
-            wire_history: None,
-            wire_fingerprint: 0,
+            wire_cache: None,
+            transcript_visible_budget: crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET,
         }
     }
 
@@ -496,13 +500,9 @@ impl OxiApp {
             let session = self.session_mut(active);
             session.messages = messages;
             session.messages_loaded = true;
-            if let Some((fingerprint, history)) = wire {
-                session.wire_fingerprint = fingerprint;
-                session.wire_history = Some(history.clone());
-                let run = self.run_state_mut(active_key);
-                run.wire_fingerprint = fingerprint;
-                run.wire_history = Some(history);
-                run.wire_session_file = Some(session_file);
+            session.transcript_visible_budget = crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET;
+            if let Some(cache) = wire {
+                session.wire_cache = Some(cache);
             }
         }
     }
