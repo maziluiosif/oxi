@@ -1,9 +1,5 @@
 //! Domain types and pure helpers (no egui).
 
-/// Default approximate amount of transcript source rendered by the immediate-mode UI. The full
-/// message history is still retained in every session for persistence and provider requests.
-pub const TRANSCRIPT_INITIAL_RENDER_BUDGET: usize = 48 * 1024;
-
 /// Provider-native conversation cache. The transcript remains the source of truth; this cache is
 /// reused only when its stable fingerprint matches the complete current request environment.
 #[derive(Clone, Debug)]
@@ -105,10 +101,6 @@ pub struct Session {
     /// Derived, dispensable provider-native history persisted for prompt-cache hits. The
     /// transcript in `messages` is authoritative and can rebuild this cache at any time.
     pub wire_cache: Option<WireCache>,
-    /// Approximate source-size budget for the tail rendered in the transcript. The complete
-    /// history remains in `messages`; this only bounds immediate-mode UI work. The user can
-    /// increase it in batches from the top of the visible transcript.
-    pub transcript_visible_budget: usize,
 }
 
 pub fn make_session_title(text: &str) -> String {

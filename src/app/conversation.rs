@@ -13,71 +13,77 @@ use crate::ui::messages::{render_assistant_message_run, render_message};
 
 use super::{OxiApp, PendingApproval};
 
-/// Bound expensive immediate-mode transcript rendering by source size rather than message count:
-/// one answer containing many large code blocks can dwarf hundreds of short chat turns.
-const TRANSCRIPT_LOAD_MORE_BUDGET: usize = crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET;
+/// Extra vertical margin (in points) around the scroll viewport inside which transcript units
+/// are still rendered for real. Units beyond it advance the cursor by their cached height only,
+/// so a fast scroll never reveals an unrendered gap at the edges.
+const TRANSCRIPT_CULL_MARGIN: f32 = 600.0;
 
-fn message_render_weight(message: &crate::model::ChatMessage) -> usize {
-    let attachments = message.attachments.len().saturating_mul(4 * 1024);
-    let blocks = message.blocks.iter().fold(0usize, |total, block| {
-        let size = match block {
-            crate::model::AssistantBlock::Thinking(text)
-            | crate::model::AssistantBlock::Answer(text) => text.len(),
-            crate::model::AssistantBlock::Tool {
-                args_summary,
-                output,
-                diff,
-                ..
-            } => {
-                args_summary.as_deref().map_or(0, str::len)
-                    + output.len()
-                    + diff.as_deref().map_or(0, str::len)
+/// Cheap content fingerprint for one transcript unit (a user message or a contiguous assistant
+/// run). Built from lengths and flags rather than full text so revalidating every unit each
+/// frame stays O(blocks), not O(bytes). Any append/edit/tool update changes a length and
+/// invalidates the cached height; the unit is then re-rendered and re-measured.
+fn transcript_unit_fingerprint(messages: &[crate::model::ChatMessage]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    messages.len().hash(&mut hasher);
+    for message in messages {
+        (message.role == MsgRole::User).hash(&mut hasher);
+        message.is_summary.hash(&mut hasher);
+        message.streaming.hash(&mut hasher);
+        message.text.len().hash(&mut hasher);
+        message.attachments.len().hash(&mut hasher);
+        message.worked_duration.is_some().hash(&mut hasher);
+        message.blocks.len().hash(&mut hasher);
+        for block in &message.blocks {
+            match block {
+                crate::model::AssistantBlock::Thinking(text) => {
+                    (0u8, text.len()).hash(&mut hasher);
+                }
+                crate::model::AssistantBlock::Answer(text) => {
+                    (1u8, text.len()).hash(&mut hasher);
+                }
+                crate::model::AssistantBlock::Tool {
+                    args_summary,
+                    output,
+                    diff,
+                    is_error,
+                    output_truncated,
+                    ..
+                } => {
+                    (
+                        2u8,
+                        args_summary.as_deref().map_or(0, str::len),
+                        output.len(),
+                        diff.as_deref().map_or(0, str::len),
+                        *is_error,
+                        *output_truncated,
+                    )
+                        .hash(&mut hasher);
+                }
             }
-        };
-        total.saturating_add(size)
-    });
-    message
-        .text
-        .len()
-        .saturating_add(attachments)
-        .saturating_add(blocks)
-        .max(1)
-}
-
-fn transcript_visible_start(messages: &[crate::model::ChatMessage], budget: usize) -> usize {
-    let mut remaining = budget.max(1);
-    let mut start = messages.len();
-    while start > 0 {
-        let weight = message_render_weight(&messages[start - 1]);
-        // Always include the newest message, even if it alone exceeds the transcript budget.
-        if start < messages.len() && weight > remaining {
-            break;
         }
-        start -= 1;
-        remaining = remaining.saturating_sub(weight);
     }
-    start
+    hasher.finish()
 }
 
-/// Increase the budget by at least one normal batch, but also guarantee that the next hidden
-/// message becomes visible. A fixed increment alone appears to drop clicks when that message is
-/// larger than the increment (several clicks mutate state without changing the transcript).
-fn transcript_load_more_budget(
-    messages: &[crate::model::ChatMessage],
-    visible_start: usize,
-    current_budget: usize,
-) -> usize {
-    if visible_start == 0 {
-        return current_budget;
+/// Split the transcript into render units: one per user message, one per contiguous
+/// assistant run (rendered together by [`render_assistant_message_run`]).
+fn transcript_units(messages: &[crate::model::ChatMessage]) -> Vec<(usize, usize)> {
+    let mut units = Vec::new();
+    let mut index = 0;
+    while index < messages.len() {
+        if messages[index].role == MsgRole::Assistant {
+            let start = index;
+            while index < messages.len() && messages[index].role == MsgRole::Assistant {
+                index += 1;
+            }
+            units.push((start, index));
+        } else {
+            units.push((index, index + 1));
+            index += 1;
+        }
     }
-    let required = messages[visible_start - 1..]
-        .iter()
-        .fold(0usize, |sum, message| {
-            sum.saturating_add(message_render_weight(message))
-        });
-    current_budget
-        .saturating_add(TRANSCRIPT_LOAD_MORE_BUDGET)
-        .max(required)
+    units
 }
 
 impl OxiApp {
@@ -426,12 +432,13 @@ impl OxiApp {
         // Suppress auto-stick whenever the user has an active text selection
         // (dragging or just holding one) so streaming growth doesn't yank the
         // viewport away from their selection.
-        let user_has_selection = {
+        let transcript_has_selection = ui
+            .ctx()
+            .plugin::<egui::text_selection::LabelSelectionState>()
+            .lock()
+            .has_selection();
+        let user_has_selection = transcript_has_selection || {
             let ctx = ui.ctx();
-            let has_selection = ctx
-                .plugin::<egui::text_selection::LabelSelectionState>()
-                .lock()
-                .has_selection();
             let primary_down = ctx.input(|i| i.pointer.primary_down());
             let dragged_far =
                 ctx.input(
@@ -442,7 +449,7 @@ impl OxiApp {
                         _ => false,
                     },
                 );
-            has_selection || (primary_down && dragged_far)
+            primary_down && dragged_far
         };
 
         // Hold stick-to-bottom a few frames after the turn ends so the "Working…" →
@@ -520,48 +527,65 @@ impl OxiApp {
                         if message_count == 0 {
                             self.render_empty_state(ui);
                         } else {
-                            let visible_budget =
-                                self.conv.workspaces[wi].sessions[si].transcript_visible_budget;
-                            let visible_start = transcript_visible_start(
-                                &self.conv.workspaces[wi].sessions[si].messages,
-                                visible_budget,
-                            );
-                            if visible_start > 0 {
-                                ui.vertical_centered(|ui| {
-                                    let remaining = visible_start;
-                                    let label = format!("Load older messages ({remaining} hidden)");
-                                    if crate::ui::chrome::ghost_button(ui, &label, false).clicked()
-                                    {
-                                        let session = &mut self.conv.workspaces[wi].sessions[si];
-                                        session.transcript_visible_budget =
-                                            transcript_load_more_budget(
-                                                &session.messages,
-                                                visible_start,
-                                                session.transcript_visible_budget,
-                                            );
-                                        ui.ctx().request_repaint();
-                                    }
-                                });
-                                ui.add_space(10.0);
-                            }
-
-                            let messages = &self.conv.workspaces[wi].sessions[si].messages;
-                            let mut mi = visible_start;
-                            while mi < messages.len() {
-                                let msg = &messages[mi];
-                                if msg.role == MsgRole::Assistant {
-                                    let start = mi;
-                                    mi += 1;
-                                    while mi < messages.len()
-                                        && messages[mi].role == MsgRole::Assistant
-                                    {
-                                        mi += 1;
-                                    }
-                                    render_assistant_message_run(ui, start, &messages[start..mi]);
-                                } else {
-                                    render_message(ui, mi, msg);
-                                    mi += 1;
+                            // The whole history is walked every frame, but only units near the
+                            // viewport are actually rendered; the rest advance the cursor by
+                            // their cached measured height. This keeps per-frame cost O(visible)
+                            // regardless of conversation length.
+                            let units =
+                                transcript_units(&self.conv.workspaces[wi].sessions[si].messages);
+                            let viewport = ui
+                                .clip_rect()
+                                .expand2(egui::vec2(0.0, TRANSCRIPT_CULL_MARGIN));
+                            let width_bits = col_w.round().to_bits();
+                            // While the user holds a text selection in the transcript, keep
+                            // every unit rendered: culling a unit would drop its selection
+                            // anchors and truncate what Cmd+C copies. Plain drags (scrollbar
+                            // scrubbing) must not disable culling, so this checks only for an
+                            // actual selection.
+                            let cull_enabled = !transcript_has_selection;
+                            for (start, end) in units {
+                                let messages = &self.conv.workspaces[wi].sessions[si].messages;
+                                let fingerprint =
+                                    transcript_unit_fingerprint(&messages[start..end]);
+                                let key = (wi, si, start);
+                                let top = ui.cursor().min.y;
+                                let cached_height = self
+                                    .conv
+                                    .transcript_heights
+                                    .get(&key)
+                                    .filter(|entry| {
+                                        entry.width_bits == width_bits
+                                            && entry.fingerprint == fingerprint
+                                    })
+                                    .map(|entry| entry.height);
+                                if cull_enabled
+                                    && let Some(height) = cached_height
+                                    && (top > viewport.bottom() || top + height < viewport.top())
+                                {
+                                    ui.add_space(height);
+                                    continue;
                                 }
+                                if messages[start].role == MsgRole::Assistant {
+                                    render_assistant_message_run(
+                                        ui,
+                                        start,
+                                        &self.conv.workspaces[wi].sessions[si].messages[start..end],
+                                    );
+                                } else {
+                                    render_message(
+                                        ui,
+                                        start,
+                                        &self.conv.workspaces[wi].sessions[si].messages[start],
+                                    );
+                                }
+                                self.conv.transcript_heights.insert(
+                                    key,
+                                    super::state::TranscriptUnitHeight {
+                                        width_bits,
+                                        fingerprint,
+                                        height: ui.cursor().min.y - top,
+                                    },
+                                );
                             }
                             let rollback_available = self
                                 .run_state(self.active_session_key())
@@ -575,7 +599,8 @@ impl OxiApp {
                                 });
                             let can_edit = !self.active_waiting_response()
                                 && !self.compaction_active_for(self.active_session_key())
-                                && messages
+                                && self.conv.workspaces[wi].sessions[si]
+                                    .messages
                                     .last()
                                     .is_some_and(|m| m.role == MsgRole::Assistant)
                                 && self.conv.editing_last_prompt.is_none()
@@ -812,34 +837,46 @@ mod tests {
         }
     }
 
-    #[test]
-    fn transcript_budget_accounts_for_large_answers() {
-        let messages = vec![answer(30_000), answer(30_000), answer(30_000)];
-        assert_eq!(transcript_visible_start(&messages, 48_000), 2);
+    fn user(text: &str) -> ChatMessage {
+        ChatMessage {
+            role: MsgRole::User,
+            text: text.to_owned(),
+            is_summary: false,
+            attachments: Vec::new(),
+            blocks: Vec::new(),
+            streaming: false,
+            started_at: None,
+            worked_duration: None,
+        }
     }
 
     #[test]
-    fn transcript_budget_always_keeps_latest_message() {
-        let messages = vec![answer(1_000), answer(100_000)];
-        assert_eq!(transcript_visible_start(&messages, 48_000), 1);
+    fn units_group_contiguous_assistant_messages() {
+        let messages = vec![user("a"), answer(10), answer(10), user("b"), answer(10)];
+        assert_eq!(
+            transcript_units(&messages),
+            vec![(0, 1), (1, 3), (3, 4), (4, 5)]
+        );
     }
 
     #[test]
-    fn load_more_reveals_next_message_even_when_it_exceeds_one_batch() {
-        let messages = vec![answer(200_000), answer(1_000)];
-        let visible_start = transcript_visible_start(&messages, 48_000);
-        assert_eq!(visible_start, 1);
-
-        let next_budget = transcript_load_more_budget(&messages, visible_start, 48_000);
-        assert_eq!(transcript_visible_start(&messages, next_budget), 0);
+    fn fingerprint_changes_when_content_grows() {
+        let before = vec![answer(100)];
+        let after = vec![answer(101)];
+        assert_ne!(
+            transcript_unit_fingerprint(&before),
+            transcript_unit_fingerprint(&after)
+        );
     }
 
     #[test]
-    fn load_more_still_advances_by_a_normal_batch_for_small_messages() {
-        let messages = vec![answer(30_000), answer(30_000), answer(30_000)];
-        let visible_start = transcript_visible_start(&messages, 48_000);
-        let next_budget = transcript_load_more_budget(&messages, visible_start, 48_000);
-        assert_eq!(next_budget, 48_000 + TRANSCRIPT_LOAD_MORE_BUDGET);
-        assert_eq!(transcript_visible_start(&messages, next_budget), 0);
+    fn fingerprint_changes_when_streaming_ends() {
+        let mut streaming = answer(100);
+        streaming.streaming = true;
+        let done = answer(100);
+        assert_ne!(
+            transcript_unit_fingerprint(std::slice::from_ref(&streaming)),
+            transcript_unit_fingerprint(std::slice::from_ref(&done))
+        );
     }
 }

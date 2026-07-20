@@ -168,6 +168,7 @@ impl OxiApp {
                 composer_measured_full_h: 0.0,
                 diff_view_open: false,
                 diff_job_cache: None,
+                transcript_heights: std::collections::HashMap::new(),
                 git_open,
                 git_width,
                 git_tab: crate::app::git_panel::GitTab::default(),
@@ -441,7 +442,6 @@ impl OxiApp {
             modified: std::time::SystemTime::now(),
             chars_per_token: None,
             wire_cache: None,
-            transcript_visible_budget: crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET,
         }
     }
 
@@ -510,7 +510,6 @@ impl OxiApp {
             let session = self.session_mut(active);
             session.messages = messages;
             session.messages_loaded = true;
-            session.transcript_visible_budget = crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET;
             if let Some(cache) = wire {
                 session.wire_cache = Some(cache);
             }

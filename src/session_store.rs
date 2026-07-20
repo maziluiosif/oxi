@@ -50,7 +50,6 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             modified: session.modified,
             chars_per_token: None,
             wire_cache: None,
-            transcript_visible_budget: crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET,
         })
         .collect()
 }
@@ -205,7 +204,6 @@ mod tests {
                 fingerprint: "v1:sha256:abcd".into(),
                 messages: vec![json!({"role":"system","content":"s"})],
             }),
-            transcript_visible_budget: crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET,
             modified: SystemTime::now(),
         };
 
@@ -239,7 +237,6 @@ mod tests {
             pending_images: Vec::new(),
             chars_per_token: None,
             wire_cache: None,
-            transcript_visible_budget: crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET,
             modified: SystemTime::now(),
         };
 
@@ -301,7 +298,6 @@ mod tests {
             pending_images: Vec::new(),
             chars_per_token: None,
             wire_cache: None,
-            transcript_visible_budget: crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET,
             modified: SystemTime::now(),
         };
 
@@ -348,7 +344,6 @@ mod tests {
             pending_images: Vec::new(),
             chars_per_token: None,
             wire_cache: None,
-            transcript_visible_budget: crate::model::TRANSCRIPT_INITIAL_RENDER_BUDGET,
             modified: SystemTime::now(),
         };
 

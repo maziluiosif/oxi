@@ -387,6 +387,13 @@ pub struct PromptEditState {
     pub previous_images: Vec<(String, Vec<u8>)>,
 }
 
+/// Cached measured height of one transcript unit at a given column width and content state.
+pub struct TranscriptUnitHeight {
+    pub width_bits: u32,
+    pub fingerprint: u64,
+    pub height: f32,
+}
+
 pub struct ConversationState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -447,6 +454,13 @@ pub struct ConversationState {
     /// rebuilding the (potentially huge) `LayoutJob` on every frame while the same
     /// diff stays open.
     pub diff_job_cache: Option<(u64, u32, egui::text::LayoutJob)>,
+    /// Measured heights of transcript units (a user message or a contiguous assistant run),
+    /// keyed by `(workspace_idx, session_idx, unit_start_message_idx)`. Units outside the
+    /// scroll viewport advance the cursor by their cached height instead of being rendered,
+    /// so a long conversation costs O(visible) per frame instead of O(history). Entries are
+    /// revalidated against the column width and a cheap content fingerprint, and re-measured
+    /// whenever the unit actually renders.
+    pub transcript_heights: std::collections::HashMap<(usize, usize, usize), TranscriptUnitHeight>,
     /// Source-control (git) panel visibility and width (persisted in settings).
     pub git_open: bool,
     pub git_width: f32,
