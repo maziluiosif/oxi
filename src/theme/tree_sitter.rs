@@ -11,6 +11,7 @@ use super::{SyntaxPalette, active_palette};
 pub struct EditorSyntaxState {
     language: String,
     content: String,
+    content_revision: Option<u64>,
     tree: Tree,
     job: egui::text::LayoutJob,
     palette: SyntaxPalette,
@@ -18,18 +19,32 @@ pub struct EditorSyntaxState {
     query: Query,
 }
 
+#[cfg(test)]
 pub fn highlight_editor_code(
     state: &mut Option<EditorSyntaxState>,
     content: &str,
     language: &str,
     font_id: FontId,
 ) -> Option<egui::text::LayoutJob> {
+    highlight_editor_code_with_revision(state, content, language, font_id, None)
+}
+
+pub fn highlight_editor_code_with_revision(
+    state: &mut Option<EditorSyntaxState>,
+    content: &str,
+    language: &str,
+    font_id: FontId,
+    content_revision: Option<u64>,
+) -> Option<egui::text::LayoutJob> {
     let (ts_language, query_source) = language_config(language)?;
     let palette = active_palette().syntax;
     if let Some(current) = state.as_ref()
         && current.language == language
-        && current.content == content
         && current.palette == palette
+        && content_revision.map_or_else(
+            || current.content == content,
+            |revision| current.content_revision == Some(revision),
+        )
     {
         return Some(current.job.clone());
     }
@@ -43,6 +58,7 @@ pub fn highlight_editor_code(
         let tree = current.parser.parse(content, Some(&current.tree))?;
         let job = layout_job(content, &tree, &current.query, palette, font_id);
         current.content = content.to_owned();
+        current.content_revision = content_revision;
         current.tree = tree;
         current.job = job.clone();
         return Some(job);
@@ -56,6 +72,7 @@ pub fn highlight_editor_code(
     *state = Some(EditorSyntaxState {
         language: language.to_owned(),
         content: content.to_owned(),
+        content_revision,
         tree,
         job: job.clone(),
         palette,

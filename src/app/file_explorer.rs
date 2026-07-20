@@ -4,7 +4,10 @@ use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
     self, Align, FontId, Frame, Layout, Margin, RichText, ScrollArea, TextEdit, Ui,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use walkdir::WalkDir;
 
 use crate::theme::*;
@@ -23,12 +26,19 @@ use support::{
 const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const ALWAYS_SKIPPED_DIRS: &[&str] = &[".git"];
 
+#[derive(Default)]
+pub struct EditorLayoutCache {
+    revision: u64,
+    wrap_width_bits: u32,
+    pixels_per_point_bits: u32,
+    geometry: Option<Arc<egui::Galley>>,
+    syntax: Option<Arc<egui::Galley>>,
+}
+
 type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
-    Vec<f32>,
+    Vec<(usize, f32)>,
     bool,
     Option<(usize, usize)>,
-    egui::text::LayoutJob,
-    String,
     Option<usize>,
     Option<usize>,
     Option<usize>,
@@ -692,6 +702,10 @@ impl OxiApp {
                     disk_modified: metadata.modified().ok(),
                     externally_modified: false,
                     syntax_state: None,
+                    content_revision: 0,
+                    dirty: false,
+                    layout_cache: EditorLayoutCache::default(),
+                    minimap_cache: None,
                 });
                 self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
                 self.conv.editor.error = None;
@@ -715,6 +729,7 @@ impl OxiApp {
         match std::fs::write(&document.path, document.content.as_bytes()) {
             Ok(()) => {
                 document.saved_content.clone_from(&document.content);
+                document.dirty = false;
                 document.disk_modified = std::fs::metadata(&document.path)
                     .and_then(|metadata| metadata.modified())
                     .ok();
@@ -752,6 +767,10 @@ impl OxiApp {
             Ok(content) => {
                 document.content = content.clone();
                 document.saved_content = content;
+                document.content_revision = document.content_revision.wrapping_add(1);
+                document.dirty = false;
+                document.layout_cache = EditorLayoutCache::default();
+                document.minimap_cache = None;
                 document.disk_modified = std::fs::metadata(&document.path)
                     .and_then(|metadata| metadata.modified())
                     .ok();
@@ -1674,6 +1693,10 @@ impl OxiApp {
                         .content
                         .replace_range(ranges[active].clone(), &replacement);
                 }
+                document.content_revision = document.content_revision.wrapping_add(1);
+                document.dirty = document.content != document.saved_content;
+                document.layout_cache = EditorLayoutCache::default();
+                document.minimap_cache = None;
             }
             if replace_all {
                 self.conv.editor.find_active_match = 0;
@@ -1735,10 +1758,19 @@ impl OxiApp {
         self.conv.editor.find_select_pending = false;
         self.conv.editor.find_reveal_pending = false;
         let logical_line_count = self.conv.editor.documents[index]
-            .content
-            .split('\n')
-            .count()
-            .max(1);
+            .minimap_cache
+            .as_ref()
+            .map_or_else(
+                || {
+                    self.conv.editor.documents[index]
+                        .content
+                        .bytes()
+                        .filter(|byte| *byte == b'\n')
+                        .count()
+                        + 1
+                },
+                |geometry| geometry.line_count,
+            );
         let gutter_digits = logical_line_count.to_string().len().max(2) as f32;
         let digit_width = ui.fonts_mut(|fonts| {
             fonts
@@ -1771,11 +1803,15 @@ impl OxiApp {
         // Git itself only sees the saved file. When editing changes the number of lines,
         // project those disk-based markers onto the in-memory buffer so the gutter follows
         // inserted/deleted newlines without doing Git work on every keystroke.
-        let git_line_changes = live_git_line_changes(
-            &disk_git_line_changes,
-            &self.conv.editor.documents[index].saved_content,
-            &self.conv.editor.documents[index].content,
-        );
+        let git_line_changes = if self.conv.editor.documents[index].is_dirty() {
+            live_git_line_changes(
+                &disk_git_line_changes,
+                &self.conv.editor.documents[index].saved_content,
+                &self.conv.editor.documents[index].content,
+            )
+        } else {
+            disk_git_line_changes
+        };
         const MINIMAP_WIDTH: f32 = 96.0;
         let editor_view_size = ui.available_size();
         let mut goto_definition_byte = None;
@@ -1805,11 +1841,33 @@ impl OxiApp {
                         .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            let editor_size = egui::vec2(
+                                editor_view_width.max(80.0),
+                                editor_view_size.y.max(24.0),
+                            );
+                            let select_all_requested = ui.input(|input| {
+                                input.modifiers.command && input.key_pressed(egui::Key::A)
+                            });
+                            let document = &mut self.conv.editor.documents[index];
+                            let revision = document.content_revision;
+                            let pixels_per_point_bits = ui.ctx().pixels_per_point().to_bits();
+                            let allow_layout_cache = !has_mutating_text_input(ui);
+                            let layout_cache = &mut document.layout_cache;
                             let mut layouter =
                                 |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                                    // TextEdit only needs glyph geometry here; the syntax-colored
-                                    // galley is painted once below. Running Syntect in both passes
-                                    // made every keystroke parse and lay out the whole file twice.
+                                    let wrap_width_bits = wrap_width.round().to_bits();
+                                    if allow_layout_cache
+                                        && layout_cache.revision == revision
+                                        && layout_cache.wrap_width_bits == wrap_width_bits
+                                        && layout_cache.pixels_per_point_bits
+                                            == pixels_per_point_bits
+                                        && let Some(galley) = &layout_cache.geometry
+                                    {
+                                        return Arc::clone(galley);
+                                    }
+
+                                    // TextEdit only needs glyph geometry here; cache it before
+                                    // egui's whole-LayoutJob hashing so selection-only frames are O(1).
                                     let mut job = egui::text::LayoutJob::simple(
                                         text.as_str().to_owned(),
                                         FontId::monospace(FS_SMALL),
@@ -1817,13 +1875,15 @@ impl OxiApp {
                                         wrap_width,
                                     );
                                     job.wrap.max_width = wrap_width;
-                                    ui.fonts_mut(|fonts| fonts.layout_job(job))
+                                    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                                    if allow_layout_cache {
+                                        layout_cache.revision = revision;
+                                        layout_cache.wrap_width_bits = wrap_width_bits;
+                                        layout_cache.pixels_per_point_bits = pixels_per_point_bits;
+                                        layout_cache.geometry = Some(Arc::clone(&galley));
+                                    }
+                                    galley
                                 };
-                            let editor_size = egui::vec2(
-                                editor_view_width.max(80.0),
-                                editor_view_size.y.max(24.0),
-                            );
-                            let document = &mut self.conv.editor.documents[index];
                             let mut output = ui
                                 .scope(|ui| {
                                     ui.visuals_mut().extreme_bg_color = egui::Color32::TRANSPARENT;
@@ -1843,6 +1903,9 @@ impl OxiApp {
                                         .code_editor()
                                         .frame(egui::Frame::NONE)
                                         .background_color(egui::Color32::TRANSPARENT)
+                                        .text_revision(document.content_revision)
+                                        .emit_selection_events(false)
+                                        .scroll_to_cursor(!select_all_requested)
                                         .desired_width(f32::INFINITY)
                                         .min_size(editor_size)
                                         .margin(Margin::same(8))
@@ -1850,6 +1913,19 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
+                            if output.response.changed() {
+                                document.content_revision =
+                                    document.content_revision.wrapping_add(1);
+                                document.dirty = document.content != document.saved_content;
+                                document.layout_cache = EditorLayoutCache::default();
+                                document.minimap_cache = None;
+                            }
+                            // TextEdit reports `text_clip_rect` as the full text rect — the whole
+                            // document laid out inside the ScrollArea — not the visible viewport.
+                            // Every "visible only" cull below must use the real viewport, or it
+                            // silently degrades to whole-file work per frame (a select-all in a
+                            // few-thousand-line file drops to ~12 fps otherwise).
+                            let viewport_clip = ui.clip_rect().intersect(output.text_clip_rect);
                             let selection_target = navigation_range.as_ref();
                             let find_caret_target = select_find_match
                                 .then(|| &find_ranges[active_find_match.unwrap_or(0)]);
@@ -1896,17 +1972,15 @@ impl OxiApp {
                                 output.response.request_focus();
                             }
 
-                            let caret_byte = output.cursor_range.map(|range| {
-                                char_index_to_byte(&document.content, range.primary.index.0)
-                            });
-                            let active_line = output.cursor_range.map(|range| {
-                                document
-                                    .content
-                                    .chars()
-                                    .take(range.primary.index.0)
-                                    .filter(|character| *character == '\n')
-                                    .count()
-                            });
+                            // The primary caret's char index is free from the cursor range. The
+                            // byte offset (needed only when a definition jump fires) and the logical
+                            // line are derived from the layout, not by walking the document. The old
+                            // char-by-char scans grew to the whole file whenever the caret sat near
+                            // the end, e.g. right after Select All.
+                            let caret_char = output.cursor_range.map(|range| range.primary.index.0);
+                            let active_line = output
+                                .cursor_range
+                                .map(|range| caret_logical_line(&output.galley, range.primary));
                             let definition_modifier =
                                 ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
                             let hovered_definition = if extension == "rs"
@@ -1914,7 +1988,7 @@ impl OxiApp {
                                 && output.response.hovered()
                             {
                                 ui.input(|input| input.pointer.hover_pos())
-                                    .filter(|position| output.text_clip_rect.contains(*position))
+                                    .filter(|position| viewport_clip.contains(*position))
                                     .and_then(|position| {
                                         let cursor = output
                                             .galley
@@ -1955,20 +2029,90 @@ impl OxiApp {
                             let navigation_request = if extension == "rs" {
                                 click_byte.or_else(|| {
                                     (goto_definition_requested || context_goto)
-                                        .then_some(caret_byte)
+                                        .then(|| {
+                                            caret_char.map(|index| {
+                                                char_index_to_byte(&document.content, index)
+                                            })
+                                        })
                                         .flatten()
                                 })
                             } else {
                                 None
                             };
                             let selection = output.cursor_range.filter(|range| !range.is_empty());
-                            // Draw indentation guides behind both selections and source text.
+                            let wrap_width_bits =
+                                output.galley.job.wrap.max_width.round().to_bits();
+                            let pixels_per_point_bits = ui.ctx().pixels_per_point().to_bits();
+                            let can_reuse_syntax = find_ranges.is_empty()
+                                && hovered_definition.is_none()
+                                && document.layout_cache.revision == document.content_revision
+                                && document.layout_cache.wrap_width_bits == wrap_width_bits
+                                && document.layout_cache.pixels_per_point_bits
+                                    == pixels_per_point_bits;
+                            let mut syntax_job = None;
+                            let visible_galley = if can_reuse_syntax {
+                                document.layout_cache.syntax.as_ref().map(Arc::clone)
+                            } else {
+                                None
+                            }
+                            .unwrap_or_else(|| {
+                                let mut job = crate::theme::highlight_editor_code_with_revision(
+                                    &mut document.syntax_state,
+                                    &document.content,
+                                    &extension,
+                                    FontId::monospace(FS_SMALL),
+                                    Some(document.content_revision),
+                                )
+                                .unwrap_or_else(|| {
+                                    themed_highlight(
+                                        ui,
+                                        &document.content,
+                                        &extension,
+                                        FontId::monospace(FS_SMALL),
+                                    )
+                                });
+                                if document.minimap_cache.is_none() {
+                                    ensure_minimap_geometry(
+                                        &document.content,
+                                        &job,
+                                        &mut document.minimap_cache,
+                                    );
+                                }
+                                apply_search_highlights(&mut job, &find_ranges, active_find_match);
+                                if let Some(range) = hovered_definition.as_ref() {
+                                    apply_definition_underline(&mut job, range);
+                                }
+                                job.wrap.max_width = output.galley.job.wrap.max_width;
+                                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job.clone()));
+                                syntax_job = Some(job);
+                                if find_ranges.is_empty() && hovered_definition.is_none() {
+                                    document.layout_cache.revision = document.content_revision;
+                                    document.layout_cache.wrap_width_bits = wrap_width_bits;
+                                    document.layout_cache.pixels_per_point_bits =
+                                        pixels_per_point_bits;
+                                    document.layout_cache.syntax = Some(Arc::clone(&galley));
+                                }
+                                galley
+                            });
+                            if document.minimap_cache.is_none()
+                                && let Some(job) = syntax_job.as_ref()
+                            {
+                                ensure_minimap_geometry(
+                                    &document.content,
+                                    job,
+                                    &mut document.minimap_cache,
+                                );
+                            }
                             paint_indent_guides(
                                 ui,
                                 &output.galley,
                                 output.galley_pos,
-                                output.text_clip_rect,
-                                &document.content,
+                                viewport_clip,
+                                &document
+                                    .minimap_cache
+                                    .as_ref()
+                                    .expect("editor geometry was just prepared")
+                                    .indent_columns,
                             );
 
                             // Paint selection behind the visible galley. The previous order put a
@@ -1976,11 +2120,11 @@ impl OxiApp {
                             // opaque and left only our whitespace markers visible.
                             if let Some(selection) = selection {
                                 let selection_color = crate::theme::editor_selection_fill();
-                                let selection_painter =
-                                    ui.painter().with_clip_rect(output.text_clip_rect);
+                                let selection_painter = ui.painter().with_clip_rect(viewport_clip);
                                 let selection_rects = editor_selection_rects(
                                     &output.galley,
                                     output.galley_pos,
+                                    viewport_clip,
                                     selection,
                                 );
                                 paint_editor_selection(
@@ -1990,36 +2134,8 @@ impl OxiApp {
                                 );
                             }
 
-                            // TextEdit's layout pass is transparent. Tree-sitter edits and reuses
-                            // the document's syntax tree, then queries the new tree immediately.
-                            let syntax_job = crate::theme::highlight_editor_code(
-                                &mut document.syntax_state,
-                                &document.content,
-                                &extension,
-                                FontId::monospace(FS_SMALL),
-                            )
-                            .unwrap_or_else(|| {
-                                themed_highlight(
-                                    ui,
-                                    &document.content,
-                                    &extension,
-                                    FontId::monospace(FS_SMALL),
-                                )
-                            });
-                            let mut visible_job = syntax_job.clone();
-                            apply_search_highlights(
-                                &mut visible_job,
-                                &find_ranges,
-                                active_find_match,
-                            );
-                            if let Some(range) = hovered_definition.as_ref() {
-                                apply_definition_underline(&mut visible_job, range);
-                            }
-                            visible_job.wrap.max_width = output.galley.job.wrap.max_width;
-                            let minimap_job = syntax_job;
-                            let visible_galley =
-                                ui.fonts_mut(|fonts| fonts.layout_job(visible_job));
-                            ui.painter().with_clip_rect(output.text_clip_rect).galley(
+                            // TextEdit's geometry is transparent; paint the cached syntax galley.
+                            ui.painter().with_clip_rect(viewport_clip).galley(
                                 output.galley_pos,
                                 visible_galley,
                                 c_text(),
@@ -2030,7 +2146,7 @@ impl OxiApp {
                                     ui,
                                     &output.galley,
                                     output.galley_pos,
-                                    output.text_clip_rect,
+                                    viewport_clip,
                                     &document.content,
                                     selection,
                                 );
@@ -2041,69 +2157,61 @@ impl OxiApp {
                                         ui,
                                         &output.galley,
                                         output.galley_pos,
-                                        output.text_clip_rect,
+                                        viewport_clip,
                                         cursor_range.primary,
                                     );
                                 }
                             }
 
-                            let selected_lines = selection.map(|range| {
-                                let selected = range.as_sorted_char_range();
-                                let start = document
-                                    .content
-                                    .chars()
-                                    .take(selected.start.0)
-                                    .filter(|character| *character == '\n')
-                                    .count();
-                                let end = start
-                                    + document
-                                        .content
-                                        .chars()
-                                        .skip(selected.start.0)
-                                        .take(selected.end.0 - selected.start.0)
-                                        .filter(|character| *character == '\n')
-                                        .count();
-                                (start, end)
-                            });
+                            let selected_lines = selection
+                                .map(|range| selected_logical_lines(&output.galley, range));
 
                             // Return the screen-space positions needed to paint the fixed gutter,
                             // plus whether the pointer is extending a text selection. egui normally
                             // suppresses ScrollArea wheel input while a child is being dragged, so
                             // the latter is used below to keep editor scrolling responsive.
-                            let line_positions = output
-                                .galley
-                                .rows
-                                .iter()
-                                .enumerate()
-                                .filter(|(row, _)| {
-                                    *row == 0 || output.galley.rows[*row - 1].ends_with_newline
-                                })
-                                .map(|(_, placed_row)| {
-                                    placed_row
-                                        .rect()
-                                        .translate(output.galley_pos.to_vec2())
-                                        .center()
-                                        .y
-                                })
-                                .collect::<Vec<_>>();
+                            //
+                            // Only the lines inside the viewport are emitted. The gutter lays out a
+                            // number glyph per entry, so returning every logical line made a 3000-line
+                            // file shape 3000 tiny galleys each frame; culling here keeps that O(visible).
+                            let gutter_clip_range = viewport_clip.y_range();
+                            let gutter_line_height = FS_SMALL * 1.35;
+                            let mut logical_line = 0usize;
+                            let mut line_positions: Vec<(usize, f32)> = Vec::new();
+                            for (row, placed_row) in output.galley.rows.iter().enumerate() {
+                                let starts_line =
+                                    row == 0 || output.galley.rows[row - 1].ends_with_newline;
+                                if !starts_line {
+                                    continue;
+                                }
+                                let y = placed_row
+                                    .rect()
+                                    .translate(output.galley_pos.to_vec2())
+                                    .center()
+                                    .y;
+                                if y >= gutter_clip_range.min - gutter_line_height
+                                    && y <= gutter_clip_range.max + gutter_line_height
+                                {
+                                    line_positions.push((logical_line, y));
+                                }
+                                logical_line += 1;
+                            }
                             (
                                 line_positions,
                                 output.response.dragged(),
                                 selected_lines,
-                                minimap_job,
-                                document.content.clone(),
                                 navigation_request,
                                 active_line,
-                                caret_byte,
+                                caret_char,
                             )
                         })
                 })
                 .inner;
 
             let gutter_clip = gutter_rect.intersect(ui.clip_rect());
-            for (line, y) in scroll_output.inner.0.iter().copied().enumerate() {
+            for (line, y) in scroll_output.inner.0.iter().copied() {
                 let line_height = FS_SMALL * 1.35;
-                if scroll_output.inner.6 == Some(line) {
+                if scroll_output.inner.4 == Some(line) {
                     ui.painter().with_clip_rect(gutter_clip).rect_filled(
                         egui::Rect::from_center_size(
                             egui::pos2(gutter_rect.center().x, y),
@@ -2132,7 +2240,7 @@ impl OxiApp {
                     egui::Align2::RIGHT_CENTER,
                     line + 1,
                     FontId::monospace(FS_SMALL),
-                    if scroll_output.inner.6 == Some(line) {
+                    if scroll_output.inner.4 == Some(line) {
                         c_text_muted()
                     } else {
                         c_text_faint()
@@ -2176,20 +2284,22 @@ impl OxiApp {
                 ui.ctx().request_repaint();
             }
 
-            goto_definition_byte = scroll_output.inner.5;
-            if let Some(caret_byte) = scroll_output.inner.7 {
-                self.conv.editor.navigation_cursor_byte = caret_byte;
+            goto_definition_byte = scroll_output.inner.3;
+            if let Some(caret_char) = scroll_output.inner.5 {
+                self.conv.editor.navigation_cursor_char = caret_char;
             }
 
             // The minimap is outside the editor ScrollArea. Its own narrow scroll strip is painted
             // after it, so the visual order is source → minimap → scrollbar.
             if let Some(fraction) = paint_minimap(
                 ui,
-                &scroll_output.inner.4,
                 egui::vec2(MINIMAP_WIDTH, editor_view_size.y.max(24.0)),
                 &scroll_output,
                 scroll_output.inner.2,
-                &scroll_output.inner.3,
+                self.conv.editor.documents[index]
+                    .minimap_cache
+                    .as_ref()
+                    .expect("minimap geometry is prepared during editor rendering"),
             ) {
                 let mut state = scroll_output.state;
                 let max_y =
@@ -2257,10 +2367,11 @@ impl OxiApp {
             return;
         };
         if let Some(current) = self.conv.editor.active_document() {
-            let current_location = (
-                current.path.clone(),
-                self.conv.editor.navigation_cursor_byte..self.conv.editor.navigation_cursor_byte,
-            );
+            // The caret is tracked as a char index each frame; resolve it to a byte offset only
+            // here, when a jump actually records the current location.
+            let byte =
+                char_index_to_byte(&current.content, self.conv.editor.navigation_cursor_char);
+            let current_location = (current.path.clone(), byte..byte);
             if forward {
                 self.conv.editor.navigation_back.push(current_location);
             } else {
@@ -2474,6 +2585,27 @@ fn live_git_line_changes(
     changes
 }
 
+fn has_mutating_text_input(ui: &Ui) -> bool {
+    ui.input(|input| {
+        input.events.iter().any(|event| match event {
+            egui::Event::Cut | egui::Event::Paste(_) | egui::Event::Text(_) => true,
+            egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_)) => true,
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                matches!(
+                    key,
+                    egui::Key::Backspace | egui::Key::Delete | egui::Key::Enter | egui::Key::Tab
+                ) || (modifiers.command && matches!(key, egui::Key::Z | egui::Key::Y))
+            }
+            _ => false,
+        })
+    })
+}
+
 fn char_index_to_byte(content: &str, char_index: usize) -> usize {
     content
         .char_indices()
@@ -2503,6 +2635,7 @@ fn byte_range_rects(
 fn editor_selection_rects(
     galley: &egui::Galley,
     galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
     range: egui::text::CCursorRange,
 ) -> Vec<egui::Rect> {
     // The font's baseline leaves more visual space below the glyphs than above them. Moving only
@@ -2513,23 +2646,116 @@ fn editor_selection_rects(
     let [start, end] = range.sorted_cursors();
     let primary_is_start = range.primary.index == start.index;
     let primary_is_end = range.primary.index == end.index;
-    let mut rects = selection_rects(galley, galley_pos, range)
+    // Keep one row outside each clip edge so clipping never exposes the artificial start/end
+    // of this reduced contour. A select-all should cost roughly one viewport to paint, not one
+    // shape per line in the entire file.
+    let mut rects = selection_rects_in_clip(galley, galley_pos, clip_rect, range)
         .into_iter()
         .map(|rect| rect.translate(egui::vec2(0.0, -VERTICAL_OFFSET)))
         .collect::<Vec<_>>();
 
     // Leave the active edge to egui's native caret instead of repainting a second caret. This keeps
     // the whole caret visible and uses egui's exact blink phase (including its typing pause/reset).
-    if primary_is_start {
+    let start_is_painted = galley
+        .pos_from_cursor(start)
+        .translate(galley_pos.to_vec2())
+        .intersects(clip_rect);
+    let end_is_painted = galley
+        .pos_from_cursor(end)
+        .translate(galley_pos.to_vec2())
+        .intersects(clip_rect);
+    if primary_is_start && start_is_painted {
         if let Some(first) = rects.first_mut() {
             first.min.x = (first.min.x + CARET_CLEARANCE).min(first.max.x);
         }
-    } else if primary_is_end {
+    } else if primary_is_end && end_is_painted {
         if let Some(last) = rects.last_mut() {
             last.max.x = (last.max.x - CARET_CLEARANCE).max(last.min.x);
         }
     }
     rects
+}
+
+fn selection_rects_in_clip(
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
+    range: egui::text::CCursorRange,
+) -> Vec<egui::Rect> {
+    let [start_cursor, end_cursor] = range.sorted_cursors();
+    let start = galley.layout_from_cursor(start_cursor);
+    let end = galley.layout_from_cursor(end_cursor);
+    let local_clip = clip_rect.translate(-galley_pos.to_vec2());
+
+    let first_visible = galley
+        .rows
+        .partition_point(|row| row.max_y() < local_clip.top());
+    let after_visible = galley
+        .rows
+        .partition_point(|row| row.min_y() <= local_clip.bottom());
+    // Include a neighboring row at either edge. The painter clips it, while the selection outline
+    // remains continuous as if the complete (potentially huge) contour had been generated.
+    let first_row = start.row.max(first_visible.saturating_sub(1));
+    let last_row = end
+        .row
+        .min(after_visible.min(galley.rows.len().saturating_sub(1)));
+    if first_row > last_row {
+        return Vec::new();
+    }
+
+    let mut rects = Vec::with_capacity(last_row - first_row + 1);
+    for row_index in first_row..=last_row {
+        let row = &galley.rows[row_index];
+        let left = if row_index == start.row {
+            row.row.x_offset(start.column)
+        } else {
+            0.0
+        };
+        let right = if row_index == end.row {
+            row.row.x_offset(end.column)
+        } else {
+            row.row.size.x
+                + if row.ends_with_newline {
+                    row.row.height() * 0.5
+                } else {
+                    0.0
+                }
+        };
+        if right > left {
+            rects.push(egui::Rect::from_min_max(
+                galley_pos + egui::vec2(row.pos.x + left, row.pos.y),
+                galley_pos + egui::vec2(row.pos.x + right, row.pos.y + row.row.height()),
+            ));
+        }
+    }
+    rects
+}
+
+fn caret_logical_line(galley: &egui::Galley, cursor: egui::text::CCursor) -> usize {
+    let row = galley.layout_from_cursor(cursor).row;
+    galley.rows[..row]
+        .iter()
+        .filter(|row| row.ends_with_newline)
+        .count()
+}
+
+fn selected_logical_lines(
+    galley: &egui::Galley,
+    range: egui::text::CCursorRange,
+) -> (usize, usize) {
+    let [start, end] = range.sorted_cursors();
+    let start_row = galley.layout_from_cursor(start).row;
+    let end_row = galley.layout_from_cursor(end).row;
+    let start_line = galley.rows[..start_row]
+        .iter()
+        .filter(|row| row.ends_with_newline)
+        .count();
+    let end_line = start_line
+        + galley.rows[start_row..end_row]
+            .iter()
+            .filter(|row| row.ends_with_newline)
+            .count();
+    (start_line, end_line)
 }
 
 fn selection_rects(
@@ -2573,14 +2799,13 @@ fn paint_selected_whitespace(
     galley: &egui::Galley,
     galley_pos: egui::Pos2,
     clip_rect: egui::Rect,
-    content: &str,
+    _content: &str,
     range: egui::text::CCursorRange,
 ) {
     let painter = ui.painter().with_clip_rect(clip_rect);
 
-    // Expose selected whitespace without outlining every selected line. Spaces use centered dots;
-    // tabs use a small arrow so
-    // indentation remains distinguishable without showing invisibles throughout the whole file.
+    // Expose selected whitespace without outlining every selected line. Only walk visible glyphs:
+    // iterating every selected character made select-all disproportionately expensive in big files.
     let selected = range.as_sorted_char_range();
     let marker_base =
         crate::theme::blend_color(c_text_muted(), active_palette().selection_stroke, 0.25);
@@ -2590,36 +2815,57 @@ fn paint_selected_whitespace(
         marker_base.b(),
         105,
     );
-    for (offset, character) in content
-        .chars()
-        .skip(selected.start.0)
-        .take(selected.end.0 - selected.start.0)
-        .enumerate()
-    {
-        // The selection anchor already communicates its starting position; avoid placing a dot
-        // directly on top of it when the first selected character is whitespace.
-        if offset == 0 && character == ' ' {
-            continue;
+    let local_clip = clip_rect.translate(-galley_pos.to_vec2());
+    let first_visible = galley
+        .rows
+        .partition_point(|row| row.max_y() < local_clip.top());
+    let Some(first_row) = galley.rows.get(first_visible) else {
+        return;
+    };
+    let mut row_start = galley
+        .cursor_from_pos(egui::vec2(
+            first_row.rect().left(),
+            first_row.rect().center().y,
+        ))
+        .index
+        .0;
+    for (row_index, row) in galley.rows.iter().enumerate().skip(first_visible) {
+        let row_len = row.row.char_count_excluding_newline().0 + usize::from(row.ends_with_newline);
+        if row.min_y() > local_clip.bottom() {
+            break;
         }
-        let marker = match character {
-            ' ' => "·",
-            '\t' => "→",
-            _ => continue,
-        };
-        let cursor = egui::text::CCursor {
-            index: egui::text::CharIndex(selected.start.0 + offset),
-            prefer_next_row: true,
-        };
-        let rect = galley
-            .pos_from_cursor(cursor)
-            .translate(galley_pos.to_vec2());
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            marker,
-            FontId::monospace(FS_TINY),
-            marker_color,
-        );
+        for (column, glyph) in row.row.glyphs.iter().enumerate() {
+            let char_index = row_start + column;
+            if char_index >= selected.end.0 {
+                break;
+            }
+            if char_index < selected.start.0 || (char_index == selected.start.0 && glyph.chr == ' ')
+            {
+                continue;
+            }
+            let marker = match glyph.chr {
+                ' ' => "·",
+                '\t' => "→",
+                _ => continue,
+            };
+            let rect = galley
+                .pos_from_layout_cursor(&egui::epaint::text::cursor::LayoutCursor {
+                    row: row_index,
+                    column: egui::text::CharIndex(column),
+                })
+                .translate(galley_pos.to_vec2());
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                marker,
+                FontId::monospace(FS_TINY),
+                marker_color,
+            );
+        }
+        row_start += row_len;
+        if row_start >= selected.end.0 {
+            break;
+        }
     }
 }
 
@@ -2652,11 +2898,7 @@ fn paint_editor_caret(
     );
 }
 
-fn paint_editor_selection(
-    painter: &egui::Painter,
-    rects: &[egui::Rect],
-    fill: egui::Color32,
-) {
+fn paint_editor_selection(painter: &egui::Painter, rects: &[egui::Rect], fill: egui::Color32) {
     const RADIUS: f32 = 2.0;
     let Some(first) = rects.first() else {
         return;
@@ -2731,10 +2973,10 @@ fn simplify_orthogonal_contour(points: &mut Vec<egui::Pos2>) {
             let current = points[index];
             let next = points[(index + 1) % points.len()];
             let duplicate = current.distance_sq(previous) < 0.01;
-            let vertical = (previous.x - current.x).abs() < 0.01
-                && (current.x - next.x).abs() < 0.01;
-            let horizontal = (previous.y - current.y).abs() < 0.01
-                && (current.y - next.y).abs() < 0.01;
+            let vertical =
+                (previous.x - current.x).abs() < 0.01 && (current.x - next.x).abs() < 0.01;
+            let horizontal =
+                (previous.y - current.y).abs() < 0.01 && (current.y - next.y).abs() < 0.01;
             if duplicate || vertical || horizontal {
                 points.remove(index);
                 changed = true;
@@ -2793,32 +3035,111 @@ fn paint_indent_guides(
     galley: &egui::Galley,
     galley_pos: egui::Pos2,
     clip_rect: egui::Rect,
-    content: &str,
+    indent_columns: &[Option<usize>],
 ) {
     const TAB_WIDTH: usize = 4;
     const DASH_LENGTH: f32 = 1.5;
     const DASH_GAP: f32 = 2.5;
 
-    let lines = content.split('\n').collect::<Vec<_>>();
-    let mut indent_columns = lines
+    let local_clip = clip_rect.translate(-galley_pos.to_vec2());
+    let first_visible = galley
+        .rows
+        .partition_point(|row| row.max_y() < local_clip.top());
+    let after_visible = galley
+        .rows
+        .partition_point(|row| row.min_y() <= local_clip.bottom());
+    let logical_line_before = galley.rows[..first_visible]
         .iter()
-        .map(|line| {
-            let mut column = 0usize;
-            for character in line.chars() {
-                match character {
-                    ' ' => column += 1,
-                    '\t' => column += TAB_WIDTH - column % TAB_WIDTH,
-                    _ => break,
+        .filter(|row| row.ends_with_newline)
+        .count();
+    let glyph_width = ui.fonts_mut(|fonts| {
+        fonts
+            .glyph_width(&FontId::monospace(FS_SMALL), ' ')
+            .max(FS_SMALL * 0.25)
+    });
+    let color = crate::theme::blend_color(c_text_faint(), c_bg_main(), 0.38);
+    let painter = ui.painter().with_clip_rect(clip_rect);
+
+    let mut logical_line = logical_line_before;
+    for row_index in first_visible..after_visible {
+        let row = &galley.rows[row_index];
+        let starts_line = row_index == 0 || galley.rows[row_index - 1].ends_with_newline;
+        if starts_line && let Some(columns) = indent_columns.get(logical_line).copied().flatten() {
+            let row_rect = row.rect().translate(galley_pos.to_vec2());
+            for column in (TAB_WIDTH..=columns).step_by(TAB_WIDTH) {
+                let x = galley_pos.x + column as f32 * glyph_width;
+                let mut y = row_rect.top().max(clip_rect.top());
+                let bottom = row_rect.bottom().min(clip_rect.bottom());
+                while y < bottom {
+                    painter.vline(
+                        x,
+                        y..=(y + DASH_LENGTH).min(bottom),
+                        egui::Stroke::new(1.0, color),
+                    );
+                    y += DASH_LENGTH + DASH_GAP;
                 }
             }
-            (!line.trim().is_empty()).then_some(column)
-        })
-        .collect::<Vec<_>>();
+        }
+        if row.ends_with_newline {
+            logical_line += 1;
+        }
+    }
+}
 
-    // Preserve guides across empty separator lines, but do not invent a deeper indentation than
-    // either neighbouring block has. Keep this linear: searching both sides for every blank line
-    // caused quadratic work in files containing large whitespace regions.
-    let mut indentation_before = Vec::with_capacity(indent_columns.len());
+/// One horizontal stroke in the minimap silhouette: a tab-expanded column run on a
+/// single line, colored by the syntax section it came from.
+struct MinimapSegment {
+    line: usize,
+    start_col: usize,
+    end_col: usize,
+    color: egui::Color32,
+}
+
+/// Cached minimap silhouette for a document. The strokes and horizontal scale depend
+/// only on the buffer and syntax palette, so they are rebuilt on change instead of
+/// rescanning the whole file every frame; painting then just culls to the visible strip.
+pub struct MinimapGeometry {
+    palette: crate::theme::SyntaxPalette,
+    line_count: usize,
+    max_columns: usize,
+    indent_columns: Vec<Option<usize>>,
+    segments: Vec<MinimapSegment>,
+}
+
+const MINIMAP_TAB_WIDTH: usize = 4;
+const MINIMAP_MIN_COLUMNS: usize = 60;
+
+fn minimap_advance_columns(mut column: usize, text: &str) -> usize {
+    for character in text.chars() {
+        column += match character {
+            '\t' => MINIMAP_TAB_WIDTH - column % MINIMAP_TAB_WIDTH,
+            _ => 1,
+        };
+    }
+    column
+}
+
+fn build_minimap_geometry(
+    content: &str,
+    highlight_job: &egui::text::LayoutJob,
+    palette: crate::theme::SyntaxPalette,
+) -> MinimapGeometry {
+    // Build line metadata and indentation guides in one pass. Blank lines inherit the shallower
+    // indentation of their nearest non-empty neighbours, matching the previous visual behavior.
+    let mut indent_columns = Vec::new();
+    let mut max_columns = MINIMAP_MIN_COLUMNS;
+    for line in content.split('\n') {
+        let columns = minimap_advance_columns(0, line);
+        max_columns = max_columns.max(columns);
+        let indentation = minimap_advance_columns(
+            0,
+            line.get(..line.len() - line.trim_start_matches([' ', '\t']).len())
+                .unwrap_or_default(),
+        );
+        indent_columns.push((!line.trim().is_empty()).then_some(indentation));
+    }
+    let line_count = indent_columns.len();
+    let mut indentation_before = Vec::with_capacity(line_count);
     let mut nearest = None;
     for indentation in &indent_columns {
         indentation_before.push(nearest);
@@ -2835,48 +3156,72 @@ fn paint_indent_guides(
         }
     }
 
-    let logical_rows = galley
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(row, _)| *row == 0 || galley.rows[*row - 1].ends_with_newline)
-        .map(|(_, row)| row.rect().translate(galley_pos.to_vec2()))
-        .collect::<Vec<_>>();
-    let glyph_width = ui.fonts_mut(|fonts| {
-        fonts
-            .glyph_width(&FontId::monospace(FS_SMALL), ' ')
-            .max(FS_SMALL * 0.25)
-    });
-    let color = crate::theme::blend_color(c_text_faint(), c_bg_main(), 0.38);
-    let painter = ui.painter().with_clip_rect(clip_rect);
-
-    for (line, row_rect) in logical_rows.iter().enumerate() {
-        let Some(columns) = indent_columns.get(line).copied().flatten() else {
+    // One stroke per visible run of source, keyed to its logical line. Only section byte
+    // ranges and colors are read, so the minimap reuses the editor's cached highlight.
+    let mut segments = Vec::new();
+    let mut line_index = 0usize;
+    let mut column = 0usize;
+    for section in &highlight_job.sections {
+        let start = section.byte_range.start.0.min(content.len());
+        let end = section.byte_range.end.0.min(content.len());
+        // Never let stale or malformed byte ranges take down the editor.
+        let Some(section_text) = content.get(start..end) else {
             continue;
         };
-        for column in (TAB_WIDTH..=columns).step_by(TAB_WIDTH) {
-            let x = galley_pos.x + column as f32 * glyph_width;
-            let mut y = row_rect.top().max(clip_rect.top());
-            let bottom = row_rect.bottom().min(clip_rect.bottom());
-            while y < bottom {
-                painter.vline(
-                    x,
-                    y..=(y + DASH_LENGTH).min(bottom),
-                    egui::Stroke::new(1.0, color),
-                );
-                y += DASH_LENGTH + DASH_GAP;
+        for fragment in section_text.split_inclusive('\n') {
+            let text = fragment.trim_end_matches('\n');
+            let leading_text: String = text
+                .chars()
+                .take_while(|character| character.is_whitespace())
+                .collect();
+            let visible_start = minimap_advance_columns(column, &leading_text);
+            let visible_end = minimap_advance_columns(visible_start, text.trim());
+            if visible_end > visible_start {
+                segments.push(MinimapSegment {
+                    line: line_index,
+                    start_col: visible_start,
+                    end_col: visible_end,
+                    color: section.format.color,
+                });
+            }
+            if fragment.ends_with('\n') {
+                line_index += 1;
+                column = 0;
+            } else {
+                column = minimap_advance_columns(column, text);
             }
         }
+    }
+
+    MinimapGeometry {
+        palette,
+        line_count,
+        max_columns,
+        indent_columns,
+        segments,
+    }
+}
+
+fn ensure_minimap_geometry(
+    content: &str,
+    highlight_job: &egui::text::LayoutJob,
+    cache: &mut Option<MinimapGeometry>,
+) {
+    let palette = active_palette().syntax;
+    if cache
+        .as_ref()
+        .is_none_or(|geometry| geometry.palette != palette)
+    {
+        *cache = Some(build_minimap_geometry(content, highlight_job, palette));
     }
 }
 
 fn paint_minimap(
     ui: &mut Ui,
-    content: &str,
     size: egui::Vec2,
     scroll: &EditorScrollOutput,
     selected_lines: Option<(usize, usize)>,
-    highlight_job: &egui::text::LayoutJob,
+    geometry: &MinimapGeometry,
 ) -> Option<f32> {
     const SCROLLBAR_WIDTH: f32 = 10.0;
     let (whole_rect, response) = ui.allocate_exact_size(
@@ -2899,34 +3244,9 @@ fn paint_minimap(
     // short files look sparse and crushed large files into sub-pixel noise; neither resembled the
     // source. When the file outgrows the strip, the map scrolls in sync with the editor instead.
     const ROW_HEIGHT: f32 = 2.0;
-    const TAB_WIDTH: usize = 4;
-    const MIN_COLUMNS: usize = 60;
-
-    fn advance_columns(mut column: usize, text: &str) -> usize {
-        for character in text.chars() {
-            column += match character {
-                '\t' => TAB_WIDTH - column % TAB_WIDTH,
-                _ => 1,
-            };
-        }
-        column
-    }
-
-    // Keep the minimap's line count identical to the editor's, including a final empty line.
-    let lines = content.split('\n').collect::<Vec<_>>();
-    // Only section ranges and colors are used by the minimap. Reuse the editor's cached or
-    // incrementally adjusted highlight so the minimap neither reparses nor loses colors on input.
-    let job = highlight_job;
     let row_height = ROW_HEIGHT;
-    let natural_height = lines.len() as f32 * row_height;
-    // Tab-expanded columns so tab-indented files keep their editor silhouette; the floor keeps
-    // short-lined files from being stretched to the full strip width.
-    let max_columns = lines
-        .iter()
-        .map(|line| advance_columns(0, line))
-        .max()
-        .unwrap_or(1)
-        .max(MIN_COLUMNS);
+
+    let natural_height = geometry.line_count as f32 * row_height;
 
     let max_y = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
     let exact_viewport_fraction =
@@ -2940,47 +3260,28 @@ fn paint_minimap(
     let line_top = |line: usize| minimap_rect.top() + line as f32 * row_height - map_offset;
 
     let map_painter = ui.painter().with_clip_rect(minimap_rect);
-    let mut line_index = 0usize;
-    let mut column = 0usize;
-    for section in &job.sections {
-        let start = section.byte_range.start.0.min(content.len());
-        let end = section.byte_range.end.0.min(content.len());
-        // Never let stale or malformed byte ranges take down the editor. Incremental highlight
-        // ranges are sanitized at creation too; this guard also protects cached legacy jobs.
-        let Some(section_text) = content.get(start..end) else {
-            continue;
-        };
-        for fragment in section_text.split_inclusive('\n') {
-            let text = fragment.trim_end_matches('\n');
-            let y = line_top(line_index);
-            if y >= minimap_rect.top() - row_height && y < minimap_rect.bottom() {
-                let leading_text: String = text
-                    .chars()
-                    .take_while(|character| character.is_whitespace())
-                    .collect();
-                let visible_start = advance_columns(column, &leading_text);
-                let visible_end = advance_columns(visible_start, text.trim());
-                if visible_end > visible_start {
-                    let scale = minimap_rect.width() / max_columns as f32;
-                    let x = minimap_rect.left() + visible_start as f32 * scale;
-                    let width = ((visible_end - visible_start) as f32 * scale).max(1.0);
-                    map_painter.hline(
-                        x..=(x + width).min(minimap_rect.right()),
-                        y,
-                        egui::Stroke::new(
-                            1.35,
-                            crate::theme::blend_color(section.format.color, c_bg_main(), 0.58),
-                        ),
-                    );
-                }
-            }
-            if fragment.ends_with('\n') {
-                line_index += 1;
-                column = 0;
-            } else {
-                column = advance_columns(column, text);
-            }
-        }
+    let scale = minimap_rect.width() / geometry.max_columns as f32;
+    let first_visible_line = ((map_offset - row_height) / row_height).floor().max(0.0) as usize;
+    let after_visible_line =
+        ((map_offset + minimap_rect.height()) / row_height).ceil() as usize + 1;
+    let first_segment = geometry
+        .segments
+        .partition_point(|segment| segment.line < first_visible_line);
+    let after_segment = geometry
+        .segments
+        .partition_point(|segment| segment.line < after_visible_line);
+    for segment in &geometry.segments[first_segment..after_segment] {
+        let y = line_top(segment.line);
+        let x = minimap_rect.left() + segment.start_col as f32 * scale;
+        let width = ((segment.end_col - segment.start_col) as f32 * scale).max(1.0);
+        map_painter.hline(
+            x..=(x + width).min(minimap_rect.right()),
+            y,
+            egui::Stroke::new(
+                1.35,
+                crate::theme::blend_color(segment.color, c_bg_main(), 0.58),
+            ),
+        );
     }
 
     if let Some((start_line, end_line)) = selected_lines {
@@ -3053,8 +3354,7 @@ fn paint_minimap(
         // The minimap lives outside the editor ScrollArea, so forward wheel/trackpad movement to
         // the same stored scroll state while the pointer is anywhere over the map or its scrollbar.
         let wheel_y = ui.input(|input| input.smooth_scroll_delta.y);
-        (wheel_y != 0.0)
-            .then(|| ((scroll.state.offset.y - wheel_y) / max_y).clamp(0.0, 1.0))
+        (wheel_y != 0.0).then(|| ((scroll.state.offset.y - wheel_y) / max_y).clamp(0.0, 1.0))
     } else {
         None
     }

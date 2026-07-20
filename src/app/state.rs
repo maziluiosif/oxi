@@ -107,8 +107,9 @@ pub struct EditorState {
     /// Definition-navigation history, independent from the order of open tabs.
     pub navigation_back: Vec<(PathBuf, std::ops::Range<usize>)>,
     pub navigation_forward: Vec<(PathBuf, std::ops::Range<usize>)>,
-    /// Last caret byte observed in the active editor document.
-    pub navigation_cursor_byte: usize,
+    /// Last caret char index observed in the active editor document, resolved to a byte offset
+    /// only when a navigation jump records it (avoids a per-frame walk of the whole file).
+    pub navigation_cursor_char: usize,
     pub show_diff: bool,
     pub file_operation: Option<FileOperation>,
     pub file_operation_name: String,
@@ -148,11 +149,21 @@ pub struct EditorDocument {
     pub externally_modified: bool,
     /// Incremental Tree-sitter parse and query-highlight state for this document.
     pub syntax_state: Option<crate::theme::EditorSyntaxState>,
+    /// Monotonic content revision shared with TextEdit and document decoration caches.
+    pub content_revision: u64,
+    /// Cached dirty state, recomputed only after an edit/save/reload.
+    pub dirty: bool,
+    /// Cached full editor layouts. Selection-only frames reuse the existing galleys directly,
+    /// bypassing LayoutJob construction and egui's whole-text cache hashing.
+    pub layout_cache: super::file_explorer::EditorLayoutCache,
+    /// Cached minimap silhouette, rebuilt only when the content or palette changes so
+    /// idle and scrolling frames no longer rescan the whole file.
+    pub minimap_cache: Option<super::file_explorer::MinimapGeometry>,
 }
 
 impl EditorDocument {
     pub fn is_dirty(&self) -> bool {
-        self.content != self.saved_content
+        self.dirty
     }
 }
 
