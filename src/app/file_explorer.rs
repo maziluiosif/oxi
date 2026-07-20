@@ -1881,6 +1881,11 @@ impl OxiApp {
                                         layout_cache.wrap_width_bits = wrap_width_bits;
                                         layout_cache.pixels_per_point_bits = pixels_per_point_bits;
                                         layout_cache.geometry = Some(Arc::clone(&galley));
+                                        // The cached syntax galley was laid out for the previous
+                                        // wrap width / dpi. The keys now describe this new
+                                        // geometry, so keeping it would repaint stale rows (text
+                                        // visibly truncated after the editor is resized).
+                                        layout_cache.syntax = None;
                                     }
                                     galley
                                 };
@@ -2085,11 +2090,17 @@ impl OxiApp {
                                 job.wrap.max_width = output.galley.job.wrap.max_width;
                                 let galley = ui.fonts_mut(|fonts| fonts.layout_job(job.clone()));
                                 syntax_job = Some(job);
-                                if find_ranges.is_empty() && hovered_definition.is_none() {
-                                    document.layout_cache.revision = document.content_revision;
-                                    document.layout_cache.wrap_width_bits = wrap_width_bits;
-                                    document.layout_cache.pixels_per_point_bits =
-                                        pixels_per_point_bits;
+                                // Store only when the cache keys already describe this exact
+                                // layout (they are written by the geometry layouter). Overwriting
+                                // the keys here could relabel a geometry galley from an older
+                                // wrap width as current and corrupt both caches.
+                                if find_ranges.is_empty()
+                                    && hovered_definition.is_none()
+                                    && document.layout_cache.revision == document.content_revision
+                                    && document.layout_cache.wrap_width_bits == wrap_width_bits
+                                    && document.layout_cache.pixels_per_point_bits
+                                        == pixels_per_point_bits
+                                {
                                     document.layout_cache.syntax = Some(Arc::clone(&galley));
                                 }
                                 galley
