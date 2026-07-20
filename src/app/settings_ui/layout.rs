@@ -65,7 +65,7 @@ impl OxiApp {
     fn continue_after_settings_exit(&mut self, action: SettingsExitAction) {
         match action {
             SettingsExitAction::BackToChat => {
-                self.conv.focus_chat_input_next_frame = true;
+                self.focus_active_view_next_frame();
             }
             SettingsExitAction::ToggleSidebar => {
                 let chats_on = self.conv.sidebar_open
@@ -77,7 +77,7 @@ impl OxiApp {
                         self.conv.editor.hidden_active = self.conv.editor.active.take();
                     }
                 }
-                self.conv.focus_chat_input_next_frame = true;
+                self.focus_active_view_next_frame();
             }
             SettingsExitAction::ToggleExplorer => {
                 let explorer_on = self.conv.sidebar_open
@@ -89,6 +89,7 @@ impl OxiApp {
                         self.conv.editor.active = self.conv.editor.hidden_active.take();
                     }
                 }
+                self.focus_active_view_next_frame();
             }
             SettingsExitAction::ToggleTerminal => self.toggle_terminal(),
             SettingsExitAction::ToggleGitChanges => {
@@ -113,7 +114,7 @@ impl OxiApp {
         self.conv.settings_original = None;
         self.conv.settings_exit_prompt = None;
         self.conv.settings_open = false;
-        self.conv.focus_chat_input_next_frame = true;
+        self.focus_active_view_next_frame();
     }
 
     pub(crate) fn save_settings_page(&mut self) {
@@ -128,7 +129,7 @@ impl OxiApp {
         self.conv.settings_original = Some(self.conv.settings.clone());
         self.conv.settings_exit_prompt = None;
         self.conv.settings_open = false;
-        self.conv.focus_chat_input_next_frame = true;
+        self.focus_active_view_next_frame();
     }
 
     fn save_settings_and_continue(&mut self, action: SettingsExitAction) {

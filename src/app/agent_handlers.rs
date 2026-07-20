@@ -3,9 +3,8 @@
 use eframe::egui;
 use serde_json::Value;
 
-use crate::agent::AgentEvent;
+use crate::agent::{AgentEvent, AgentOutcome};
 use crate::oauth::OAuthUiMsg;
-use crate::session_store;
 
 use super::{OxiApp, PendingApproval, SessionKey};
 
@@ -42,10 +41,20 @@ impl OxiApp {
                 continue;
             };
 
+            const MAX_AGENT_EVENTS_PER_FRAME: usize = 512;
+            let mut processed = 0usize;
             loop {
+                if processed >= MAX_AGENT_EVENTS_PER_FRAME {
+                    if let Some(state) = self.flow.sessions.get_mut(&key) {
+                        state.agent_rx = Some(rx);
+                    }
+                    repainted = true;
+                    break;
+                }
                 match rx.try_recv() {
                     Ok(ev) => {
                         self.apply_agent_event(key, ev);
+                        processed += 1;
                         repainted = true;
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -68,12 +77,13 @@ impl OxiApp {
 
         // A disconnect while still waiting means the worker died without a terminal
         // event (e.g. a panic): close out the stream so the session doesn't hang.
-        // After a normal AgentEnd, waiting is already off and this is a no-op.
+        // After a normal Finished event, waiting is already off and this is a no-op.
         for key in disconnected {
             if self
                 .run_state(key)
                 .is_some_and(|state| state.waiting_response)
             {
+                self.invalidate_wire_cache(key);
                 self.append_assistant_answer(key, "\n[Error] Agent stopped unexpectedly.\n");
                 self.finish_assistant_stream(key);
             }
@@ -83,12 +93,10 @@ impl OxiApp {
             state.agent_rx.is_some()
                 || state.waiting_response
                 || state.stream_error.is_some()
-                // Keep completed run metadata around: the header "Ready" chip shows the last
-                // turn's usage/cache stats, and `wire_history` is reused on the next turn.
+                // Keep completed usage metadata around for the header "Ready" chip.
                 || !state.turn_usage.is_zero()
                 || !state.last_turn_usage.is_zero()
                 || !state.session_usage.is_zero()
-                || state.wire_history.is_some()
         });
 
         if repainted {
@@ -235,11 +243,6 @@ impl OxiApp {
                 };
                 self.finalize_tool_run(key, id, is_error, full_output_path, diff);
             }
-            AgentEvent::StreamError(reason) => {
-                self.run_state_mut(key).wire_history = None;
-                self.append_assistant_answer(key, &format!("\n[Error] {reason}\n"));
-                self.finish_assistant_stream(key);
-            }
             AgentEvent::StreamRetry { attempt, reason } => {
                 eprintln!("[oxi] stream retry (attempt {attempt}): {reason}");
                 self.run_state_mut(key).stream_retrying =
@@ -264,20 +267,19 @@ impl OxiApp {
                     self.session_mut_by_key(key).chars_per_token = Some(cpt);
                 }
             }
-            AgentEvent::WireHistory(history) => {
-                self.run_state_mut(key).wire_history = Some(history.clone());
-                let fingerprint = self.run_state(key).map(|r| r.wire_fingerprint).unwrap_or(0);
-                {
-                    let sess = self.session_mut_by_key(key);
-                    sess.wire_history = Some(history);
-                    sess.wire_fingerprint = fingerprint;
+            AgentEvent::Finished(outcome) => {
+                match outcome {
+                    AgentOutcome::Success { wire_cache } => {
+                        self.session_mut_by_key(key).wire_cache = wire_cache;
+                    }
+                    AgentOutcome::Failed { error } => {
+                        self.invalidate_wire_cache(key);
+                        self.append_assistant_answer(key, &format!("\n[Error] {error}\n"));
+                    }
+                    AgentOutcome::Cancelled => {
+                        self.invalidate_wire_cache(key);
+                    }
                 }
-                let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
-                let _ =
-                    session_store::save_session_messages(&root_path, self.session_mut_by_key(key));
-            }
-            AgentEvent::ProviderDone => {}
-            AgentEvent::AgentEnd => {
                 self.finish_assistant_stream(key);
             }
         }

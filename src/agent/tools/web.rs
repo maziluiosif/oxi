@@ -585,11 +585,12 @@ fn html_to_text(html: &str) -> String {
                 }
                 None => break,
             }
-        } else {
+        } else if let Some(ch) = rest.chars().next() {
             // Advance one full UTF-8 char so multi-byte text is preserved intact.
-            let ch = rest.chars().next().unwrap();
             text.push(ch);
             i += ch.len_utf8();
+        } else {
+            break;
         }
     }
 

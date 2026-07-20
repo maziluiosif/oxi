@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::agent::runner::wire_fingerprint_for;
+use crate::agent::runner::AgentRunRequest;
 use crate::agent::spawn_agent_run;
 use crate::model::{
     AssistantBlock, ChatMessage, MsgRole, UserAttachment, make_session_title,
@@ -102,8 +102,7 @@ impl OxiApp {
             return;
         };
         self.active_session_mut().messages.truncate(user_idx);
-        self.active_session_mut().wire_history = None;
-        self.run_state_mut(key).wire_history = None;
+        self.invalidate_wire_cache(key);
         self.conv.editing_last_prompt = None;
         self.send_message_opts(true);
     }
@@ -207,6 +206,9 @@ impl OxiApp {
         let cwd = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
         let expanded = super::mentions::expand_at_mentions(&text, &cwd);
         self.run_state_mut(key).last_user_prompt = Some(text.clone());
+        // The previous cache remains only a candidate for this run. Removing it before the
+        // initial save prevents a crash from persisting an advanced transcript with stale wire.
+        let wire_candidate = self.session_mut_by_key(key).wire_cache.take();
         self.materialize_prompt(key, &expanded, &user_attachments);
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
         if let Err(e) =
@@ -217,7 +219,8 @@ impl OxiApp {
             self.persist_active_session_selection();
         }
 
-        if let Err(e) = self.send_prompt_payload(key) {
+        if let Err(e) = self.send_prompt_payload(key, wire_candidate) {
+            self.invalidate_wire_cache(key);
             self.run_state_mut(key).stream_error = Some(e.clone());
             let sess = self.session_mut_by_key(key);
             if let Some(last) = sess.messages.last_mut()
@@ -310,9 +313,10 @@ impl OxiApp {
                     return;
                 }
             }
-            let empty = m.blocks.pop().unwrap();
-            m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
-            m.blocks.push(empty);
+            if let Some(empty) = m.blocks.pop() {
+                m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
+                m.blocks.push(empty);
+            }
             return;
         }
         m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
@@ -453,7 +457,11 @@ impl OxiApp {
         }
     }
 
-    pub(crate) fn send_prompt_payload(&mut self, key: SessionKey) -> Result<(), String> {
+    pub(crate) fn send_prompt_payload(
+        &mut self,
+        key: SessionKey,
+        wire_candidate: Option<crate::model::WireCache>,
+    ) -> Result<(), String> {
         let cwd = PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
         let chat = {
             let s = self.session_mut_by_key(key);
@@ -463,21 +471,9 @@ impl OxiApp {
             s.messages[..s.messages.len() - 1].to_vec()
         };
         let settings = self.conv.settings.clone();
-        let system = crate::agent::prompt::build_system_prompt_for_workspace(&settings, &cwd);
-        let tools = crate::agent::tools::tool_definitions_json(
-            &settings.tools_enabled,
-            settings.bash_timeout_cap_secs,
-        );
-        let wire_fingerprint = wire_fingerprint_for(&settings, &system, &tools);
         let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
             .session_file
             .clone();
-        let prior_wire = self.run_state(key).and_then(|run| {
-            (run.wire_session_file == session_file && run.wire_fingerprint == wire_fingerprint)
-                .then(|| run.wire_history.clone())
-                .flatten()
-        });
-        let used_prior_wire = prior_wire.is_some();
         let chars_per_token = self.calibrated_chars_per_token(key);
         // Stable key for the per-session ACP subprocess: prefer the session file, falling back
         // to a synthetic id for an as-yet-unsaved chat. Once a chat has been saved it switches
@@ -494,38 +490,34 @@ impl OxiApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let _join = spawn_agent_run(
+        let undo_journal = Arc::new(std::sync::Mutex::new(
+            crate::agent::tools::TurnUndoJournal::default(),
+        ));
+        self.run_state_mut(key).undo_journal = Some(undo_journal.clone());
+        let request = AgentRunRequest {
             settings,
-            self.tunnels.clone(),
-            self.acp.clone(),
+            tunnels: self.tunnels.clone(),
+            acp: self.acp.clone(),
             acp_session_key,
             cwd,
-            chat,
-            tx,
+            chat_for_history: chat,
             approval_rx,
-            cancel.clone(),
-            prior_wire,
+            cancel: cancel.clone(),
+            wire_candidate,
             chars_per_token,
-            {
-                let journal = Arc::new(std::sync::Mutex::new(
-                    crate::agent::tools::TurnUndoJournal::default(),
-                ));
-                self.run_state_mut(key).undo_journal = Some(journal.clone());
-                journal
-            },
-        );
-        let existing_wire = self.run_state(key).and_then(|run| run.wire_history.clone());
+            undo_journal,
+        };
+        let _join = spawn_agent_run(&self.agent_executor, request, tx);
         let run = self.run_state_mut(key);
         run.agent_rx = Some(rx);
         run.approval_tx = Some(approval_tx);
         run.pending_approval = None;
         run.cancel_agent = Some(cancel);
-        run.wire_fingerprint = wire_fingerprint;
-        run.wire_session_file = session_file;
-        if !used_prior_wire && existing_wire.is_some() {
-            run.wire_history = None;
-        }
         Ok(())
+    }
+
+    pub(crate) fn invalidate_wire_cache(&mut self, key: SessionKey) {
+        self.session_mut_by_key(key).wire_cache = None;
     }
 
     pub(crate) fn finish_assistant_stream(&mut self, key: SessionKey) {
@@ -552,14 +544,10 @@ impl OxiApp {
             .run_state(key)
             .map(|run| run.turn_usage)
             .filter(|usage| !usage.is_zero());
-        let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
-            .session_file
-            .clone();
         let run = self.run_state_mut(key);
         if let Some(usage) = completed_turn_usage {
             run.last_turn_usage = usage;
         }
-        run.wire_session_file = session_file;
         run.end_waiting_response();
         run.cancel_agent = None;
         run.agent_rx = None;

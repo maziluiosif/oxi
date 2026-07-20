@@ -86,6 +86,70 @@ pub(super) fn is_edit_like_tool(block: &AssistantBlock) -> bool {
     ) || tool_breaks_explore_cluster(block)
 }
 
+const ANSWER_RENDER_CHUNK_BYTES: usize = 24 * 1024;
+
+fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+    index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// Render large answers incrementally. Parsing and laying out an entire multi-hundred-KiB Markdown
+/// response (especially fenced code) every frame is expensive in immediate-mode egui. Completed
+/// answers start with a bounded prefix and can be revealed in chunks; a live answer keeps a
+/// bounded tail visible so the newest streamed output is never hidden.
+fn render_answer_markdown(
+    ui: &mut Ui,
+    msg_idx: usize,
+    block_idx: usize,
+    text: &str,
+    streaming: bool,
+) {
+    if text.len() <= ANSWER_RENDER_CHUNK_BYTES {
+        markdown::render_markdown(ui, text);
+        return;
+    }
+
+    let state_id = Id::new(("answer_render_budget", msg_idx, block_idx));
+    if streaming {
+        let start = floor_char_boundary(text, text.len() - ANSWER_RENDER_CHUNK_BYTES);
+        ui.label(
+            RichText::new(format!(
+                "Showing the latest {} KiB while this response streams",
+                ANSWER_RENDER_CHUNK_BYTES / 1024
+            ))
+            .size(FS_TINY)
+            .color(c_text_muted()),
+        );
+        markdown::render_markdown(ui, &text[start..]);
+        return;
+    }
+
+    let shown = ui
+        .ctx()
+        .data_mut(|d| d.get_persisted::<usize>(state_id))
+        .unwrap_or(ANSWER_RENDER_CHUNK_BYTES)
+        .max(ANSWER_RENDER_CHUNK_BYTES)
+        .min(text.len());
+    let end = floor_char_boundary(text, shown);
+    markdown::render_markdown(ui, &text[..end]);
+
+    if end < text.len() {
+        ui.add_space(4.0);
+        let remaining_kib = (text.len() - end).div_ceil(1024);
+        let label = format!("Show more of this response ({remaining_kib} KiB remaining)");
+        if crate::ui::chrome::ghost_button(ui, &label, false).clicked() {
+            let next = shown
+                .saturating_add(ANSWER_RENDER_CHUNK_BYTES)
+                .min(text.len());
+            ui.ctx().data_mut(|d| d.insert_persisted(state_id, next));
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
 fn has_visible_assistant_content(blocks: &[AssistantBlock], streaming: bool) -> bool {
     blocks.iter().any(|block| match block {
         AssistantBlock::Answer(text) => !text.trim().is_empty(),
@@ -318,7 +382,7 @@ fn render_activity_range(
                 {
                     let response = ui
                         .vertical(|ui| {
-                            markdown::render_markdown(ui, text);
+                            render_answer_markdown(ui, msg_idx, gi, text, streaming);
                         })
                         .response;
                     crate::ui::chrome::copy_message_context_menu(
@@ -532,7 +596,7 @@ pub fn render_assistant_blocks(
         {
             let response = ui
                 .vertical(|ui| {
-                    markdown::render_markdown(ui, text);
+                    render_answer_markdown(ui, msg_idx, worked_end + i, text, streaming);
                 })
                 .response;
             if !text.trim().is_empty() {
@@ -543,5 +607,18 @@ pub fn render_assistant_blocks(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod answer_render_tests {
+    use super::floor_char_boundary;
+
+    #[test]
+    fn floor_boundary_never_splits_utf8() {
+        let text = "a🙂b";
+        let inside_emoji = 2;
+        assert_eq!(floor_char_boundary(text, inside_emoji), 1);
+        assert!(text.is_char_boundary(floor_char_boundary(text, inside_emoji)));
     }
 }

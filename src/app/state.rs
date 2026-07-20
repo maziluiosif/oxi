@@ -9,8 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Instant;
 
-use serde_json::Value;
-
 use eframe::egui;
 
 use crate::agent::{AgentEvent, ApprovalDecision, TokenUsage};
@@ -100,6 +98,8 @@ pub struct EditorState {
     pub find_focus_editor_pending: bool,
     /// Move keyboard focus into the Find input on its next render.
     pub focus_find_next_frame: bool,
+    /// Return keyboard focus to the editor on its next render (Escape, definition jumps).
+    pub focus_editor_next_frame: bool,
     /// Select and reveal this byte range after opening a definition target.
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
@@ -107,8 +107,9 @@ pub struct EditorState {
     /// Definition-navigation history, independent from the order of open tabs.
     pub navigation_back: Vec<(PathBuf, std::ops::Range<usize>)>,
     pub navigation_forward: Vec<(PathBuf, std::ops::Range<usize>)>,
-    /// Last caret byte observed in the active editor document.
-    pub navigation_cursor_byte: usize,
+    /// Last caret char index observed in the active editor document, resolved to a byte offset
+    /// only when a navigation jump records it (avoids a per-frame walk of the whole file).
+    pub navigation_cursor_char: usize,
     pub show_diff: bool,
     pub file_operation: Option<FileOperation>,
     pub file_operation_name: String,
@@ -148,11 +149,21 @@ pub struct EditorDocument {
     pub externally_modified: bool,
     /// Incremental Tree-sitter parse and query-highlight state for this document.
     pub syntax_state: Option<crate::theme::EditorSyntaxState>,
+    /// Monotonic content revision shared with TextEdit and document decoration caches.
+    pub content_revision: u64,
+    /// Cached dirty state, recomputed only after an edit/save/reload.
+    pub dirty: bool,
+    /// Cached full editor layouts. Selection-only frames reuse the existing galleys directly,
+    /// bypassing LayoutJob construction and egui's whole-text cache hashing.
+    pub layout_cache: super::file_explorer::EditorLayoutCache,
+    /// Cached minimap silhouette, rebuilt only when the content or palette changes so
+    /// idle and scrolling frames no longer rescan the whole file.
+    pub minimap_cache: Option<super::file_explorer::MinimapGeometry>,
 }
 
 impl EditorDocument {
     pub fn is_dirty(&self) -> bool {
-        self.content != self.saved_content
+        self.dirty
     }
 }
 
@@ -168,6 +179,23 @@ impl EditorState {
     pub fn any_dirty(&self) -> bool {
         self.documents.iter().any(EditorDocument::is_dirty)
     }
+
+    /// Choose which widget should own keyboard focus given the current view: the editor
+    /// when a document is showing, the chat composer otherwise. Callers then set the
+    /// matching `focus_*_next_frame` flag instead of assuming the chat is visible.
+    pub fn focus_target(&self) -> EditorFocusTarget {
+        if self.active.is_some() {
+            EditorFocusTarget::Editor
+        } else {
+            EditorFocusTarget::ChatInput
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EditorFocusTarget {
+    Editor,
+    ChatInput,
 }
 
 /// One project root and its chat tabs.
@@ -203,11 +231,6 @@ pub struct SessionRunState {
     /// new turn is running before the provider reports current-turn usage.
     pub last_turn_usage: TokenUsage,
     pub session_usage: TokenUsage,
-    /// In-memory canonical provider wire history reused across turns to preserve
-    /// byte-for-byte cacheable prefixes. Not persisted; provider caches are short-lived.
-    pub wire_history: Option<Vec<Value>>,
-    pub wire_fingerprint: u64,
-    pub wire_session_file: Option<String>,
     /// Path states captured by reversible built-in filesystem calls in the most recent turn.
     pub undo_journal: Option<Arc<Mutex<crate::agent::tools::TurnUndoJournal>>>,
     /// Unexpanded text entered by the user for the most recent turn (the transcript may contain
@@ -364,6 +387,13 @@ pub struct PromptEditState {
     pub previous_images: Vec<(String, Vec<u8>)>,
 }
 
+/// Cached measured height of one transcript unit at a given column width and content state.
+pub struct TranscriptUnitHeight {
+    pub width_bits: u32,
+    pub fingerprint: u64,
+    pub height: f32,
+}
+
 pub struct ConversationState {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -424,6 +454,13 @@ pub struct ConversationState {
     /// rebuilding the (potentially huge) `LayoutJob` on every frame while the same
     /// diff stays open.
     pub diff_job_cache: Option<(u64, u32, egui::text::LayoutJob)>,
+    /// Measured heights of transcript units (a user message or a contiguous assistant run),
+    /// keyed by `(workspace_idx, session_idx, unit_start_message_idx)`. Units outside the
+    /// scroll viewport advance the cursor by their cached height instead of being rendered,
+    /// so a long conversation costs O(visible) per frame instead of O(history). Entries are
+    /// revalidated against the column width and a cheap content fingerprint, and re-measured
+    /// whenever the unit actually renders.
+    pub transcript_heights: std::collections::HashMap<(usize, usize, usize), TranscriptUnitHeight>,
     /// Source-control (git) panel visibility and width (persisted in settings).
     pub git_open: bool,
     pub git_width: f32,

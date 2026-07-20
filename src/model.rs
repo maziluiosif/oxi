@@ -1,5 +1,13 @@
 //! Domain types and pure helpers (no egui).
 
+/// Provider-native conversation cache. The transcript remains the source of truth; this cache is
+/// reused only when its stable fingerprint matches the complete current request environment.
+#[derive(Clone, Debug)]
+pub struct WireCache {
+    pub fingerprint: String,
+    pub messages: Vec<serde_json::Value>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum MsgRole {
     User,
@@ -90,10 +98,9 @@ pub struct Session {
     /// only (not persisted), used to calibrate the context trim budget and the composer
     /// context indicator. `None` until the first turn reports usage.
     pub chars_per_token: Option<f32>,
-    /// Provider-native wire history (`messages[]`) persisted across restarts for prompt-cache hits.
-    pub wire_history: Option<Vec<serde_json::Value>>,
-    /// Fingerprint that must match the current system/tools/model for `wire_history` reuse.
-    pub wire_fingerprint: u64,
+    /// Derived, dispensable provider-native history persisted for prompt-cache hits. The
+    /// transcript in `messages` is authoritative and can rebuild this cache at any time.
+    pub wire_cache: Option<WireCache>,
 }
 
 pub fn make_session_title(text: &str) -> String {

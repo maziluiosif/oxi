@@ -49,8 +49,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             pending_images: Vec::new(),
             modified: session.modified,
             chars_per_token: None,
-            wire_history: None,
-            wire_fingerprint: 0,
+            wire_cache: None,
         })
         .collect()
 }
@@ -79,7 +78,7 @@ fn parse_session_file(path: &Path) -> Option<LoadedSession> {
 mod tests {
     use super::*;
     use crate::hydrate;
-    use crate::model::{AssistantBlock, ChatMessage, MsgRole, Session, UserAttachment};
+    use crate::model::{AssistantBlock, ChatMessage, MsgRole, Session, UserAttachment, WireCache};
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -191,6 +190,35 @@ mod tests {
     }
 
     #[test]
+    fn save_and_reload_preserves_wire_cache() {
+        let root = temp_root("wire-cache-roundtrip");
+        let mut session = Session {
+            title: "Chat".into(),
+            messages: vec![],
+            session_file: None,
+            messages_loaded: true,
+            input_text: String::new(),
+            pending_images: Vec::new(),
+            chars_per_token: None,
+            wire_cache: Some(WireCache {
+                fingerprint: "v1:sha256:abcd".into(),
+                messages: vec![json!({"role":"system","content":"s"})],
+            }),
+            modified: SystemTime::now(),
+        };
+
+        save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
+        let (_, loaded) =
+            load_session_messages_with_wire(session.session_file.as_deref().unwrap()).unwrap();
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.fingerprint, "v1:sha256:abcd");
+        assert_eq!(
+            loaded.messages,
+            vec![json!({"role":"system","content":"s"})]
+        );
+    }
+
+    #[test]
     fn save_session_messages_dedupes_duplicate_full_history_before_writing() {
         let root = temp_root("save-dedupe");
         let mut session = Session {
@@ -208,8 +236,7 @@ mod tests {
             input_text: String::new(),
             pending_images: Vec::new(),
             chars_per_token: None,
-            wire_history: None,
-            wire_fingerprint: 0,
+            wire_cache: None,
             modified: SystemTime::now(),
         };
 
@@ -270,8 +297,7 @@ mod tests {
             input_text: String::new(),
             pending_images: Vec::new(),
             chars_per_token: None,
-            wire_history: None,
-            wire_fingerprint: 0,
+            wire_cache: None,
             modified: SystemTime::now(),
         };
 
@@ -317,8 +343,7 @@ mod tests {
             input_text: String::new(),
             pending_images: Vec::new(),
             chars_per_token: None,
-            wire_history: None,
-            wire_fingerprint: 0,
+            wire_cache: None,
             modified: SystemTime::now(),
         };
 

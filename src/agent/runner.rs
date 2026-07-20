@@ -1,46 +1,63 @@
 //! Spawn background agent run (tokio + mpsc).
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::thread::JoinHandle;
 
 use crate::agent::anthropic::run_anthropic_loop;
 use crate::agent::approval::{ApprovalDecision, ApprovalGate, ApprovalPolicy};
 use crate::agent::codex_responses::run_codex_responses_loop;
-use crate::agent::events::AgentEvent;
+use crate::agent::events::{AgentEvent, AgentOutcome};
 use crate::agent::history::{
     build_openai_messages, trim_wire_history_to_budget, user_content_to_openai,
 };
 use crate::agent::loop_ctx::LoopCtx;
 use crate::agent::openai::{run_azure_chat_loop, run_chat_loop};
 use crate::agent::tools::{ToolEnv, tool_definitions_json};
-use crate::model::ChatMessage;
+use crate::model::{ChatMessage, WireCache};
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{AppSettings, LlmProviderKind, ProviderConfig};
+
+const WIRE_CACHE_SCHEMA_VERSION: u8 = 1;
 
 pub fn wire_fingerprint_for(
     settings: &AppSettings,
     system: &str,
     tools: &[serde_json::Value],
-) -> u64 {
+) -> String {
     let cfg = settings.active_config();
-    let mut h = DefaultHasher::new();
-    cfg.provider.hash(&mut h);
-    cfg.model_id.hash(&mut h);
-    system.hash(&mut h);
-    serde_json::to_string(tools)
-        .unwrap_or_default()
-        .hash(&mut h);
-    h.finish()
+    let protocol = match cfg.provider {
+        LlmProviderKind::CustomAnthropic => "anthropic-messages",
+        LlmProviderKind::GptCodex => "codex-or-openai",
+        LlmProviderKind::OpenCodeGo if opencode_go_model_uses_anthropic(&cfg.model_id) => {
+            "anthropic-messages"
+        }
+        LlmProviderKind::ClaudeCodeAcp => "acp",
+        _ => "openai-chat",
+    };
+    let canonical = serde_json::json!({
+        "schema_version": WIRE_CACHE_SCHEMA_VERSION,
+        "protocol": protocol,
+        "provider": cfg.provider.slug(),
+        "model": cfg.model_id,
+        "base_url": cfg.effective_base_url().trim_end_matches('/'),
+        "system": system,
+        "tools": tools,
+    });
+    let digest = Sha256::digest(serde_json::to_vec(&canonical).unwrap_or_default());
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("v{WIRE_CACHE_SCHEMA_VERSION}:sha256:{hex}")
 }
 
 fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
-    let _ = tx.send(AgentEvent::StreamError(msg.into()));
-    let _ = tx.send(AgentEvent::AgentEnd);
+    let _ = tx.send(AgentEvent::Finished(AgentOutcome::Failed {
+        error: msg.into(),
+    }));
 }
 
 pub(super) fn configured_openai_key(cfg: &ProviderConfig) -> Result<String, String> {
@@ -147,31 +164,64 @@ pub fn openrouter_extra_headers(cfg: &ProviderConfig) -> Vec<(String, String)> {
     h
 }
 
-/// `chat_for_history`: messages including the latest user turn; excludes the trailing empty assistant placeholder.
-#[allow(clippy::too_many_arguments)]
+/// Immutable snapshot for one agent run.
+pub struct AgentRunRequest {
+    pub settings: AppSettings,
+    pub tunnels: crate::compute::TunnelManager,
+    pub acp: crate::agent::acp::AcpManager,
+    pub acp_session_key: String,
+    pub cwd: PathBuf,
+    pub chat_for_history: Vec<ChatMessage>,
+    pub approval_rx: Receiver<ApprovalDecision>,
+    pub cancel: Arc<AtomicBool>,
+    pub wire_candidate: Option<WireCache>,
+    pub chars_per_token: f32,
+    pub undo_journal: Arc<std::sync::Mutex<crate::agent::tools::TurnUndoJournal>>,
+}
+
+/// Shared Tokio runtime for all HTTP agent runs.
+#[derive(Clone)]
+pub struct AgentExecutor {
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl AgentExecutor {
+    pub fn new() -> Result<Self, String> {
+        tokio::runtime::Runtime::new()
+            .map(|runtime| Self {
+                runtime: Arc::new(runtime),
+            })
+            .map_err(|e| format!("tokio: {e}"))
+    }
+
+    fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
+    where
+        F: std::future::Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        self.runtime.spawn(future)
+    }
+}
+
 pub fn spawn_agent_run(
-    settings: AppSettings,
-    tunnels: crate::compute::TunnelManager,
-    acp: crate::agent::acp::AcpManager,
-    acp_session_key: String,
-    cwd: PathBuf,
-    chat_for_history: Vec<ChatMessage>,
+    executor: &AgentExecutor,
+    request: AgentRunRequest,
     tx: Sender<AgentEvent>,
-    approval_rx: Receiver<ApprovalDecision>,
-    cancel: Arc<AtomicBool>,
-    prior_wire: Option<Vec<serde_json::Value>>,
-    chars_per_token: f32,
-    undo_journal: Arc<std::sync::Mutex<crate::agent::tools::TurnUndoJournal>>,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(r) => r,
-            Err(e) => {
-                finish_with_error(&tx, format!("tokio: {e}"));
-                return;
-            }
-        };
-        rt.block_on(async move {
+) -> tokio::task::JoinHandle<()> {
+    executor.spawn(async move {
+        let AgentRunRequest {
+            settings,
+            tunnels,
+            acp,
+            acp_session_key,
+            cwd,
+            chat_for_history,
+            approval_rx,
+            cancel,
+            wire_candidate,
+            chars_per_token,
+            undo_journal,
+        } = request;
             let cwd_ref = cwd.as_path();
             let cfg = settings.active_config().clone();
 
@@ -216,6 +266,10 @@ pub fn spawn_agent_run(
             let mcp = crate::agent::mcp::McpManager::new();
             mcp.sync_servers(&settings.mcp_servers);
             tools.extend(mcp.tool_definitions());
+            let wire_fingerprint = wire_fingerprint_for(&settings, &system, &tools);
+            let prior_wire = wire_candidate
+                .filter(|cache| cache.fingerprint == wire_fingerprint)
+                .map(|cache| cache.messages);
             let mut messages = if let Some(mut wire) = prior_wire {
                 if let Some(last_user) = chat_for_history.last()
                     && last_user.role == crate::model::MsgRole::User
@@ -577,16 +631,18 @@ pub fn spawn_agent_run(
                     unreachable!("ACP is handled before the provider match")
                 }
             };
-            if let Err(e) = r {
-                if !cancel.load(Ordering::SeqCst) {
-                    let _ = tx.send(AgentEvent::StreamError(e));
-                }
-                let _ = tx.send(AgentEvent::AgentEnd);
-            } else if !cancel.load(Ordering::SeqCst) {
-                let _ = tx.send(AgentEvent::WireHistory(messages));
-                let _ = tx.send(AgentEvent::AgentEnd);
-            }
-        });
+            let outcome = match r {
+                Err(_) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
+                Err(error) => AgentOutcome::Failed { error },
+                Ok(()) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
+                Ok(()) => AgentOutcome::Success {
+                    wire_cache: Some(WireCache {
+                        fingerprint: wire_fingerprint,
+                        messages,
+                    }),
+                },
+            };
+            let _ = tx.send(AgentEvent::Finished(outcome));
     })
 }
 
@@ -644,18 +700,44 @@ async fn run_acp_turn(
         cancel: cancel.clone(),
     };
 
-    let r = acp.prompt(req).await;
-    if let Err(e) = r
-        && !cancel.load(Ordering::SeqCst)
-    {
-        let _ = tx.send(AgentEvent::StreamError(e));
-    }
-    let _ = tx.send(AgentEvent::AgentEnd);
+    let outcome = match acp.prompt(req).await {
+        Err(_) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
+        Err(error) => AgentOutcome::Failed { error },
+        Ok(()) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
+        Ok(()) => AgentOutcome::Success { wire_cache: None },
+    };
+    let _ = tx.send(AgentEvent::Finished(outcome));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_fingerprint_is_stable_and_versioned() {
+        let settings = AppSettings::default();
+        let tools = vec![serde_json::json!({"type":"function","function":{"name":"read"}})];
+        let a = wire_fingerprint_for(&settings, "system", &tools);
+        let b = wire_fingerprint_for(&settings, "system", &tools);
+        assert_eq!(a, b);
+        assert!(a.starts_with("v1:sha256:"));
+        assert_eq!(a.len(), "v1:sha256:".len() + 64);
+    }
+
+    #[test]
+    fn wire_fingerprint_changes_with_prompt_or_tools() {
+        let settings = AppSettings::default();
+        let tools = vec![serde_json::json!({"type":"function","function":{"name":"read"}})];
+        let changed_tools = vec![serde_json::json!({"type":"function","function":{"name":"edit"}})];
+        assert_ne!(
+            wire_fingerprint_for(&settings, "system-a", &tools),
+            wire_fingerprint_for(&settings, "system-b", &tools)
+        );
+        assert_ne!(
+            wire_fingerprint_for(&settings, "system-a", &tools),
+            wire_fingerprint_for(&settings, "system-a", &changed_tools)
+        );
+    }
 
     #[test]
     fn opencode_go_anthropic_models() {

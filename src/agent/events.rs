@@ -2,6 +2,8 @@
 
 use serde_json::Value;
 
+use crate::model::WireCache;
+
 /// Token usage reported by a provider for one request/round.
 ///
 /// `input_tokens` counts only the uncached remainder; the full prompt size is
@@ -45,6 +47,13 @@ impl TokenUsage {
 }
 
 #[derive(Debug)]
+pub enum AgentOutcome {
+    Success { wire_cache: Option<WireCache> },
+    Failed { error: String },
+    Cancelled,
+}
+
+#[derive(Debug)]
 pub enum AgentEvent {
     AgentStart,
     TextStart,
@@ -72,7 +81,6 @@ pub enum AgentEvent {
         full_output_path: Option<String>,
         diff: Option<String>,
     },
-    StreamError(String),
     /// The stream died mid-round and the round is being re-sent; the UI should
     /// discard the partial text/thinking of the current round to avoid duplicates.
     StreamRetry {
@@ -83,11 +91,6 @@ pub enum AgentEvent {
     AssistantMessageDone,
     /// Token usage for one provider round; the UI accumulates per turn/session.
     Usage(TokenUsage),
-    /// Canonical provider wire-format history to reuse on the next turn for cache hits.
-    WireHistory(Vec<Value>),
-    /// Provider loop finished successfully; runner will emit `WireHistory` and then
-    /// `AgentEnd` so the UI cannot drop the canonical history by clearing the receiver first.
-    ProviderDone,
-    /// Entire turn finished (no more tool calls).
-    AgentEnd,
+    /// The only terminal event for a run.
+    Finished(AgentOutcome),
 }

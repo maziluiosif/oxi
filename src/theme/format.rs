@@ -38,7 +38,7 @@ pub fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {
 /// The workspace editor's selection wash: `selection_bg` blended over the main background.
 /// Shared by the editor and every selectable text run so selections look identical app-wide.
 pub fn editor_selection_fill() -> Color32 {
-    blend_color(c_bg_main(), active_palette().selection_bg, 0.74)
+    blend_color(c_bg_main(), active_palette().selection_bg, 0.80)
 }
 
 /// Lay out `job` and run egui's label text selection styled like the workspace editor.

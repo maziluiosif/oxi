@@ -41,6 +41,8 @@ pub struct OxiApp {
     pub conv: ConversationState,
     /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
     pub terminal: Option<crate::terminal::TerminalSession>,
+    /// Shared async executor for all agent runs.
+    pub agent_executor: crate::agent::runner::AgentExecutor,
     /// SSH tunnels for `RemoteSsh` provider configs (e.g. Ollama/LM Studio on a LAN host).
     /// Cheap to clone; the actual tunnels live on a dedicated background thread/runtime
     /// started once here and kept alive for the life of the app.
@@ -58,6 +60,16 @@ pub struct OxiApp {
 }
 
 impl OxiApp {
+    /// Move keyboard focus to whatever view is actually showing: the editor when a
+    /// document tab is active, the chat composer otherwise. Use this instead of setting
+    /// `focus_chat_input_next_frame` directly so focus never lands on a hidden widget.
+    pub(crate) fn focus_active_view_next_frame(&mut self) {
+        match self.conv.editor.focus_target() {
+            state::EditorFocusTarget::Editor => self.conv.editor.focus_editor_next_frame = true,
+            state::EditorFocusTarget::ChatInput => self.conv.focus_chat_input_next_frame = true,
+        }
+    }
+
     pub fn new() -> Self {
         crate::agent::tools::cleanup_stale_spill_files();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -156,6 +168,7 @@ impl OxiApp {
                 composer_measured_full_h: 0.0,
                 diff_view_open: false,
                 diff_job_cache: None,
+                transcript_heights: std::collections::HashMap::new(),
                 git_open,
                 git_width,
                 git_tab: crate::app::git_panel::GitTab::default(),
@@ -200,6 +213,8 @@ impl OxiApp {
                 voice_rx,
             },
             terminal: None,
+            agent_executor: crate::agent::runner::AgentExecutor::new()
+                .expect("failed to initialize shared agent runtime"),
             tunnels: crate::compute::TunnelManager::spawn(),
             acp: crate::agent::acp::AcpManager::spawn(),
             voice,
@@ -369,7 +384,7 @@ impl OxiApp {
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
         self.conv.scroll_to_bottom_once = true;
-        self.conv.focus_chat_input_next_frame = true;
+        self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
         self.persist_active_session_selection();
         self.refresh_git_cwd();
@@ -389,7 +404,7 @@ impl OxiApp {
             && session_idx == self.conv.workspaces[workspace_idx].active
         {
             self.ensure_active_session_loaded();
-            self.conv.focus_chat_input_next_frame = true;
+            self.focus_active_view_next_frame();
             return;
         }
         let workspace_changed = workspace_idx != self.conv.active_workspace;
@@ -406,7 +421,7 @@ impl OxiApp {
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
         self.conv.scroll_to_bottom_once = true;
-        self.conv.focus_chat_input_next_frame = true;
+        self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
         self.persist_active_session_selection();
         if workspace_changed {
@@ -426,8 +441,7 @@ impl OxiApp {
             pending_images: Vec::new(),
             modified: std::time::SystemTime::now(),
             chars_per_token: None,
-            wire_history: None,
-            wire_fingerprint: 0,
+            wire_cache: None,
         }
     }
 
@@ -496,13 +510,8 @@ impl OxiApp {
             let session = self.session_mut(active);
             session.messages = messages;
             session.messages_loaded = true;
-            if let Some((fingerprint, history)) = wire {
-                session.wire_fingerprint = fingerprint;
-                session.wire_history = Some(history.clone());
-                let run = self.run_state_mut(active_key);
-                run.wire_fingerprint = fingerprint;
-                run.wire_history = Some(history);
-                run.wire_session_file = Some(session_file);
+            if let Some(cache) = wire {
+                session.wire_cache = Some(cache);
             }
         }
     }

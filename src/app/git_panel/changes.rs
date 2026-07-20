@@ -496,7 +496,7 @@ impl OxiApp {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.request(GitOp::ClearDiff);
             self.conv.diff_view_open = false;
-            self.conv.focus_chat_input_next_frame = true;
+            self.focus_active_view_next_frame();
         }
 
         let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
@@ -528,7 +528,7 @@ impl OxiApp {
                         {
                             self.request(GitOp::ClearDiff);
                             self.conv.diff_view_open = false;
-                            self.conv.focus_chat_input_next_frame = true;
+                            self.focus_active_view_next_frame();
                         }
                         if self.conv.git.current_diff_path.is_some()
                             && crate::ui::chrome::mini_button_icon_enabled(

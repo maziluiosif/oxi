@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::hydrate;
-use crate::model::{ChatMessage, Session};
+use crate::model::{ChatMessage, Session, WireCache};
 
 use super::dedupe::dedupe_trailing_duplicate_messages;
 use super::format::{chat_message_to_json_entries, session_file_stem_or_generated};
@@ -17,8 +17,8 @@ pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
     Some(messages)
 }
 
-/// Loaded chat messages plus optional provider wire history `(fingerprint, messages)`.
-type SessionMessagesWithWire = (Vec<ChatMessage>, Option<(u64, Vec<Value>)>);
+/// Loaded chat messages plus an optional, derived provider wire cache.
+type SessionMessagesWithWire = (Vec<ChatMessage>, Option<WireCache>);
 
 /// Load chat messages plus any persisted provider wire history.
 pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMessagesWithWire> {
@@ -26,7 +26,7 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
     let reader = BufReader::new(file);
     let mut saw_header = false;
     let mut messages = Vec::new();
-    let mut wire: Option<(u64, Vec<Value>)> = None;
+    let mut wire: Option<WireCache> = None;
 
     for (line_idx, line) in reader.lines().enumerate() {
         let line = match line {
@@ -70,12 +70,19 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
                 }
             }
             Some("wire_history") => {
-                let fingerprint = value
-                    .get("fingerprint")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                if let Some(Value::Array(arr)) = value.get("messages") {
-                    wire = Some((fingerprint, arr.clone()));
+                // Legacy numeric fingerprints deliberately never match the stable v1 key.
+                let fingerprint = value.get("fingerprint").and_then(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    Value::Number(n) => Some(format!("legacy:{n}")),
+                    _ => None,
+                });
+                if let (Some(fingerprint), Some(Value::Array(arr))) =
+                    (fingerprint, value.get("messages"))
+                {
+                    wire = Some(WireCache {
+                        fingerprint,
+                        messages: arr.clone(),
+                    });
                 }
             }
             _ => {}
@@ -145,16 +152,16 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         }
     }
 
-    if let Some(wire) = session.wire_history.as_ref()
-        && !wire.is_empty()
+    if let Some(wire) = session.wire_cache.as_ref()
+        && !wire.messages.is_empty()
     {
         writeln!(
             file,
             "{}",
             serde_json::to_string(&json!({
                 "type": "wire_history",
-                "fingerprint": session.wire_fingerprint,
-                "messages": wire,
+                "fingerprint": wire.fingerprint,
+                "messages": wire.messages,
             }))
             .map_err(|e| e.to_string())?
         )
@@ -163,15 +170,64 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
 
     file.sync_all().map_err(|e| e.to_string())?;
     drop(file);
-    fs::rename(&tmp_path, &session_path).map_err(|e| e.to_string())?;
-    if let Some(parent) = session_path.parent()
-        && let Ok(dir) = File::open(parent)
-    {
-        let _ = dir.sync_all();
-    }
+    replace_synced_file(&tmp_path, &session_path)?;
 
     session.session_file = Some(session_path.to_string_lossy().to_string());
     session.messages_loaded = true;
+    Ok(())
+}
+
+/// Install a synced temporary file without exposing a partial destination.
+fn replace_synced_file(tmp_path: &Path, destination: &Path) -> Result<(), String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "session destination has no parent".to_string())?;
+    #[cfg(windows)]
+    {
+        use rand::RngExt;
+        let retry = |mut action: Box<dyn FnMut() -> std::io::Result<()>>| {
+            let mut last = None;
+            for _ in 0..6 {
+                match action() {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        last = Some(e);
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                }
+            }
+            Err(last.unwrap().to_string())
+        };
+        if destination.exists() {
+            let random: u64 = rand::rng().random();
+            let backup = parent.join(format!(".oxi-session-backup-{random:016x}.tmp"));
+            let src = destination.to_path_buf();
+            let dst = backup.clone();
+            retry(Box::new(move || fs::rename(&src, &dst)))?;
+            let src = tmp_path.to_path_buf();
+            let dst = destination.to_path_buf();
+            if let Err(install_error) = retry(Box::new(move || fs::rename(&src, &dst))) {
+                let src = backup.clone();
+                let dst = destination.to_path_buf();
+                if let Err(rollback_error) = retry(Box::new(move || fs::rename(&src, &dst))) {
+                    return Err(format!(
+                        "{install_error}; session rollback failed: {rollback_error}; backup remains at {}",
+                        backup.display()
+                    ));
+                }
+                return Err(install_error);
+            }
+            let _ = fs::remove_file(backup);
+        } else {
+            fs::rename(tmp_path, destination).map_err(|e| e.to_string())?;
+        }
+    }
+    #[cfg(not(windows))]
+    fs::rename(tmp_path, destination).map_err(|e| e.to_string())?;
+
+    if let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 
@@ -291,6 +347,27 @@ mod tests {
             b"{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}\n",
         );
         assert!(load_session_messages(path.to_str().unwrap()).is_none());
+    }
+
+    #[test]
+    fn load_wire_cache_supports_stable_and_legacy_fingerprints() {
+        let stable = temp_file(
+            "wire-stable.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n\
+              {\"type\":\"wire_history\",\"fingerprint\":\"v1:sha256:abcd\",\"messages\":[{\"role\":\"system\",\"content\":\"s\"}]}\n",
+        );
+        let (_, wire) = load_session_messages_with_wire(stable.to_str().unwrap()).unwrap();
+        let wire = wire.unwrap();
+        assert_eq!(wire.fingerprint, "v1:sha256:abcd");
+        assert_eq!(wire.messages.len(), 1);
+
+        let legacy = temp_file(
+            "wire-legacy.jsonl",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n\
+              {\"type\":\"wire_history\",\"fingerprint\":42,\"messages\":[]}\n",
+        );
+        let (_, wire) = load_session_messages_with_wire(legacy.to_str().unwrap()).unwrap();
+        assert_eq!(wire.unwrap().fingerprint, "legacy:42");
     }
 
     #[test]
