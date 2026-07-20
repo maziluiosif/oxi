@@ -410,10 +410,13 @@ impl OxiApp {
                 Some("Password is stored in the OS keychain, never in settings.json."),
             );
             field_label_first(ui, "SSH password");
-            let changed = {
-                let pw = self.conv.ssh_password_drafts.get_mut(&kind).unwrap();
-                settings_password_field(ui, pw, "SSH password").changed()
-            };
+            let changed = self
+                .conv
+                .ssh_password_drafts
+                .get_mut(&kind)
+                .is_some_and(|password| {
+                    settings_password_field(ui, password, "SSH password").changed()
+                });
             if changed {
                 let pw = self
                     .conv

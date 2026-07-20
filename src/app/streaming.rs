@@ -313,9 +313,10 @@ impl OxiApp {
                     return;
                 }
             }
-            let empty = m.blocks.pop().unwrap();
-            m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
-            m.blocks.push(empty);
+            if let Some(empty) = m.blocks.pop() {
+                m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
+                m.blocks.push(empty);
+            }
             return;
         }
         m.blocks.push(AssistantBlock::Thinking(delta.to_string()));
