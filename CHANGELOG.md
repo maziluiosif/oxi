@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-20
+
+### Added
+- Cache measured unit heights and use fingerprints to invalidate stale transcript entries
+- Cache editor layout and minimap data across frames
+- Support scrolling while hovering over the minimap
+- Add `focus_active_view_next_frame` helper for routing focus between editor and chat composer
+
+### Changed
+- Limit gutter, selection, whitespace, and guide painting to the viewport
+- Avoid full-buffer scans for dirty state and caret tracking
+- Polish editor selection and navigation with consistent custom carets and rounded selection contours
+- Increase selection fill visibility
+- Return keyboard focus to the editor instead of hidden chat after certain actions
+- Extract file explorer helpers into a support module
+- Unify terminal events and share a Tokio executor across agent runs
+- Validate persisted wire caches with stable SHA-256 fingerprints
+- Centralize tool side-effect metadata for approvals and concurrency
+- Bound transcript and response rendering for large conversations
+
+### Fixed
+- Invalidate stale syntax layout cache when wrap width or DPI changes
+- Only cache syntax layouts when all geometry cache keys match
+- Polish editor selection and navigation
+- Keep find focused after navigation attempts without matches
+- Replace unsafe unwraps with graceful optional handling in file explorer
+- Guard HTML text conversion against empty input slices
+- Improve atomic session replacement and cache invalidation
+
+
 ## [0.19.0] - 2026-07-19
 
 ### Added
@@ -489,7 +519,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/maziluiosif/oxi/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/maziluiosif/oxi/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/maziluiosif/oxi/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/maziluiosif/oxi/compare/v0.16.0...v0.17.0
