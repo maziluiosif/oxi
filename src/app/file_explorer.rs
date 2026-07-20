@@ -1631,6 +1631,12 @@ impl OxiApp {
                 }
             });
 
+        if next || previous {
+            // A single-line TextEdit releases focus on Enter, including when there are no matches.
+            // Always return focus to Find after a navigation attempt so repeated searches and query
+            // edits continue to work without requiring another click.
+            self.conv.editor.focus_find_next_frame = true;
+        }
         if !ranges.is_empty() && (next || previous) {
             self.conv.editor.find_active_match = if previous {
                 if self.conv.editor.find_has_navigated {
@@ -1654,9 +1660,6 @@ impl OxiApp {
             self.conv.editor.find_select_pending = false;
             self.conv.editor.find_reveal_pending = true;
             self.conv.editor.find_focus_editor_pending = false;
-            // Restore the Find TextEdit after single-line Enter surrendered focus. This is
-            // applied through the actual widget Response on the next frame (not a guessed Id).
-            self.conv.editor.focus_find_next_frame = true;
         }
         if (replace_one || replace_all) && !ranges.is_empty() {
             let replacement = self.conv.editor.replace_query.clone();
@@ -1829,6 +1832,11 @@ impl OxiApp {
                                     // natively and once from our syntax galley (the last-row flicker).
                                     ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
                                     ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
+                                    // The native caret is hidden and repainted after syntax text
+                                    // below, giving it identical pixel width on empty and text rows.
+                                    ui.visuals_mut().text_cursor.stroke.color =
+                                        egui::Color32::TRANSPARENT;
+                                    ui.visuals_mut().text_cursor.blink = false;
                                     TextEdit::multiline(&mut document.content)
                                         .id_salt(("workspace_text_editor", index))
                                         .font(FontId::monospace(FS_SMALL))
@@ -1970,11 +1978,16 @@ impl OxiApp {
                                 let selection_color = crate::theme::editor_selection_fill();
                                 let selection_painter =
                                     ui.painter().with_clip_rect(output.text_clip_rect);
-                                for rect in
-                                    selection_rects(&output.galley, output.galley_pos, selection)
-                                {
-                                    selection_painter.rect_filled(rect, 0.0, selection_color);
-                                }
+                                let selection_rects = editor_selection_rects(
+                                    &output.galley,
+                                    output.galley_pos,
+                                    selection,
+                                );
+                                paint_editor_selection(
+                                    &selection_painter,
+                                    &selection_rects,
+                                    selection_color,
+                                );
                             }
 
                             // TextEdit's layout pass is transparent. Tree-sitter edits and reuses
@@ -2021,6 +2034,17 @@ impl OxiApp {
                                     &document.content,
                                     selection,
                                 );
+                            }
+                            if output.response.has_focus() {
+                                if let Some(cursor_range) = output.cursor_range {
+                                    paint_editor_caret(
+                                        ui,
+                                        &output.galley,
+                                        output.galley_pos,
+                                        output.text_clip_rect,
+                                        cursor_range.primary,
+                                    );
+                                }
                             }
 
                             let selected_lines = selection.map(|range| {
@@ -2476,6 +2500,38 @@ fn byte_range_rects(
     )
 }
 
+fn editor_selection_rects(
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    range: egui::text::CCursorRange,
+) -> Vec<egui::Rect> {
+    // The font's baseline leaves more visual space below the glyphs than above them. Moving only
+    // the painted selection slightly upward keeps the text optically centered without changing
+    // cursor positioning, line height, or hit-testing geometry.
+    const VERTICAL_OFFSET: f32 = 1.0;
+    const CARET_CLEARANCE: f32 = 1.5;
+    let [start, end] = range.sorted_cursors();
+    let primary_is_start = range.primary.index == start.index;
+    let primary_is_end = range.primary.index == end.index;
+    let mut rects = selection_rects(galley, galley_pos, range)
+        .into_iter()
+        .map(|rect| rect.translate(egui::vec2(0.0, -VERTICAL_OFFSET)))
+        .collect::<Vec<_>>();
+
+    // Leave the active edge to egui's native caret instead of repainting a second caret. This keeps
+    // the whole caret visible and uses egui's exact blink phase (including its typing pause/reset).
+    if primary_is_start {
+        if let Some(first) = rects.first_mut() {
+            first.min.x = (first.min.x + CARET_CLEARANCE).min(first.max.x);
+        }
+    } else if primary_is_end {
+        if let Some(last) = rects.last_mut() {
+            last.max.x = (last.max.x - CARET_CLEARANCE).max(last.min.x);
+        }
+    }
+    rects
+}
+
 fn selection_rects(
     galley: &egui::Galley,
     galley_pos: egui::Pos2,
@@ -2521,35 +2577,6 @@ fn paint_selected_whitespace(
     range: egui::text::CCursorRange,
 ) {
     let painter = ui.painter().with_clip_rect(clip_rect);
-    let selected_rects = selection_rects(galley, galley_pos, range);
-
-    // Outline only the outside silhouette of the selection. Shared edges between adjacent rows
-    // stay empty, avoiding the boxed-per-line appearance while preserving the outer border.
-    let outline = active_palette().selection_stroke;
-    let stroke = egui::Stroke::new(
-        1.0,
-        egui::Color32::from_rgba_unmultiplied(outline.r(), outline.g(), outline.b(), 120),
-    );
-    for (index, rect) in selected_rects.iter().copied().enumerate() {
-        let previous = index.checked_sub(1).and_then(|i| selected_rects.get(i));
-        let next = selected_rects.get(index + 1);
-        paint_exposed_horizontal_edge(
-            &painter,
-            rect.left()..=rect.right(),
-            previous,
-            rect.top(),
-            stroke,
-        );
-        paint_exposed_horizontal_edge(
-            &painter,
-            rect.left()..=rect.right(),
-            next,
-            rect.bottom(),
-            stroke,
-        );
-        painter.line_segment([rect.left_top(), rect.left_bottom()], stroke);
-        painter.line_segment([rect.right_top(), rect.right_bottom()], stroke);
-    }
 
     // Expose selected whitespace without outlining every selected line. Spaces use centered dots;
     // tabs use a small arrow so
@@ -2596,37 +2623,157 @@ fn paint_selected_whitespace(
     }
 }
 
-fn paint_exposed_horizontal_edge(
-    painter: &egui::Painter,
-    edge: std::ops::RangeInclusive<f32>,
-    adjacent: Option<&egui::Rect>,
-    y: f32,
-    stroke: egui::Stroke,
+fn paint_editor_caret(
+    ui: &Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
+    cursor: egui::text::CCursor,
 ) {
-    let left = *edge.start();
-    let right = *edge.end();
-    let Some(adjacent) = adjacent else {
-        painter.line_segment([egui::pos2(left, y), egui::pos2(right, y)], stroke);
+    let caret = galley
+        .pos_from_cursor(cursor)
+        .translate(galley_pos.to_vec2())
+        .expand(1.5);
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let stroke_width = 3.0 / pixels_per_point;
+    // Snap the center to the physical pixel grid. Otherwise the same logical stroke can cover a
+    // different number of pixel columns depending on the caret's x coordinate.
+    let x = (caret.center().x * pixels_per_point).round() / pixels_per_point;
+    let palette = active_palette();
+    let color = if palette == Palette::MARIANA {
+        // Sublime Text 4 / Mariana's orange, shared with numeric literals.
+        palette.syntax.number
+    } else {
+        c_text()
+    };
+    ui.painter().with_clip_rect(clip_rect).line_segment(
+        [egui::pos2(x, caret.top()), egui::pos2(x, caret.bottom())],
+        egui::Stroke::new(stroke_width, color),
+    );
+}
+
+fn paint_editor_selection(
+    painter: &egui::Painter,
+    rects: &[egui::Rect],
+    fill: egui::Color32,
+) {
+    const RADIUS: f32 = 2.0;
+    let Some(first) = rects.first() else {
         return;
     };
-    if left < adjacent.left() {
-        painter.line_segment(
-            [
-                egui::pos2(left, y),
-                egui::pos2(adjacent.left().min(right), y),
-            ],
-            stroke,
-        );
+    let outline = active_palette().selection_stroke;
+    let stroke = egui::Stroke::new(
+        1.0,
+        egui::Color32::from_rgba_unmultiplied(outline.r(), outline.g(), outline.b(), 120),
+    );
+
+    // Paint the fill as a union of small rounded row rectangles. Filling the full concave contour
+    // directly makes epaint triangulate it, which can produce large diagonal wedges for complex
+    // selections. Overlapping connectors preserve one continuous block without those artifacts.
+    for rect in rects {
+        painter.rect_filled(*rect, egui::CornerRadius::same(RADIUS as u8), fill);
     }
-    if right > adjacent.right() {
-        painter.line_segment(
-            [
-                egui::pos2(adjacent.right().max(left), y),
-                egui::pos2(right, y),
-            ],
-            stroke,
-        );
+    for rows in rects.windows(2) {
+        let upper = rows[0];
+        let lower = rows[1];
+        let left = upper.left().max(lower.left());
+        let right = upper.right().min(lower.right());
+        if right > left {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(left, upper.bottom() - RADIUS),
+                    egui::pos2(right, lower.top() + RADIUS),
+                ),
+                0.0,
+                fill,
+            );
+        }
     }
+
+    // Trace one silhouette around all selected rows for the outline. Width changes become part of
+    // that contour, so outer and inner corners are rounded. Equal edges collapse into one straight
+    // edge, making complete aligned rows look like one continuous block.
+    let mut contour = vec![first.left_top(), first.right_top()];
+    for rows in rects.windows(2) {
+        let upper = rows[0];
+        let lower = rows[1];
+        // Change width on a horizontal boundary. Connecting these corners directly would create
+        // a diagonal whenever consecutive selected rows have different lengths.
+        let boundary_y = (upper.bottom() + lower.top()) * 0.5;
+        contour.push(egui::pos2(upper.right(), boundary_y));
+        contour.push(egui::pos2(lower.right(), boundary_y));
+    }
+    let last = *rects.last().unwrap_or(first);
+    contour.extend([last.right_bottom(), last.left_bottom()]);
+    for rows in rects.windows(2).rev() {
+        let upper = rows[0];
+        let lower = rows[1];
+        let boundary_y = (upper.bottom() + lower.top()) * 0.5;
+        contour.push(egui::pos2(lower.left(), boundary_y));
+        contour.push(egui::pos2(upper.left(), boundary_y));
+    }
+    simplify_orthogonal_contour(&mut contour);
+    let rounded = rounded_contour(&contour, RADIUS);
+    painter.add(egui::Shape::Path(egui::epaint::PathShape {
+        points: rounded,
+        closed: true,
+        fill: egui::Color32::TRANSPARENT,
+        stroke: stroke.into(),
+    }));
+}
+
+fn simplify_orthogonal_contour(points: &mut Vec<egui::Pos2>) {
+    let mut changed = true;
+    while changed && points.len() > 2 {
+        changed = false;
+        for index in 0..points.len() {
+            let previous = points[(index + points.len() - 1) % points.len()];
+            let current = points[index];
+            let next = points[(index + 1) % points.len()];
+            let duplicate = current.distance_sq(previous) < 0.01;
+            let vertical = (previous.x - current.x).abs() < 0.01
+                && (current.x - next.x).abs() < 0.01;
+            let horizontal = (previous.y - current.y).abs() < 0.01
+                && (current.y - next.y).abs() < 0.01;
+            if duplicate || vertical || horizontal {
+                points.remove(index);
+                changed = true;
+                break;
+            }
+        }
+    }
+}
+
+fn rounded_contour(points: &[egui::Pos2], radius: f32) -> Vec<egui::Pos2> {
+    const STEPS: usize = 4;
+    let mut rounded = Vec::with_capacity(points.len() * (STEPS + 1));
+    for index in 0..points.len() {
+        let previous = points[(index + points.len() - 1) % points.len()];
+        let corner = points[index];
+        let next = points[(index + 1) % points.len()];
+        let incoming = corner - previous;
+        let outgoing = next - corner;
+        let corner_radius = radius
+            .min(incoming.length() * 0.5)
+            .min(outgoing.length() * 0.5);
+        let start = corner - incoming.normalized() * corner_radius;
+        let end = corner + outgoing.normalized() * corner_radius;
+        rounded.push(start);
+        // A short quadratic Bézier rounds convex and concave orthogonal corners alike.
+        for step in 1..=STEPS {
+            let t = step as f32 / STEPS as f32;
+            let one_minus_t = 1.0 - t;
+            rounded.push(egui::pos2(
+                start.x * one_minus_t.powi(2)
+                    + corner.x * (2.0 * one_minus_t * t)
+                    + end.x * t.powi(2),
+                start.y * one_minus_t.powi(2)
+                    + corner.y * (2.0 * one_minus_t * t)
+                    + end.y * t.powi(2),
+            ));
+        }
+    }
+    rounded
 }
 
 fn themed_highlight(
@@ -2902,6 +3049,12 @@ fn paint_minimap(
         response.interact_pointer_pos().map(|position| {
             ((position.y - whole_rect.top() + map_offset) / natural_height.max(1.0)).clamp(0.0, 1.0)
         })
+    } else if response.hovered() && max_y > 0.0 {
+        // The minimap lives outside the editor ScrollArea, so forward wheel/trackpad movement to
+        // the same stored scroll state while the pointer is anywhere over the map or its scrollbar.
+        let wheel_y = ui.input(|input| input.smooth_scroll_delta.y);
+        (wheel_y != 0.0)
+            .then(|| ((scroll.state.offset.y - wheel_y) / max_y).clamp(0.0, 1.0))
     } else {
         None
     }
