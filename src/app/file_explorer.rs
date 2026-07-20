@@ -2162,16 +2162,16 @@ impl OxiApp {
                                     selection,
                                 );
                             }
-                            if output.response.has_focus() {
-                                if let Some(cursor_range) = output.cursor_range {
-                                    paint_editor_caret(
-                                        ui,
-                                        &output.galley,
-                                        output.galley_pos,
-                                        viewport_clip,
-                                        cursor_range.primary,
-                                    );
-                                }
+                            if output.response.has_focus()
+                                && let Some(cursor_range) = output.cursor_range
+                            {
+                                paint_editor_caret(
+                                    ui,
+                                    &output.galley,
+                                    output.galley_pos,
+                                    viewport_clip,
+                                    cursor_range.primary,
+                                );
                             }
 
                             let selected_lines = selection
@@ -2679,10 +2679,11 @@ fn editor_selection_rects(
         if let Some(first) = rects.first_mut() {
             first.min.x = (first.min.x + CARET_CLEARANCE).min(first.max.x);
         }
-    } else if primary_is_end && end_is_painted {
-        if let Some(last) = rects.last_mut() {
-            last.max.x = (last.max.x - CARET_CLEARANCE).max(last.min.x);
-        }
+    } else if primary_is_end
+        && end_is_painted
+        && let Some(last) = rects.last_mut()
+    {
+        last.max.x = (last.max.x - CARET_CLEARANCE).max(last.min.x);
     }
     rects
 }
