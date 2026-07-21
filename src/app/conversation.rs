@@ -537,12 +537,44 @@ impl OxiApp {
                                 .clip_rect()
                                 .expand2(egui::vec2(0.0, TRANSCRIPT_CULL_MARGIN));
                             let width_bits = col_w.round().to_bits();
-                            // While the user holds a text selection in the transcript, keep
-                            // every unit rendered: culling a unit would drop its selection
-                            // anchors and truncate what Cmd+C copies. Plain drags (scrollbar
-                            // scrubbing) must not disable culling, so this checks only for an
-                            // actual selection.
-                            let cull_enabled = !transcript_has_selection;
+                            // Keep every unit rendered while a selection exists OR while a
+                            // drag-select is in progress. egui's label selection is dropped the
+                            // moment either endpoint's label is not rendered; during a drag the
+                            // selection is briefly empty every time an endpoint scrolls off, so
+                            // gating on `has_selection` alone lets culling remove the anchor and
+                            // the selection can never latch (it collapses as soon as edge-scroll
+                            // moves the content). A drag-select is a primary-button press that
+                            // began inside the transcript content column — this excludes wheel
+                            // scrolling (no button) and scrollbar dragging (press to the right of
+                            // the column), so both stay fully culled.
+                            // Stop culling while the pointer rests over the transcript and is not
+                            // actively scrolling. Two things make this necessary for text
+                            // selection:
+                            //   1. egui associates a press with a widget using the rects from the
+                            //      PREVIOUS frame, so the message under the pointer must already be
+                            //      a real laid-out widget before the click — a culled `add_space`
+                            //      placeholder is not selectable, so the user sees the I-beam cursor
+                            //      but nothing selects.
+                            //   2. When stuck to the bottom, `stick_to_bottom` nudges the scroll
+                            //      offset every frame; the set of culled units then flickers across
+                            //      the viewport margin, so a message flips between rendered and
+                            //      culled frame to frame and the press lands inconsistently (this is
+                            //      the "selection sometimes appears at random" symptom).
+                            // Disabling culling on hover keeps the rendered set stable and every
+                            // visible message selectable. A hover is a single settling frame (egui
+                            // does not repaint an idle view), and during an actual wheel/trackpad
+                            // scroll the button-up + non-zero scroll delta keeps culling on, so
+                            // scrolling a long transcript stays O(visible).
+                            let content_x = ui.max_rect().x_range();
+                            let viewport_y = ui.clip_rect().y_range();
+                            let pointer_interacting = ui.ctx().input(|input| {
+                                let over = input.pointer.interact_pos().is_some_and(|pos| {
+                                    content_x.contains(pos.x) && viewport_y.contains(pos.y)
+                                });
+                                let scrolling = input.smooth_scroll_delta.y.abs() > 0.5;
+                                over && !scrolling
+                            });
+                            let cull_enabled = !(transcript_has_selection || pointer_interacting);
                             for (start, end) in units {
                                 let messages = &self.conv.workspaces[wi].sessions[si].messages;
                                 let fingerprint =
@@ -565,19 +597,26 @@ impl OxiApp {
                                     ui.add_space(height);
                                     continue;
                                 }
-                                if messages[start].role == MsgRole::Assistant {
-                                    render_assistant_message_run(
-                                        ui,
-                                        start,
-                                        &self.conv.workspaces[wi].sessions[si].messages[start..end],
-                                    );
-                                } else {
-                                    render_message(
-                                        ui,
-                                        start,
-                                        &self.conv.workspaces[wi].sessions[si].messages[start],
-                                    );
-                                }
+                                // Give every unit a stable id scope keyed by its start index, so a
+                                // message's inner auto-id widgets do not depend on how many earlier
+                                // units were rendered vs replaced by `add_space` (which changes as
+                                // units scroll in and out of the culled region).
+                                ui.push_id(key, |ui| {
+                                    if messages[start].role == MsgRole::Assistant {
+                                        render_assistant_message_run(
+                                            ui,
+                                            start,
+                                            &self.conv.workspaces[wi].sessions[si].messages
+                                                [start..end],
+                                        );
+                                    } else {
+                                        render_message(
+                                            ui,
+                                            start,
+                                            &self.conv.workspaces[wi].sessions[si].messages[start],
+                                        );
+                                    }
+                                });
                                 self.conv.transcript_heights.insert(
                                     key,
                                     super::state::TranscriptUnitHeight {
