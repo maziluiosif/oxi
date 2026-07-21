@@ -537,12 +537,26 @@ impl OxiApp {
                                 .clip_rect()
                                 .expand2(egui::vec2(0.0, TRANSCRIPT_CULL_MARGIN));
                             let width_bits = col_w.round().to_bits();
-                            // While the user holds a text selection in the transcript, keep
-                            // every unit rendered: culling a unit would drop its selection
-                            // anchors and truncate what Cmd+C copies. Plain drags (scrollbar
-                            // scrubbing) must not disable culling, so this checks only for an
-                            // actual selection.
-                            let cull_enabled = !transcript_has_selection;
+                            // Keep every unit rendered while a selection exists OR while a
+                            // drag-select is in progress. egui's label selection is dropped the
+                            // moment either endpoint's label is not rendered; during a drag the
+                            // selection is briefly empty every time an endpoint scrolls off, so
+                            // gating on `has_selection` alone lets culling remove the anchor and
+                            // the selection can never latch (it collapses as soon as edge-scroll
+                            // moves the content). A drag-select is a primary-button press that
+                            // began inside the transcript content column — this excludes wheel
+                            // scrolling (no button) and scrollbar dragging (press to the right of
+                            // the column), so both stay fully culled.
+                            let content_x = ui.max_rect().x_range();
+                            let viewport_y = ui.clip_rect().y_range();
+                            let drag_select_active = ui.ctx().input(|input| {
+                                input.pointer.primary_down()
+                                    && input.pointer.press_origin().is_some_and(|origin| {
+                                        content_x.contains(origin.x)
+                                            && viewport_y.contains(origin.y)
+                                    })
+                            });
+                            let cull_enabled = !(transcript_has_selection || drag_select_active);
                             for (start, end) in units {
                                 let messages = &self.conv.workspaces[wi].sessions[si].messages;
                                 let fingerprint =
