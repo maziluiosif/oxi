@@ -1,8 +1,11 @@
 //! Embedded terminal settings.
 
-use eframe::egui::{RichText, Ui};
+use eframe::egui::Ui;
+#[cfg(not(windows))]
+use eframe::egui::RichText;
 
-use crate::theme::*;
+#[cfg(not(windows))]
+use crate::theme::{c_text_muted, FS_SMALL};
 use crate::ui::chrome::{card_frame, settings_card_header, settings_section_title};
 
 use super::super::OxiApp;
