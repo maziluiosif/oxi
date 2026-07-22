@@ -736,28 +736,31 @@ fn integrate_upstream(repo: &Repository) -> Result<(), String> {
         return Ok(());
     }
 
-    // Updating the branch reference changes what both the index and worktree are compared
-    // against. Do not move it while either contains local changes: besides risking an overwrite,
-    // a safe checkout after moving the reference can leave the old index behind and make every
-    // pulled file appear staged.
-    if !repo.statuses(None).map_err(err)?.is_empty() {
-        return Err(
-            "The working tree has uncommitted changes. Commit, stash, or discard them before pulling."
-                .into(),
-        );
-    }
-
     let refname = format!("refs/heads/{branch}");
     if analysis.is_fast_forward() {
+        // Update the worktree to the fetched commit *before* moving the branch reference, using a
+        // safe checkout. While HEAD still points at the old commit, libgit2 uses it as the merge
+        // base: files the fast-forward does not touch keep their local modifications (matching
+        // `git pull`, which does not require a clean tree), and a locally-modified file that the
+        // fast-forward would overwrite aborts the checkout instead of being clobbered. Only once
+        // the worktree is in place do we advance the reference, so an unrelated dirty file never
+        // blocks the pull and a relevant one is never lost.
+        //
+        // (Moving the reference first would force a checkout: HEAD would already match the target,
+        // so a safe checkout would treat the still-old index as staged changes and preserve it
+        // instead of completing the fast-forward — which is why this must run in this order.)
+        let target = repo.find_object(upstream_oid, None).map_err(err)?;
+        let mut checkout = CheckoutBuilder::new();
+        checkout.safe();
+        repo.checkout_tree(&target, Some(&mut checkout))
+            .map_err(|e| {
+                format!(
+                    "Cannot pull: your local changes to files updated by {upstream_name} would be overwritten. Commit, stash, or discard them first. ({e})"
+                )
+            })?;
         repo.reference(&refname, upstream_oid, true, "pull: fast-forward")
             .map_err(err)?;
-        repo.set_head(&refname).map_err(err)?;
-        // The repository was verified clean above. A forced checkout is intentional here: HEAD
-        // already points at the fetched commit, so CheckoutBuilder::safe() treats the still-old
-        // index as local staged changes and preserves it instead of completing the fast-forward.
-        let mut checkout = CheckoutBuilder::new();
-        checkout.force();
-        return repo.checkout_head(Some(&mut checkout)).map_err(err);
+        return repo.set_head(&refname).map_err(err);
     }
 
     let original = repo.head().and_then(|h| h.peel_to_commit()).map_err(err)?;
@@ -767,8 +770,15 @@ fn integrate_upstream(repo: &Repository) -> Result<(), String> {
     let signature = author_signature(repo)?;
     let mut checkout = CheckoutBuilder::new();
     checkout.safe();
-    repo.merge(&[&annotated], None, Some(&mut checkout))
-        .map_err(err)?;
+    if let Err(error) = repo.merge(&[&annotated], None, Some(&mut checkout)) {
+        // A safe merge checkout aborts if a locally-modified file would be overwritten. Nothing
+        // was committed, but libgit2 may have recorded merge state; clear it so the repository is
+        // left exactly as it was found.
+        let _ = repo.cleanup_state();
+        return Err(format!(
+            "Cannot pull: your local changes to files updated by {upstream_name} would be overwritten. Commit, stash, or discard them first. ({error})"
+        ));
+    }
 
     let mut index = repo.index().map_err(err)?;
     if index.has_conflicts() {
