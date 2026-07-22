@@ -30,8 +30,14 @@ impl OxiApp {
         self.conv.editor.explorer_reveal_pending = Some(explorer_path);
     }
 
-    pub(super) fn open_editor_file(&mut self, path: PathBuf) {
+    pub(crate) fn open_editor_file(&mut self, path: PathBuf) {
+        self.conv.editor.git_full_highlight_path = None;
         self.open_editor_file_impl(path, true);
+    }
+
+    /// Open a document without changing or revealing the Explorer sidebar.
+    pub(crate) fn open_editor_file_only(&mut self, path: PathBuf) {
+        self.open_editor_file_impl(path, false);
     }
 
     pub(super) fn open_editor_file_impl(&mut self, path: PathBuf, reveal_in_explorer: bool) {
@@ -44,8 +50,10 @@ impl OxiApp {
                 return;
             }
         };
-        self.conv.sidebar_mode = super::super::state::SidebarMode::Explorer;
-        self.conv.sidebar_open = true;
+        if reveal_in_explorer {
+            self.conv.sidebar_mode = super::super::state::SidebarMode::Explorer;
+            self.conv.sidebar_open = true;
+        }
         self.conv.editor.hidden_active = None;
         if let Some(index) = self
             .conv
@@ -85,6 +93,8 @@ impl OxiApp {
                     dirty: false,
                     layout_cache: EditorLayoutCache::default(),
                     minimap_cache: None,
+                    viewport_width_bits: None,
+                    viewport_anchor_line: 0,
                 });
                 self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
                 self.conv.editor.error = None;

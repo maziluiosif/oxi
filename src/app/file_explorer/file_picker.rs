@@ -45,6 +45,7 @@ impl OxiApp {
     }
 
     fn preview_file_picker_path(&mut self, path: &Path) {
+        self.conv.editor.git_full_highlight_path = None;
         if self
             .conv
             .editor

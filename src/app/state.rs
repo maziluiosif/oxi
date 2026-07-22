@@ -100,6 +100,9 @@ pub struct EditorState {
     pub focus_find_next_frame: bool,
     /// Return keyboard focus to the editor on its next render (Escape, definition jumps).
     pub focus_editor_next_frame: bool,
+    /// Document opened explicitly from GitPanel. Only this document receives full-row Git
+    /// highlighting; normal editor/Explorer/file-picker opens retain gutter-only markers.
+    pub git_full_highlight_path: Option<PathBuf>,
     /// Select and reveal this byte range after opening a definition target.
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
@@ -159,6 +162,11 @@ pub struct EditorDocument {
     /// Cached minimap silhouette, rebuilt only when the content or palette changes so
     /// idle and scrolling frames no longer rescan the whole file.
     pub minimap_cache: Option<super::file_explorer::MinimapGeometry>,
+    /// Width used by the previous editor layout. A width change re-anchors the scroll
+    /// position to `viewport_anchor_line` so soft wrapping cannot move the document.
+    pub viewport_width_bits: Option<u32>,
+    /// First logical source line visible in the editor viewport on the previous frame.
+    pub viewport_anchor_line: usize,
 }
 
 impl EditorDocument {

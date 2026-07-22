@@ -331,6 +331,7 @@ impl OxiApp {
             self.navigate_editor_history(true);
         }
         if let Some(index) = select {
+            self.conv.editor.git_full_highlight_path = None;
             self.conv.editor.active = Some(index);
             self.conv.editor.diff_tab_active = false;
             self.conv.editor.focus_editor_next_frame = true;

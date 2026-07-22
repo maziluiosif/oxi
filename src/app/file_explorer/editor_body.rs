@@ -25,6 +25,7 @@ pub(super) type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
     Option<usize>,
     Option<usize>,
     Option<usize>,
+    (usize, Option<f32>),
 )>;
 
 impl OxiApp {
@@ -109,6 +110,12 @@ impl OxiApp {
             .unwrap_or(&self.conv.editor.documents[index].path)
             .to_string_lossy()
             .replace('\\', "/");
+        let full_git_highlight = self
+            .conv
+            .editor
+            .git_full_highlight_path
+            .as_ref()
+            .is_some_and(|path| path == &self.conv.editor.documents[index].path);
         let disk_git_line_changes = self
             .conv
             .git
@@ -130,6 +137,15 @@ impl OxiApp {
         };
         const MINIMAP_WIDTH: f32 = 96.0;
         let editor_view_size = ui.available_size();
+        const MINIMAP_SCROLLBAR_WIDTH: f32 = 10.0;
+        let prospective_editor_width =
+            (editor_view_size.x - gutter_width - MINIMAP_WIDTH - MINIMAP_SCROLLBAR_WIDTH).max(80.0);
+        let prospective_width_bits = prospective_editor_width.round().to_bits();
+        let resize_anchor = self.conv.editor.documents[index]
+            .viewport_width_bits
+            .filter(|width| *width != prospective_width_bits)
+            .map(|_| self.conv.editor.documents[index].viewport_anchor_line);
+        self.conv.editor.documents[index].viewport_width_bits = Some(prospective_width_bits);
         let mut goto_definition_byte = None;
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -143,10 +159,7 @@ impl OxiApp {
                 egui::Stroke::new(1.0, c_border_subtle()),
             );
 
-            const MINIMAP_SCROLLBAR_WIDTH: f32 = 10.0;
-            let editor_view_width =
-                (editor_view_size.x - gutter_width - MINIMAP_WIDTH - MINIMAP_SCROLLBAR_WIDTH)
-                    .max(80.0);
+            let editor_view_width = prospective_editor_width;
             let scroll_output = ui
                 .vertical(|ui| {
                     ui.set_width(editor_view_width);
@@ -226,7 +239,9 @@ impl OxiApp {
                                         .background_color(egui::Color32::TRANSPARENT)
                                         .text_revision(document.content_revision)
                                         .emit_selection_events(false)
-                                        .scroll_to_cursor(!select_all_requested)
+                                        .scroll_to_cursor(
+                                            !select_all_requested && resize_anchor.is_none(),
+                                        )
                                         .desired_width(f32::INFINITY)
                                         .min_size(editor_size)
                                         .margin(Margin::same(8))
@@ -442,6 +457,40 @@ impl OxiApp {
                                     .indent_columns,
                             );
 
+                            // Make Git changes readable where they are edited, not only as a thin
+                            // gutter stripe. Every visual row belonging to a changed logical line
+                            // gets a full-width tint; unchanged lines retain the normal editor
+                            // background, so the boundary between the two is immediately visible.
+                            if full_git_highlight {
+                                let change_painter = ui.painter().with_clip_rect(viewport_clip);
+                                let mut logical_line = 0usize;
+                                for (row, placed_row) in output.galley.rows.iter().enumerate() {
+                                    if row > 0 && output.galley.rows[row - 1].ends_with_newline {
+                                        logical_line += 1;
+                                    }
+                                    let row_rect =
+                                        placed_row.rect().translate(output.galley_pos.to_vec2());
+                                    if !row_rect.intersects(viewport_clip) {
+                                        continue;
+                                    }
+                                    let Ok(change_index) = git_line_changes
+                                        .binary_search_by_key(&logical_line, |change| change.line)
+                                    else {
+                                        continue;
+                                    };
+                                    let change = &git_line_changes[change_index];
+                                    let highlight_rect = egui::Rect::from_min_max(
+                                        egui::pos2(viewport_clip.left(), row_rect.top()),
+                                        egui::pos2(viewport_clip.right(), row_rect.bottom()),
+                                    );
+                                    let color = match change.kind {
+                                        crate::git::GitLineKind::Added => c_diff_add_bg(),
+                                        crate::git::GitLineKind::Modified => c_warning_bg(),
+                                    };
+                                    change_painter.rect_filled(highlight_rect, 0.0, color);
+                                }
+                            }
+
                             // Paint selection behind the visible galley. The previous order put a
                             // translucent wash over the glyphs; depending on the backend it looked
                             // opaque and left only our whitespace markers visible.
@@ -503,6 +552,8 @@ impl OxiApp {
                             let gutter_clip_range = viewport_clip.y_range();
                             let gutter_line_height = FS_SMALL * 1.35;
                             let mut logical_line = 0usize;
+                            let mut viewport_anchor_line = 0usize;
+                            let mut resize_anchor_top = None;
                             let mut line_positions: Vec<(usize, f32)> = Vec::new();
                             for (row, placed_row) in output.galley.rows.iter().enumerate() {
                                 let starts_line =
@@ -510,11 +561,15 @@ impl OxiApp {
                                 if !starts_line {
                                     continue;
                                 }
-                                let y = placed_row
-                                    .rect()
-                                    .translate(output.galley_pos.to_vec2())
-                                    .center()
-                                    .y;
+                                let line_rect =
+                                    placed_row.rect().translate(output.galley_pos.to_vec2());
+                                let y = line_rect.center().y;
+                                if line_rect.top() <= viewport_clip.top() {
+                                    viewport_anchor_line = logical_line;
+                                }
+                                if resize_anchor == Some(logical_line) {
+                                    resize_anchor_top = Some(line_rect.top());
+                                }
                                 if y >= gutter_clip_range.min - gutter_line_height
                                     && y <= gutter_clip_range.max + gutter_line_height
                                 {
@@ -529,10 +584,31 @@ impl OxiApp {
                                 navigation_request,
                                 active_line,
                                 caret_char,
+                                (viewport_anchor_line, resize_anchor_top),
                             )
                         })
                 })
                 .inner;
+
+            // ScrollArea preserves a raw pixel offset when its width changes. That makes
+            // soft-wrapped rows above the viewport appear to push the document around. Rebase
+            // that offset to the same first logical line instead, keeping its line number at the
+            // top regardless of how many visual rows are added or removed by wrapping.
+            if resize_anchor.is_some()
+                && let Some(line_top) = scroll_output.inner.6.1
+            {
+                let mut state = scroll_output.state.clone();
+                let max_y =
+                    (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
+                state.offset.y =
+                    (line_top - scroll_output.inner_rect.top() + state.offset.y).clamp(0.0, max_y);
+                state.store(ui.ctx(), scroll_output.id);
+                ui.ctx().request_repaint();
+            }
+
+            if resize_anchor.is_none() {
+                self.conv.editor.documents[index].viewport_anchor_line = scroll_output.inner.6.0;
+            }
 
             let gutter_clip = gutter_rect.intersect(ui.clip_rect());
             for (line, y) in scroll_output.inner.0.iter().copied() {

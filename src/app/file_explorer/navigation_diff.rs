@@ -80,20 +80,10 @@ impl OxiApp {
         self.conv.editor.focus_editor_next_frame = true;
     }
 
-    pub(super) fn close_editor_git_diff(&mut self) {
+    pub(crate) fn close_editor_git_diff(&mut self) {
         self.request(crate::git::GitOp::ClearDiff);
         self.conv.diff_view_open = false;
         self.conv.editor.diff_tab_active = false;
-    }
-
-    /// Open the file behind the currently shown git diff in an editable tab.
-    pub(crate) fn open_current_diff_file(&mut self) {
-        let Some(relative) = self.conv.git.current_diff_path.clone() else {
-            return;
-        };
-        let root = PathBuf::from(&self.active_workspace().root_path);
-        self.open_editor_file(root.join(relative));
-        self.conv.editor.focus_editor_next_frame = true;
     }
 
     /// The git diff rendered as an editor tab: files stay open and editable next to it.
@@ -121,18 +111,6 @@ impl OxiApp {
                     .clicked()
                 {
                     self.close_editor_git_diff();
-                }
-                if self.conv.git.current_diff_path.is_some()
-                    && crate::ui::chrome::mini_button_icon_enabled(
-                        ui,
-                        ICON_PROMPTS,
-                        "Edit file",
-                        true,
-                    )
-                    .on_hover_text("Open this file in an editable tab")
-                    .clicked()
-                {
-                    self.open_current_diff_file();
                 }
             });
         });
