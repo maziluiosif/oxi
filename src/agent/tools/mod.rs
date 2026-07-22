@@ -44,6 +44,7 @@ pub fn tool_is_parallel_safe(name: &str) -> bool {
 }
 
 mod definitions;
+mod diff;
 mod file_ops;
 mod paths;
 mod shell_search;
@@ -54,7 +55,8 @@ mod web;
 mod tests;
 
 pub use definitions::tool_definitions_json;
-pub(crate) use file_ops::{cleanup_stale_spill_files, floor_char_boundary, make_unified_diff};
+pub(crate) use diff::make_unified_diff;
+pub(crate) use file_ops::{cleanup_stale_spill_files, floor_char_boundary};
 pub use paths::resolve_under_cwd;
 pub use undo::TurnUndoJournal;
 

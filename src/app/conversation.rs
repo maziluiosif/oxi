@@ -18,73 +18,9 @@ use super::{OxiApp, PendingApproval};
 /// so a fast scroll never reveals an unrendered gap at the edges.
 const TRANSCRIPT_CULL_MARGIN: f32 = 600.0;
 
-/// Cheap content fingerprint for one transcript unit (a user message or a contiguous assistant
-/// run). Built from lengths and flags rather than full text so revalidating every unit each
-/// frame stays O(blocks), not O(bytes). Any append/edit/tool update changes a length and
-/// invalidates the cached height; the unit is then re-rendered and re-measured.
-fn transcript_unit_fingerprint(messages: &[crate::model::ChatMessage]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    messages.len().hash(&mut hasher);
-    for message in messages {
-        (message.role == MsgRole::User).hash(&mut hasher);
-        message.is_summary.hash(&mut hasher);
-        message.streaming.hash(&mut hasher);
-        message.text.len().hash(&mut hasher);
-        message.attachments.len().hash(&mut hasher);
-        message.worked_duration.is_some().hash(&mut hasher);
-        message.blocks.len().hash(&mut hasher);
-        for block in &message.blocks {
-            match block {
-                crate::model::AssistantBlock::Thinking(text) => {
-                    (0u8, text.len()).hash(&mut hasher);
-                }
-                crate::model::AssistantBlock::Answer(text) => {
-                    (1u8, text.len()).hash(&mut hasher);
-                }
-                crate::model::AssistantBlock::Tool {
-                    args_summary,
-                    output,
-                    diff,
-                    is_error,
-                    output_truncated,
-                    ..
-                } => {
-                    (
-                        2u8,
-                        args_summary.as_deref().map_or(0, str::len),
-                        output.len(),
-                        diff.as_deref().map_or(0, str::len),
-                        *is_error,
-                        *output_truncated,
-                    )
-                        .hash(&mut hasher);
-                }
-            }
-        }
-    }
-    hasher.finish()
-}
-
-/// Split the transcript into render units: one per user message, one per contiguous
-/// assistant run (rendered together by [`render_assistant_message_run`]).
-fn transcript_units(messages: &[crate::model::ChatMessage]) -> Vec<(usize, usize)> {
-    let mut units = Vec::new();
-    let mut index = 0;
-    while index < messages.len() {
-        if messages[index].role == MsgRole::Assistant {
-            let start = index;
-            while index < messages.len() && messages[index].role == MsgRole::Assistant {
-                index += 1;
-            }
-            units.push((start, index));
-        } else {
-            units.push((index, index + 1));
-            index += 1;
-        }
-    }
-    units
-}
+#[path = "conversation/transcript_model.rs"]
+mod transcript_model;
+use transcript_model::{transcript_unit_fingerprint, transcript_units};
 
 impl OxiApp {
     /// Error banner rendered above the transcript.
@@ -859,63 +795,5 @@ pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> (egui::Vec2, bool)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{AssistantBlock, ChatMessage};
-
-    fn answer(size: usize) -> ChatMessage {
-        ChatMessage {
-            role: MsgRole::Assistant,
-            text: String::new(),
-            is_summary: false,
-            attachments: Vec::new(),
-            blocks: vec![AssistantBlock::Answer("x".repeat(size))],
-            streaming: false,
-            started_at: None,
-            worked_duration: None,
-        }
-    }
-
-    fn user(text: &str) -> ChatMessage {
-        ChatMessage {
-            role: MsgRole::User,
-            text: text.to_owned(),
-            is_summary: false,
-            attachments: Vec::new(),
-            blocks: Vec::new(),
-            streaming: false,
-            started_at: None,
-            worked_duration: None,
-        }
-    }
-
-    #[test]
-    fn units_group_contiguous_assistant_messages() {
-        let messages = vec![user("a"), answer(10), answer(10), user("b"), answer(10)];
-        assert_eq!(
-            transcript_units(&messages),
-            vec![(0, 1), (1, 3), (3, 4), (4, 5)]
-        );
-    }
-
-    #[test]
-    fn fingerprint_changes_when_content_grows() {
-        let before = vec![answer(100)];
-        let after = vec![answer(101)];
-        assert_ne!(
-            transcript_unit_fingerprint(&before),
-            transcript_unit_fingerprint(&after)
-        );
-    }
-
-    #[test]
-    fn fingerprint_changes_when_streaming_ends() {
-        let mut streaming = answer(100);
-        streaming.streaming = true;
-        let done = answer(100);
-        assert_ne!(
-            transcript_unit_fingerprint(std::slice::from_ref(&streaming)),
-            transcript_unit_fingerprint(std::slice::from_ref(&done))
-        );
-    }
-}
+#[path = "conversation/tests.rs"]
+mod tests;
