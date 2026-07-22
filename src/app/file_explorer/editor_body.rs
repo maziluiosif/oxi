@@ -597,7 +597,7 @@ impl OxiApp {
             if resize_anchor.is_some()
                 && let Some(line_top) = scroll_output.inner.6.1
             {
-                let mut state = scroll_output.state.clone();
+                let mut state = scroll_output.state;
                 let max_y =
                     (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
                 state.offset.y =
