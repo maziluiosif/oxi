@@ -177,135 +177,142 @@ pub(super) fn render_inline_until(
     end: InlineEnd,
     density: InlineDensity,
 ) {
-    let mut job = LayoutJob::default();
-    set_job_wrap(&mut job, wrap_w);
+    // Links and inline images must participate in the same wrapping row as the surrounding
+    // text. Without this horizontal layout, every flushed text run and `Hyperlink` is added to
+    // the parent's default vertical layout, making each link look like it has a newline around it.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
 
-    let mut bold = 0u32;
-    let mut italic = 0u32;
-    let mut strike = 0u32;
-    while let Some(ev) = it.next() {
-        match (&ev, end) {
-            (Event::End(TagEnd::Paragraph), InlineEnd::Paragraph) => break,
-            (Event::End(TagEnd::Item), InlineEnd::Item) => break,
-            _ => {}
-        }
-        match ev {
-            Event::Start(Tag::Strong) => bold += 1,
-            Event::End(TagEnd::Strong) => bold = bold.saturating_sub(1),
-            Event::Start(Tag::Emphasis) => italic += 1,
-            Event::End(TagEnd::Emphasis) => italic = italic.saturating_sub(1),
-            Event::Start(Tag::Strikethrough) => strike += 1,
-            Event::End(TagEnd::Strikethrough) => strike = strike.saturating_sub(1),
-            Event::Text(t) => {
-                let mut tf = inline_text_format(SZ_BODY, bold, italic > 0, density);
-                if strike > 0 {
-                    tf.strikethrough = Stroke::new(1.0, c_text());
-                }
-                job.append(t.as_ref(), 0.0, tf);
+        let mut job = LayoutJob::default();
+        set_job_wrap(&mut job, wrap_w);
+
+        let mut bold = 0u32;
+        let mut italic = 0u32;
+        let mut strike = 0u32;
+        while let Some(ev) = it.next() {
+            match (&ev, end) {
+                (Event::End(TagEnd::Paragraph), InlineEnd::Paragraph) => break,
+                (Event::End(TagEnd::Item), InlineEnd::Item) => break,
+                _ => {}
             }
-            Event::Code(c) => {
-                job.append(c.as_ref(), 0.0, inline_code_format(density));
-            }
-            Event::SoftBreak => {
-                job.append(
-                    " ",
-                    0.0,
-                    inline_text_format(SZ_BODY, bold, italic > 0, density),
-                );
-            }
-            Event::HardBreak => {
-                job.append(
-                    "\n",
-                    0.0,
-                    inline_text_format(SZ_BODY, bold, italic > 0, density),
-                );
-            }
-            Event::Start(Tag::Link {
-                link_type: _,
-                dest_url,
-                title: _,
-                id: _,
-            }) => {
-                if !job.text.is_empty() {
-                    selectable_job(ui, std::mem::take(&mut job));
-                    set_job_wrap(&mut job, wrap_w);
-                }
-                let dest = dest_url.to_string();
-                let mut label = String::new();
-                while let Some(inner) = it.next() {
-                    match inner {
-                        Event::End(TagEnd::Link) => break,
-                        Event::Text(t) => label.push_str(t.as_ref()),
-                        Event::Code(c) => label.push_str(c.as_ref()),
-                        Event::SoftBreak => label.push(' '),
-                        Event::HardBreak => label.push('\n'),
-                        Event::Html(t) | Event::InlineHtml(t) => label.push_str(t.as_ref()),
-                        Event::FootnoteReference(t) => {
-                            label.push_str(&format!("[^{}]", t));
-                        }
-                        Event::TaskListMarker(done) => {
-                            label.push_str(if done { "[x] " } else { "[ ] " });
-                        }
-                        Event::Start(nested) => consume_until_end(it, nested.to_end()),
-                        _ => {}
+            match ev {
+                Event::Start(Tag::Strong) => bold += 1,
+                Event::End(TagEnd::Strong) => bold = bold.saturating_sub(1),
+                Event::Start(Tag::Emphasis) => italic += 1,
+                Event::End(TagEnd::Emphasis) => italic = italic.saturating_sub(1),
+                Event::Start(Tag::Strikethrough) => strike += 1,
+                Event::End(TagEnd::Strikethrough) => strike = strike.saturating_sub(1),
+                Event::Text(t) => {
+                    let mut tf = inline_text_format(SZ_BODY, bold, italic > 0, density);
+                    if strike > 0 {
+                        tf.strikethrough = Stroke::new(1.0, c_text());
                     }
+                    job.append(t.as_ref(), 0.0, tf);
                 }
-                ui.add(Hyperlink::from_label_and_url(
-                    RichText::new(label).color(c_accent()).size(SZ_BODY),
-                    dest,
-                ));
-                ui.add_space(2.0);
-            }
-            Event::Start(Tag::Image { dest_url, .. }) => {
-                if !job.text.is_empty() {
-                    selectable_job(ui, std::mem::take(&mut job));
-                    set_job_wrap(&mut job, wrap_w);
+                Event::Code(c) => {
+                    job.append(c.as_ref(), 0.0, inline_code_format(density));
                 }
-                let mut alt = String::new();
-                while let Some(inner) = it.next() {
-                    match inner {
-                        Event::End(TagEnd::Image) => break,
-                        Event::Text(t) => alt.push_str(t.as_ref()),
-                        Event::Code(c) => alt.push_str(c.as_ref()),
-                        Event::SoftBreak => alt.push(' '),
-                        Event::HardBreak => alt.push('\n'),
-                        Event::Start(nested) => consume_until_end(it, nested.to_end()),
-                        _ => {}
+                Event::SoftBreak => {
+                    job.append(
+                        " ",
+                        0.0,
+                        inline_text_format(SZ_BODY, bold, italic > 0, density),
+                    );
+                }
+                Event::HardBreak => {
+                    job.append(
+                        "\n",
+                        0.0,
+                        inline_text_format(SZ_BODY, bold, italic > 0, density),
+                    );
+                }
+                Event::Start(Tag::Link {
+                    link_type: _,
+                    dest_url,
+                    title: _,
+                    id: _,
+                }) => {
+                    if !job.text.is_empty() {
+                        selectable_job(ui, std::mem::take(&mut job));
+                        set_job_wrap(&mut job, wrap_w);
                     }
+                    let dest = dest_url.to_string();
+                    let mut label = String::new();
+                    while let Some(inner) = it.next() {
+                        match inner {
+                            Event::End(TagEnd::Link) => break,
+                            Event::Text(t) => label.push_str(t.as_ref()),
+                            Event::Code(c) => label.push_str(c.as_ref()),
+                            Event::SoftBreak => label.push(' '),
+                            Event::HardBreak => label.push('\n'),
+                            Event::Html(t) | Event::InlineHtml(t) => label.push_str(t.as_ref()),
+                            Event::FootnoteReference(t) => {
+                                label.push_str(&format!("[^{}]", t));
+                            }
+                            Event::TaskListMarker(done) => {
+                                label.push_str(if done { "[x] " } else { "[ ] " });
+                            }
+                            Event::Start(nested) => consume_until_end(it, nested.to_end()),
+                            _ => {}
+                        }
+                    }
+                    ui.add(Hyperlink::from_label_and_url(
+                        RichText::new(label).color(c_accent()).size(SZ_BODY),
+                        dest,
+                    ));
+                    ui.add_space(2.0);
                 }
-                render_markdown_inline_image(ui, wrap_w, dest_url.as_ref(), alt.trim(), false);
+                Event::Start(Tag::Image { dest_url, .. }) => {
+                    if !job.text.is_empty() {
+                        selectable_job(ui, std::mem::take(&mut job));
+                        set_job_wrap(&mut job, wrap_w);
+                    }
+                    let mut alt = String::new();
+                    while let Some(inner) = it.next() {
+                        match inner {
+                            Event::End(TagEnd::Image) => break,
+                            Event::Text(t) => alt.push_str(t.as_ref()),
+                            Event::Code(c) => alt.push_str(c.as_ref()),
+                            Event::SoftBreak => alt.push(' '),
+                            Event::HardBreak => alt.push('\n'),
+                            Event::Start(nested) => consume_until_end(it, nested.to_end()),
+                            _ => {}
+                        }
+                    }
+                    render_markdown_inline_image(ui, wrap_w, dest_url.as_ref(), alt.trim(), false);
+                }
+                Event::Html(t) | Event::InlineHtml(t) => {
+                    append_inline_fallback(
+                        &mut job,
+                        wrap_w,
+                        t.as_ref(),
+                        density.line_height(SZ_CODE_INLINE),
+                    );
+                }
+                Event::FootnoteReference(t) => {
+                    let s = format!("[^{}]", t);
+                    job.append(
+                        &s,
+                        0.0,
+                        inline_text_format(SZ_BODY, bold, italic > 0, density),
+                    );
+                }
+                Event::TaskListMarker(done) => {
+                    let mark = if done { "☑ " } else { "☐ " };
+                    job.append(
+                        mark,
+                        0.0,
+                        inline_text_format(SZ_BODY, bold, italic > 0, density),
+                    );
+                }
+                Event::InlineMath(t) | Event::DisplayMath(t) => {
+                    job.append(t.as_ref(), 0.0, inline_code_format(density));
+                }
+                _ => {}
             }
-            Event::Html(t) | Event::InlineHtml(t) => {
-                append_inline_fallback(
-                    &mut job,
-                    wrap_w,
-                    t.as_ref(),
-                    density.line_height(SZ_CODE_INLINE),
-                );
-            }
-            Event::FootnoteReference(t) => {
-                let s = format!("[^{}]", t);
-                job.append(
-                    &s,
-                    0.0,
-                    inline_text_format(SZ_BODY, bold, italic > 0, density),
-                );
-            }
-            Event::TaskListMarker(done) => {
-                let mark = if done { "☑ " } else { "☐ " };
-                job.append(
-                    mark,
-                    0.0,
-                    inline_text_format(SZ_BODY, bold, italic > 0, density),
-                );
-            }
-            Event::InlineMath(t) | Event::DisplayMath(t) => {
-                job.append(t.as_ref(), 0.0, inline_code_format(density));
-            }
-            _ => {}
         }
-    }
-    selectable_job(ui, job);
+        selectable_job(ui, job);
+    });
     let tail = match (end, density) {
         (InlineEnd::Paragraph | InlineEnd::Item, InlineDensity::Normal) => 1.5,
         (InlineEnd::Paragraph | InlineEnd::Item, InlineDensity::ListItem) => 0.0,
