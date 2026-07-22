@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::theme::*;
 
-use super::ALWAYS_SKIPPED_DIRS;
+const ALWAYS_SKIPPED_DIRS: &[&str] = &[".git"];
 
 /// Sublime-style fuzzy score. Filename hits, consecutive characters, word/path boundaries and
 /// earlier matches rank higher; long gaps and deep paths rank lower.
