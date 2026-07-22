@@ -388,11 +388,25 @@ impl OxiApp {
             primary_down && dragged_far
         };
 
-        // Hold stick-to-bottom a few frames after the turn ends so the "Working…" →
-        // "Worked…" collapse reclamps the scroll offset in the same pass (avoids the
-        // one-frame jump up then down when stick turns off at the same time as the fold).
+        // A manual expand/collapse changes a transcript unit's height. Suppress bottom-clamping
+        // for the transition frames so content below the clicked thinking/tool block stays visually
+        // anchored instead of jumping down and back while a response is streaming.
+        let manual_layout_change = ui.ctx().data_mut(|d| {
+            let id = egui::Id::new("transcript_manual_layout_change");
+            let frames = d.get_temp::<u8>(id).unwrap_or(0);
+            if frames > 1 {
+                d.insert_temp(id, frames - 1);
+            } else if frames == 1 {
+                d.remove::<u8>(id);
+            }
+            frames > 0
+        });
+
+        // Hold stick-to-bottom for a few frames while a newly opened/session-loaded
+        // conversation settles its layout.
         let hold_stick = self.conv.stick_bottom_hold_frames > 0;
-        let stick_bottom = !user_has_selection
+        let stick_bottom = !manual_layout_change
+            && !user_has_selection
             && (force_scroll_bottom
                 || hold_stick
                 || self.active_waiting_response()

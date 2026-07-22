@@ -1,6 +1,7 @@
 //! Anthropic Messages API streaming (used by OpenCode Go's Anthropic-compatible models).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 
@@ -11,7 +12,9 @@ use serde_json::{Value, json};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult, run_tool};
+use super::tools::{
+    MAX_TOOL_OUTPUT_CHARS, ToolOutputCallback, ToolResult, run_tool, run_tool_with_output,
+};
 
 /// Overwrite `dst` with the u64 field `key` from a `usage` JSON object, if present.
 fn read_usage_field(usage: &Value, key: &str, dst: &mut u64) {
@@ -482,6 +485,19 @@ pub async fn run_anthropic_loop(
                         args: Some(tc.args.clone()),
                     });
                     let result = match gate.request(tx, cancel, &tc.name, &tc.args) {
+                        Ok(()) if tc.name.eq_ignore_ascii_case("bash") => {
+                            let event_tx = tx.clone();
+                            let id = tc.id.clone();
+                            let callback: ToolOutputCallback = Arc::new(move |text| {
+                                let truncated = text.chars().count() >= MAX_TOOL_OUTPUT_CHARS;
+                                let _ = event_tx.send(AgentEvent::ToolOutput {
+                                    tool_call_id: id.clone(),
+                                    text,
+                                    truncated,
+                                });
+                            });
+                            run_tool_with_output(cwd, &tc.name, &tc.args, env, Some(callback))
+                        }
                         Ok(()) => run_tool(cwd, &tc.name, &tc.args, env),
                         Err(reason) => ToolResult {
                             output: reason,

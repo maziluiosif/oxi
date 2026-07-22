@@ -76,7 +76,7 @@ impl OxiApp {
             .map(|m| std::path::PathBuf::from(&m.path))
     }
 
-    fn toggle_dictation(&mut self) {
+    pub(crate) fn toggle_dictation(&mut self) {
         let Some(model_path) = self.active_voice_model_path() else {
             self.open_settings_page();
             self.conv.settings_tab = crate::app::state::SettingsTab::Voice;

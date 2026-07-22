@@ -10,7 +10,7 @@ use eframe::egui::{self, Frame, Id, Margin, RichText, ScrollArea, Stroke, Ui};
 use crate::model::AssistantBlock;
 use crate::theme::*;
 use crate::ui::preview_expand::{
-    clickable_expand_overlay_quiet, expand_persist_id, is_expanded, toggle_expanded,
+    clickable_expand_overlay_quiet, expand_persist_id, is_expanded, set_expanded,
 };
 
 use super::{block_state_tag, selectable_layout_job};
@@ -237,6 +237,11 @@ pub(super) fn render_thinking_group_block_opts(
         "thinking_body",
         block_state_tag(live),
     )));
+    // Keep one expansion snapshot for the entire frame. In particular, do not toggle the state
+    // from the caption and then read it again below: inserting/removing the full thinking body in
+    // the click frame invalidates the rest of the transcript's geometry mid-frame and makes every
+    // block below it flicker. Tool pills follow the same deferred-layout pattern.
+    let expanded = is_expanded(ui, persist_id);
 
     // Per-group wall-clock timer (ms/s/min). While live it ticks from the first frame we
     // saw the group streaming; once thinking ends it freezes once into "Thought for Xs".
@@ -274,7 +279,6 @@ pub(super) fn render_thinking_group_block_opts(
         // Quiet caption; always clickable (with a chevron) — done thinking blocks are
         // folded by default regardless of length, so the chevron is the only way to reveal
         // even a short block's body.
-        let expanded = is_expanded(ui, persist_id);
         let caption = match elapsed {
             Some(d) => format!("Thought for {}", format_stream_elapsed(d)),
             None => "Thought".to_string(),
@@ -294,7 +298,7 @@ pub(super) fn render_thinking_group_block_opts(
         )
         .clicked()
         {
-            toggle_expanded(ui, persist_id);
+            set_expanded(ui, persist_id, !expanded);
         }
     }
     ui.add_space(4.0);
@@ -303,7 +307,7 @@ pub(super) fn render_thinking_group_block_opts(
     // the newest text (tail) so you can follow along instead of seeing a frozen first page.
     // Once done, every thinking block hides its body entirely — only the "Thought for Xs"
     // caption remains — until the user unfolds it, regardless of how short it is.
-    let show_body = live || is_expanded(ui, persist_id);
+    let show_body = live || expanded;
     if show_body {
         render_thinking_text_panel(
             ui,

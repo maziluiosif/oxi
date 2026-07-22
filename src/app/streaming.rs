@@ -368,7 +368,15 @@ impl OxiApp {
         let id = tool_call_id.unwrap_or("").to_string();
         let args_summary = args.map(|a| {
             let s = a.to_string();
-            s.chars().take(800).collect::<String>()
+            // Edit/write arguments are also the live diff preview. Keep enough of them for the
+            // UI to parse the replacement while the filesystem operation runs; other tools only
+            // need a compact one-line summary.
+            let limit = if name.eq_ignore_ascii_case("edit") || name.eq_ignore_ascii_case("write") {
+                crate::agent::tools::MAX_TOOL_OUTPUT_CHARS
+            } else {
+                800
+            };
+            s.chars().take(limit).collect::<String>()
         });
         // Providers may emit an early ToolStart (name+id, args still streaming) and a
         // second ToolStart with full args right before execution. Update the existing
@@ -529,9 +537,8 @@ impl OxiApp {
         {
             last.finish_streaming();
         }
-        if key == self.active_session_key() {
-            self.conv.stick_bottom_hold_frames = 3;
-        }
+        // Do not force the transcript back to the bottom when streaming ends. The user may
+        // have scrolled up to read earlier content while the response was being generated.
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
         if let Err(e) =
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))

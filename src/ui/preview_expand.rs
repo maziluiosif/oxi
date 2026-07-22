@@ -49,9 +49,18 @@ pub fn is_expanded(ui: &Ui, persist_id: Id) -> bool {
         .data_mut(|d| d.get_persisted::<bool>(persist_id).unwrap_or(false))
 }
 
+pub fn set_expanded(ui: &Ui, persist_id: Id, expanded: bool) {
+    ui.ctx().data_mut(|d| {
+        d.insert_persisted(persist_id, expanded);
+        // Expanding/collapsing changes the transcript height substantially. While a response is
+        // streaming, the outer chat ScrollArea is normally stuck to the bottom; letting it re-clamp
+        // in the same transition makes every block below the clicked one jump for a frame.
+        d.insert_temp(Id::new("transcript_manual_layout_change"), 2_u8);
+    });
+}
+
 pub fn toggle_expanded(ui: &Ui, persist_id: Id) {
-    let v = is_expanded(ui, persist_id);
-    ui.ctx().data_mut(|d| d.insert_persisted(persist_id, !v));
+    set_expanded(ui, persist_id, !is_expanded(ui, persist_id));
 }
 
 pub fn clickable_expand_overlay(ui: &mut Ui, rect: Rect, persist_id: Id) {

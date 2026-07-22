@@ -62,11 +62,25 @@ fn user_image_texture(
 }
 
 pub(super) fn selectable_layout_job(ui: &mut Ui, job: LayoutJob, allow_select: bool) {
+    selectable_layout_job_with_wrap(ui, job, allow_select, true);
+}
+
+pub(super) fn selectable_layout_job_with_wrap(
+    ui: &mut Ui,
+    job: LayoutJob,
+    allow_select: bool,
+    wrap: bool,
+) {
     if job.text.is_empty() {
         return;
     }
     if !allow_select {
-        ui.add(Label::new(job).wrap().selectable(false));
+        let wrap_mode = if wrap {
+            egui::TextWrapMode::Wrap
+        } else {
+            egui::TextWrapMode::Extend
+        };
+        ui.add(Label::new(job).wrap_mode(wrap_mode).selectable(false));
         return;
     }
 
@@ -353,6 +367,9 @@ fn render_activity_range(
     streaming: bool,
 ) {
     let slice = &blocks[start..end];
+    let last_streaming_edit = streaming
+        .then(|| blocks.iter().rposition(is_edit_like_tool))
+        .flatten();
     for group in build_assistant_block_groups(slice) {
         match group {
             AssistantBlockGroup::Thinking(indices) => {
@@ -411,7 +428,14 @@ fn render_activity_range(
             }
             AssistantBlockGroup::Tool(i) => {
                 let gi = start + i;
-                render_single_tool_block(ui, msg_idx, gi, &blocks[gi], streaming);
+                render_single_tool_block(
+                    ui,
+                    msg_idx,
+                    gi,
+                    &blocks[gi],
+                    streaming,
+                    last_streaming_edit == Some(gi),
+                );
             }
         }
     }
@@ -518,8 +542,7 @@ fn render_activity_summary(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     if !streaming && click.clicked() {
-        ui.ctx()
-            .data_mut(|d| d.insert_persisted(persist_id, !expanded));
+        crate::ui::preview_expand::toggle_expanded(ui, persist_id);
     }
 
     if expanded {

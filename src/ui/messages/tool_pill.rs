@@ -10,19 +10,17 @@ use eframe::egui::{
 use crate::model::{AssistantBlock, concat_thinking_blocks};
 use crate::theme::*;
 use crate::ui::preview_expand::{
-    clickable_expand_overlay, expand_persist_id, is_expanded, truncate_lines_preview,
+    clickable_expand_overlay, expand_persist_id, is_expanded, set_expanded, truncate_lines_preview,
 };
 
 use super::thinking::{render_thinking_group_block, thinking_group_is_live};
-use crate::ui::diff::diff_layout_job;
+use crate::ui::diff::{diff_layout_job, split_chat_diff_layout_jobs};
 
 use super::tool_format::{diff_counts, mono_output_job, tool_icon, tool_summary_text};
-use super::{is_edit_like_tool, selectable_layout_job};
+use super::{is_edit_like_tool, selectable_layout_job, selectable_layout_job_with_wrap};
 
 const BLOCK_PREVIEW_LINES: usize = 10;
 const EDIT_PREVIEW_LINES: usize = 10;
-/// Max tool pills shown while streaming (the oldest entries are hidden).
-const MAX_VISIBLE_STREAMING_TOOL_PILLS: usize = 5;
 /// Vertical gap between consecutive pills.
 const TOOL_PILL_GAP: f32 = 3.0;
 
@@ -80,12 +78,11 @@ pub(super) fn render_tool_pill(
     };
 
     let has_error = *is_error == Some(true);
-    let has_diff = diff.as_deref().is_some_and(|t| !t.trim().is_empty());
     let has_output = !output.trim().is_empty();
-    // A tool is "actively running" only while streaming AND it has not been finalized yet
-    // (is_error is set by finalize_tool_run — None means still in-flight).
-    // Additionally only the last pill in the visual run gets the spinner.
-    let tool_in_flight = streaming && is_error.is_none() && !has_output && !has_diff;
+    // Finalization—not whether the first output chunk arrived—controls the running state. This is
+    // especially important for bash, whose output is updated incrementally while it is in flight.
+    // Only the last pill in the visual run gets the spinner.
+    let tool_in_flight = streaming && is_error.is_none();
     let running = tool_in_flight && is_last_in_run;
 
     let status_done = !running && !has_error;
@@ -136,8 +133,11 @@ pub(super) fn render_tool_pill(
     } else {
         Id::new(("tool_pill", tool_call_id.as_str()))
     });
-    let can_expand = expandable && !running && (has_output || has_diff);
-    let expanded = can_expand && is_expanded(ui, persist_id);
+    let is_bash = name.eq_ignore_ascii_case("bash");
+    // Every visible tool keeps an unfold affordance, even before it has output or after an empty
+    // result. Bash is forced open while running, then remains user-foldable after completion.
+    let can_expand = expandable;
+    let expanded = can_expand && ((is_bash && running) || is_expanded(ui, persist_id));
 
     let frame = Frame::new()
         .fill(pill_bg)
@@ -231,9 +231,19 @@ pub(super) fn render_tool_pill(
                 overflow,
             );
         } else {
-            let text = output.trim_end();
+            let text = if has_output {
+                output.trim_end()
+            } else {
+                args_summary.as_deref().unwrap_or("Waiting for output…")
+            };
             let overflow = text.lines().count() > BLOCK_PREVIEW_LINES || text.len() > 2000;
-            let preview = truncate_lines_preview(text, BLOCK_PREVIEW_LINES);
+            let preview = if is_bash && running {
+                // Live commands stay at the compact default height and show the newest output.
+                let lines: Vec<&str> = text.lines().collect();
+                lines[lines.len().saturating_sub(BLOCK_PREVIEW_LINES)..].join("\n")
+            } else {
+                truncate_lines_preview(text, BLOCK_PREVIEW_LINES)
+            };
             render_static_preview_job_panel(
                 ui,
                 crate::theme::c_tool_diff_bg(),
@@ -252,6 +262,46 @@ pub(super) fn render_tool_pill(
         }
     }
     ui.add_space(3.0);
+}
+
+fn edit_preview_from_args(args_summary: Option<&String>) -> Option<String> {
+    let raw = args_summary?;
+    let value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("file");
+    let mut pairs = Vec::new();
+    if let Some(edits) = value.get("edits").and_then(|v| v.as_array()) {
+        for edit in edits {
+            if let (Some(old), Some(new)) = (
+                edit.get("oldText").and_then(|v| v.as_str()),
+                edit.get("newText").and_then(|v| v.as_str()),
+            ) {
+                pairs.push((old, new));
+            }
+        }
+    } else if let (Some(old), Some(new)) = (
+        value.get("oldText").and_then(|v| v.as_str()),
+        value.get("newText").and_then(|v| v.as_str()),
+    ) {
+        pairs.push((old, new));
+    }
+    if pairs.is_empty() {
+        return None;
+    }
+    let mut out = format!("--- a/{path}\n+++ b/{path}\n");
+    for (old, new) in pairs {
+        out.push_str("@@ preview @@\n");
+        for line in old.lines() {
+            out.push('-');
+            out.push_str(line);
+            out.push('\n');
+        }
+        for line in new.lines() {
+            out.push('+');
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    Some(out)
 }
 
 fn write_content_from_args(args_summary: Option<&String>) -> Option<String> {
@@ -290,9 +340,10 @@ pub(super) fn render_single_tool_block(
     bi: usize,
     block: &AssistantBlock,
     streaming: bool,
+    is_last_streaming_edit: bool,
 ) {
     if is_edit_like_tool(block) {
-        render_edit_tool_block(ui, msg_idx, bi, block, streaming);
+        render_edit_tool_block(ui, msg_idx, bi, block, streaming, is_last_streaming_edit);
         return;
     }
 
@@ -305,8 +356,10 @@ fn render_edit_tool_block(
     block_idx: usize,
     block: &AssistantBlock,
     streaming: bool,
+    is_last_streaming_edit: bool,
 ) {
     let AssistantBlock::Tool {
+        tool_call_id,
         name,
         args_summary,
         diff,
@@ -318,10 +371,12 @@ fn render_edit_tool_block(
         return;
     };
 
-    let write_preview = if name.eq_ignore_ascii_case("write") {
+    let args_preview = if name.eq_ignore_ascii_case("write") {
         write_content_from_args(args_summary.as_ref())
             .map(|content| pseudo_diff_from_write_content(&content))
             .filter(|text| !text.trim().is_empty())
+    } else if name.eq_ignore_ascii_case("edit") {
+        edit_preview_from_args(args_summary.as_ref())
     } else {
         None
     };
@@ -329,14 +384,15 @@ fn render_edit_tool_block(
         .as_ref()
         .filter(|t| !t.trim().is_empty())
         .cloned()
-        .or(write_preview);
+        .or(args_preview);
 
     let has_error = *is_error == Some(true);
     let has_diff = rendered_diff
         .as_deref()
         .is_some_and(|t| !t.trim().is_empty());
-    // Spinner only while the tool is truly in-flight: streaming + not finalized (is_error=None) + no diff yet
-    let running = streaming && is_error.is_none() && !has_diff;
+    // Argument-derived previews are visible before execution finishes, so finalization—not the
+    // presence of a preview—controls the running state.
+    let running = streaming && is_error.is_none();
 
     // Diff stats badge
     let (added, removed) = rendered_diff
@@ -361,7 +417,23 @@ fn render_edit_tool_block(
     };
     let diff_bg = crate::theme::c_tool_diff_bg();
 
-    let is_open = true;
+    // Completed turns retain the existing always-open presentation. During a live turn, the newest
+    // edit defaults open and earlier edits default folded, but every block keeps a manual override.
+    // Key by provider call id so the choice survives re-layout while more blocks stream in.
+    let open_id = expand_persist_id(if tool_call_id.is_empty() {
+        Id::new((msg_idx, block_idx, "edit_block_open"))
+    } else {
+        Id::new(("edit_block_open", tool_call_id.as_str()))
+    });
+    let default_open = if streaming {
+        is_last_streaming_edit
+    } else {
+        true
+    };
+    let is_open = ui
+        .ctx()
+        .data_mut(|d| d.get_persisted::<bool>(open_id))
+        .unwrap_or(default_open);
 
     // ── Outer frame wraps header + diff in one visual block ──────────────────
     Frame::new()
@@ -419,6 +491,24 @@ fn render_edit_tool_block(
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let unfold = ui
+                                .add(
+                                    Label::new(
+                                        RichText::new(if is_open {
+                                            ICON_ANGLE_UP
+                                        } else {
+                                            ICON_ANGLE_DOWN
+                                        })
+                                        .font(FontId::new(FS_TINY, icon_font()))
+                                        .color(c_text_faint()),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text(if is_open { "Fold edit" } else { "Unfold edit" });
+                            if unfold.clicked() {
+                                set_expanded(ui, open_id, !is_open);
+                            }
+
                             if running {
                                 ui.add(
                                     eframe::egui::Spinner::new()
@@ -454,7 +544,9 @@ fn render_edit_tool_block(
             let _ = header_resp;
 
             // ── Diff block ───────────────────────────────────────────────────
-            if let Some(diff_text) = rendered_diff.as_deref().filter(|t| !t.trim().is_empty()) {
+            if is_open
+                && let Some(diff_text) = rendered_diff.as_deref().filter(|t| !t.trim().is_empty())
+            {
                 Frame::new()
                     .fill(diff_bg)
                     .corner_radius(eframe::egui::CornerRadius {
@@ -466,18 +558,42 @@ fn render_edit_tool_block(
                     .inner_margin(Margin::symmetric(10, 8))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        let bubble_w = ui.available_width().max(40.0);
-                        let overflow = diff_text.lines().count() > EDIT_PREVIEW_LINES
-                            || diff_text.len() > 2000;
-                        let preview = truncate_lines_preview(diff_text, EDIT_PREVIEW_LINES);
-                        render_static_preview_job_panel(
-                            ui,
-                            diff_bg,
-                            diff_layout_job(&preview, bubble_w),
-                            |inner| diff_layout_job(diff_text, inner),
-                            expand_persist_id(Id::new((msg_idx, block_idx, "edit_diff"))),
-                            overflow,
-                        );
+                        let overflow = diff_text.lines().count() > EDIT_PREVIEW_LINES * 2
+                            || diff_text.len() > 3000;
+                        let persist_id =
+                            expand_persist_id(Id::new((msg_idx, block_idx, "edit_split_diff")));
+                        let expanded = !overflow || is_expanded(ui, persist_id);
+                        let max_rows = (!expanded).then_some(EDIT_PREVIEW_LINES);
+                        let frame = Frame::new()
+                            .fill(diff_bg)
+                            .stroke(Stroke::new(1.0, c_border()))
+                            .corner_radius(CornerRadius::same(RADIUS_CHIP))
+                            .inner_margin(Margin::symmetric(8, 5))
+                            .show(ui, |ui| {
+                                let (left, right) =
+                                    split_chat_diff_layout_jobs(diff_text, max_rows);
+                                ui.columns(2, |columns| {
+                                    egui::ScrollArea::horizontal()
+                                        .id_salt((msg_idx, block_idx, "before"))
+                                        .auto_shrink([false, true])
+                                        .show(&mut columns[0], |ui| {
+                                            selectable_layout_job_with_wrap(
+                                                ui, left, expanded, false,
+                                            );
+                                        });
+                                    egui::ScrollArea::horizontal()
+                                        .id_salt((msg_idx, block_idx, "after"))
+                                        .auto_shrink([false, true])
+                                        .show(&mut columns[1], |ui| {
+                                            selectable_layout_job_with_wrap(
+                                                ui, right, expanded, false,
+                                            );
+                                        });
+                                });
+                            });
+                        if overflow {
+                            clickable_expand_overlay(ui, frame.response.rect, persist_id);
+                        }
                     });
             }
         });
@@ -485,61 +601,20 @@ fn render_edit_tool_block(
     ui.add_space(6.0);
 }
 
-/// Shared inputs for [`render_explored_tool_pill_run`] (keeps the renderer under clippy’s
-/// argument limit).
-struct ExploredToolPillCtx<'a> {
-    msg_idx: usize,
-    blocks: &'a [AssistantBlock],
-    capped: bool,
-    hidden_before: &'a mut usize,
-    visible_start: usize,
-    last_tool_idx: Option<usize>,
-    streaming: bool,
-}
-
-/// Renders a consecutive run of tool block indices. When capped, only the newest pills are
-/// visible; thinking/prose are handled separately and are never hidden.
+/// Render one consecutive run of tool blocks directly in transcript order. Tool calls must not be
+/// capped independently of thinking blocks: hiding only tools makes interleaved thinking segments
+/// collapse together and visually destroys the provider's chronological event order.
 fn render_explored_tool_pill_run(
     ui: &mut Ui,
+    msg_idx: usize,
+    blocks: &[AssistantBlock],
     tool_run: &[usize],
-    ctx: &mut ExploredToolPillCtx<'_>,
+    last_tool_idx: Option<usize>,
+    streaming: bool,
 ) {
-    if tool_run.is_empty() {
-        return;
-    }
-
-    // While the live explored cluster is capped to the last N tool pills, older tool batches can
-    // become fully hidden. Skip those batches instead of leaving blank gaps between thinking blocks.
-    let visible_run: &[usize] = if ctx.capped {
-        let hidden_in_this_run = ctx
-            .visible_start
-            .saturating_sub(*ctx.hidden_before)
-            .min(tool_run.len());
-        *ctx.hidden_before += hidden_in_this_run;
-        let visible = &tool_run[hidden_in_this_run..];
-        if visible.is_empty() {
-            return;
-        }
-        visible
-    } else {
-        tool_run
-    };
-
-    let msg_idx = ctx.msg_idx;
-    let blocks = ctx.blocks;
-    let last_tool_idx = ctx.last_tool_idx;
-    let streaming = ctx.streaming;
-
-    // `visible_run` is already trimmed to the last N tools above, so a nested ScrollArea buys
-    // us nothing here. More importantly, egui clamps a nested ScrollArea to the outer transcript's
-    // remaining viewport rect. Direct layout lets each pill reserve its real height and prevents
-    // the first tool run after a collapsing Thinking block from being clipped/painted underneath it.
-    // Keep details folded while trimming is active so a single expanded output cannot defeat the cap.
-    let expandable = !ctx.capped;
-    for &ti in visible_run {
-        let block = &blocks[ti];
+    for &ti in tool_run {
         let is_last = Some(ti) == last_tool_idx;
-        render_tool_pill(ui, msg_idx, ti, block, streaming, is_last, expandable);
+        render_tool_pill(ui, msg_idx, ti, &blocks[ti], streaming, is_last, true);
         ui.add_space(TOOL_PILL_GAP);
     }
 }
@@ -552,15 +627,6 @@ fn render_explored_tool_list(
     end: usize,
     streaming: bool,
 ) {
-    // Collect only Tool indices (not Thinking/Answer) for the live display cap.
-    let tool_count = blocks[start..end]
-        .iter()
-        .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
-        .count();
-    // While streaming, retain only the last N tool pills so a long tool flood doesn't grow the
-    // transcript unbounded. Thinking and markdown answers stay outside that trimmed set.
-    let capped = streaming && tool_count > MAX_VISIBLE_STREAMING_TOOL_PILLS;
-
     let last_tool_idx = blocks[start..end]
         .iter()
         .enumerate()
@@ -568,8 +634,6 @@ fn render_explored_tool_list(
         .find(|(_, b)| matches!(b, AssistantBlock::Tool { .. }))
         .map(|(j, _)| start + j);
 
-    let visible_start = tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
-    let mut hidden_before = 0usize;
     let mut i = start;
 
     while i < end {
@@ -605,29 +669,15 @@ fn render_explored_tool_list(
                 let tool_run: Vec<usize> = (batch_lo..i)
                     .filter(|&j| matches!(blocks[j], AssistantBlock::Tool { .. }))
                     .collect();
-                let mut pill_ctx = ExploredToolPillCtx {
+                render_explored_tool_pill_run(
+                    ui,
                     msg_idx,
                     blocks,
-                    capped,
-                    hidden_before: &mut hidden_before,
-                    visible_start,
+                    &tool_run,
                     last_tool_idx,
                     streaming,
-                };
-                render_explored_tool_pill_run(ui, &tool_run, &mut pill_ctx);
+                );
             }
-        }
-    }
-
-    if capped {
-        let hidden = tool_count.saturating_sub(MAX_VISIBLE_STREAMING_TOOL_PILLS);
-        if hidden > 0 {
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new(format!("+{hidden} earlier tool calls"))
-                    .size(FS_TINY)
-                    .color(c_text_muted()),
-            );
         }
     }
 }

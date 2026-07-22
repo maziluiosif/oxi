@@ -358,6 +358,13 @@ pub struct VoiceUiState {
     /// True while waiting on [`crate::voice_engine::VoiceMsg::TranscriptionDone`] (covers
     /// lazy model load + inference).
     pub transcribing: bool,
+    /// Physical Space press waiting to cross the push-to-dictate hold threshold.
+    pub hold_space_pressed_at: Option<Instant>,
+    /// Composer text captured before Space was pressed. Restored once the hold becomes dictation,
+    /// so key-repeat spaces never modify an existing draft.
+    pub hold_space_draft: Option<String>,
+    /// The current Space hold has started the microphone and must stop it on release.
+    pub hold_space_active: bool,
     pub error: Option<String>,
 }
 
@@ -405,8 +412,8 @@ pub struct ConversationState {
     pub chat_scroll_id: egui::Id,
     pub pending_images: Vec<(String, Vec<u8>)>,
     pub scroll_to_bottom_once: bool,
-    /// Keep transcript `stick_to_bottom` for a few frames after a turn ends so the
-    /// "Working…" → "Worked…" collapse reclamps scroll without a one-frame jump.
+    /// Keep transcript `stick_to_bottom` for a few frames while a newly opened/session-loaded
+    /// conversation settles its layout.
     pub stick_bottom_hold_frames: u8,
     pub input_history: Vec<String>,
     pub input_history_index: Option<usize>,
