@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-07-23
+
+### Added
+- Issue and pull request templates to guide contributions
+- Website badge and link in README for easier discovery
+
+### Changed
+- Landing page repositioned around native, local-first, and run-any-model positioning
+- Landing page now highlights local GGUF support via llama-server, file explorer, code editor, MCP tools, and local voice dictation
+- Expanded provider support display on landing page
+
+
 ## [0.21.0] - 2026-07-23
 
 ### Added
@@ -552,7 +564,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/maziluiosif/oxi/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/maziluiosif/oxi/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/maziluiosif/oxi/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/maziluiosif/oxi/compare/v0.19.0...v0.20.0
