@@ -1,5 +1,8 @@
 [![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/website-maziluiosif.github.io%2Foxi-e26a2c)](https://maziluiosif.github.io/oxi/)
+
+**Website: [maziluiosif.github.io/oxi](https://maziluiosif.github.io/oxi/)** · [Download](https://github.com/maziluiosif/oxi/releases)
 
 **oxi** is a native, local-first coding-agent desktop app for people who want to run *any* model — your own local GGUF, an Ollama/LM Studio server, a box you SSH into, or a hosted API — without an Electron shell and without your code, keys, or history leaving your machine.
 

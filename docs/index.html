@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>oxi — a fast, native, local-first coding-agent chat app</title>
-  <meta name="description" content="oxi is a fast, lightweight desktop coding-agent chat app built in Rust with egui. Single native binary, local-first, works with LM Studio and Ollama — even over SSH." />
+  <title>oxi — native, local-first, run-any-model coding agent</title>
+  <meta name="description" content="oxi is a native, local-first coding-agent desktop app built in Rust with egui. A single binary that runs any model — local GGUF, Ollama/LM Studio, SSH-tunneled runtimes, hosted APIs, or Claude Code / Cursor / Codex over ACP. No Electron, no cloud lock-in." />
 
   <!-- Open Graph / social -->
-  <meta property="og:title" content="oxi — native local-first coding-agent chat" />
-  <meta property="og:description" content="A single Rust binary. Local-first. LM Studio & Ollama, even over SSH." />
+  <meta property="og:title" content="oxi — native, local-first, run-any-model coding agent" />
+  <meta property="og:description" content="A single Rust binary. Run any model — local GGUF, Ollama/LM Studio, SSH, hosted APIs, or agent CLIs over ACP. No Electron, no cloud lock-in." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://maziluiosif.github.io/oxi/" />
-  <meta property="og:image" content="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/screenshots/chat.png" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/chat.png" />
   <meta name="twitter:card" content="summary_large_image" />
 
-  <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/app-icon.png" />
+  <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" />
 
   <style>
     :root {
@@ -100,7 +100,7 @@
       background: linear-gradient(120deg, var(--rust), var(--rust-2));
       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     }
-    .subtitle { font-size: clamp(1.05rem, 2.2vw, 1.3rem); color: var(--muted); max-width: 680px; margin: 0 auto 34px; }
+    .subtitle { font-size: clamp(1.05rem, 2.2vw, 1.3rem); color: var(--muted); max-width: 700px; margin: 0 auto 34px; }
     .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
     .btn {
       display: inline-flex; align-items: center; gap: 9px; padding: 13px 24px; border-radius: 12px;
@@ -123,7 +123,7 @@
 
     /* Sections */
     section { padding: 72px 0; }
-    .section-head { text-align: center; max-width: 640px; margin: 0 auto 48px; }
+    .section-head { text-align: center; max-width: 660px; margin: 0 auto 48px; }
     .section-head h2 { font-size: clamp(1.7rem, 4vw, 2.4rem); letter-spacing: -0.02em; margin: 0 0 12px; }
     .section-head p { color: var(--muted); font-size: 1.05rem; margin: 0; }
     .eyebrow { color: var(--rust-2); font-weight: 700; font-size: 0.82rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 10px; }
@@ -162,6 +162,7 @@
       background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 9px 18px;
       font-size: 0.92rem; font-weight: 550; color: var(--text);
     }
+    .chip b { color: var(--rust-2); font-weight: 700; }
 
     /* Footer */
     footer { border-top: 1px solid var(--border); padding: 40px 0; color: var(--muted); font-size: 0.9rem; }
@@ -174,11 +175,12 @@
   <header class="nav">
     <div class="wrap nav-inner">
       <div class="brand">
-        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/app-icon.png" alt="oxi" />
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" alt="oxi" />
         oxi
       </div>
       <nav class="nav-links">
         <a href="#features">Features</a>
+        <a href="#themes">Themes</a>
         <a href="#screenshots">Screenshots</a>
         <a href="#install">Install</a>
         <a href="https://github.com/maziluiosif/oxi">GitHub</a>
@@ -190,12 +192,13 @@
   <!-- HERO -->
   <div class="hero">
     <div class="wrap">
-      <span class="badge">🦀 Built in <b>Rust + egui</b> · single native binary</span>
-      <h1>A local-first coding agent<br><span class="grad">you fully control</span></h1>
+      <span class="badge">🦀 Built in <b>Rust + egui</b> · single native binary · no Electron</span>
+      <h1>Run <span class="grad">any model</span>,<br>keep everything local</h1>
       <p class="subtitle">
-        oxi keeps your workspaces, sessions, and keys on your machine, runs local models from
-        LM Studio or Ollama — even over SSH — and hands you the system prompt so it can be
-        a focused coding agent or whatever you point it at.
+        oxi is a native, local-first coding agent that talks to whatever model you choose —
+        a local GGUF, an Ollama or LM Studio server, a box you SSH into, a hosted API, or an
+        agent CLI over ACP — without a browser engine and without your code, keys, or history
+        leaving your machine.
       </p>
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases">⬇ Download latest release</a>
@@ -205,7 +208,7 @@
 
       <div class="shot">
         <div class="bar"><span></span><span></span><span></span></div>
-        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/screenshots/chat.png" alt="oxi chat UI" loading="lazy" />
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/chat.png" alt="oxi chat UI" loading="lazy" />
       </div>
     </div>
   </div>
@@ -215,39 +218,49 @@
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Why oxi</div>
-        <h2>Built for local coding workflows</h2>
-        <p>No Electron, no webview runtime, no cloud dependency. Just a lean native app that talks to the models you choose.</p>
+        <h2>The opposite bet from cloud coding tools</h2>
+        <p>The polished commercial tools assume you'll use their cloud and their subscription. oxi assumes the opposite: bring your own model, keep everything local, own your data.</p>
       </div>
       <div class="grid">
         <div class="card">
-          <span class="ico">⚡</span>
-          <h3>Native &amp; efficient</h3>
-          <p>Rust + egui, shipped as a single binary with a low memory footprint — no heavy app shell.</p>
+          <span class="ico">🧠</span>
+          <h3>Any model, no lock-in</h3>
+          <p>Hosted APIs, local servers, oxi-managed GGUF models, or agent CLIs over ACP — switch providers from one control.</p>
         </div>
         <div class="card">
           <span class="ico">🔒</span>
-          <h3>Local-first</h3>
-          <p>Settings, workspaces, sessions, OAuth tokens, SSH passwords, and tool execution all stay local.</p>
+          <h3>Local-first by design</h3>
+          <p>Settings, sessions, tool execution, SSH credentials, OAuth tokens, and models all stay on your machine. No account needed to use your own models.</p>
+        </div>
+        <div class="card">
+          <span class="ico">⚡</span>
+          <h3>Native, not Electron</h3>
+          <p>Rust + egui, a single binary, no bundled browser engine — and a low idle memory footprint.</p>
         </div>
         <div class="card">
           <span class="ico">🧩</span>
-          <h3>Local models, first-class</h3>
-          <p>First-class profiles for LM Studio and Ollama, with model discovery straight from the UI.</p>
+          <h3>Local &amp; self-hosted models</h3>
+          <p>Run GGUF models oxi downloads for you via <code>llama-server</code>, connect to LM Studio or Ollama, or tunnel to a GPU box over SSH.</p>
         </div>
         <div class="card">
-          <span class="ico">🛰️</span>
-          <h3>Remote compute over SSH</h3>
-          <p>Run a model on a stronger LAN machine and let oxi open the tunnel for you automatically.</p>
+          <span class="ico">🗂️</span>
+          <h3>File explorer + code editor</h3>
+          <p>A multi-tab editor with syntax highlighting, minimap, find/replace, external-change detection, and Git changes opened inline — not just a chat window.</p>
         </div>
         <div class="card">
           <span class="ico">🛠️</span>
           <h3>Workspace-aware tools</h3>
-          <p>Read, write, edit, grep, find, list files, run shell commands, and fetch/search the web.</p>
+          <p>Read, write, edit, grep, find, codebase search, Git inspection, verification commands, MCP servers, and web search/fetch.</p>
         </div>
         <div class="card">
-          <span class="ico">🗂️</span>
-          <h3>Sessions per workspace</h3>
-          <p>Each workspace has its own chats, active session, and tool execution rooted in that folder.</p>
+          <span class="ico">🌿</span>
+          <h3>Git, terminal &amp; diffs built in</h3>
+          <p>A source-control panel with stage/commit/push, AI commit messages, inline diffs, and a workspace-rooted PTY terminal.</p>
+        </div>
+        <div class="card">
+          <span class="ico">🎙️</span>
+          <h3>Local voice dictation</h3>
+          <p>Optional microphone dictation using local Whisper models — loaded lazily, unloaded when idle. Nothing leaves the machine.</p>
         </div>
       </div>
     </div>
@@ -265,7 +278,7 @@
         <div class="card">
           <span class="ico">✍️</span>
           <h3>Editable system prompt</h3>
-          <p>One editable template with a <code>{tools_list}</code> placeholder. Keep the coding defaults, or replace them entirely.</p>
+          <p>One editable template with a <code>{tools_list}</code> placeholder. Keep the coding defaults, or replace them entirely. <code>@</code>-mention files and folders into a message.</p>
         </div>
         <div class="card">
           <span class="ico">🎭</span>
@@ -287,20 +300,57 @@
       <div class="section-head">
         <div class="eyebrow">Providers</div>
         <h2>Bring your own model</h2>
+        <p>One configuration per provider kind, switchable from the composer or Settings.</p>
       </div>
       <div class="providers">
+        <span class="chip"><b>Local HF</b> · GGUF</span>
+        <span class="chip"><b>Remote HF</b> · GGUF over SSH</span>
         <span class="chip">LM Studio</span>
         <span class="chip">Ollama</span>
         <span class="chip">OpenAI</span>
+        <span class="chip">Azure OpenAI</span>
         <span class="chip">OpenRouter</span>
+        <span class="chip">Anthropic-compatible</span>
         <span class="chip">GPT Codex</span>
         <span class="chip">OpenCode Go</span>
+        <span class="chip">Claude Code · ACP</span>
+        <span class="chip">Cursor · ACP</span>
+        <span class="chip">Codex · ACP</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- THEMES -->
+  <section id="themes" style="background: var(--bg-soft);">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Themes</div>
+        <h2>Make it yours</h2>
+        <p>Built-in themes restyle the whole app — chrome, transcript, syntax highlighting, and the editor — consistently. Custom themes load from a JSON spec.</p>
+      </div>
+      <div class="gallery">
+        <figure>
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-mariana.png" alt="Sublime 4 theme" loading="lazy" />
+          <figcaption>Sublime 4</figcaption>
+        </figure>
+        <figure>
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-sublime.png" alt="Sublime theme" loading="lazy" />
+          <figcaption>Sublime</figcaption>
+        </figure>
+        <figure>
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-midnight.png" alt="Midnight theme" loading="lazy" />
+          <figcaption>Midnight</figcaption>
+        </figure>
+        <figure>
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-light.png" alt="Light theme" loading="lazy" />
+          <figcaption>Light</figcaption>
+        </figure>
       </div>
     </div>
   </section>
 
   <!-- SCREENSHOTS -->
-  <section id="screenshots" style="background: var(--bg-soft);">
+  <section id="screenshots">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Screenshots</div>
@@ -308,27 +358,27 @@
       </div>
       <div class="gallery">
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/screenshots/scr1.png" alt="Git and terminal" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/scr1.png" alt="Git and terminal" loading="lazy" />
           <figcaption>Git and terminal</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/screenshots/scr2.png" alt="Diff view" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/scr2.png" alt="Diff view" loading="lazy" />
           <figcaption>Diff view</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/screenshots/set1.png" alt="Provider settings" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/set1.png" alt="Provider settings" loading="lazy" />
           <figcaption>Provider profiles</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/screenshots/set2.png" alt="Editable system prompt" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/set2.png" alt="Editable system prompt" loading="lazy" />
           <figcaption>Editable system prompt</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/screenshots/ssh-remote-compute.png" alt="SSH remote compute" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/ssh-remote-compute.png" alt="SSH remote compute" loading="lazy" />
           <figcaption>Remote compute over SSH</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/screenshots/resource_ussage.png" alt="RAM usage" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/resource_ussage.png" alt="RAM usage" loading="lazy" />
           <figcaption>Low memory footprint</figcaption>
         </figure>
       </div>
@@ -336,7 +386,7 @@
   </section>
 
   <!-- INSTALL -->
-  <section id="install">
+  <section id="install" style="background: var(--bg-soft);">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Install</div>
@@ -368,7 +418,7 @@
   </section>
 
   <!-- FINAL CTA -->
-  <section style="text-align:center; background: var(--bg-soft);">
+  <section style="text-align:center;">
     <div class="wrap">
       <h2 style="font-size: clamp(1.8rem,4vw,2.6rem); letter-spacing:-0.02em; margin:0 0 14px;">Own your coding agent.</h2>
       <p style="color:var(--muted); max-width:560px; margin:0 auto 30px; font-size:1.05rem;">
@@ -384,13 +434,13 @@
   <footer>
     <div class="wrap foot-inner">
       <div class="brand" style="font-size:1rem;">
-        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/master/assets/app-icon.png" alt="oxi" style="width:22px;height:22px;border-radius:5px;" />
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" alt="oxi" style="width:22px;height:22px;border-radius:5px;" />
         oxi
       </div>
       <div class="foot-links">
         <a href="https://github.com/maziluiosif/oxi">GitHub</a>
         <a href="https://github.com/maziluiosif/oxi/releases">Releases</a>
-        <a href="https://github.com/maziluiosif/oxi/blob/master/LICENSE">MIT License</a>
+        <a href="https://github.com/maziluiosif/oxi/blob/dev/LICENSE">MIT License</a>
       </div>
     </div>
   </footer>
