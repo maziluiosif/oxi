@@ -2362,7 +2362,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.54.0",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -4003,6 +4003,7 @@ dependencies = [
  "walkdir",
  "webbrowser",
  "whisper-rs",
+ "windows 0.62.2",
  "windows-native-keyring-store",
  "windows-sys 0.61.2",
  "winresource",

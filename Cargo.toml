@@ -75,6 +75,9 @@ whisper-rs = "0.16"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1"
 windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+# Keep gpu-allocator's broad windows dependency aligned with wgpu-hal. Without this pin Cargo can
+# unify it with cpal's windows 0.54 dependency, producing incompatible Direct3D 12 types on Windows.
+windows = { version = "=0.62.2", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi_Common"] }
 
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
 zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
