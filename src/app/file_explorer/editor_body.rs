@@ -174,9 +174,6 @@ impl OxiApp {
                                 editor_view_width.max(80.0),
                                 editor_view_size.y.max(24.0),
                             );
-                            let select_all_requested = ui.input(|input| {
-                                input.modifiers.command && input.key_pressed(egui::Key::A)
-                            });
                             let document = &mut self.conv.editor.documents[index];
                             let revision = document.content_revision;
                             let pixels_per_point_bits = ui.ctx().pixels_per_point().to_bits();
@@ -224,6 +221,8 @@ impl OxiApp {
                                     // Paint the complete selection ourselves after TextEdit. Keeping
                                     // egui's pass transparent avoids the moving edge being painted once
                                     // natively and once from our syntax galley (the last-row flicker).
+                                    // Note: stock egui still clones the galley for transparent
+                                    // selection painting — that was the main reason for the fork.
                                     ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
                                     ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
                                     // The native caret is hidden and repainted after syntax text
@@ -237,11 +236,6 @@ impl OxiApp {
                                         .code_editor()
                                         .frame(egui::Frame::NONE)
                                         .background_color(egui::Color32::TRANSPARENT)
-                                        .text_revision(document.content_revision)
-                                        .emit_selection_events(false)
-                                        .scroll_to_cursor(
-                                            !select_all_requested && resize_anchor.is_none(),
-                                        )
                                         .desired_width(f32::INFINITY)
                                         .min_size(editor_size)
                                         .margin(Margin::same(8))

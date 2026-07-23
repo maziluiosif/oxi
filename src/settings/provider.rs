@@ -32,18 +32,24 @@ pub enum LlmProviderKind {
     /// Claude Code run its own agent loop and tools. Unlike every other provider, oxi is an
     /// ACP *client* here rather than the agent. See [`crate::agent::acp`].
     ClaudeCodeAcp,
+    /// Cursor CLI's built-in ACP server (`agent acp`).
+    CursorAcp,
+    /// OpenAI Codex CLI through the official ACP adapter.
+    CodexAcp,
 }
 
 impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 11] = [
+    pub const ALL: [LlmProviderKind; 13] = [
         LlmProviderKind::LocalHf,
         LlmProviderKind::RemoteHf,
         LlmProviderKind::Ollama,
         LlmProviderKind::LmStudio,
         LlmProviderKind::ClaudeCodeAcp,
+        LlmProviderKind::CursorAcp,
+        LlmProviderKind::CodexAcp,
         LlmProviderKind::AzureOpenAi,
         LlmProviderKind::CustomAnthropic,
         LlmProviderKind::OpenAi,
@@ -68,7 +74,18 @@ impl LlmProviderKind {
             LlmProviderKind::LocalHf => "localhf",
             LlmProviderKind::RemoteHf => "remotehf",
             LlmProviderKind::ClaudeCodeAcp => "claudecodeacp",
+            LlmProviderKind::CursorAcp => "cursoracp",
+            LlmProviderKind::CodexAcp => "codexacp",
         }
+    }
+
+    pub fn is_acp(self) -> bool {
+        matches!(
+            self,
+            LlmProviderKind::ClaudeCodeAcp
+                | LlmProviderKind::CursorAcp
+                | LlmProviderKind::CodexAcp
+        )
     }
 
     pub fn default_base_url(&self) -> &'static str {
@@ -87,16 +104,18 @@ impl LlmProviderKind {
             LlmProviderKind::Ollama => "http://localhost:11434/v1",
             LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf => "http://127.0.0.1:18080/v1",
             // ACP does not use an HTTP base URL; it launches a subprocess (see `acp_command`).
-            LlmProviderKind::ClaudeCodeAcp => "",
+            LlmProviderKind::ClaudeCodeAcp
+            | LlmProviderKind::CursorAcp
+            | LlmProviderKind::CodexAcp => "",
         }
     }
 
     pub fn label(&self) -> &'static str {
         match self {
-            LlmProviderKind::OpenAi => "OpenAI",
+            LlmProviderKind::OpenAi => "OpenAI Compatible",
             LlmProviderKind::OpenRouter => "OpenRouter",
             LlmProviderKind::AzureOpenAi => "Azure OpenAI",
-            LlmProviderKind::CustomAnthropic => "Custom Anthropic",
+            LlmProviderKind::CustomAnthropic => "Anthropic Compatible",
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
             LlmProviderKind::LmStudio => "LM Studio",
@@ -104,6 +123,8 @@ impl LlmProviderKind {
             LlmProviderKind::LocalHf => "Local HF",
             LlmProviderKind::RemoteHf => "Remote HF",
             LlmProviderKind::ClaudeCodeAcp => "Claude Code (ACP)",
+            LlmProviderKind::CursorAcp => "Cursor (ACP)",
+            LlmProviderKind::CodexAcp => "Codex (ACP)",
         }
     }
 
@@ -123,6 +144,7 @@ impl LlmProviderKind {
             LlmProviderKind::RemoteHf => "remote-hf-model",
             // Informational only: Claude Code picks the model from its own config/login.
             LlmProviderKind::ClaudeCodeAcp => "sonnet",
+            LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => "default",
         }
     }
 
@@ -293,14 +315,28 @@ impl ProviderConfig {
     /// Default command line for launching an ACP agent subprocess. Uses the actively-maintained
     /// adapter (the older `@zed-industries/claude-code-acp` is deprecated and pins older model
     /// versions).
-    pub const DEFAULT_ACP_COMMAND: &'static str = "npx @agentclientprotocol/claude-agent-acp";
+    pub const DEFAULT_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/claude-agent-acp";
+    pub const DEFAULT_CURSOR_ACP_COMMAND: &'static str = "agent acp";
+    pub const DEFAULT_CODEX_ACP_COMMAND: &'static str =
+        "npx -y @agentclientprotocol/codex-acp";
 
-    /// The command line used to spawn the ACP agent, falling back to the built-in default
-    /// when the user hasn't overridden it.
+    pub fn is_acp(&self) -> bool {
+        self.provider.is_acp()
+    }
+
+    pub fn default_acp_command(&self) -> &'static str {
+        match self.provider {
+            LlmProviderKind::CursorAcp => Self::DEFAULT_CURSOR_ACP_COMMAND,
+            LlmProviderKind::CodexAcp => Self::DEFAULT_CODEX_ACP_COMMAND,
+            _ => Self::DEFAULT_ACP_COMMAND,
+        }
+    }
+
+    /// The command line used to spawn the ACP agent, falling back to that agent's built-in default.
     pub fn effective_acp_command(&self) -> String {
         let t = self.acp_command.trim();
         if t.is_empty() {
-            Self::DEFAULT_ACP_COMMAND.to_string()
+            self.default_acp_command().to_string()
         } else {
             t.to_string()
         }
@@ -516,8 +552,8 @@ mod tests {
         for kind in LlmProviderKind::ALL {
             assert!(!kind.label().is_empty());
             assert!(!kind.default_model_id().is_empty());
-            // Claude Code (ACP) launches a subprocess and has no HTTP base URL.
-            if kind != LlmProviderKind::ClaudeCodeAcp {
+            // ACP providers launch subprocesses and have no HTTP base URL.
+            if !ProviderConfig::new(kind).is_acp() {
                 assert!(!kind.default_base_url().is_empty());
             }
         }

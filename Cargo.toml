@@ -84,19 +84,3 @@ winresource = "0.1"
 
 [dev-dependencies]
 wiremock = "0.6"
-
-# Pin the whole egui 0.35 family to a small editor-performance fork. It skips native selection
-# painting when fully transparent (the editor draws the same visuals itself) and shares undo text
-# snapshots across selection-only frames instead of copying the full buffer. All family crates are
-# pinned together so they resolve to a single source (mixing git + crates.io copies of epaint/emath
-# breaks type unification). Rebase this branch when bumping egui.
-[patch.crates-io]
-ecolor = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }
-emath = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }
-epaint = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }
-epaint_default_fonts = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }
-egui = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }
-egui_extras = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }
-egui-winit = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }
-egui_glow = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }
-eframe = { git = "https://github.com/maziluiosif/egui", rev = "82ee9a5223b077ac5a090dd68c413a3ae4b35e97" }

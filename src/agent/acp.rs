@@ -60,10 +60,10 @@ pub struct AcpPrompt {
     pub command_line: String,
     /// Extra environment variables for the subprocess (e.g. `ANTHROPIC_API_KEY`).
     pub env: Vec<(String, String)>,
-    /// Configured model id (e.g. `sonnet`/`haiku`/`default`). Applied via `session/set_model`
-    /// before the prompt when it matches one of the agent's available models. Empty = leave the
-    /// agent on its current model.
+    /// Configured model id, applied through the agent-advertised ACP model config option.
     pub model: String,
+    /// Thinking/reasoning level, applied through the advertised `thought_level` option.
+    pub effort: String,
     /// The latest user message text.
     pub text: String,
     /// Image attachments on the latest user message (`mime`, bytes).
@@ -85,9 +85,9 @@ pub struct AcpWarm {
     pub cwd: PathBuf,
     pub command_line: String,
     pub env: Vec<(String, String)>,
-    /// Configured model id; applied to the session at creation via `session/set_model` so the
-    /// warmed subprocess already runs on the selected model before the first prompt.
+    /// Configured model id and thinking level, applied through ACP session config options.
     pub model: String,
+    pub effort: String,
 }
 
 enum AcpCommand {
@@ -137,6 +137,7 @@ impl AcpManager {
                                     &req.cwd,
                                     &req.env,
                                     &req.model,
+                                    &req.effort,
                                 )
                                 .await;
                                 match ensured {
@@ -157,6 +158,7 @@ impl AcpManager {
                                     &req.cwd,
                                     &req.env,
                                     &req.model,
+                                    &req.effort,
                                 )
                                 .await;
                                 let _ = reply.send(ensured.map(|h| h.available_models));
@@ -217,9 +219,10 @@ impl AcpManager {
 /// child (via `kill_on_drop`) and ends the reader tasks.
 struct Conn {
     command_line: String,
-    /// Model this subprocess was launched with (via `ANTHROPIC_MODEL`). A change means the
-    /// subprocess must be relaunched, since the model is fixed at process start.
+    /// Requested session configuration. A change relaunches the session so every adapter starts
+    /// with a deterministic model and reasoning level.
     model: String,
+    effort: String,
     alive: Arc<AtomicBool>,
     handles: ConnHandles,
     // Kept alive for their side effects; never read directly.
@@ -262,6 +265,7 @@ async fn ensure_conn(
     cwd: &std::path::Path,
     env: &[(String, String)],
     model: &str,
+    effort: &str,
 ) -> Result<ConnHandles, String> {
     {
         let map = conns.lock().await;
@@ -269,13 +273,14 @@ async fn ensure_conn(
             && c.alive.load(Ordering::SeqCst)
             && c.command_line == command_line
             && c.model == model
+            && c.effort == effort
         {
             return Ok(c.handles.clone());
         }
     }
     // A new subprocess (or one whose launch command / model changed): spawn it and replace any
     // previous entry, whose Conn is dropped here and killed (kill_on_drop).
-    let conn = spawn_conn(command_line, cwd, env, model).await?;
+    let conn = spawn_conn(command_line, cwd, env, model, effort).await?;
     let handles = conn.handles.clone();
     conns.lock().await.insert(session_key.to_string(), conn);
     Ok(handles)
@@ -296,12 +301,38 @@ fn build_command(command_line: &str) -> Command {
     }
 }
 
+fn launch_error(command_line: &str, error: &std::io::Error) -> String {
+    let command = command_line.trim();
+    let first = command.split_whitespace().next().unwrap_or("ACP command");
+    let hint = match first {
+        "agent" | "cursor-agent" => {
+            " Install Cursor CLI and ensure `agent` is available in PATH (Cursor: Install CLI Command)."
+        }
+        "npx" => " Install Node.js/npm so `npx` is available, or install the ACP adapter globally and set its command here.",
+        "codex-acp" => " Install it with `npm install -g @agentclientprotocol/codex-acp`.",
+        _ => " Check that the executable is installed and available in PATH.",
+    };
+    format!("Could not launch ACP agent `{command}`: {error}.{hint}")
+}
+
 async fn spawn_conn(
     command_line: &str,
     cwd: &std::path::Path,
     env: &[(String, String)],
     model: &str,
+    effort: &str,
 ) -> Result<Conn, String> {
+    let command_line = command_line.trim();
+    if command_line.is_empty() {
+        return Err("ACP agent command is empty. Configure it in Settings → Models & providers."
+            .to_string());
+    }
+    if !cwd.is_dir() {
+        return Err(format!(
+            "ACP workspace does not exist or is not a directory: {}",
+            cwd.display()
+        ));
+    }
     let mut cmd = build_command(command_line);
     cmd.current_dir(cwd);
     // The adapter refuses to start when it detects it's nested inside another Claude Code
@@ -311,19 +342,11 @@ async fn spawn_conn(
     for (k, v) in env {
         cmd.env(k, v);
     }
-    // The model is fixed at process start via Claude Code's `ANTHROPIC_MODEL` (the current
-    // adapter has no runtime model-switch method). Accepts an alias (`sonnet`, `opus`) or a full
-    // id (`claude-sonnet-5`).
-    if !model.trim().is_empty() {
-        cmd.env("ANTHROPIC_MODEL", model.trim());
-    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to launch ACP agent `{}`: {e}", command_line.trim()))?;
+    let mut child = cmd.spawn().map_err(|e| launch_error(command_line, &e))?;
     let stdin = child.stdin.take().ok_or("ACP: child has no stdin")?;
     let stdout = child.stdout.take().ok_or("ACP: child has no stdout")?;
     let stderr = child.stderr.take().ok_or("ACP: child has no stderr")?;
@@ -351,24 +374,56 @@ async fn spawn_conn(
             "terminal": false
         }
     });
-    request(&stdin, &next_id, &pending, "initialize", init_params)
-        .await
-        .map_err(|e| format!("ACP initialize failed: {e}"))?;
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        request(&stdin, &next_id, &pending, "initialize", init_params),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "ACP agent `{command_line}` did not initialize within 30 seconds. Check that it is installed and can start from a terminal."
+        )
+    })?
+    .map_err(|e| format!("ACP initialize failed for `{command_line}`: {e}"))?;
 
     // session/new
     let new_params = json!({
         "cwd": cwd.to_string_lossy(),
         "mcpServers": []
     });
-    let res = request(&stdin, &next_id, &pending, "session/new", new_params)
-        .await
-        .map_err(|e| format!("ACP session/new failed: {e}"))?;
+    let res = tokio::time::timeout(
+        Duration::from_secs(30),
+        request(&stdin, &next_id, &pending, "session/new", new_params),
+    )
+    .await
+    .map_err(|_| "ACP session setup timed out after 30 seconds".to_string())?
+    .map_err(|e| format!("ACP session/new failed: {e}"))?;
     let session_id = res
         .get("sessionId")
         .and_then(|v| v.as_str())
         .ok_or("ACP session/new returned no sessionId")?
         .to_string();
     let available_models = parse_available_models(&res);
+    let mut config_options = res.get("configOptions").cloned().unwrap_or(Value::Null);
+    config_options = set_matching_config_option(
+        &stdin,
+        &next_id,
+        &pending,
+        &session_id,
+        &config_options,
+        "model",
+        model,
+    )
+    .await?;
+    let _ = set_thought_level(
+        &stdin,
+        &next_id,
+        &pending,
+        &session_id,
+        &config_options,
+        effort,
+    )
+    .await?;
 
     let handles = ConnHandles {
         stdin,
@@ -381,6 +436,7 @@ async fn spawn_conn(
     Ok(Conn {
         command_line: command_line.to_string(),
         model: model.to_string(),
+        effort: effort.to_string(),
         alive,
         handles,
         _child: child,
@@ -418,6 +474,98 @@ fn parse_available_models(res: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Set a select config option when the agent advertised it and the requested value is valid.
+/// Unknown/unsupported values degrade gracefully to the adapter's current default.
+async fn set_matching_config_option(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    next_id: &Arc<AtomicI64>,
+    pending: &Pending,
+    session_id: &str,
+    config_options: &Value,
+    config_id: &str,
+    value: &str,
+) -> Result<Value, String> {
+    let value = value.trim();
+    if value.is_empty() || value == "default" {
+        return Ok(config_options.clone());
+    }
+    let Some(option) = config_options.as_array().and_then(|opts| {
+        opts.iter().find(|o| {
+            o.get("id").and_then(Value::as_str) == Some(config_id)
+                || (config_id == "thought_level"
+                    && o.get("category").and_then(Value::as_str) == Some("thought_level"))
+        })
+    }) else {
+        return Ok(config_options.clone());
+    };
+    let supported = option
+        .get("options")
+        .and_then(Value::as_array)
+        .is_some_and(|values| {
+            values
+                .iter()
+                .any(|v| v.get("value").and_then(Value::as_str) == Some(value))
+        });
+    if !supported {
+        return Ok(config_options.clone());
+    }
+    let actual_id = option
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or(config_id);
+    let response = request(
+        stdin,
+        next_id,
+        pending,
+        "session/set_config_option",
+        json!({"sessionId": session_id, "configId": actual_id, "value": value}),
+    )
+    .await
+    .map_err(|e| format!("ACP could not set {actual_id} to {value}: {e}"))?;
+    Ok(response
+        .get("configOptions")
+        .cloned()
+        .unwrap_or_else(|| config_options.clone()))
+}
+
+async fn set_thought_level(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    next_id: &Arc<AtomicI64>,
+    pending: &Pending,
+    session_id: &str,
+    config_options: &Value,
+    effort: &str,
+) -> Result<Value, String> {
+    let Some(options) = config_options.as_array() else {
+        return Ok(config_options.clone());
+    };
+    let config_id = options
+        .iter()
+        .find(|o| o.get("category").and_then(Value::as_str) == Some("thought_level"))
+        .and_then(|o| o.get("id"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            ["thought_level", "reasoning_effort", "effort"]
+                .into_iter()
+                .find(|id| {
+                    options.iter().any(|o| o.get("id").and_then(Value::as_str) == Some(*id))
+                })
+        });
+    let Some(config_id) = config_id else {
+        return Ok(config_options.clone());
+    };
+    set_matching_config_option(
+        stdin,
+        next_id,
+        pending,
+        session_id,
+        config_options,
+        config_id,
+        effort,
+    )
+    .await
+}
+
 /// Drive one `session/prompt` turn: set the prompt context, send the prompt, and pump agent
 /// permission requests + cancellation until the agent reports a stop reason.
 async fn run_prompt(
@@ -428,8 +576,6 @@ async fn run_prompt(
     // Destructure into owned locals so nothing borrows the `!Sync` approval Receiver across an
     // await — an async fn holds all its params for the whole future, so `&Receiver`/`&Sender`
     // params would make this future `!Send` and unspawnable.
-    // `model` is applied at subprocess launch via `ANTHROPIC_MODEL` (see `spawn_conn`); a model
-    // change relaunches the subprocess through `ensure_conn`, so there's nothing to do per turn.
     let AcpPrompt {
         text,
         images,

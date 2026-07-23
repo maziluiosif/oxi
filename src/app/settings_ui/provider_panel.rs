@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Align, Layout, RichText, Ui};
 
-use crate::settings::{ComputeLocation, LlmProviderKind, ProviderConfig, SshConfig};
+use crate::settings::{ComputeLocation, LlmProviderKind, SshConfig};
 use crate::theme::*;
 use crate::ui::chrome::{
     alert_banner, card_frame, field_hint, field_label, field_label_first, nested_card_frame,
@@ -129,10 +129,17 @@ impl OxiApp {
                     | LlmProviderKind::OpenCodeGo
                     | LlmProviderKind::AzureOpenAi
                     | LlmProviderKind::CustomAnthropic
+                    | LlmProviderKind::ClaudeCodeAcp
+                    | LlmProviderKind::CodexAcp
+                    | LlmProviderKind::CursorAcp
             ) {
                 let is_gpt = matches!(
                     kind,
-                    LlmProviderKind::OpenAi | LlmProviderKind::GptCodex | LlmProviderKind::AzureOpenAi
+                    LlmProviderKind::OpenAi
+                        | LlmProviderKind::GptCodex
+                        | LlmProviderKind::AzureOpenAi
+                        | LlmProviderKind::CodexAcp
+                        | LlmProviderKind::CursorAcp
                 );
                 field_label(
                     ui,
@@ -190,24 +197,46 @@ impl OxiApp {
                 Some("Endpoint and credentials. Secrets stay in the OS keychain."),
             );
 
-            if kind == LlmProviderKind::ClaudeCodeAcp {
+            if kind.is_acp() {
                 // ACP launches a subprocess instead of hitting an HTTP endpoint.
                 field_label_first(ui, "Agent command");
+                let default_command = self.conv.settings.provider(kind).default_acp_command();
                 settings_text_field(
                     ui,
                     &mut self.conv.settings.provider_mut(kind).acp_command,
-                    ProviderConfig::DEFAULT_ACP_COMMAND,
+                    default_command,
                 );
                 field_hint(
                     ui,
-                    "Shell command for the Claude Code ACP adapter (default: npx @agentclientprotocol/claude-agent-acp). Model is applied via ANTHROPIC_MODEL; changing it restarts the agent.",
+                    "Shell command for the ACP server. Leave empty for the recommended default. Refresh models to verify that it can launch; failures include installation hints.",
                 );
-            } else {
+            } else if matches!(
+                kind,
+                LlmProviderKind::OpenAi
+                    | LlmProviderKind::CustomAnthropic
+                    | LlmProviderKind::AzureOpenAi
+                    | LlmProviderKind::LmStudio
+                    | LlmProviderKind::Ollama
+                    | LlmProviderKind::LocalHf
+                    | LlmProviderKind::RemoteHf
+            ) {
                 field_label_first(ui, "Base URL (optional)");
                 settings_text_field(
                     ui,
                     &mut self.conv.settings.provider_mut(kind).base_url,
                     kind.default_base_url(),
+                );
+            } else {
+                field_label_first(ui, "Endpoint");
+                ui.label(
+                    RichText::new(kind.default_base_url())
+                        .size(FS_SMALL)
+                        .color(c_text_muted())
+                        .monospace(),
+                );
+                field_hint(
+                    ui,
+                    "This provider uses its official endpoint. Use OpenAI Compatible or Anthropic Compatible for a custom URL.",
                 );
             }
 
@@ -226,6 +255,10 @@ impl OxiApp {
                 }
                 LlmProviderKind::ClaudeCodeAcp => {
                     "Optional ANTHROPIC_API_KEY (else Claude Code's own login is used)"
+                }
+                LlmProviderKind::CursorAcp => "Cursor CLI uses its own login",
+                LlmProviderKind::CodexAcp => {
+                    "Optional OPENAI_API_KEY / CODEX_API_KEY (else Codex login is used)"
                 }
             };
             settings_password_field(

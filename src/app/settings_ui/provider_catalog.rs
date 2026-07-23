@@ -24,7 +24,14 @@ pub(super) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
             LlmProviderKind::OpenCodeGo,
         ],
     ),
-    ("External agents", &[LlmProviderKind::ClaudeCodeAcp]),
+    (
+        "External agents (ACP)",
+        &[
+            LlmProviderKind::ClaudeCodeAcp,
+            LlmProviderKind::CursorAcp,
+            LlmProviderKind::CodexAcp,
+        ],
+    ),
 ];
 
 pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
@@ -39,7 +46,7 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
             "Talk to a local or LAN Ollama server (OpenAI-compatible /v1 API)."
         }
         LlmProviderKind::LmStudio => "Talk to a local or LAN LM Studio server (OpenAI-compatible).",
-        LlmProviderKind::OpenAi => "OpenAI Chat Completions API.",
+        LlmProviderKind::OpenAi => "Any OpenAI-compatible Chat Completions endpoint.",
         LlmProviderKind::OpenRouter => "OpenRouter multi-model router.",
         LlmProviderKind::AzureOpenAi => "Azure OpenAI deployment endpoint.",
         LlmProviderKind::CustomAnthropic => "Any Anthropic Messages-compatible endpoint.",
@@ -47,6 +54,12 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         LlmProviderKind::OpenCodeGo => "OpenCode Go subscription endpoint.",
         LlmProviderKind::ClaudeCodeAcp => {
             "Drive Claude Code as an external agent over the Agent Client Protocol."
+        }
+        LlmProviderKind::CursorAcp => {
+            "Drive the installed Cursor CLI through its built-in Agent Client Protocol server."
+        }
+        LlmProviderKind::CodexAcp => {
+            "Drive Codex CLI through the official Agent Client Protocol adapter."
         }
     }
 }

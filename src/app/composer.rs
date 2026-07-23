@@ -14,7 +14,7 @@ use crate::theme::*;
 
 use super::composer_helpers::{
     context_indicator_color, estimate_message_chars, format_context_tokens, paint_arc,
-    truncate_label,
+    short_model_label,
 };
 use super::{OxiApp, SessionKey};
 
@@ -54,6 +54,27 @@ fn composer_thumb_texture(ui: &Ui, data: &[u8]) -> Option<TextureHandle> {
     ui.ctx()
         .data_mut(|d| d.insert_persisted(cache_id, tex.clone()));
     Some(tex)
+}
+
+/// Short provider names for the composer combo — full settings labels like
+/// "OpenAI Compatible" / "Claude Code (ACP)" make the bar jump around.
+fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static str {
+    use crate::settings::LlmProviderKind::*;
+    match kind {
+        OpenAi => "OpenAI",
+        OpenRouter => "OpenRouter",
+        AzureOpenAi => "Azure",
+        CustomAnthropic => "Anthropic",
+        GptCodex => "GPT Codex",
+        OpenCodeGo => "OpenCode",
+        LmStudio => "LM Studio",
+        Ollama => "Ollama",
+        LocalHf => "Local HF",
+        RemoteHf => "Remote HF",
+        ClaudeCodeAcp => "Claude",
+        CursorAcp => "Cursor",
+        CodexAcp => "Codex",
+    }
 }
 
 /// Quiet pill styling shared by the composer combos (provider + model): transparent at
@@ -304,6 +325,7 @@ impl OxiApp {
 
         // ── Left: provider + model (compact widths when the chat column is squeezed) ──
         self.render_model_selector(ui, narrow, compact);
+        self.render_effort_selector(ui, compact);
 
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -394,38 +416,39 @@ impl OxiApp {
 
     /// Two borderless dropdowns styled as quiet text with a chevron: provider (only
     /// providers the user has actually configured), then model within that provider's
-    /// config. `narrow` and `compact` shrink the controls before they can crowd out
-    /// the attachment/send actions on small desktop windows.
+    /// config. Widths stay fixed so switching providers/models doesn't shove the
+    /// attach/send controls around; labels are short/parsed to fit.
     fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool, compact: bool) {
         let oauth = crate::oauth::load_oauth_store();
         let configured = self.conv.settings.configured_provider_kinds(&oauth);
         let active_provider = self.conv.settings.active_provider;
-        let combo_w = if compact {
-            76.0
+        // Independent fixed widths — shared dynamic widths made the bar look jumpy
+        // when labels swung from "Ollama" to "Claude Code (ACP)" / long model ids.
+        let (provider_w, model_w, model_chars) = if compact {
+            (82.0, 90.0, 10usize)
         } else if narrow {
-            110.0
+            (96.0, 114.0, 14)
         } else {
-            150.0
+            (104.0, 130.0, 18)
         };
 
         ui.scope(|ui| {
             quiet_combo_style(ui);
 
-            let provider_label = active_provider.label();
-            let label = if compact {
-                truncate_label(provider_label, 9)
-            } else {
-                provider_label.to_string()
-            };
+            let label = composer_provider_label(active_provider);
             let resp = ComboBox::from_id_salt("provider_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
-                .width(combo_w)
+                .width(provider_w)
                 .height(300.0)
                 .show_ui(ui, |ui| {
                     for kind in &configured {
                         let selected = active_provider == *kind;
-                        if ui.selectable_label(selected, kind.label()).clicked() && !selected {
+                        if ui
+                            .selectable_label(selected, composer_provider_label(*kind))
+                            .clicked()
+                            && !selected
+                        {
                             self.conv.settings.active_provider = *kind;
                             self.save_settings_quietly();
                             // Remote/local HF choices come from its downloaded-model list;
@@ -443,7 +466,8 @@ impl OxiApp {
                     }
                 });
             resp.response
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(active_provider.label());
         });
 
         // Second dropdown: model within the active provider, populated from the fetched
@@ -482,20 +506,16 @@ impl OxiApp {
         ui.scope(|ui| {
             quiet_combo_style(ui);
 
-            let label = if current.is_empty() {
-                "(custom)".to_string()
-            } else if narrow {
-                truncate_label(&current, if compact { 9 } else { 18 })
-            } else {
-                current.clone()
-            };
+            let label = short_model_label(&current, model_chars);
             let resp = ComboBox::from_id_salt("active_model_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(quiet_combo_icon)
-                .width(combo_w)
+                .width(model_w)
                 .height(300.0)
                 .show_ui(ui, |ui| {
                     for m in &items {
+                        // Full id in the popup so the user can tell near-duplicates apart;
+                        // the closed button keeps the short parsed form.
                         if ui.selectable_label(m == &current, m.clone()).clicked() && m != &current
                         {
                             selected_model = Some(m.clone());
@@ -522,6 +542,71 @@ impl OxiApp {
                 self.conv.settings.provider_mut(kind).model_id = model_id;
                 self.save_settings_quietly();
             }
+        }
+    }
+
+    /// Compact thinking/reasoning selector beside the active model. ACP adapters receive this
+    /// through `session/set_config_option`; HTTP providers use their native effort field.
+    fn render_effort_selector(&mut self, ui: &mut Ui, compact: bool) {
+        let kind = self.conv.settings.active_provider;
+        let is_anthropic = matches!(
+            kind,
+            crate::settings::LlmProviderKind::CustomAnthropic
+                | crate::settings::LlmProviderKind::ClaudeCodeAcp
+        );
+        let supports_effort = is_anthropic
+            || matches!(
+                kind,
+                crate::settings::LlmProviderKind::OpenAi
+                    | crate::settings::LlmProviderKind::GptCodex
+                    | crate::settings::LlmProviderKind::OpenCodeGo
+                    | crate::settings::LlmProviderKind::AzureOpenAi
+                    | crate::settings::LlmProviderKind::CodexAcp
+                    | crate::settings::LlmProviderKind::CursorAcp
+            );
+        if !supports_effort || compact {
+            return;
+        }
+        let values: &[(&str, &str)] = if is_anthropic {
+            &[
+                ("", "Auto"),
+                ("low", "Low"),
+                ("medium", "Medium"),
+                ("high", "High"),
+                ("xhigh", "XHigh"),
+                ("max", "Max"),
+            ]
+        } else {
+            &[("", "Auto"), ("low", "Low"), ("medium", "Medium"), ("high", "High")]
+        };
+        let current = self.conv.settings.provider(kind).effort.clone();
+        let selected = values
+            .iter()
+            .find(|(value, _)| *value == current)
+            .map(|(_, label)| *label)
+            .unwrap_or("Auto");
+        let mut changed = None;
+        ui.scope(|ui| {
+            quiet_combo_style(ui);
+            // Fixed short label + width so this doesn't grow/shrink with "Thinking: …"
+            // or when switching between Auto / Medium / XHigh.
+            ComboBox::from_id_salt("active_effort_combo")
+                .selected_text(RichText::new(selected).size(FS_SMALL).color(c_text_muted()))
+                .icon(quiet_combo_icon)
+                .width(72.0)
+                .show_ui(ui, |ui| {
+                    for (value, label) in values {
+                        if ui.selectable_label(current == *value, *label).clicked() {
+                            changed = Some((*value).to_string());
+                        }
+                    }
+                })
+                .response
+                .on_hover_text("Thinking / reasoning level");
+        });
+        if let Some(effort) = changed {
+            self.conv.settings.provider_mut(kind).effort = effort;
+            self.save_settings_quietly();
         }
     }
 

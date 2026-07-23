@@ -137,6 +137,7 @@ fn acp_end_to_end_applies_model() {
         command_line: "npx @agentclientprotocol/claude-agent-acp".to_string(),
         env: Vec::new(),
         model: "haiku".to_string(),
+        effort: "low".to_string(),
         text: "Reply with ONLY one word naming your model family: Opus, Sonnet, or Haiku."
             .to_string(),
         images: Vec::new(),

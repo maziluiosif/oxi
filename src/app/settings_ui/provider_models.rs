@@ -51,7 +51,16 @@ impl OxiApp {
         let mut env = Vec::new();
         let api_key = cfg.api_key.trim();
         if !api_key.is_empty() {
-            env.push(("ANTHROPIC_API_KEY".to_string(), api_key.to_string()));
+            match cfg.provider {
+                LlmProviderKind::ClaudeCodeAcp => {
+                    env.push(("ANTHROPIC_API_KEY".to_string(), api_key.to_string()));
+                }
+                LlmProviderKind::CodexAcp => {
+                    env.push(("CODEX_API_KEY".to_string(), api_key.to_string()));
+                    env.push(("OPENAI_API_KEY".to_string(), api_key.to_string()));
+                }
+                _ => {}
+            }
         }
         let command_line = cfg.effective_acp_command();
         let acp = self.acp.clone();
@@ -76,6 +85,7 @@ impl OxiApp {
                     command_line,
                     env,
                     model: cfg.model_id.clone(),
+                    effort: cfg.effort.clone(),
                 }));
                 let _ = tx.send(ModelFetchMsg {
                     provider: kind,
@@ -100,9 +110,8 @@ impl OxiApp {
             self.spawn_remote_list(ctx);
             return;
         }
-        // Claude Code (ACP) has no HTTP `/v1/models` endpoint — the agent advertises its models
-        // over the protocol, so warm the subprocess and read them from `session/new` instead.
-        if kind == LlmProviderKind::ClaudeCodeAcp {
+        // ACP agents advertise their models during session setup rather than over HTTP.
+        if self.conv.settings.provider(kind).is_acp() {
             self.spawn_acp_warm(ctx, kind);
             return;
         }
@@ -243,8 +252,10 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
             Ok(String::new())
         }
-        LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf | LlmProviderKind::ClaudeCodeAcp => {
-            Ok(String::new())
-        }
+        LlmProviderKind::LocalHf
+        | LlmProviderKind::RemoteHf
+        | LlmProviderKind::ClaudeCodeAcp
+        | LlmProviderKind::CursorAcp
+        | LlmProviderKind::CodexAcp => Ok(String::new()),
     }
 }

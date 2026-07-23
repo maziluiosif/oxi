@@ -56,7 +56,9 @@ impl AppSettings {
                 | LlmProviderKind::RemoteHf => true,
                 // Claude Code handles its own auth (subscription login or ANTHROPIC_API_KEY),
                 // so it's always offered; the subprocess reports a clear error if not logged in.
-                LlmProviderKind::ClaudeCodeAcp => true,
+                LlmProviderKind::ClaudeCodeAcp
+                | LlmProviderKind::CursorAcp
+                | LlmProviderKind::CodexAcp => true,
                 LlmProviderKind::AzureOpenAi => true,
                 LlmProviderKind::CustomAnthropic => {
                     has_profile_key(kind)

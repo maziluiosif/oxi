@@ -34,7 +34,9 @@ pub fn wire_fingerprint_for(
         LlmProviderKind::OpenCodeGo if opencode_go_model_uses_anthropic(&cfg.model_id) => {
             "anthropic-messages"
         }
-        LlmProviderKind::ClaudeCodeAcp => "acp",
+        LlmProviderKind::ClaudeCodeAcp
+        | LlmProviderKind::CursorAcp
+        | LlmProviderKind::CodexAcp => "acp",
         _ => "openai-chat",
     };
     let canonical = serde_json::json!({
@@ -132,12 +134,12 @@ pub fn spawn_agent_run(
         // ACP inverts oxi's model: Claude Code runs the agent loop in a subprocess. Handle
         // it entirely here — no system prompt, wire history, or tool definitions from oxi —
         // then return before the HTTP-provider machinery below.
-        if cfg.provider == LlmProviderKind::ClaudeCodeAcp {
+        if cfg.is_acp() {
             undo_journal
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .mark_non_reversible(
-                    "Claude Code ACP manages its own tools, so this response cannot be restored safely.",
+                    "The ACP agent manages its own tools, so this response cannot be restored safely.",
                 );
             run_acp_turn(
                 &cfg,
@@ -531,7 +533,9 @@ pub fn spawn_agent_run(
                     .await
                 }
             }
-            LlmProviderKind::ClaudeCodeAcp => {
+            LlmProviderKind::ClaudeCodeAcp
+            | LlmProviderKind::CursorAcp
+            | LlmProviderKind::CodexAcp => {
                 unreachable!("ACP is handled before the provider match")
             }
         };
@@ -587,7 +591,16 @@ async fn run_acp_turn(
     let mut env = Vec::new();
     let key = cfg.api_key.trim();
     if !key.is_empty() {
-        env.push(("ANTHROPIC_API_KEY".to_string(), key.to_string()));
+        match cfg.provider {
+            LlmProviderKind::ClaudeCodeAcp => {
+                env.push(("ANTHROPIC_API_KEY".to_string(), key.to_string()));
+            }
+            LlmProviderKind::CodexAcp => {
+                env.push(("CODEX_API_KEY".to_string(), key.to_string()));
+                env.push(("OPENAI_API_KEY".to_string(), key.to_string()));
+            }
+            _ => {}
+        }
     }
 
     let req = crate::agent::acp::AcpPrompt {
@@ -596,6 +609,7 @@ async fn run_acp_turn(
         command_line: cfg.effective_acp_command(),
         env,
         model: cfg.model_id.clone(),
+        effort: cfg.effort.clone(),
         text,
         images,
         event_tx: tx.clone(),
