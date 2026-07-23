@@ -18,73 +18,9 @@ use super::{OxiApp, PendingApproval};
 /// so a fast scroll never reveals an unrendered gap at the edges.
 const TRANSCRIPT_CULL_MARGIN: f32 = 600.0;
 
-/// Cheap content fingerprint for one transcript unit (a user message or a contiguous assistant
-/// run). Built from lengths and flags rather than full text so revalidating every unit each
-/// frame stays O(blocks), not O(bytes). Any append/edit/tool update changes a length and
-/// invalidates the cached height; the unit is then re-rendered and re-measured.
-fn transcript_unit_fingerprint(messages: &[crate::model::ChatMessage]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    messages.len().hash(&mut hasher);
-    for message in messages {
-        (message.role == MsgRole::User).hash(&mut hasher);
-        message.is_summary.hash(&mut hasher);
-        message.streaming.hash(&mut hasher);
-        message.text.len().hash(&mut hasher);
-        message.attachments.len().hash(&mut hasher);
-        message.worked_duration.is_some().hash(&mut hasher);
-        message.blocks.len().hash(&mut hasher);
-        for block in &message.blocks {
-            match block {
-                crate::model::AssistantBlock::Thinking(text) => {
-                    (0u8, text.len()).hash(&mut hasher);
-                }
-                crate::model::AssistantBlock::Answer(text) => {
-                    (1u8, text.len()).hash(&mut hasher);
-                }
-                crate::model::AssistantBlock::Tool {
-                    args_summary,
-                    output,
-                    diff,
-                    is_error,
-                    output_truncated,
-                    ..
-                } => {
-                    (
-                        2u8,
-                        args_summary.as_deref().map_or(0, str::len),
-                        output.len(),
-                        diff.as_deref().map_or(0, str::len),
-                        *is_error,
-                        *output_truncated,
-                    )
-                        .hash(&mut hasher);
-                }
-            }
-        }
-    }
-    hasher.finish()
-}
-
-/// Split the transcript into render units: one per user message, one per contiguous
-/// assistant run (rendered together by [`render_assistant_message_run`]).
-fn transcript_units(messages: &[crate::model::ChatMessage]) -> Vec<(usize, usize)> {
-    let mut units = Vec::new();
-    let mut index = 0;
-    while index < messages.len() {
-        if messages[index].role == MsgRole::Assistant {
-            let start = index;
-            while index < messages.len() && messages[index].role == MsgRole::Assistant {
-                index += 1;
-            }
-            units.push((start, index));
-        } else {
-            units.push((index, index + 1));
-            index += 1;
-        }
-    }
-    units
-}
+#[path = "conversation/transcript_model.rs"]
+mod transcript_model;
+use transcript_model::{transcript_unit_fingerprint, transcript_units};
 
 impl OxiApp {
     /// Error banner rendered above the transcript.
@@ -452,11 +388,25 @@ impl OxiApp {
             primary_down && dragged_far
         };
 
-        // Hold stick-to-bottom a few frames after the turn ends so the "Working…" →
-        // "Worked…" collapse reclamps the scroll offset in the same pass (avoids the
-        // one-frame jump up then down when stick turns off at the same time as the fold).
+        // A manual expand/collapse changes a transcript unit's height. Suppress bottom-clamping
+        // for the transition frames so content below the clicked thinking/tool block stays visually
+        // anchored instead of jumping down and back while a response is streaming.
+        let manual_layout_change = ui.ctx().data_mut(|d| {
+            let id = egui::Id::new("transcript_manual_layout_change");
+            let frames = d.get_temp::<u8>(id).unwrap_or(0);
+            if frames > 1 {
+                d.insert_temp(id, frames - 1);
+            } else if frames == 1 {
+                d.remove::<u8>(id);
+            }
+            frames > 0
+        });
+
+        // Hold stick-to-bottom for a few frames while a newly opened/session-loaded
+        // conversation settles its layout.
         let hold_stick = self.conv.stick_bottom_hold_frames > 0;
-        let stick_bottom = !user_has_selection
+        let stick_bottom = !manual_layout_change
+            && !user_has_selection
             && (force_scroll_bottom
                 || hold_stick
                 || self.active_waiting_response()
@@ -537,44 +487,16 @@ impl OxiApp {
                                 .clip_rect()
                                 .expand2(egui::vec2(0.0, TRANSCRIPT_CULL_MARGIN));
                             let width_bits = col_w.round().to_bits();
-                            // Keep every unit rendered while a selection exists OR while a
-                            // drag-select is in progress. egui's label selection is dropped the
-                            // moment either endpoint's label is not rendered; during a drag the
-                            // selection is briefly empty every time an endpoint scrolls off, so
-                            // gating on `has_selection` alone lets culling remove the anchor and
-                            // the selection can never latch (it collapses as soon as edge-scroll
-                            // moves the content). A drag-select is a primary-button press that
-                            // began inside the transcript content column — this excludes wheel
-                            // scrolling (no button) and scrollbar dragging (press to the right of
-                            // the column), so both stay fully culled.
-                            // Stop culling while the pointer rests over the transcript and is not
-                            // actively scrolling. Two things make this necessary for text
-                            // selection:
-                            //   1. egui associates a press with a widget using the rects from the
-                            //      PREVIOUS frame, so the message under the pointer must already be
-                            //      a real laid-out widget before the click — a culled `add_space`
-                            //      placeholder is not selectable, so the user sees the I-beam cursor
-                            //      but nothing selects.
-                            //   2. When stuck to the bottom, `stick_to_bottom` nudges the scroll
-                            //      offset every frame; the set of culled units then flickers across
-                            //      the viewport margin, so a message flips between rendered and
-                            //      culled frame to frame and the press lands inconsistently (this is
-                            //      the "selection sometimes appears at random" symptom).
-                            // Disabling culling on hover keeps the rendered set stable and every
-                            // visible message selectable. A hover is a single settling frame (egui
-                            // does not repaint an idle view), and during an actual wheel/trackpad
-                            // scroll the button-up + non-zero scroll delta keeps culling on, so
-                            // scrolling a long transcript stays O(visible).
-                            let content_x = ui.max_rect().x_range();
-                            let viewport_y = ui.clip_rect().y_range();
-                            let pointer_interacting = ui.ctx().input(|input| {
-                                let over = input.pointer.interact_pos().is_some_and(|pos| {
-                                    content_x.contains(pos.x) && viewport_y.contains(pos.y)
-                                });
-                                let scrolling = input.smooth_scroll_delta.y.abs() > 0.5;
-                                over && !scrolling
-                            });
-                            let cull_enabled = !(transcript_has_selection || pointer_interacting);
+                            // Keep culling mode independent of hover and wheel state. Toggling from
+                            // real widgets to cached placeholders when the pointer enters/leaves the
+                            // chat changes the reported content height for conversations containing
+                            // stateful blocks, which can make the scrollbar disappear and re-wrap a
+                            // borderline line. The large viewport margin guarantees visible units
+                            // are real widgets even while normal culling remains enabled.
+                            //
+                            // Selection is the one exception: render all units while a selection or
+                            // drag-select exists so egui does not drop an off-screen endpoint.
+                            let cull_enabled = !user_has_selection;
                             for (start, end) in units {
                                 let messages = &self.conv.workspaces[wi].sessions[si].messages;
                                 let fingerprint =
@@ -859,63 +781,5 @@ pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> (egui::Vec2, bool)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::{AssistantBlock, ChatMessage};
-
-    fn answer(size: usize) -> ChatMessage {
-        ChatMessage {
-            role: MsgRole::Assistant,
-            text: String::new(),
-            is_summary: false,
-            attachments: Vec::new(),
-            blocks: vec![AssistantBlock::Answer("x".repeat(size))],
-            streaming: false,
-            started_at: None,
-            worked_duration: None,
-        }
-    }
-
-    fn user(text: &str) -> ChatMessage {
-        ChatMessage {
-            role: MsgRole::User,
-            text: text.to_owned(),
-            is_summary: false,
-            attachments: Vec::new(),
-            blocks: Vec::new(),
-            streaming: false,
-            started_at: None,
-            worked_duration: None,
-        }
-    }
-
-    #[test]
-    fn units_group_contiguous_assistant_messages() {
-        let messages = vec![user("a"), answer(10), answer(10), user("b"), answer(10)];
-        assert_eq!(
-            transcript_units(&messages),
-            vec![(0, 1), (1, 3), (3, 4), (4, 5)]
-        );
-    }
-
-    #[test]
-    fn fingerprint_changes_when_content_grows() {
-        let before = vec![answer(100)];
-        let after = vec![answer(101)];
-        assert_ne!(
-            transcript_unit_fingerprint(&before),
-            transcript_unit_fingerprint(&after)
-        );
-    }
-
-    #[test]
-    fn fingerprint_changes_when_streaming_ends() {
-        let mut streaming = answer(100);
-        streaming.streaming = true;
-        let done = answer(100);
-        assert_ne!(
-            transcript_unit_fingerprint(std::slice::from_ref(&streaming)),
-            transcript_unit_fingerprint(std::slice::from_ref(&done))
-        );
-    }
-}
+#[path = "conversation/tests.rs"]
+mod tests;

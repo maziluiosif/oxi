@@ -100,6 +100,9 @@ pub struct EditorState {
     pub focus_find_next_frame: bool,
     /// Return keyboard focus to the editor on its next render (Escape, definition jumps).
     pub focus_editor_next_frame: bool,
+    /// Document opened explicitly from GitPanel. Only this document receives full-row Git
+    /// highlighting; normal editor/Explorer/file-picker opens retain gutter-only markers.
+    pub git_full_highlight_path: Option<PathBuf>,
     /// Select and reveal this byte range after opening a definition target.
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
@@ -159,6 +162,11 @@ pub struct EditorDocument {
     /// Cached minimap silhouette, rebuilt only when the content or palette changes so
     /// idle and scrolling frames no longer rescan the whole file.
     pub minimap_cache: Option<super::file_explorer::MinimapGeometry>,
+    /// Width used by the previous editor layout. A width change re-anchors the scroll
+    /// position to `viewport_anchor_line` so soft wrapping cannot move the document.
+    pub viewport_width_bits: Option<u32>,
+    /// First logical source line visible in the editor viewport on the previous frame.
+    pub viewport_anchor_line: usize,
 }
 
 impl EditorDocument {
@@ -220,6 +228,9 @@ pub struct SessionRunState {
     pub approval_tx: Option<Sender<ApprovalDecision>>,
     /// A mutating tool call currently waiting on the user.
     pub pending_approval: Option<PendingApproval>,
+    /// The last response finished while this chat was not the visible main conversation. Kept
+    /// until the user returns to the chat so the sidebar can draw an attention indicator.
+    pub completion_unseen: bool,
     pub waiting_response: bool,
     pub stream_started_at: Option<Instant>,
     pub stream_error: Option<String>,
@@ -254,6 +265,7 @@ impl SessionRunState {
     }
 
     pub fn begin_waiting_response(&mut self) {
+        self.completion_unseen = false;
         self.waiting_response = true;
         self.stream_started_at = Some(Instant::now());
         self.turn_usage = TokenUsage::default();
@@ -358,6 +370,13 @@ pub struct VoiceUiState {
     /// True while waiting on [`crate::voice_engine::VoiceMsg::TranscriptionDone`] (covers
     /// lazy model load + inference).
     pub transcribing: bool,
+    /// Physical Space press waiting to cross the push-to-dictate hold threshold.
+    pub hold_space_pressed_at: Option<Instant>,
+    /// Composer text captured before Space was pressed. Restored once the hold becomes dictation,
+    /// so key-repeat spaces never modify an existing draft.
+    pub hold_space_draft: Option<String>,
+    /// The current Space hold has started the microphone and must stop it on release.
+    pub hold_space_active: bool,
     pub error: Option<String>,
 }
 
@@ -405,8 +424,8 @@ pub struct ConversationState {
     pub chat_scroll_id: egui::Id,
     pub pending_images: Vec<(String, Vec<u8>)>,
     pub scroll_to_bottom_once: bool,
-    /// Keep transcript `stick_to_bottom` for a few frames after a turn ends so the
-    /// "Working…" → "Worked…" collapse reclamps scroll without a one-frame jump.
+    /// Keep transcript `stick_to_bottom` for a few frames while a newly opened/session-loaded
+    /// conversation settles its layout.
     pub stick_bottom_hold_frames: u8,
     pub input_history: Vec<String>,
     pub input_history_index: Option<usize>,

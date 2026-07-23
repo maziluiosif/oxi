@@ -466,15 +466,49 @@ impl OxiApp {
             },
         );
 
-        // File diff on click. With editor tabs open, the diff appears as a pseudo-tab
-        // next to them so files stay editable; otherwise it overlays the chat column.
+        // A changed file is most useful in the real editor: open it directly so it can be
+        // inspected and edited in place. Deleted files no longer have an editable worktree
+        // version, so retain the read-only diff viewer as their fallback.
         if response.clicked() {
-            self.request(GitOp::ShowDiff {
-                path: entry.path.clone(),
-                staged,
-            });
-            self.conv.diff_view_open = true;
-            self.conv.editor.diff_tab_active = true;
+            let path =
+                std::path::PathBuf::from(&self.active_workspace().root_path).join(&entry.path);
+            if path.is_file() {
+                let first_changed_line = self
+                    .conv
+                    .git
+                    .line_changes
+                    .get(&entry.path)
+                    .and_then(|changes| changes.iter().min_by_key(|change| change.line))
+                    .map(|change| change.line);
+                self.close_editor_git_diff();
+                self.open_editor_file_only(path);
+                self.conv.editor.git_full_highlight_path = self
+                    .conv
+                    .editor
+                    .active_document()
+                    .map(|document| document.path.clone());
+                if let Some(line) = first_changed_line
+                    && let Some(document) = self.conv.editor.active_document()
+                {
+                    let target_path = document.path.clone();
+                    let byte = document
+                        .content
+                        .split_inclusive('\n')
+                        .take(line)
+                        .map(str::len)
+                        .sum::<usize>()
+                        .min(document.content.len());
+                    self.conv.editor.navigation_target = Some((target_path, byte..byte));
+                }
+                self.conv.editor.focus_editor_next_frame = true;
+            } else {
+                self.request(GitOp::ShowDiff {
+                    path: entry.path.clone(),
+                    staged,
+                });
+                self.conv.diff_view_open = true;
+                self.conv.editor.diff_tab_active = true;
+            }
         }
         if hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -529,18 +563,6 @@ impl OxiApp {
                             self.request(GitOp::ClearDiff);
                             self.conv.diff_view_open = false;
                             self.focus_active_view_next_frame();
-                        }
-                        if self.conv.git.current_diff_path.is_some()
-                            && crate::ui::chrome::mini_button_icon_enabled(
-                                ui,
-                                ICON_PROMPTS,
-                                "Edit file",
-                                true,
-                            )
-                            .on_hover_text("Open this file in an editable tab")
-                            .clicked()
-                        {
-                            self.open_current_diff_file();
                         }
                     });
                 },

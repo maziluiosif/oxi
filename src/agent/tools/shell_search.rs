@@ -4,9 +4,14 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use glob::glob;
+
+/// Shared stdout/stderr snapshots and the callback metadata for one pipe reader.
+type LiveStreams = Arc<Mutex<(Vec<u8>, Vec<u8>)>>;
+type LivePipe = (LiveStreams, usize, super::ToolOutputCallback);
 use regex::Regex;
 use serde_json::Value;
 use walkdir::{DirEntry, WalkDir};
@@ -146,7 +151,10 @@ fn sanitize_bash_env(cmd: &mut Command) {
     cmd.env_remove("CDPATH");
 }
 
-fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R) -> std::thread::JoinHandle<Vec<u8>> {
+fn spawn_pipe_reader<R: Read + Send + 'static>(
+    mut reader: R,
+    live: Option<LivePipe>,
+) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         // Keep draining after the display cap so the child can never block on a full pipe.
         const CAP: usize = super::MAX_TOOL_OUTPUT_CHARS * 2;
@@ -158,6 +166,30 @@ fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R) -> std::thread::Jo
                 Ok(n) if kept.len() < CAP => {
                     let take = n.min(CAP - kept.len());
                     kept.extend_from_slice(&buf[..take]);
+                    if let Some((shared, stream, callback)) = &live {
+                        let snapshot = {
+                            let mut streams = shared.lock().unwrap_or_else(|e| e.into_inner());
+                            let target = if *stream == 0 {
+                                &mut streams.0
+                            } else {
+                                &mut streams.1
+                            };
+                            if target.len() < super::MAX_TOOL_OUTPUT_CHARS {
+                                let live_take =
+                                    take.min(super::MAX_TOOL_OUTPUT_CHARS - target.len());
+                                target.extend_from_slice(&buf[..live_take]);
+                            }
+                            let mut text = String::from_utf8_lossy(&streams.0).into_owned();
+                            if !streams.1.is_empty() {
+                                if !text.is_empty() {
+                                    text.push('\n');
+                                }
+                                text.push_str(&String::from_utf8_lossy(&streams.1));
+                            }
+                            text
+                        };
+                        callback(snapshot);
+                    }
                 }
                 Ok(_) => {}
             }
@@ -182,7 +214,12 @@ fn terminate_child_tree(child: &mut Child) {
     let _ = child.wait();
 }
 
-pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<String, String> {
+pub(crate) fn tool_bash_streaming(
+    cwd: &Path,
+    args: &Value,
+    max_secs: u32,
+    on_output: Option<super::ToolOutputCallback>,
+) -> Result<String, String> {
     let cmd = args
         .get("command")
         .and_then(|x| x.as_str())
@@ -237,8 +274,25 @@ pub(crate) fn tool_bash(cwd: &Path, args: &Value, max_secs: u32) -> Result<Strin
         c.creation_flags(CREATE_NO_WINDOW);
         c.spawn().map_err(|e| e.to_string())?
     };
-    let stdout_reader = child.stdout.take().map(spawn_pipe_reader);
-    let stderr_reader = child.stderr.take().map(spawn_pipe_reader);
+    let live_streams = on_output
+        .as_ref()
+        .map(|_| Arc::new(Mutex::new((Vec::new(), Vec::new()))));
+    let stdout_live = on_output
+        .as_ref()
+        .zip(live_streams.as_ref())
+        .map(|(cb, shared)| (Arc::clone(shared), 0, Arc::clone(cb)));
+    let stderr_live = on_output
+        .as_ref()
+        .zip(live_streams.as_ref())
+        .map(|(cb, shared)| (Arc::clone(shared), 1, Arc::clone(cb)));
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|pipe| spawn_pipe_reader(pipe, stdout_live));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|pipe| spawn_pipe_reader(pipe, stderr_live));
     let timeout = Duration::from_secs_f64(timeout_s);
     let (status, timed_out) = loop {
         if start.elapsed() > timeout {

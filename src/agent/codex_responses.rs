@@ -1,5 +1,6 @@
 //! OpenAI Codex ChatGPT backend (`/codex/responses` SSE) — OAuth access token + `chatgpt-account-id`.
 
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 
@@ -10,7 +11,9 @@ use serde_json::{Value, json};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult, run_tool};
+use super::tools::{
+    MAX_TOOL_OUTPUT_CHARS, ToolOutputCallback, ToolResult, run_tool, run_tool_with_output,
+};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -310,12 +313,26 @@ fn process_responses_event(
             }
         }
         "response.created" | "response.incomplete" => {}
-        // New reasoning item in the stream — allow a later `output_item.done` fallback for this item.
+        // Surface function calls as soon as their output item is announced. Large edit/write
+        // argument payloads can take seconds to stream, so waiting for `output_item.done` makes the
+        // chat look idle until the operation is effectively ready to execute.
         "response.output_item.added" => {
-            if let Some(item) = v.get("item")
-                && item.get("type").and_then(|x| x.as_str()) == Some("reasoning")
-            {
-                state.got_thinking_delta = false;
+            if let Some(item) = v.get("item") {
+                match item.get("type").and_then(|x| x.as_str()) {
+                    Some("reasoning") => state.got_thinking_delta = false,
+                    Some("function_call") => {
+                        let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                        let call_id = item.get("call_id").and_then(|x| x.as_str()).unwrap_or("");
+                        if !call_id.is_empty() && !name.is_empty() {
+                            let _ = tx.send(AgentEvent::ToolStart {
+                                name: name.to_string(),
+                                tool_call_id: call_id.to_string(),
+                                args: None,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
         "response.output_text.delta" => {
@@ -362,8 +379,8 @@ fn process_responses_event(
                             .and_then(|x| x.as_str())
                             .unwrap_or("{}");
                         let call_id = item.get("call_id").and_then(|x| x.as_str()).unwrap_or("");
-                        // Emit ToolStart as soon as the completed function_call item arrives —
-                        // don't wait for the rest of the SSE stream / response.completed.
+                        // A second ToolStart updates the early pill with complete arguments. The
+                        // app routes it by call id, so this never creates a duplicate block.
                         if !call_id.is_empty() && !name.is_empty() {
                             let parsed_args: Value =
                                 serde_json::from_str(args).unwrap_or(json!({}));
@@ -662,6 +679,19 @@ pub async fn run_codex_responses_loop(
                         args: Some(tc.args.clone()),
                     });
                     let result = match gate.request(tx, cancel, &tc.name, &tc.args) {
+                        Ok(()) if tc.name.eq_ignore_ascii_case("bash") => {
+                            let event_tx = tx.clone();
+                            let id = tc.id.clone();
+                            let callback: ToolOutputCallback = Arc::new(move |text| {
+                                let truncated = text.chars().count() >= MAX_TOOL_OUTPUT_CHARS;
+                                let _ = event_tx.send(AgentEvent::ToolOutput {
+                                    tool_call_id: id.clone(),
+                                    text,
+                                    truncated,
+                                });
+                            });
+                            run_tool_with_output(cwd, &tc.name, &tc.args, env, Some(callback))
+                        }
                         Ok(()) => run_tool(cwd, &tc.name, &tc.args, env),
                         Err(reason) => ToolResult {
                             output: reason,

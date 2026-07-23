@@ -45,6 +45,7 @@ impl eframe::App for OxiApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_windows_clipboard_image_paste(ctx);
+        self.handle_hold_space_dictation(ctx);
         self.handle_global_shortcuts(ctx);
         self.consume_dropped_files(ctx);
         self.drain_agent(ctx);
@@ -62,6 +63,21 @@ impl eframe::App for OxiApp {
         self.drain_git(ctx);
         self.drain_commit_gen(ctx);
         self.drain_compaction(ctx);
+
+        // Returning to the actual chat transcript acknowledges a background completion. Tool
+        // approvals remain attention-worthy until the user explicitly responds to them.
+        if self.active_chat_is_visible(ctx) {
+            let active_key = self.active_session_key();
+            if let Some(run) = self.flow.sessions.get_mut(&active_key) {
+                run.completion_unseen = false;
+            }
+        }
+
+        let any_sidebar_attention = self
+            .flow
+            .sessions
+            .values()
+            .any(|run| run.completion_unseen || run.pending_approval.is_some());
         let any_assistant_streaming = self.conv.workspaces.iter().any(|w| {
             w.sessions.iter().any(|s| {
                 s.messages
@@ -72,6 +88,8 @@ impl eframe::App for OxiApp {
         if self.any_waiting_response() || any_assistant_streaming || self.conv.voice_ui.transcribing
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        } else if any_sidebar_attention {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
     }
 
@@ -114,6 +132,74 @@ impl eframe::App for OxiApp {
 }
 
 impl OxiApp {
+    /// Push-to-dictate: while the composer is focused, holding unmodified Space for a short
+    /// threshold starts recording; releasing it stops and transcribes. A normal tap remains a
+    /// normal space because TextEdit still receives the original key events.
+    fn handle_hold_space_dictation(&mut self, ctx: &egui::Context) {
+        const HOLD_SECS: f32 = 0.28;
+
+        let composer_has_focus = ctx.memory(|m| m.has_focus(egui::Id::new("composer_input")));
+        let eligible = self.conv.settings.dictation.enabled
+            && !self.conv.settings_open
+            && !self.confirm_prompt_open()
+            && !self.conv.voice_ui.transcribing
+            && (!self.conv.voice_ui.recording || self.conv.voice_ui.hold_space_active)
+            && composer_has_focus;
+        let (pressed, down, modifiers) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::Space),
+                i.key_down(Key::Space),
+                i.modifiers,
+            )
+        });
+
+        if !eligible || !modifiers.is_none() {
+            if self.conv.voice_ui.hold_space_active && self.conv.voice_ui.recording {
+                self.toggle_dictation();
+            }
+            self.conv.voice_ui.hold_space_pressed_at = None;
+            self.conv.voice_ui.hold_space_draft = None;
+            self.conv.voice_ui.hold_space_active = false;
+            return;
+        }
+
+        if pressed && self.conv.voice_ui.hold_space_pressed_at.is_none() {
+            self.conv.voice_ui.hold_space_pressed_at = Some(std::time::Instant::now());
+            self.conv.voice_ui.hold_space_draft = Some(self.conv.input.clone());
+        }
+        if down
+            && !self.conv.voice_ui.hold_space_active
+            && self
+                .conv
+                .voice_ui
+                .hold_space_pressed_at
+                .is_some_and(|at| at.elapsed().as_secs_f32() >= HOLD_SECS)
+        {
+            // Remove the initial/key-repeat spaces inserted by TextEdit during the threshold
+            // frames, preserving whatever draft existed before Space was pressed.
+            if let Some(draft) = self.conv.voice_ui.hold_space_draft.as_ref() {
+                self.conv.input.clone_from(draft);
+            }
+            self.toggle_dictation();
+            self.conv.voice_ui.hold_space_active = self.conv.voice_ui.recording;
+        }
+        if self.conv.voice_ui.hold_space_active
+            && let Some(draft) = self.conv.voice_ui.hold_space_draft.as_ref()
+        {
+            self.conv.input.clone_from(draft);
+        }
+        if !down {
+            if self.conv.voice_ui.hold_space_active && self.conv.voice_ui.recording {
+                self.toggle_dictation();
+            }
+            self.conv.voice_ui.hold_space_pressed_at = None;
+            self.conv.voice_ui.hold_space_draft = None;
+            self.conv.voice_ui.hold_space_active = false;
+        } else if self.conv.voice_ui.hold_space_pressed_at.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
     /// egui-winit consumes Ctrl+V while asking arboard for text. A Windows clipboard containing
     /// only a screenshot therefore produces neither `Event::Paste` nor a usable key event.
     /// Poll the physical chord before rendering and attach the bitmap once per key press.

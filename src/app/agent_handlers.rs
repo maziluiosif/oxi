@@ -53,7 +53,7 @@ impl OxiApp {
                 }
                 match rx.try_recv() {
                     Ok(ev) => {
-                        self.apply_agent_event(key, ev);
+                        self.apply_agent_event(ctx, key, ev);
                         processed += 1;
                         repainted = true;
                     }
@@ -85,7 +85,10 @@ impl OxiApp {
             {
                 self.invalidate_wire_cache(key);
                 self.append_assistant_answer(key, "\n[Error] Agent stopped unexpectedly.\n");
+                let completion_unseen =
+                    key != self.active_session_key() || !self.active_chat_is_visible(ctx);
                 self.finish_assistant_stream(key);
+                self.run_state_mut(key).completion_unseen = completion_unseen;
             }
         }
 
@@ -93,6 +96,7 @@ impl OxiApp {
             state.agent_rx.is_some()
                 || state.waiting_response
                 || state.stream_error.is_some()
+                || state.completion_unseen
                 // Keep completed usage metadata around for the header "Ready" chip.
                 || !state.turn_usage.is_zero()
                 || !state.last_turn_usage.is_zero()
@@ -186,7 +190,7 @@ impl OxiApp {
         ctx.request_repaint();
     }
 
-    fn apply_agent_event(&mut self, key: SessionKey, ev: AgentEvent) {
+    fn apply_agent_event(&mut self, ctx: &egui::Context, key: SessionKey, ev: AgentEvent) {
         // Any event other than another retry means the stream is flowing again.
         if !matches!(ev, AgentEvent::StreamRetry { .. }) {
             self.run_state_mut(key).stream_retrying = None;
@@ -268,6 +272,8 @@ impl OxiApp {
                 }
             }
             AgentEvent::Finished(outcome) => {
+                let completion_unseen = !matches!(&outcome, AgentOutcome::Cancelled)
+                    && (key != self.active_session_key() || !self.active_chat_is_visible(ctx));
                 match outcome {
                     AgentOutcome::Success { wire_cache } => {
                         self.session_mut_by_key(key).wire_cache = wire_cache;
@@ -281,6 +287,7 @@ impl OxiApp {
                     }
                 }
                 self.finish_assistant_stream(key);
+                self.run_state_mut(key).completion_unseen = completion_unseen;
             }
         }
     }

@@ -208,14 +208,25 @@ impl OxiApp {
             if sidebar_changed {
                 return;
             }
-            if self.conv.workspaces[wi].sidebar_folded {
-                continue;
-            }
-
+            // Folding hides the normal chat list. The chat currently open in the main view and
+            // any chat that needs attention are handled as exceptions in the loop below.
             let mut visible_sessions = 0usize;
             for si in 0..n_sessions {
                 if sidebar_changed {
                     return;
+                }
+                if folded {
+                    let key = self.session_key(wi, si);
+                    let globally_selected = wi == self.conv.active_workspace && si == active_si;
+                    let needs_attention = self.run_state(key).is_some_and(|run| {
+                        run.completion_unseen
+                            || (run.pending_approval.is_some()
+                                && (key != self.active_session_key()
+                                    || !self.active_chat_is_visible(ui.ctx())))
+                    });
+                    if !globally_selected && !needs_attention {
+                        continue;
+                    }
                 }
                 let Some(session) = self.conv.workspaces[wi].sessions.get(si) else {
                     return;
@@ -248,6 +259,16 @@ impl OxiApp {
                             let selected = wi == self.conv.active_workspace && si == active_si;
                             let running = self.session_row_is_running(wi, si);
                             let has_error = !running && self.session_row_has_error(wi, si);
+                            let key = self.session_key(wi, si);
+                            let run_state = self.run_state(key);
+                            let needs_approval = run_state.is_some_and(|run| {
+                                run.pending_approval.is_some()
+                                    && (key != self.active_session_key()
+                                        || !self.active_chat_is_visible(ui.ctx()))
+                            });
+                            let completion_unseen =
+                                run_state.is_some_and(|run| run.completion_unseen);
+                            let needs_attention = needs_approval || completion_unseen;
                             let title = row_title.clone();
                             const ROW_INNER_H: f32 = 22.0;
                             const ROW_VMARGIN: f32 = 4.0;
@@ -262,7 +283,23 @@ impl OxiApp {
                             if hovered {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
-                            let fill = if selected {
+                            let attention_pulse = if needs_attention {
+                                let time = ui.input(|input| input.time);
+                                (0.5 + 0.5 * (time * 3.6).sin()) as f32
+                            } else {
+                                0.0
+                            };
+                            let fill = if needs_attention {
+                                blend_color(
+                                    if selected {
+                                        c_row_active()
+                                    } else {
+                                        c_info_bg()
+                                    },
+                                    c_accent(),
+                                    0.10 + attention_pulse * 0.14,
+                                )
+                            } else if selected {
                                 c_row_active()
                             } else if hovered {
                                 c_row_hover()
@@ -271,6 +308,17 @@ impl OxiApp {
                             };
                             ui.painter()
                                 .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
+                            if needs_attention {
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    CornerRadius::same(RADIUS_ROW),
+                                    Stroke::new(
+                                        1.0,
+                                        c_accent().gamma_multiply(0.45 + attention_pulse * 0.55),
+                                    ),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
                             if self.conv.renaming_session == Some((wi, si)) {
                                 let edit = egui::TextEdit::singleline(&mut self.conv.rename_draft)
                                     .font(egui::TextStyle::Small)
@@ -321,7 +369,16 @@ impl OxiApp {
                                 let can_delete = wi == self.conv.active_workspace && !running;
                                 let show_trash = can_delete && ui.rect_contains_pointer(rect);
                                 self.render_session_row_inner(
-                                    ui, rect, wi, si, running, has_error, selected, title,
+                                    ui,
+                                    rect,
+                                    wi,
+                                    si,
+                                    running,
+                                    has_error,
+                                    selected,
+                                    needs_approval,
+                                    completion_unseen,
+                                    title,
                                     show_trash,
                                 );
 
@@ -411,6 +468,8 @@ impl OxiApp {
         running: bool,
         has_error: bool,
         selected: bool,
+        needs_approval: bool,
+        completion_unseen: bool,
         title: String,
         hide_time: bool,
     ) {
@@ -448,7 +507,7 @@ impl OxiApp {
             let title_w = (ui.available_width() - fixed).max(24.0);
             let bullet_col = if has_error {
                 c_danger()
-            } else if selected {
+            } else if needs_approval || completion_unseen || selected {
                 c_accent()
             } else {
                 c_text_muted()
@@ -461,13 +520,17 @@ impl OxiApp {
                         egui::vec2(lead_w, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
-                            if selected || has_error {
+                            if selected || has_error || needs_approval || completion_unseen {
                                 let resp =
                                     ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
                                 if has_error {
                                     resp.on_hover_text(
                                         "This chat has an error — open it to see details",
                                     );
+                                } else if needs_approval {
+                                    resp.on_hover_text("This chat needs tool approval");
+                                } else if completion_unseen {
+                                    resp.on_hover_text("This chat finished while out of focus");
                                 }
                             }
                         },
@@ -540,30 +603,38 @@ impl OxiApp {
 
             if self.conv.sidebar_open {
                 let w = self.conv.sidebar_width.clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(w, full_h),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        Frame::new()
-                            .fill(c_bg_sidebar())
-                            .inner_margin(Margin {
-                                left: 12,
-                                right: 10,
-                                top: 12,
-                                bottom: 12,
-                            })
-                            .show(ui, |ui| {
-                                ui.set_min_width(ui.max_rect().width());
-                                ui.set_min_height(ui.max_rect().height());
-                                if self.conv.sidebar_mode == super::state::SidebarMode::Explorer {
-                                    self.render_file_explorer(ui);
-                                } else {
-                                    self.render_sidebar(ui);
-                                }
-                            });
-                        ui.expand_to_include_rect(ui.max_rect());
-                    },
+                // Like the chat/git split below, the sidebar owns an exact column. A long session
+                // list can report a wider `min_rect` when its floating scrollbar wakes on hover;
+                // letting that propagate through `allocate_ui_with_layout` steals a few pixels
+                // from the chat and re-wraps borderline transcript lines.
+                let sidebar_rect =
+                    egui::Rect::from_min_size(ui.cursor().min, egui::vec2(w, full_h));
+                let mut sidebar_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt("fixed_left_sidebar")
+                        .max_rect(sidebar_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
                 );
+                sidebar_ui.shrink_clip_rect(sidebar_rect);
+                Frame::new()
+                    .fill(c_bg_sidebar())
+                    .inner_margin(Margin {
+                        left: 12,
+                        right: 10,
+                        top: 12,
+                        bottom: 12,
+                    })
+                    .show(&mut sidebar_ui, |ui| {
+                        ui.set_min_width(ui.max_rect().width());
+                        ui.set_min_height(ui.max_rect().height());
+                        if self.conv.sidebar_mode == super::state::SidebarMode::Explorer {
+                            self.render_file_explorer(ui);
+                        } else {
+                            self.render_sidebar(ui);
+                        }
+                    });
+                drop(sidebar_ui);
+                ui.advance_cursor_after_rect(sidebar_rect);
                 self.render_sidebar_resize_sep(ui, full_h, SIDEBAR_W_MIN, SIDEBAR_W_MAX);
             }
 
@@ -577,112 +648,117 @@ impl OxiApp {
                 0.0
             };
             let chat_w = (ui.available_width() - git_w).max(60.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(chat_w, full_h),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    let editor_open = self.conv.editor.active_document().is_some();
-                    Frame::new()
-                        .fill(c_bg_main())
-                        .inner_margin(Margin {
-                            // The editor gutter starts directly at the sidebar boundary; the chat
-                            // view keeps its usual breathing room.
-                            left: if editor_open {
-                                0
-                            } else {
-                                CHAT_VIEW_MARGIN_LEFT as i8
-                            },
-                            right: CHAT_VIEW_MARGIN_RIGHT as i8,
-                            top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
-                            // The editor owns a bottom-docked find panel, so it must meet the
-                            // status bar without the chat view's composer breathing room.
-                            bottom: if editor_open {
-                                0
-                            } else {
-                                CHAT_FRAME_BOTTOM as i8
-                            },
-                        })
-                        .show(ui, |ui| {
-                            if editor_open {
-                                self.render_text_editor(ui);
-                                return;
-                            }
+            // `allocate_ui_with_layout` grows its parent allocation when a child reports a wider
+            // `min_rect`. That is normally useful, but here it lets a narrow transcript (notably
+            // while its scrollbar appears and text re-wraps) push the fixed-width git panel to
+            // the right. Keep the split geometry authoritative: chat content may reflow inside
+            // this rect, but it must never participate in sizing the sibling git column.
+            let chat_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(chat_w, full_h));
+            let mut chat_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("fixed_chat_column")
+                    .max_rect(chat_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            chat_ui.shrink_clip_rect(chat_rect);
+            {
+                let ui = &mut chat_ui;
+                let editor_open = self.conv.editor.active_document().is_some();
+                Frame::new()
+                    .fill(c_bg_main())
+                    .inner_margin(Margin {
+                        // The editor gutter starts directly at the sidebar boundary; the chat
+                        // view keeps its usual breathing room.
+                        left: if editor_open {
+                            0
+                        } else {
+                            CHAT_VIEW_MARGIN_LEFT as i8
+                        },
+                        right: CHAT_VIEW_MARGIN_RIGHT as i8,
+                        top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
+                        // The editor owns a bottom-docked find panel, so it must meet the
+                        // status bar without the chat view's composer breathing room.
+                        bottom: if editor_open {
+                            0
+                        } else {
+                            CHAT_FRAME_BOTTOM as i8
+                        },
+                    })
+                    .show(ui, |ui| {
+                        if editor_open {
+                            self.render_text_editor(ui);
+                            return;
+                        }
 
-                            let style = (*ui.style()).clone();
-                            let column_center_w = crate::theme::chat_column_center_width(
-                                ui.available_width(),
-                                &style,
-                            );
+                        let style = (*ui.style()).clone();
+                        let column_center_w =
+                            crate::theme::chat_column_center_width(ui.available_width(), &style);
 
-                            const HEADER_H: f32 = 38.0;
-                            const HEADER_GAP: f32 = 6.0;
-                            let show_diff =
-                                self.conv.diff_view_open && self.conv.git.diff.is_some();
-                            self.render_chat_header(ui, column_center_w);
-                            ui.add_space(HEADER_GAP);
+                        const HEADER_H: f32 = 38.0;
+                        const HEADER_GAP: f32 = 6.0;
+                        let show_diff = self.conv.diff_view_open && self.conv.git.diff.is_some();
+                        self.render_chat_header(ui, column_center_w);
+                        ui.add_space(HEADER_GAP);
 
-                            // Floating composer always stays available — even over a diff —
-                            // so you can discuss the change without leaving the view.
-                            const COMPOSER_GAP: f32 = 8.0;
-                            let composer_overlay_h =
-                                (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
-                            let conversation_h =
-                                (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                            let chat_rect = ui.max_rect();
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), conversation_h),
-                                egui::Layout::top_down(egui::Align::Min),
-                                |ui| {
-                                    if show_diff {
-                                        if let Some((title, diff_text)) = self.conv.git.diff.clone()
-                                        {
-                                            self.render_diff_view(
-                                                ui,
-                                                &title,
-                                                &diff_text,
-                                                column_center_w,
-                                            );
-                                        }
-                                    } else {
-                                        self.render_conversation(
+                        // Floating composer always stays available — even over a diff —
+                        // so you can discuss the change without leaving the view.
+                        const COMPOSER_GAP: f32 = 8.0;
+                        let composer_overlay_h =
+                            (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
+                        let conversation_h =
+                            (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                        let chat_rect = ui.max_rect();
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), conversation_h),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                if show_diff {
+                                    if let Some((title, diff_text)) = self.conv.git.diff.clone() {
+                                        self.render_diff_view(
                                             ui,
+                                            &title,
+                                            &diff_text,
                                             column_center_w,
-                                            conversation_h,
-                                            composer_overlay_h,
                                         );
                                     }
-                                },
-                            );
+                                } else {
+                                    self.render_conversation(
+                                        ui,
+                                        column_center_w,
+                                        conversation_h,
+                                        composer_overlay_h,
+                                    );
+                                }
+                            },
+                        );
 
-                            // Soft scrim so transcript text doesn't compete with the input.
-                            // If TextEdit changes height while rendering, `render_composer` asks
-                            // egui for a second layout pass in the same frame. That keeps this
-                            // previous measurement safe for hard newlines, wrapping, deletion,
-                            // sending, attachments, and notices without predicting individual keys.
-                            let composer_h = self.conv.composer_measured_full_h.max(80.0);
-                            let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
-                            let scrim_top = chat_rect.bottom() - scrim_h;
-                            let scrim_rect = egui::Rect::from_min_max(
-                                egui::pos2(chat_rect.left(), scrim_top),
-                                egui::pos2(chat_rect.right(), chat_rect.bottom()),
-                            );
-                            paint_composer_scrim(ui, scrim_rect);
+                        // Soft scrim so transcript text doesn't compete with the input.
+                        // If TextEdit changes height while rendering, `render_composer` asks
+                        // egui for a second layout pass in the same frame. That keeps this
+                        // previous measurement safe for hard newlines, wrapping, deletion,
+                        // sending, attachments, and notices without predicting individual keys.
+                        let composer_h = self.conv.composer_measured_full_h.max(80.0);
+                        let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
+                        let scrim_top = chat_rect.bottom() - scrim_h;
+                        let scrim_rect = egui::Rect::from_min_max(
+                            egui::pos2(chat_rect.left(), scrim_top),
+                            egui::pos2(chat_rect.right(), chat_rect.bottom()),
+                        );
+                        paint_composer_scrim(ui, scrim_rect);
 
-                            let composer_top = chat_rect.bottom() - composer_h;
-                            let composer_rect = egui::Rect::from_min_size(
-                                egui::pos2(chat_rect.left(), composer_top),
-                                egui::vec2(chat_rect.width(), composer_h),
-                            );
-                            ui.scope_builder(
-                                egui::UiBuilder::new().max_rect(composer_rect),
-                                |ui| {
-                                    self.render_composer(ui, column_center_w);
-                                },
-                            );
+                        let composer_top = chat_rect.bottom() - composer_h;
+                        let composer_rect = egui::Rect::from_min_size(
+                            egui::pos2(chat_rect.left(), composer_top),
+                            egui::vec2(chat_rect.width(), composer_h),
+                        );
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(composer_rect), |ui| {
+                            self.render_composer(ui, column_center_w);
                         });
-                    ui.expand_to_include_rect(ui.max_rect());
-                },
-            );
+                    });
+                ui.expand_to_include_rect(ui.max_rect());
+            }
+            drop(chat_ui);
+            ui.advance_cursor_after_rect(chat_rect);
 
             // Right git panel
             if git_open {

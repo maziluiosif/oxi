@@ -20,6 +20,9 @@ pub struct ToolResult {
 
 pub(crate) const MAX_TOOL_OUTPUT_CHARS: usize = 40_000;
 
+/// Receives cumulative output snapshots while a long-running tool is executing.
+pub type ToolOutputCallback = Arc<dyn Fn(String) + Send + Sync>;
+
 /// Side-effect metadata shared by provider orchestration and approval policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSideEffect {
@@ -44,6 +47,7 @@ pub fn tool_is_parallel_safe(name: &str) -> bool {
 }
 
 mod definitions;
+mod diff;
 mod file_ops;
 mod paths;
 mod shell_search;
@@ -54,7 +58,8 @@ mod web;
 mod tests;
 
 pub use definitions::tool_definitions_json;
-pub(crate) use file_ops::{cleanup_stale_spill_files, floor_char_boundary, make_unified_diff};
+pub(crate) use diff::make_unified_diff;
+pub(crate) use file_ops::{cleanup_stale_spill_files, floor_char_boundary};
 pub use paths::resolve_under_cwd;
 pub use undo::TurnUndoJournal;
 
@@ -79,6 +84,18 @@ pub struct ToolEnv {
 }
 
 pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResult {
+    run_tool_with_output(cwd, name, args, env, None)
+}
+
+/// Run a tool and optionally publish cumulative live output. Currently bash is the only built-in
+/// tool that emits incremental snapshots; all tools still return the same final [`ToolResult`].
+pub fn run_tool_with_output(
+    cwd: &Path,
+    name: &str,
+    args: &Value,
+    env: &ToolEnv,
+    on_output: Option<ToolOutputCallback>,
+) -> ToolResult {
     if crate::agent::mcp::McpManager::is_mcp_tool(name) {
         if let Some(journal) = &env.undo_journal {
             journal.lock().unwrap_or_else(|e| e.into_inner()).mark_non_reversible(
@@ -140,7 +157,12 @@ pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResu
                 // The system prompt restricts bash to non-mutating verification commands. File
                 // changes must go through the filesystem tools, so merely running bash must not hide the
                 // Regenerate action for otherwise read-only turns.
-                "bash" => shell_search::tool_bash(cwd, args, env.bash_timeout_cap_secs),
+                "bash" => shell_search::tool_bash_streaming(
+                    cwd,
+                    args,
+                    env.bash_timeout_cap_secs,
+                    on_output,
+                ),
                 "grep" => shell_search::tool_grep(cwd, args),
                 "find" => shell_search::tool_find(cwd, args),
                 "ls" => shell_search::tool_ls(cwd, args),

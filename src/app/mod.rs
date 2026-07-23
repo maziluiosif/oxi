@@ -322,6 +322,16 @@ impl OxiApp {
             .is_some_and(|s| s.stream_error.is_some())
     }
 
+    /// Whether the active chat transcript is the content currently visible in the main column.
+    /// A file editor, diff, Settings, or an unfocused app all count as the chat being out of focus.
+    pub(crate) fn active_chat_is_visible(&self, ctx: &egui::Context) -> bool {
+        let app_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        app_focused
+            && !self.conv.settings_open
+            && self.conv.editor.active_document().is_none()
+            && !(self.conv.diff_view_open && self.conv.git.diff.is_some())
+    }
+
     pub(crate) fn active_session_mut(&mut self) -> &mut Session {
         let w = self.conv.active_workspace;
         let a = self.conv.workspaces[w].active;

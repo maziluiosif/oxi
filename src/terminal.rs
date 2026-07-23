@@ -17,7 +17,11 @@ use eframe::egui::{
     TextFormat, Ui,
 };
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
-use vt100::{MouseProtocolEncoding as MEnc, MouseProtocolMode as MMode};
+use vt100::MouseProtocolMode as MMode;
+
+#[path = "terminal/encoding.rs"]
+mod encoding;
+use encoding::{button_base, ctrl_byte, encode_mouse, key_sequence, ordered_selection, vt_color};
 
 /// Mouse tracking carried between frames so we can report drags / motion.
 #[derive(Default)]
@@ -688,175 +692,6 @@ impl TerminalSession {
                     egui::StrokeKind::Middle,
                 );
             }
-        }
-    }
-}
-
-fn ordered_selection(selection: TerminalSelection) -> ((u16, u16), (u16, u16)) {
-    if selection.anchor <= selection.focus {
-        (selection.anchor, selection.focus)
-    } else {
-        (selection.focus, selection.anchor)
-    }
-}
-
-/// Base button code for a mouse button (None = unsupported / extra buttons).
-fn button_base(button: PointerButton) -> Option<u8> {
-    match button {
-        PointerButton::Primary => Some(0),
-        PointerButton::Middle => Some(1),
-        PointerButton::Secondary => Some(2),
-        _ => None,
-    }
-}
-
-/// Encode one mouse event for the terminal. `col`/`row` are 0-based; protocols are 1-based.
-fn encode_mouse(
-    encoding: MEnc,
-    base: u8,
-    col: u16,
-    row: u16,
-    pressed: bool,
-    motion: bool,
-    mods: egui::Modifiers,
-) -> Vec<u8> {
-    let mut cb = base;
-    if mods.shift {
-        cb += 4;
-    }
-    if mods.alt {
-        cb += 8;
-    }
-    if mods.ctrl {
-        cb += 16;
-    }
-    if motion {
-        cb += 32;
-    }
-    let cx = col as u32 + 1;
-    let cy = row as u32 + 1;
-    match encoding {
-        MEnc::Sgr => {
-            let final_char = if pressed { 'M' } else { 'm' };
-            format!("\x1b[<{cb};{cx};{cy}{final_char}").into_bytes()
-        }
-        // Default / Utf8 X10-style: button byte uses release code 3 in the low bits.
-        _ => {
-            let cb_out = if pressed { cb } else { (cb & !0b11) | 0b11 };
-            let clamp = |v: u32| (v.min(223) as u8).saturating_add(32);
-            vec![
-                0x1b,
-                b'[',
-                b'M',
-                cb_out.saturating_add(32),
-                clamp(cx),
-                clamp(cy),
-            ]
-        }
-    }
-}
-
-/// Map a vt100 color to an egui color. `fg` selects the default-color fallback (None = inherit).
-fn vt_color(color: vt100::Color, _fg: bool) -> Option<Color32> {
-    match color {
-        vt100::Color::Default => None,
-        vt100::Color::Rgb(r, g, b) => Some(Color32::from_rgb(r, g, b)),
-        vt100::Color::Idx(i) => Some(xterm_256_color(i)),
-    }
-}
-
-/// Translate special keys to terminal byte sequences (no Ctrl modifier).
-fn key_sequence(key: Key, app_cursor: bool) -> Option<&'static [u8]> {
-    let arrows = |normal: &'static [u8], app: &'static [u8]| {
-        if app_cursor { app } else { normal }
-    };
-    let seq: &[u8] = match key {
-        Key::Enter => b"\r",
-        Key::Backspace => b"\x7f",
-        Key::Tab => b"\t",
-        Key::Escape => b"\x1b",
-        Key::ArrowUp => arrows(b"\x1b[A", b"\x1bOA"),
-        Key::ArrowDown => arrows(b"\x1b[B", b"\x1bOB"),
-        Key::ArrowRight => arrows(b"\x1b[C", b"\x1bOC"),
-        Key::ArrowLeft => arrows(b"\x1b[D", b"\x1bOD"),
-        Key::Home => b"\x1b[H",
-        Key::End => b"\x1b[F",
-        Key::Delete => b"\x1b[3~",
-        Key::Insert => b"\x1b[2~",
-        Key::PageUp => b"\x1b[5~",
-        Key::PageDown => b"\x1b[6~",
-        _ => return None,
-    };
-    Some(seq)
-}
-
-/// Control byte for Ctrl + letter / common symbols.
-fn ctrl_byte(key: Key) -> Option<u8> {
-    let b = match key {
-        Key::A => 1,
-        Key::B => 2,
-        Key::C => 3,
-        Key::D => 4,
-        Key::E => 5,
-        Key::F => 6,
-        Key::G => 7,
-        Key::H => 8,
-        Key::I => 9,
-        Key::J => 10,
-        Key::K => 11,
-        Key::L => 12,
-        Key::M => 13,
-        Key::N => 14,
-        Key::O => 15,
-        Key::P => 16,
-        Key::Q => 17,
-        Key::R => 18,
-        Key::S => 19,
-        Key::T => 20,
-        Key::U => 21,
-        Key::V => 22,
-        Key::W => 23,
-        Key::X => 24,
-        Key::Y => 25,
-        Key::Z => 26,
-        Key::OpenBracket => 27,  // Ctrl+[ == ESC
-        Key::Backslash => 28,    // Ctrl+\\
-        Key::CloseBracket => 29, // Ctrl+]
-        _ => return None,
-    };
-    Some(b)
-}
-
-/// Standard xterm 256-color palette.
-fn xterm_256_color(i: u8) -> Color32 {
-    match i {
-        0 => Color32::from_rgb(0, 0, 0),
-        1 => Color32::from_rgb(205, 49, 49),
-        2 => Color32::from_rgb(13, 188, 121),
-        3 => Color32::from_rgb(229, 229, 16),
-        4 => Color32::from_rgb(36, 114, 200),
-        5 => Color32::from_rgb(188, 63, 188),
-        6 => Color32::from_rgb(17, 168, 205),
-        7 => Color32::from_rgb(229, 229, 229),
-        8 => Color32::from_rgb(102, 102, 102),
-        9 => Color32::from_rgb(241, 76, 76),
-        10 => Color32::from_rgb(35, 209, 139),
-        11 => Color32::from_rgb(245, 245, 67),
-        12 => Color32::from_rgb(59, 142, 234),
-        13 => Color32::from_rgb(214, 112, 214),
-        14 => Color32::from_rgb(41, 184, 219),
-        15 => Color32::from_rgb(255, 255, 255),
-        16..=231 => {
-            let i = i - 16;
-            let r = i / 36;
-            let g = (i % 36) / 6;
-            let b = i % 6;
-            let conv = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
-            Color32::from_rgb(conv(r), conv(g), conv(b))
-        }
-        232..=255 => {
-            let v = 8 + (i - 232) * 10;
-            Color32::from_rgb(v, v, v)
         }
     }
 }
