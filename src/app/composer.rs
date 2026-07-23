@@ -577,7 +577,12 @@ impl OxiApp {
                 ("max", "Max"),
             ]
         } else {
-            &[("", "Auto"), ("low", "Low"), ("medium", "Medium"), ("high", "High")]
+            &[
+                ("", "Auto"),
+                ("low", "Low"),
+                ("medium", "Medium"),
+                ("high", "High"),
+            ]
         };
         let current = self.conv.settings.provider(kind).effort.clone();
         let selected = values

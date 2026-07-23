@@ -82,9 +82,7 @@ impl LlmProviderKind {
     pub fn is_acp(self) -> bool {
         matches!(
             self,
-            LlmProviderKind::ClaudeCodeAcp
-                | LlmProviderKind::CursorAcp
-                | LlmProviderKind::CodexAcp
+            LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp
         )
     }
 
@@ -317,8 +315,7 @@ impl ProviderConfig {
     /// versions).
     pub const DEFAULT_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/claude-agent-acp";
     pub const DEFAULT_CURSOR_ACP_COMMAND: &'static str = "agent acp";
-    pub const DEFAULT_CODEX_ACP_COMMAND: &'static str =
-        "npx -y @agentclientprotocol/codex-acp";
+    pub const DEFAULT_CODEX_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/codex-acp";
 
     pub fn is_acp(&self) -> bool {
         self.provider.is_acp()

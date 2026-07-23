@@ -308,7 +308,9 @@ fn launch_error(command_line: &str, error: &std::io::Error) -> String {
         "agent" | "cursor-agent" => {
             " Install Cursor CLI and ensure `agent` is available in PATH (Cursor: Install CLI Command)."
         }
-        "npx" => " Install Node.js/npm so `npx` is available, or install the ACP adapter globally and set its command here.",
+        "npx" => {
+            " Install Node.js/npm so `npx` is available, or install the ACP adapter globally and set its command here."
+        }
         "codex-acp" => " Install it with `npm install -g @agentclientprotocol/codex-acp`.",
         _ => " Check that the executable is installed and available in PATH.",
     };
@@ -324,8 +326,10 @@ async fn spawn_conn(
 ) -> Result<Conn, String> {
     let command_line = command_line.trim();
     if command_line.is_empty() {
-        return Err("ACP agent command is empty. Configure it in Settings → Models & providers."
-            .to_string());
+        return Err(
+            "ACP agent command is empty. Configure it in Settings → Models & providers."
+                .to_string(),
+        );
     }
     if !cwd.is_dir() {
         return Err(format!(
@@ -548,7 +552,9 @@ async fn set_thought_level(
             ["thought_level", "reasoning_effort", "effort"]
                 .into_iter()
                 .find(|id| {
-                    options.iter().any(|o| o.get("id").and_then(Value::as_str) == Some(*id))
+                    options
+                        .iter()
+                        .any(|o| o.get("id").and_then(Value::as_str) == Some(*id))
                 })
         });
     let Some(config_id) = config_id else {

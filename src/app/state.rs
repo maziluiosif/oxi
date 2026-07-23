@@ -228,6 +228,9 @@ pub struct SessionRunState {
     pub approval_tx: Option<Sender<ApprovalDecision>>,
     /// A mutating tool call currently waiting on the user.
     pub pending_approval: Option<PendingApproval>,
+    /// The last response finished while this chat was not the visible main conversation. Kept
+    /// until the user returns to the chat so the sidebar can draw an attention indicator.
+    pub completion_unseen: bool,
     pub waiting_response: bool,
     pub stream_started_at: Option<Instant>,
     pub stream_error: Option<String>,
@@ -262,6 +265,7 @@ impl SessionRunState {
     }
 
     pub fn begin_waiting_response(&mut self) {
+        self.completion_unseen = false;
         self.waiting_response = true;
         self.stream_started_at = Some(Instant::now());
         self.turn_usage = TokenUsage::default();

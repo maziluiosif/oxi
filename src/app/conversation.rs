@@ -487,44 +487,16 @@ impl OxiApp {
                                 .clip_rect()
                                 .expand2(egui::vec2(0.0, TRANSCRIPT_CULL_MARGIN));
                             let width_bits = col_w.round().to_bits();
-                            // Keep every unit rendered while a selection exists OR while a
-                            // drag-select is in progress. egui's label selection is dropped the
-                            // moment either endpoint's label is not rendered; during a drag the
-                            // selection is briefly empty every time an endpoint scrolls off, so
-                            // gating on `has_selection` alone lets culling remove the anchor and
-                            // the selection can never latch (it collapses as soon as edge-scroll
-                            // moves the content). A drag-select is a primary-button press that
-                            // began inside the transcript content column — this excludes wheel
-                            // scrolling (no button) and scrollbar dragging (press to the right of
-                            // the column), so both stay fully culled.
-                            // Stop culling while the pointer rests over the transcript, including
-                            // during wheel/trackpad scrolling. Two things make this necessary for
-                            // text selection and stable layout:
-                            //   1. egui associates a press with a widget using the rects from the
-                            //      PREVIOUS frame, so the message under the pointer must already be
-                            //      a real laid-out widget before the click — a culled `add_space`
-                            //      placeholder is not selectable, so the user sees the I-beam cursor
-                            //      but nothing selects.
-                            //   2. When stuck to the bottom, `stick_to_bottom` nudges the scroll
-                            //      offset every frame; the set of culled units then flickers across
-                            //      the viewport margin, so a message flips between rendered and
-                            //      culled frame to frame and the press lands inconsistently (this is
-                            //      the "selection sometimes appears at random" symptom).
-                            // Disabling culling on hover keeps the rendered set stable and every
-                            // visible message selectable. It must remain disabled while scrolling:
-                            // switching from real widgets to cached `add_space` placeholders on the
-                            // first scroll frame can change the content width/height and visibly
-                            // re-wrap the transcript. Culling still applies when the pointer is
-                            // outside the transcript viewport.
-                            let scroll_viewport = ui.clip_rect();
-                            let pointer_over_transcript = ui.ctx().input(|input| {
-                                input
-                                    .pointer
-                                    .interact_pos()
-                                    .is_some_and(|pos| scroll_viewport.contains(pos))
-                            });
-                            let cull_enabled =
-                                !(transcript_has_selection || pointer_over_transcript);
+                            // Keep culling mode independent of hover and wheel state. Toggling from
+                            // real widgets to cached placeholders when the pointer enters/leaves the
+                            // chat changes the reported content height for conversations containing
+                            // stateful blocks, which can make the scrollbar disappear and re-wrap a
+                            // borderline line. The large viewport margin guarantees visible units
+                            // are real widgets even while normal culling remains enabled.
+                            //
+                            // Selection is the one exception: render all units while a selection or
+                            // drag-select exists so egui does not drop an off-screen endpoint.
+                            let cull_enabled = !user_has_selection;
                             for (start, end) in units {
                                 let messages = &self.conv.workspaces[wi].sessions[si].messages;
                                 let fingerprint =

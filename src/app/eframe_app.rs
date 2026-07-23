@@ -63,6 +63,21 @@ impl eframe::App for OxiApp {
         self.drain_git(ctx);
         self.drain_commit_gen(ctx);
         self.drain_compaction(ctx);
+
+        // Returning to the actual chat transcript acknowledges a background completion. Tool
+        // approvals remain attention-worthy until the user explicitly responds to them.
+        if self.active_chat_is_visible(ctx) {
+            let active_key = self.active_session_key();
+            if let Some(run) = self.flow.sessions.get_mut(&active_key) {
+                run.completion_unseen = false;
+            }
+        }
+
+        let any_sidebar_attention = self
+            .flow
+            .sessions
+            .values()
+            .any(|run| run.completion_unseen || run.pending_approval.is_some());
         let any_assistant_streaming = self.conv.workspaces.iter().any(|w| {
             w.sessions.iter().any(|s| {
                 s.messages
@@ -73,6 +88,8 @@ impl eframe::App for OxiApp {
         if self.any_waiting_response() || any_assistant_streaming || self.conv.voice_ui.transcribing
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        } else if any_sidebar_attention {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
     }
 

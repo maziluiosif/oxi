@@ -161,7 +161,10 @@ mod tests {
             short_model_label("org/repo/qwen2.5-coder-7b.gguf", 24),
             "qwen2.5-coder-7b"
         );
-        assert_eq!(short_model_label("qwen2.5-coder:7b", 20), "qwen2.5-coder:7b");
+        assert_eq!(
+            short_model_label("qwen2.5-coder:7b", 20),
+            "qwen2.5-coder:7b"
+        );
         assert_eq!(short_model_label("", 10), "(custom)");
         assert_eq!(short_model_label("claude-sonnet-4-5", 10), "claude-son…");
     }

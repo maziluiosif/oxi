@@ -34,9 +34,9 @@ pub fn wire_fingerprint_for(
         LlmProviderKind::OpenCodeGo if opencode_go_model_uses_anthropic(&cfg.model_id) => {
             "anthropic-messages"
         }
-        LlmProviderKind::ClaudeCodeAcp
-        | LlmProviderKind::CursorAcp
-        | LlmProviderKind::CodexAcp => "acp",
+        LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => {
+            "acp"
+        }
         _ => "openai-chat",
     };
     let canonical = serde_json::json!({

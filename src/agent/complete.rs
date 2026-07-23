@@ -368,9 +368,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 .await
             }
         }
-        LlmProviderKind::ClaudeCodeAcp
-        | LlmProviderKind::CursorAcp
-        | LlmProviderKind::CodexAcp => {
+        LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => {
             // ACP drives a full interactive agent session; it has no cheap one-shot
             // text-completion path for helpers like commit-message generation.
             Err("ACP agents do not support one-shot completion. \
