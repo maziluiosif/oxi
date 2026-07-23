@@ -1,7 +1,11 @@
 [![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**oxi** is a fast, local-first desktop coding-agent app built in Rust with **egui/eframe**. It is a single native binary with a chat UI, local workspace tools, session persistence, Git controls, an embedded terminal, local voice dictation, and provider support for hosted APIs, local runtimes, SSH-tunneled runtimes, and oxi-managed HuggingFace GGUF models.
+**oxi** is a native, local-first coding-agent desktop app for people who want to run *any* model — your own local GGUF, an Ollama/LM Studio server, a box you SSH into, or a hosted API — without an Electron shell and without your code, keys, or history leaving your machine.
+
+It is a single native binary built in Rust with **egui/eframe**: a chat-driven coding agent, a workspace file explorer and multi-tab code editor, local workspace tools, session persistence, Git controls, an embedded terminal, and local voice dictation — all rooted in your own directories.
+
+**Why it exists:** the polished commercial coding tools assume you'll use their cloud and their subscription model. oxi is the opposite bet — bring your own model, keep everything local, own your data. If you run local or self-hosted models, care about privacy, or just don't want a browser engine eating your RAM, oxi is built for you.
 
 The default workflow is coding-agent oriented, but the system prompt is editable, so oxi can be adapted to other assistant workflows too.
 
@@ -81,13 +85,14 @@ target/release/oxi
 
 ## Why oxi
 
-- **Native desktop app** — Rust + egui, no Electron/webview runtime.
-- **Local-first** — settings, sessions, tool execution, SSH credentials, OAuth tokens, local models, and voice models are handled on your machine.
+- **Any model, no lock-in** — hosted APIs (OpenAI, Azure, OpenRouter, GPT Codex, OpenCode Go, Anthropic-compatible), local servers (LM Studio, Ollama), oxi-managed HuggingFace GGUF models via `llama-server`, or agent CLIs over ACP (Claude Code, Cursor, Codex). Switch providers from one control.
+- **Local-first by design** — settings, sessions, tool execution, SSH credentials, OAuth tokens, local models, and voice models stay on your machine. No account required to use your own models.
+- **Local & self-hosted friendly** — run GGUF models oxi downloads for you, connect to an LM Studio/Ollama server, or tunnel to a GPU box over SSH — no external `ssh` binary needed.
+- **Native, not Electron** — Rust + egui, a single binary, no bundled browser engine. Low idle RAM (see below).
+- **Workspace file explorer + code editor** — a multi-tab editor with syntax highlighting, minimap, find/replace, external-change detection, and Git changes opened inline — not just a chat window.
 - **Workspace-aware agent tools** — inspect and search code, read/write/edit/delete/move files, create directories, inspect Git state/diffs, run verification commands, call MCP servers, and search/fetch web content.
-- **Provider flexibility** — OpenAI, Azure OpenAI, OpenRouter, GPT Codex, OpenCode Go, Custom Anthropic-compatible endpoints, LM Studio, Ollama, Local HF, and Claude Code over ACP.
-- **Local model friendly** — connect to LM Studio/Ollama, tunnel to a remote runtime over SSH, or let oxi download GGUF models from HuggingFace and run them through `llama-server`.
 - **Built-in developer surfaces** — source-control panel, diffs, commit-message generation, and a workspace-rooted terminal.
-- **User-controlled prompting** — editable agent prompt and separate commit-message prompt.
+- **User-controlled prompting** — editable agent prompt, `@`-mention files/folders into a message, and a separate commit-message prompt.
 - **Local voice dictation** — optional microphone dictation using local Whisper models.
 
 ![oxi RAM usage](assets/screenshots/resource_ussage.png)
@@ -189,6 +194,8 @@ Assistant output is rendered as structured blocks rather than plain text only. T
 - markdown final answers
 - image attachments in the transcript
 - stop/cancel while a response is streaming
+- `@`-mention files and folders in the composer to inject their contents into the message
+- unseen-completion flagging when an agent run finishes in a chat you are not currently viewing
 - heuristic long-history trimming before provider requests
 
 ### Git panel
@@ -208,6 +215,18 @@ Current Git features include:
 - AI commit-message generation from the current diff
 
 The commit-message generator can use the active provider or a provider/model pinned in Settings, with its own editable system prompt.
+
+### File explorer and code editor
+
+oxi is more than a chat window: it includes a workspace file explorer and a multi-tab text editor so you can read and edit code next to the agent.
+
+- **Explorer tree** — browse the active workspace, with Git status coloring on entries and dimming for Git-ignored paths.
+- **Context-menu file operations** — create, rename, and delete files/folders from the tree, and reveal a path in the OS file manager.
+- **Multi-tab editor** — open several files at once, each in its own tab, with syntax highlighting.
+- **Minimap** — a scrollable overview of the current file; you can scroll while hovering over it.
+- **Find / replace** — in-file search and replace with match highlighting.
+- **External-change detection** — oxi notices when a file changes on disk (e.g. after an agent edit) and keeps the view in sync.
+- **Git changes inline** — open a Git diff as an editor tab, with files staying open and editable beside it.
 
 ### Embedded terminal
 
@@ -241,8 +260,11 @@ Supported provider kinds:
 | Custom Anthropic | User-configured Anthropic Messages-compatible endpoint |
 | LM Studio | Local/LAN OpenAI-compatible server |
 | Ollama | Local/LAN OpenAI-compatible server at `/v1` |
-| Local HF | oxi-managed GGUF model + `llama-server` runtime |
-| Claude Code (ACP) | oxi acts as an Agent Client Protocol client and spawns an ACP subprocess |
+| Local HF | oxi-managed GGUF model + local `llama-server` runtime |
+| Remote HF | oxi-managed GGUF model + `llama-server` runtime on an SSH-tunneled host |
+| Claude Code (ACP) | oxi acts as an Agent Client Protocol client and spawns the `claude-code-acp` subprocess |
+| Cursor (ACP) | Cursor CLI's built-in ACP server (`agent acp`) |
+| Codex (ACP) | OpenAI Codex CLI through the official ACP adapter |
 
 ### Provider defaults
 
@@ -257,7 +279,10 @@ Supported provider kinds:
 | LM Studio | `http://localhost:1234/v1` | `local-model` |
 | Ollama | `http://localhost:11434/v1` | `qwen2.5-coder:7b` |
 | Local HF | `http://127.0.0.1:18080/v1` | `local-hf-model` |
+| Remote HF | `http://127.0.0.1:18080/v1` (via SSH tunnel) | `local-hf-model` |
 | Claude Code (ACP) | not HTTP-based | `sonnet` informational default |
+| Cursor (ACP) | not HTTP-based | provider default |
+| Codex (ACP) | not HTTP-based | provider default |
 
 ### Auth fallback environment variables
 
@@ -284,27 +309,32 @@ Create an LM Studio or Ollama provider config, point the base URL at your runtim
 
 LM Studio and Ollama API keys are optional because local servers usually ignore bearer tokens. oxi will use the profile value, then the relevant environment variable, then an empty key.
 
-### Local HF
+### Local HF and Remote HF
 
-The **Local HF** provider lets oxi manage GGUF models directly:
+The **Local HF** and **Remote HF** providers let oxi manage GGUF models directly:
 
 - search HuggingFace for GGUF repositories
 - list available `.gguf` files
 - download selected models into oxi's data directory
 - install a matching `llama-server` runtime
-- start/stop a local `llama-server` process
+- start/stop the `llama-server` process
 - talk to it through the OpenAI-compatible `/v1` API
 
-Local HF can also be combined with the SSH compute target below to manage and start a runtime on another machine.
+The two providers differ only in *where* the managed runtime runs:
+
+- **Local HF** runs the oxi-managed `llama-server` on this machine.
+- **Remote HF** runs the same oxi-managed workflow — install runtime, download GGUF, start/stop, tunnel chat — on another host over SSH. It is always remote; there is no local/remote toggle.
+
+Remote HF is a dedicated provider now. If you previously configured **Local HF** with an SSH compute target, oxi migrates that setup to **Remote HF** automatically on first launch.
 
 ### Remote compute over SSH
 
 ![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png)
 
-LM Studio, Ollama, and Local HF provider configs support a compute target:
+SSH compute targets connect oxi to a model runtime on another machine through an SSH tunnel:
 
-- **Local** — connect directly to the provider's effective base URL.
-- **Remote (SSH)** — connect to another machine through an SSH tunnel and forward a local port to the model runtime running there.
+- **LM Studio and Ollama** expose a **Local / Remote (SSH)** toggle. *Local* connects directly to the provider's base URL; *Remote (SSH)* forwards a local port to a runtime already listening on `127.0.0.1` on the remote host.
+- **Remote HF** is SSH-only and additionally manages the runtime for you (install, download, start/stop) on the remote host.
 
 Implementation notes:
 
@@ -405,7 +435,17 @@ The `web_search` tool supports multiple backends:
 
 ## Appearance
 
-Settings include theme and density controls. Built-in themes are managed by the theme catalog, and UI density is applied through egui zoom so text and spacing scale together.
+Settings include theme and density controls. Built-in themes are managed by the theme catalog, and UI density is applied through egui zoom so text and spacing scale together. A custom theme can also be loaded from a JSON spec.
+
+Built-in themes: **Dark**, **Light**, **Midnight**, **Sublime**, and **Sublime 4** (`mariana`). Each theme restyles the whole app — chrome, transcript, syntax highlighting, and the editor — consistently.
+
+| Sublime 4 | Sublime |
+|---|---|
+| ![oxi Sublime 4 theme](assets/screenshots/theme-mariana.png) | ![oxi Sublime theme](assets/screenshots/theme-sublime.png) |
+
+| Midnight | Light |
+|---|---|
+| ![oxi Midnight theme](assets/screenshots/theme-midnight.png) | ![oxi Light theme](assets/screenshots/theme-light.png) |
 
 ## Architecture
 
@@ -413,6 +453,7 @@ High-level source layout:
 
 - `src/main.rs` — native `eframe` entry point, window setup, panic logging
 - `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior, Git/terminal panels
+- `src/app/file_explorer/` — workspace file explorer, multi-tab code editor, minimap, find/replace, and inline Git-diff tabs
 - `src/agent/` — agent runner, prompts, provider adapters, history conversion/trimming, approvals, tool execution
 - `src/agent/tools/` — filesystem, shell/search, codebase-search, Git inspection, web, and reversible-turn tool implementations
 - `src/git.rs` — background Git worker and typed Git operations
