@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-07-23
+
+### Added
+- Flag unseen agent completions with background completion indicators
+- Add Cursor and Codex ACP providers with configurable reasoning effort
+- Open Git changes directly in the editor with inline diff highlighting
+- Stream bash output across Anthropic, OpenAI, and Codex backends
+- Support hold-Space push-to-dictate in the composer
+- Surface Codex tool calls early with edit argument previews
+- Add split-column diffs and stable tool expansion behavior
+
+### Changed
+- Stabilize transcript layout while scrolling and disable message culling when pointer is over transcript
+- Stabilize composer provider, model, and effort selectors
+- Improve Git pull to safely handle fast-forwards and preserve local changes
+- Restore upstream egui crates instead of performance fork
+- Refactor agent, app, settings UI, and file explorer into focused modules
+
+### Fixed
+- Pin Windows crate for Direct3D compatibility with wgpu-hal
+- Keep inline links on wrapped text rows in shared horizontal layout
+- Preserve viewport anchor when soft wrapping changes on resize
+- Gate terminal styling imports on non-Windows platforms
+
+
 ## [0.20.1] - 2026-07-21
 
 ### Fixed
@@ -527,7 +552,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/maziluiosif/oxi/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/maziluiosif/oxi/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/maziluiosif/oxi/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/maziluiosif/oxi/compare/v0.18.0...v0.19.0
