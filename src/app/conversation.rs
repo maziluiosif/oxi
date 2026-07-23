@@ -497,9 +497,9 @@ impl OxiApp {
                             // began inside the transcript content column — this excludes wheel
                             // scrolling (no button) and scrollbar dragging (press to the right of
                             // the column), so both stay fully culled.
-                            // Stop culling while the pointer rests over the transcript and is not
-                            // actively scrolling. Two things make this necessary for text
-                            // selection:
+                            // Stop culling while the pointer rests over the transcript, including
+                            // during wheel/trackpad scrolling. Two things make this necessary for
+                            // text selection and stable layout:
                             //   1. egui associates a press with a widget using the rects from the
                             //      PREVIOUS frame, so the message under the pointer must already be
                             //      a real laid-out widget before the click — a culled `add_space`
@@ -511,20 +511,20 @@ impl OxiApp {
                             //      culled frame to frame and the press lands inconsistently (this is
                             //      the "selection sometimes appears at random" symptom).
                             // Disabling culling on hover keeps the rendered set stable and every
-                            // visible message selectable. A hover is a single settling frame (egui
-                            // does not repaint an idle view), and during an actual wheel/trackpad
-                            // scroll the button-up + non-zero scroll delta keeps culling on, so
-                            // scrolling a long transcript stays O(visible).
-                            let content_x = ui.max_rect().x_range();
-                            let viewport_y = ui.clip_rect().y_range();
-                            let pointer_interacting = ui.ctx().input(|input| {
-                                let over = input.pointer.interact_pos().is_some_and(|pos| {
-                                    content_x.contains(pos.x) && viewport_y.contains(pos.y)
-                                });
-                                let scrolling = input.smooth_scroll_delta.y.abs() > 0.5;
-                                over && !scrolling
+                            // visible message selectable. It must remain disabled while scrolling:
+                            // switching from real widgets to cached `add_space` placeholders on the
+                            // first scroll frame can change the content width/height and visibly
+                            // re-wrap the transcript. Culling still applies when the pointer is
+                            // outside the transcript viewport.
+                            let scroll_viewport = ui.clip_rect();
+                            let pointer_over_transcript = ui.ctx().input(|input| {
+                                input
+                                    .pointer
+                                    .interact_pos()
+                                    .is_some_and(|pos| scroll_viewport.contains(pos))
                             });
-                            let cull_enabled = !(transcript_has_selection || pointer_interacting);
+                            let cull_enabled =
+                                !(transcript_has_selection || pointer_over_transcript);
                             for (start, end) in units {
                                 let messages = &self.conv.workspaces[wi].sessions[si].messages;
                                 let fingerprint =

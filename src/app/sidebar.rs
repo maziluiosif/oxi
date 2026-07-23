@@ -577,112 +577,117 @@ impl OxiApp {
                 0.0
             };
             let chat_w = (ui.available_width() - git_w).max(60.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(chat_w, full_h),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    let editor_open = self.conv.editor.active_document().is_some();
-                    Frame::new()
-                        .fill(c_bg_main())
-                        .inner_margin(Margin {
-                            // The editor gutter starts directly at the sidebar boundary; the chat
-                            // view keeps its usual breathing room.
-                            left: if editor_open {
-                                0
-                            } else {
-                                CHAT_VIEW_MARGIN_LEFT as i8
-                            },
-                            right: CHAT_VIEW_MARGIN_RIGHT as i8,
-                            top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
-                            // The editor owns a bottom-docked find panel, so it must meet the
-                            // status bar without the chat view's composer breathing room.
-                            bottom: if editor_open {
-                                0
-                            } else {
-                                CHAT_FRAME_BOTTOM as i8
-                            },
-                        })
-                        .show(ui, |ui| {
-                            if editor_open {
-                                self.render_text_editor(ui);
-                                return;
-                            }
+            // `allocate_ui_with_layout` grows its parent allocation when a child reports a wider
+            // `min_rect`. That is normally useful, but here it lets a narrow transcript (notably
+            // while its scrollbar appears and text re-wraps) push the fixed-width git panel to
+            // the right. Keep the split geometry authoritative: chat content may reflow inside
+            // this rect, but it must never participate in sizing the sibling git column.
+            let chat_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(chat_w, full_h));
+            let mut chat_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt("fixed_chat_column")
+                    .max_rect(chat_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            chat_ui.shrink_clip_rect(chat_rect);
+            {
+                let ui = &mut chat_ui;
+                let editor_open = self.conv.editor.active_document().is_some();
+                Frame::new()
+                    .fill(c_bg_main())
+                    .inner_margin(Margin {
+                        // The editor gutter starts directly at the sidebar boundary; the chat
+                        // view keeps its usual breathing room.
+                        left: if editor_open {
+                            0
+                        } else {
+                            CHAT_VIEW_MARGIN_LEFT as i8
+                        },
+                        right: CHAT_VIEW_MARGIN_RIGHT as i8,
+                        top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
+                        // The editor owns a bottom-docked find panel, so it must meet the
+                        // status bar without the chat view's composer breathing room.
+                        bottom: if editor_open {
+                            0
+                        } else {
+                            CHAT_FRAME_BOTTOM as i8
+                        },
+                    })
+                    .show(ui, |ui| {
+                        if editor_open {
+                            self.render_text_editor(ui);
+                            return;
+                        }
 
-                            let style = (*ui.style()).clone();
-                            let column_center_w = crate::theme::chat_column_center_width(
-                                ui.available_width(),
-                                &style,
-                            );
+                        let style = (*ui.style()).clone();
+                        let column_center_w =
+                            crate::theme::chat_column_center_width(ui.available_width(), &style);
 
-                            const HEADER_H: f32 = 38.0;
-                            const HEADER_GAP: f32 = 6.0;
-                            let show_diff =
-                                self.conv.diff_view_open && self.conv.git.diff.is_some();
-                            self.render_chat_header(ui, column_center_w);
-                            ui.add_space(HEADER_GAP);
+                        const HEADER_H: f32 = 38.0;
+                        const HEADER_GAP: f32 = 6.0;
+                        let show_diff = self.conv.diff_view_open && self.conv.git.diff.is_some();
+                        self.render_chat_header(ui, column_center_w);
+                        ui.add_space(HEADER_GAP);
 
-                            // Floating composer always stays available — even over a diff —
-                            // so you can discuss the change without leaving the view.
-                            const COMPOSER_GAP: f32 = 8.0;
-                            let composer_overlay_h =
-                                (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
-                            let conversation_h =
-                                (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
-                            let chat_rect = ui.max_rect();
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), conversation_h),
-                                egui::Layout::top_down(egui::Align::Min),
-                                |ui| {
-                                    if show_diff {
-                                        if let Some((title, diff_text)) = self.conv.git.diff.clone()
-                                        {
-                                            self.render_diff_view(
-                                                ui,
-                                                &title,
-                                                &diff_text,
-                                                column_center_w,
-                                            );
-                                        }
-                                    } else {
-                                        self.render_conversation(
+                        // Floating composer always stays available — even over a diff —
+                        // so you can discuss the change without leaving the view.
+                        const COMPOSER_GAP: f32 = 8.0;
+                        let composer_overlay_h =
+                            (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
+                        let conversation_h =
+                            (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                        let chat_rect = ui.max_rect();
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), conversation_h),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                if show_diff {
+                                    if let Some((title, diff_text)) = self.conv.git.diff.clone() {
+                                        self.render_diff_view(
                                             ui,
+                                            &title,
+                                            &diff_text,
                                             column_center_w,
-                                            conversation_h,
-                                            composer_overlay_h,
                                         );
                                     }
-                                },
-                            );
+                                } else {
+                                    self.render_conversation(
+                                        ui,
+                                        column_center_w,
+                                        conversation_h,
+                                        composer_overlay_h,
+                                    );
+                                }
+                            },
+                        );
 
-                            // Soft scrim so transcript text doesn't compete with the input.
-                            // If TextEdit changes height while rendering, `render_composer` asks
-                            // egui for a second layout pass in the same frame. That keeps this
-                            // previous measurement safe for hard newlines, wrapping, deletion,
-                            // sending, attachments, and notices without predicting individual keys.
-                            let composer_h = self.conv.composer_measured_full_h.max(80.0);
-                            let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
-                            let scrim_top = chat_rect.bottom() - scrim_h;
-                            let scrim_rect = egui::Rect::from_min_max(
-                                egui::pos2(chat_rect.left(), scrim_top),
-                                egui::pos2(chat_rect.right(), chat_rect.bottom()),
-                            );
-                            paint_composer_scrim(ui, scrim_rect);
+                        // Soft scrim so transcript text doesn't compete with the input.
+                        // If TextEdit changes height while rendering, `render_composer` asks
+                        // egui for a second layout pass in the same frame. That keeps this
+                        // previous measurement safe for hard newlines, wrapping, deletion,
+                        // sending, attachments, and notices without predicting individual keys.
+                        let composer_h = self.conv.composer_measured_full_h.max(80.0);
+                        let scrim_h = (composer_h + 28.0).min(conversation_h * 0.45);
+                        let scrim_top = chat_rect.bottom() - scrim_h;
+                        let scrim_rect = egui::Rect::from_min_max(
+                            egui::pos2(chat_rect.left(), scrim_top),
+                            egui::pos2(chat_rect.right(), chat_rect.bottom()),
+                        );
+                        paint_composer_scrim(ui, scrim_rect);
 
-                            let composer_top = chat_rect.bottom() - composer_h;
-                            let composer_rect = egui::Rect::from_min_size(
-                                egui::pos2(chat_rect.left(), composer_top),
-                                egui::vec2(chat_rect.width(), composer_h),
-                            );
-                            ui.scope_builder(
-                                egui::UiBuilder::new().max_rect(composer_rect),
-                                |ui| {
-                                    self.render_composer(ui, column_center_w);
-                                },
-                            );
+                        let composer_top = chat_rect.bottom() - composer_h;
+                        let composer_rect = egui::Rect::from_min_size(
+                            egui::pos2(chat_rect.left(), composer_top),
+                            egui::vec2(chat_rect.width(), composer_h),
+                        );
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(composer_rect), |ui| {
+                            self.render_composer(ui, column_center_w);
                         });
-                    ui.expand_to_include_rect(ui.max_rect());
-                },
-            );
+                    });
+                ui.expand_to_include_rect(ui.max_rect());
+            }
+            drop(chat_ui);
+            ui.advance_cursor_after_rect(chat_rect);
 
             // Right git panel
             if git_open {
