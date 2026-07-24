@@ -20,11 +20,11 @@ The default workflow is coding-agent oriented, but the system prompt is editable
 
 The tap distributes the precompiled release as a Homebrew Cask and is updated automatically on every release.
 
-macOS Apple Silicon (the app is ad-hoc signed but not Apple-notarized, so the explicit `--no-quarantine` flag is required):
+macOS Apple Silicon (the app is ad-hoc signed but not Apple-notarized, so quarantine must be explicitly disabled through Homebrew's Cask options):
 
 ```bash
 brew tap maziluiosif/tap
-brew install --cask --no-quarantine oxi
+HOMEBREW_CASK_OPTS="--no-quarantine" brew install --cask oxi
 ```
 
 This installs `oxi.app` in `/Applications` and exposes the `oxi` command. Only bypass quarantine when you trust this repository and its published release.
