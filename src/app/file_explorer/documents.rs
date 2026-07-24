@@ -7,7 +7,90 @@ use super::EditorLayoutCache;
 
 const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
+fn scratchpad_path() -> PathBuf {
+    crate::settings::AppSettings::config_path()
+        .parent()
+        .map_or_else(
+            || PathBuf::from("scratchpad.md"),
+            |dir| dir.join("scratchpad.md"),
+        )
+}
+
 impl OxiApp {
+    pub(crate) fn open_scratchpad(&mut self) {
+        let path = scratchpad_path();
+        if let Some(index) = self
+            .conv
+            .editor
+            .documents
+            .iter()
+            .position(|document| document.is_scratchpad)
+        {
+            self.conv.editor.active = Some(index);
+            self.conv.editor.hidden_active = None;
+            self.conv.editor.diff_tab_active = false;
+            self.conv.editor.focus_editor_next_frame = true;
+            return;
+        }
+
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let disk_modified = std::fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        self.conv.editor.documents.push(EditorDocument {
+            path,
+            is_scratchpad: true,
+            saved_content: content.clone(),
+            content,
+            disk_modified,
+            externally_modified: false,
+            syntax_state: None,
+            content_revision: 0,
+            dirty: false,
+            layout_cache: EditorLayoutCache::default(),
+            minimap_cache: None,
+            viewport_width_bits: None,
+            viewport_anchor_line: 0,
+        });
+        self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
+        self.conv.editor.hidden_active = None;
+        self.conv.editor.diff_tab_active = false;
+        self.conv.editor.show_diff = false;
+        self.conv.editor.error = None;
+        self.conv.editor.focus_editor_next_frame = true;
+    }
+
+    pub(super) fn autosave_scratchpad(&mut self, index: usize) {
+        let Some(document) = self.conv.editor.documents.get_mut(index) else {
+            return;
+        };
+        if !document.is_scratchpad || !document.is_dirty() {
+            return;
+        }
+        let result = document
+            .path
+            .parent()
+            .ok_or_else(|| "Scratchpad path has no parent directory.".to_string())
+            .and_then(|parent| std::fs::create_dir_all(parent).map_err(|error| error.to_string()))
+            .and_then(|()| {
+                std::fs::write(&document.path, document.content.as_bytes())
+                    .map_err(|error| error.to_string())
+            });
+        match result {
+            Ok(()) => {
+                document.saved_content.clone_from(&document.content);
+                document.dirty = false;
+                document.disk_modified = std::fs::metadata(&document.path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok();
+                document.externally_modified = false;
+                self.conv.editor.error = None;
+            }
+            Err(error) => {
+                self.conv.editor.error = Some(format!("Could not autosave scratchpad: {error}"));
+            }
+        }
+    }
     pub(super) fn reveal_editor_file_in_explorer(&mut self, path: &Path) {
         let root = PathBuf::from(&self.active_workspace().root_path);
         let safe_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
@@ -84,6 +167,7 @@ impl OxiApp {
             Ok(content) => {
                 self.conv.editor.documents.push(EditorDocument {
                     path: safe_path.clone(),
+                    is_scratchpad: false,
                     saved_content: content.clone(),
                     content,
                     disk_modified: metadata.modified().ok(),
@@ -112,9 +196,14 @@ impl OxiApp {
     }
 
     pub(crate) fn save_editor_file(&mut self) {
-        let Some(document) = self.conv.editor.active_document_mut() else {
+        let Some(index) = self.conv.editor.active else {
             return;
         };
+        if self.conv.editor.documents[index].is_scratchpad {
+            self.autosave_scratchpad(index);
+            return;
+        }
+        let document = &mut self.conv.editor.documents[index];
         match std::fs::write(&document.path, document.content.as_bytes()) {
             Ok(()) => {
                 document.saved_content.clone_from(&document.content);
@@ -136,6 +225,9 @@ impl OxiApp {
 
     pub(super) fn check_external_file_changes(&mut self) {
         for document in &mut self.conv.editor.documents {
+            if document.is_scratchpad && document.is_dirty() {
+                continue;
+            }
             let modified = std::fs::metadata(&document.path)
                 .and_then(|metadata| metadata.modified())
                 .ok();

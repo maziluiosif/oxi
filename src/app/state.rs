@@ -148,6 +148,8 @@ pub enum FileOperation {
 
 pub struct EditorDocument {
     pub path: PathBuf,
+    /// Global autosaved scratchpad documents are not constrained to the active workspace.
+    pub is_scratchpad: bool,
     pub content: String,
     pub saved_content: String,
     pub disk_modified: Option<std::time::SystemTime>,
@@ -186,8 +188,10 @@ impl EditorState {
         self.active.and_then(|index| self.documents.get_mut(index))
     }
 
-    pub fn any_dirty(&self) -> bool {
-        self.documents.iter().any(EditorDocument::is_dirty)
+    pub fn any_dirty_workspace_file(&self) -> bool {
+        self.documents
+            .iter()
+            .any(|document| !document.is_scratchpad && document.is_dirty())
     }
 
     /// Choose which widget should own keyboard focus given the current view: the editor
@@ -420,6 +424,8 @@ pub struct ConversationState {
     pub active_workspace: usize,
     pub input: String,
     pub sidebar_search: String,
+    /// Cross-view notice shown in the Chats sidebar (for example, a blocked workspace switch).
+    pub sidebar_notice: Option<String>,
     /// When set, the sidebar shows an inline rename field for `(workspace_idx, session_idx)`.
     pub renaming_session: Option<(usize, usize)>,
     pub rename_draft: String,

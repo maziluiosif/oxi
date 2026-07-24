@@ -62,6 +62,18 @@ impl OxiApp {
 
         ui.add_space(8.0);
 
+        if let Some(notice) = self.conv.sidebar_notice.clone() {
+            Frame::new()
+                .fill(c_error_bg())
+                .stroke(Stroke::new(1.0, c_error_fg().gamma_multiply(0.45)))
+                .corner_radius(CornerRadius::same(RADIUS_ROW))
+                .inner_margin(Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(notice).size(FS_TINY).color(c_error_fg()));
+                });
+            ui.add_space(8.0);
+        }
+
         const FOOTER_H: f32 = 36.0;
         let scroll_h = (ui.available_height() - FOOTER_H).max(48.0);
         ScrollArea::vertical()

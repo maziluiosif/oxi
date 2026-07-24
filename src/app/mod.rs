@@ -145,6 +145,7 @@ impl OxiApp {
                 active_workspace,
                 input: String::new(),
                 sidebar_search: String::new(),
+                sidebar_notice: None,
                 renaming_session: None,
                 rename_draft: String::new(),
                 chat_scroll_id: egui::Id::new("main_chat_scroll"),
@@ -396,14 +397,25 @@ impl OxiApp {
         {
             return;
         }
-        if self.conv.editor.any_dirty() {
-            self.conv.editor.error = Some("Save the open file before switching workspace.".into());
+        if self.conv.editor.any_dirty_workspace_file() {
+            let message = "Save the open file before switching workspace.".to_string();
+            self.conv.editor.error = Some(message.clone());
+            self.conv.sidebar_notice = Some(message);
             return;
         }
         self.capture_active_session_config();
-        self.conv.editor.documents.clear();
+        self.conv.sidebar_notice = None;
+        self.conv
+            .editor
+            .documents
+            .retain(|document| document.is_scratchpad);
         self.conv.editor.active = None;
-        self.conv.editor.hidden_active = None;
+        self.conv.editor.hidden_active = self
+            .conv
+            .editor
+            .documents
+            .iter()
+            .position(|document| document.is_scratchpad);
         let target_si = self.conv.workspaces[workspace_idx].active;
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
@@ -436,15 +448,26 @@ impl OxiApp {
             return;
         }
         let workspace_changed = workspace_idx != self.conv.active_workspace;
-        if workspace_changed && self.conv.editor.any_dirty() {
-            self.conv.editor.error = Some("Save the open file before switching workspace.".into());
+        if workspace_changed && self.conv.editor.any_dirty_workspace_file() {
+            let message = "Save the open file before switching workspace.".to_string();
+            self.conv.editor.error = Some(message.clone());
+            self.conv.sidebar_notice = Some(message);
             return;
         }
         self.capture_active_session_config();
+        self.conv.sidebar_notice = None;
         if workspace_changed {
-            self.conv.editor.documents.clear();
+            self.conv
+                .editor
+                .documents
+                .retain(|document| document.is_scratchpad);
             self.conv.editor.active = None;
-            self.conv.editor.hidden_active = None;
+            self.conv.editor.hidden_active = self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .position(|document| document.is_scratchpad);
         }
         self.swap_session_input(workspace_idx, session_idx);
         self.conv.active_workspace = workspace_idx;

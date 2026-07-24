@@ -26,6 +26,9 @@ pub(super) type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
     Option<usize>,
     Option<usize>,
     (usize, Option<f32>),
+    bool,
+    f32,
+    egui::Id,
 )>;
 
 impl OxiApp {
@@ -245,6 +248,8 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
+                            let scratchpad_changed =
+                                output.response.changed() && document.is_scratchpad;
                             if output.response.changed() {
                                 document.content_revision =
                                     document.content_revision.wrapping_add(1);
@@ -614,6 +619,9 @@ impl OxiApp {
                                 active_line,
                                 caret_char,
                                 (viewport_anchor_line, resize_anchor_top),
+                                scratchpad_changed,
+                                output.galley_pos.y + output.galley.rect.bottom(),
+                                output.response.id,
                             )
                         })
                 })
@@ -713,6 +721,36 @@ impl OxiApp {
                 state.offset.y = (state.offset.y + selection_scroll).clamp(0.0, max_y);
                 state.store(ui.ctx(), scroll_output.id);
                 ui.ctx().request_repaint();
+            }
+
+            // The ScrollArea can own the blank viewport below a short document instead of the
+            // TextEdit response. Handle that outer area too, so clicking anywhere in the source
+            // column below the final row reliably places the caret at EOF.
+            let clicked_blank_tail = ui.input(|input| input.pointer.primary_clicked())
+                && ui.input(|input| input.modifiers.is_none())
+                && ui
+                    .input(|input| input.pointer.interact_pos())
+                    .is_some_and(|pointer| {
+                        scroll_output.inner_rect.contains(pointer)
+                            && pointer.y > scroll_output.inner.8
+                    });
+            if clicked_blank_tail {
+                let id = scroll_output.inner.9;
+                let end = egui::text::CCursor::new(
+                    self.conv.editor.documents[index].content.chars().count(),
+                );
+                let caret = egui::text::CCursorRange::one(end);
+                if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+                    state.cursor.set_char_range(Some(caret));
+                    state.store(ui.ctx(), id);
+                }
+                ui.ctx().memory_mut(|memory| memory.request_focus(id));
+                self.conv.editor.navigation_cursor_char = end.index.0;
+                ui.ctx().request_repaint();
+            }
+
+            if scroll_output.inner.7 {
+                self.autosave_scratchpad(index);
             }
 
             goto_definition_byte = scroll_output.inner.3;

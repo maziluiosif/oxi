@@ -36,11 +36,11 @@ impl OxiApp {
             // modes does not move the first content row by a few pixels.
             ui.set_height(24.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if crate::ui::chrome::icon_button_plain(ui, ICON_SETTINGS, 20.0, false)
-                    .on_hover_text("Open settings")
+                if crate::ui::chrome::icon_button_plain(ui, ICON_PROMPTS, 20.0, false)
+                    .on_hover_text("Open global scratchpad")
                     .clicked()
                 {
-                    self.open_settings_page();
+                    self.open_scratchpad();
                 }
                 if crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 20.0, false)
                     .on_hover_text("Refresh and check files on disk")
@@ -84,79 +84,106 @@ impl OxiApp {
         ui.add_space(8.0);
         ui.add_space(1.0);
 
-        let label = root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_else(|| root.to_str().unwrap_or("workspace"));
-        let root_expanded = !self.conv.explorer_collapsed_roots.contains(&root);
-        let (root_rect, root_response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
-        paint_explorer_row(ui, root_rect, root_response.hovered(), false);
-        ui.scope_builder(
-            egui::UiBuilder::new().max_rect(root_rect.shrink2(egui::vec2(4.0, 0.0))),
+        const FOOTER_H: f32 = 36.0;
+        let content_height = (ui.available_height() - FOOTER_H).max(48.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), content_height),
+            Layout::top_down(Align::Min),
             |ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.label(icon_glyph_rich(
-                        if root_expanded {
-                            ICON_ANGLE_DOWN
-                        } else {
-                            ICON_CHEVRON_RIGHT
-                        },
-                        FS_TINY,
-                        c_text_faint(),
-                    ));
-                    ui.label(icon_glyph_rich(
-                        if root_expanded {
-                            ICON_FOLDER_OPEN
-                        } else {
-                            ICON_FOLDER
-                        },
-                        FS_SMALL,
-                        c_text_muted(),
-                    ));
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(label)
-                                .strong()
-                                .size(FS_SMALL)
-                                .color(c_sidebar_section()),
-                        )
-                        .truncate(),
-                    );
-                });
+                let label = root
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_else(|| root.to_str().unwrap_or("workspace"));
+                let root_expanded = !self.conv.explorer_collapsed_roots.contains(&root);
+                let (root_rect, root_response) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 22.0),
+                    egui::Sense::click(),
+                );
+                paint_explorer_row(ui, root_rect, root_response.hovered(), false);
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(root_rect.shrink2(egui::vec2(4.0, 0.0))),
+                    |ui| {
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.label(icon_glyph_rich(
+                                if root_expanded {
+                                    ICON_ANGLE_DOWN
+                                } else {
+                                    ICON_CHEVRON_RIGHT
+                                },
+                                FS_TINY,
+                                c_text_faint(),
+                            ));
+                            ui.label(icon_glyph_rich(
+                                if root_expanded {
+                                    ICON_FOLDER_OPEN
+                                } else {
+                                    ICON_FOLDER
+                                },
+                                FS_SMALL,
+                                c_text_muted(),
+                            ));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(label)
+                                        .strong()
+                                        .size(FS_SMALL)
+                                        .color(c_sidebar_section()),
+                                )
+                                .truncate(),
+                            );
+                        });
+                    },
+                );
+                let root_response = root_response.on_hover_text(root.display().to_string());
+                if root_response.clicked() {
+                    if root_expanded {
+                        self.conv.explorer_collapsed_roots.insert(root.clone());
+                    } else {
+                        self.conv.explorer_collapsed_roots.remove(&root);
+                    }
+                }
+                root_response.context_menu(|ui| self.render_root_context_menu(ui, &root));
+                ui.add_space(4.0);
+
+                if let Some(operation) = self.conv.editor.file_operation.clone() {
+                    self.render_file_operation(ui, operation);
+                    ui.add_space(6.0);
+                }
+
+                if root_expanded {
+                    ScrollArea::vertical()
+                        .id_salt("workspace_file_explorer")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            self.render_explorer_directory(ui, &root, &root, &ignored, 1)
+                        });
+                }
+
+                if let Some(error) = self.conv.editor.error.clone() {
+                    ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+                        ui.label(RichText::new(error).size(FS_TINY).color(c_error_fg()));
+                    });
+                }
             },
         );
-        let root_response = root_response.on_hover_text(root.display().to_string());
-        if root_response.clicked() {
-            if root_expanded {
-                self.conv.explorer_collapsed_roots.insert(root.clone());
-            } else {
-                self.conv.explorer_collapsed_roots.remove(&root);
+
+        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            ui.add_space(4.0);
+            if crate::ui::chrome::flat_button_icon(
+                ui,
+                ICON_SETTINGS,
+                "Settings",
+                FS_SMALL,
+                egui::vec2(ui.available_width(), 28.0),
+                c_text_muted(),
+            )
+            .on_hover_text("Open settings")
+            .clicked()
+            {
+                self.open_settings_page();
             }
-        }
-        root_response.context_menu(|ui| self.render_root_context_menu(ui, &root));
-        ui.add_space(4.0);
-
-        if let Some(operation) = self.conv.editor.file_operation.clone() {
-            self.render_file_operation(ui, operation);
-            ui.add_space(6.0);
-        }
-
-        if root_expanded {
-            ScrollArea::vertical()
-                .id_salt("workspace_file_explorer")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    self.render_explorer_directory(ui, &root, &root, &ignored, 1)
-                });
-        }
-
-        if let Some(error) = self.conv.editor.error.clone() {
-            ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-                ui.label(RichText::new(error).size(FS_TINY).color(c_error_fg()));
-            });
-        }
+        });
     }
 
     fn render_explorer_directory(
