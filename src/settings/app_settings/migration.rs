@@ -171,7 +171,12 @@ impl AppSettings {
         if self.tools_enabled.len() != ALL_TOOL_NAMES.len() {
             self.tools_enabled.resize(ALL_TOOL_NAMES.len(), true);
         }
-        if self.system_prompt.trim().is_empty() {
+        // Restore the default when empty, and upgrade a stored prompt that still matches an
+        // older shipped default so prompt improvements reach users who never customized it.
+        // A genuinely custom prompt matches neither check and is left untouched.
+        if self.system_prompt.trim().is_empty()
+            || crate::agent::prompt::is_legacy_default_system_prompt(&self.system_prompt)
+        {
             self.system_prompt = crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string();
         }
         if self.commit_msg_system_prompt.trim().is_empty() {

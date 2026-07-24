@@ -345,6 +345,31 @@ fn normalize_migrates_nonempty_url_to_searxng_backend() {
 }
 
 #[test]
+fn normalize_upgrades_legacy_default_prompt_but_keeps_custom() {
+    use crate::agent::prompt::{
+        DEFAULT_AGENT_SYSTEM_PROMPT, LEGACY_DEFAULT_SYSTEM_PROMPTS,
+    };
+
+    // A stored prompt equal to an old shipped default is upgraded to the current default.
+    let mut s = AppSettings {
+        system_prompt: LEGACY_DEFAULT_SYSTEM_PROMPTS[0].to_string(),
+        ..Default::default()
+    };
+    s.normalize();
+    assert_eq!(s.system_prompt, DEFAULT_AGENT_SYSTEM_PROMPT);
+
+    // An empty prompt is restored to the current default.
+    s.system_prompt = "   ".to_string();
+    s.normalize();
+    assert_eq!(s.system_prompt, DEFAULT_AGENT_SYSTEM_PROMPT);
+
+    // A genuinely custom prompt is left untouched.
+    s.system_prompt = "You are my custom agent. {tools_list}".to_string();
+    s.normalize();
+    assert_eq!(s.system_prompt, "You are my custom agent. {tools_list}");
+}
+
+#[test]
 fn normalize_keeps_default_when_no_url() {
     // Older settings.json: no `web_search_backend` field and empty searxng_url.
     // Deserializes to Bing (current default) and stays on Bing.

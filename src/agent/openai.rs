@@ -82,6 +82,8 @@ async fn run_chat_loop_at(
     let tx = ctx.tx;
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
+    let context_char_budget = ctx.context_char_budget;
+    let tools_chars = ctx.tools_chars;
     let gate = &mut *ctx.gate;
     let mut round = 0u32;
     let mut stream_retries = 0u32;
@@ -93,6 +95,13 @@ async fn run_chat_loop_at(
         if max_rounds != 0 && round > max_rounds {
             return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
+        // Keep the accumulating history under the context ceiling as tool rounds pile up, so a
+        // long multi-round run can't overflow the window mid-flight. A no-op until it's needed.
+        crate::agent::history::trim_wire_history_to_budget(
+            messages,
+            tools_chars,
+            context_char_budget,
+        );
         let _ = tx.send(AgentEvent::AgentStart);
         let mut body = json!({
             "model": model,
@@ -690,6 +699,8 @@ mod integration_tests {
             gate: &mut gate,
             max_rounds: 10,
             effort_override: None,
+            context_char_budget: usize::MAX,
+            tools_chars: 0,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");
@@ -779,6 +790,8 @@ mod integration_tests {
             gate: &mut gate,
             max_rounds: 10,
             effort_override: None,
+            context_char_budget: usize::MAX,
+            tools_chars: 0,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");

@@ -191,14 +191,10 @@ impl OxiApp {
                 .iter()
                 .map(|(_, data)| data.len() * 4 / 3)
                 .sum::<usize>();
-        let budget_chars = context_char_budget_from_tokens(
-            self.conv
-                .settings
-                .active_config()
-                .effective_context_window(self.conv.settings.context_window_default),
-            self.calibrated_chars_per_token(key),
-        );
-        (self.estimated_session_context_chars(key) + current_input).min(budget_chars)
+        // Report the true estimated usage (system + tools + history + pending input). The meter
+        // clamps the displayed percentage to 100%, so it can now approach full instead of being
+        // capped at the trim ceiling — the reading lines up with the compaction/trim ladder.
+        self.estimated_session_context_chars(key) + current_input
     }
 
     /// The calibrated chars-per-token ratio for a session (measured from the last provider

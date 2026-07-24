@@ -20,4 +20,11 @@ pub struct LoopCtx<'a> {
     pub gate: &'a mut ApprovalGate,
     pub max_rounds: u32,
     pub effort_override: Option<&'a str>,
+    /// Char ceiling above which history is trimmed before each round, so a long multi-round
+    /// run cannot grow the prompt past the context window mid-flight. See the ladder in
+    /// [`crate::agent::history`]. `usize::MAX` disables mid-run trimming (single-round helpers).
+    pub context_char_budget: usize,
+    /// Size (chars) of the tool definitions sent every round, counted as fixed overhead when
+    /// measuring history against [`Self::context_char_budget`].
+    pub tools_chars: usize,
 }
