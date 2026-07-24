@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-07-24
+
+### Fixed
+- Use Homebrew 6 quarantine syntax
+
+
 ## [0.22.0] - 2026-07-24
 
 ### Added
@@ -582,7 +588,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/maziluiosif/oxi/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/maziluiosif/oxi/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/maziluiosif/oxi/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/maziluiosif/oxi/compare/v0.20.1...v0.21.0
