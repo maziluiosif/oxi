@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-24
+
+### Added
+- Unify diffs with editor tabs - open commit diffs in the editor pane without duplicate headers
+
+### Changed
+- Harden agent context management with improved history trimming between tool rounds across all providers
+- Count system and tool overhead against a shared context ladder
+- Preserve compaction summaries and tool output tails
+- Improve the default agent prompt and migrate legacy defaults
+- Reveal chats when selecting or creating sessions
+- Restore the chat sidebar when starting a new conversation
+
+### Fixed
+- Improve unsigned macOS distribution
+- Disable transcript culling on hover to ensure egui can latch selection presses to real widgets from the previous frame
+
+
 ## [0.21.1] - 2026-07-23
 
 ### Added
@@ -564,7 +582,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/maziluiosif/oxi/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/maziluiosif/oxi/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/maziluiosif/oxi/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/maziluiosif/oxi/compare/v0.20.0...v0.20.1
