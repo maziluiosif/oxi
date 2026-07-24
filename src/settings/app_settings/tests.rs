@@ -346,9 +346,7 @@ fn normalize_migrates_nonempty_url_to_searxng_backend() {
 
 #[test]
 fn normalize_upgrades_legacy_default_prompt_but_keeps_custom() {
-    use crate::agent::prompt::{
-        DEFAULT_AGENT_SYSTEM_PROMPT, LEGACY_DEFAULT_SYSTEM_PROMPTS,
-    };
+    use crate::agent::prompt::{DEFAULT_AGENT_SYSTEM_PROMPT, LEGACY_DEFAULT_SYSTEM_PROMPTS};
 
     // A stored prompt equal to an old shipped default is upgraded to the current default.
     let mut s = AppSettings {

@@ -204,8 +204,10 @@ pub(crate) fn flatten_assistant(m: &ChatMessage) -> String {
                 const HISTORY_TOOL_OUTPUT_CAP: usize = 8_000;
                 const HISTORY_TOOL_OUTPUT_TAIL: usize = 2_000;
                 if output.len() > HISTORY_TOOL_OUTPUT_CAP {
-                    let head_end =
-                        floor_char_boundary(output, HISTORY_TOOL_OUTPUT_CAP - HISTORY_TOOL_OUTPUT_TAIL);
+                    let head_end = floor_char_boundary(
+                        output,
+                        HISTORY_TOOL_OUTPUT_CAP - HISTORY_TOOL_OUTPUT_TAIL,
+                    );
                     let tail_start =
                         floor_char_boundary(output, output.len() - HISTORY_TOOL_OUTPUT_TAIL);
                     s.push_str(&output[..head_end]);
@@ -358,7 +360,12 @@ mod tests {
 
     #[test]
     fn long_tool_output_keeps_head_and_tail_in_history() {
-        let output = format!("{}{}{}", "H".repeat(6_000), "M".repeat(20_000), "T".repeat(3_000));
+        let output = format!(
+            "{}{}{}",
+            "H".repeat(6_000),
+            "M".repeat(20_000),
+            "T".repeat(3_000)
+        );
         let msg = ChatMessage {
             role: MsgRole::Assistant,
             text: String::new(),

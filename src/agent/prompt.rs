@@ -176,9 +176,13 @@ mod tests {
             assert!(is_legacy_default_system_prompt(&format!("\n{legacy}  ")));
         }
         // The current default is not "legacy" — no self-upgrade churn.
-        assert!(!is_legacy_default_system_prompt(DEFAULT_AGENT_SYSTEM_PROMPT));
+        assert!(!is_legacy_default_system_prompt(
+            DEFAULT_AGENT_SYSTEM_PROMPT
+        ));
         // A genuinely edited prompt is preserved.
-        assert!(!is_legacy_default_system_prompt("You are my custom agent. {tools_list}"));
+        assert!(!is_legacy_default_system_prompt(
+            "You are my custom agent. {tools_list}"
+        ));
         assert!(!is_legacy_default_system_prompt(""));
     }
 

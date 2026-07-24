@@ -16,14 +16,27 @@ The default workflow is coding-agent oriented, but the system prompt is editable
 
 ## Install
 
-### Homebrew (macOS Apple Silicon, Linux x86_64)
+### Homebrew
+
+The tap distributes the precompiled release as a Homebrew Cask and is updated automatically on every release.
+
+macOS Apple Silicon (the app is ad-hoc signed but not Apple-notarized, so the explicit `--no-quarantine` flag is required):
 
 ```bash
 brew tap maziluiosif/tap
-brew install oxi
+brew install --cask --no-quarantine oxi
 ```
 
-The Homebrew formula installs the precompiled binary from the latest GitHub release and is updated automatically on every release. On macOS the `.app` bundle is kept inside the Homebrew prefix; the `oxi` command launches it from any directory, using that directory as the first workspace.
+This installs `oxi.app` in `/Applications` and exposes the `oxi` command. Only bypass quarantine when you trust this repository and its published release.
+
+Linux x86_64:
+
+```bash
+brew tap maziluiosif/tap
+brew install --cask oxi
+```
+
+If you previously installed the old formula, migrate once with `brew uninstall --formula oxi` before running the appropriate Cask command above. The `oxi` command launches the app from any directory, using that directory as the first workspace.
 
 ### Manual download
 
@@ -31,17 +44,14 @@ Precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are
 
 #### macOS Gatekeeper / quarantine note
 
-If you download the macOS binary or `.app` manually, macOS may block it because it came from the internet. Remove the quarantine attribute after extracting it:
+The macOS bundle is ad-hoc signed for integrity but is not Apple-notarized. If you trust this repository and download the archive manually, copy the extracted app to `/Applications`, then explicitly remove its quarantine attributes:
 
 ```bash
-# For an app bundle:
-xattr -dr com.apple.quarantine /path/to/oxi.app
-
-# Or for a standalone binary:
-xattr -d com.apple.quarantine /path/to/oxi
+xattr -cr /Applications/oxi.app
+open /Applications/oxi.app
 ```
 
-Then launch it normally.
+For a standalone binary, use `xattr -c /path/to/oxi`. Do not disable Gatekeeper globally.
 
 ### Build and run from source
 
