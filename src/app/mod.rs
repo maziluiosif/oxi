@@ -70,6 +70,18 @@ impl OxiApp {
         }
     }
 
+    /// Bring the chat transcript to the front of the main content column, hiding whatever was
+    /// covering it — an open editor tab or the history git-diff view. Selecting a session or
+    /// starting a new chat should always surface that chat, no matter which view was showing.
+    /// The editor tab is only stashed in `hidden_active` (never discarded), so its document and
+    /// any unsaved edits stay recoverable when the editor is re-opened.
+    pub(crate) fn reveal_chat_view(&mut self) {
+        if self.conv.editor.active.is_some() {
+            self.conv.editor.hidden_active = self.conv.editor.active.take();
+        }
+        self.conv.diff_view_open = false;
+    }
+
     pub fn new() -> Self {
         crate::agent::tools::cleanup_stale_spill_files();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -413,6 +425,9 @@ impl OxiApp {
         if workspace_idx == self.conv.active_workspace
             && session_idx == self.conv.workspaces[workspace_idx].active
         {
+            // Re-clicking the active chat while an editor or history diff covers it should still
+            // bring the chat forward.
+            self.reveal_chat_view();
             self.ensure_active_session_loaded();
             self.focus_active_view_next_frame();
             return;
@@ -431,6 +446,7 @@ impl OxiApp {
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
         self.conv.scroll_to_bottom_once = true;
+        self.reveal_chat_view();
         self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
         self.persist_active_session_selection();

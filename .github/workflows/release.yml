@@ -253,7 +253,7 @@ jobs:
     if: needs.changelog.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Update Homebrew tap formula
+      - name: Update Homebrew tap cask
         env:
           # Private half of a write-enabled deploy key on maziluiosif/homebrew-tap.
           TAP_SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}
@@ -273,64 +273,86 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_deploy_key"
 
           git clone git@github.com:maziluiosif/homebrew-tap.git tap
-          cat > tap/Formula/oxi.rb <<EOF
-          # This formula is regenerated automatically by the release workflow in
+          mkdir -p tap/Casks
+          rm -f tap/Formula/oxi.rb
+          cat > tap/Casks/oxi.rb <<EOF
+          # This cask is regenerated automatically by the release workflow in
           # maziluiosif/oxi (.github/workflows/release.yml, "homebrew" job).
           # Manual edits will be overwritten on the next release.
-          class Oxi < Formula
-            desc "Standalone coding agent chat UI (Rust + egui)"
-            homepage "https://github.com/maziluiosif/oxi"
+          cask "oxi" do
             version "${ver}"
-            license "MIT"
 
             on_macos do
-              depends_on arch: :arm64
-              url "${base}/oxi-macos-arm64.tar.gz"
               sha256 "${sha_mac}"
-            end
+              url "${base}/oxi-macos-arm64.tar.gz",
+                  verified: "github.com/maziluiosif/oxi/"
 
-            on_linux do
-              depends_on arch: :x86_64
-              url "${base}/oxi-linux-x86_64.tar.gz"
-              sha256 "${sha_linux}"
-            end
+              depends_on arch: :arm64
+              depends_on macos: :catalina
 
-            def install
-              if OS.mac?
-                # The tarball holds a single top-level oxi.app; Homebrew strips a sole
-                # top-level directory while staging, leaving Contents/ at buildpath.
-                appdir = prefix/"oxi.app"
-                if (buildpath/"oxi.app").exist?
-                  prefix.install "oxi.app"
-                else
-                  appdir.install buildpath.children
-                end
-                bin.write_exec_script appdir/"Contents/MacOS/oxi"
-              else
-                bin.install "oxi"
-              end
-            end
+              app "oxi.app"
+              binary "#{appdir}/oxi.app/Contents/MacOS/oxi", target: "oxi"
 
-            def caveats
-              return unless OS.mac?
+              caveats <<~EOS
+                oxi is ad-hoc signed but not Apple-notarized. Install it explicitly without
+                quarantine only when you trust its source and published release:
 
-              <<~EOS
+                  brew install --cask --no-quarantine maziluiosif/tap/oxi
+
                 Run \`oxi\` from a project directory to open it as the first workspace.
-
-                To make the app visible in Launchpad / Spotlight, link the bundle:
-                  ln -sf "#{opt_prefix}/oxi.app" /Applications/oxi.app
               EOS
             end
 
-            test do
-              assert_predicate bin/"oxi", :exist?
+            on_linux do
+              sha256 "${sha_linux}"
+              url "${base}/oxi-linux-x86_64.tar.gz",
+                  verified: "github.com/maziluiosif/oxi/"
+
+              depends_on arch: :x86_64
+
+              binary "oxi"
             end
+
+            name "oxi"
+            desc "Native, local-first coding agent"
+            homepage "https://maziluiosif.github.io/oxi/"
           end
+          EOF
+
+          cat > tap/README.md <<'EOF'
+          # homebrew-tap
+
+          Homebrew tap for [oxi](https://github.com/maziluiosif/oxi), a native, local-first coding agent.
+
+          ## Install
+
+          ### macOS (Apple Silicon)
+
+          oxi is ad-hoc signed but not Apple-notarized. Only bypass quarantine when you trust the
+          project and its published release:
+
+          ```sh
+          brew tap maziluiosif/tap
+          brew install --cask --no-quarantine oxi
+          ```
+
+          This installs `oxi.app` in `/Applications` and exposes the `oxi` command.
+
+          ### Linux (x86_64)
+
+          ```sh
+          brew tap maziluiosif/tap
+          brew install --cask oxi
+          ```
+
+          For Windows or manual installation, use the [GitHub releases](https://github.com/maziluiosif/oxi/releases).
+
+          The Cask is updated automatically by the release workflow in the main repository.
           EOF
 
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/oxi.rb
-          git commit -m "oxi ${ver}" || { echo "Formula unchanged, nothing to push."; exit 0; }
+          git add -A
+          git commit -m "oxi ${ver}" || { echo "Cask unchanged, nothing to push."; exit 0; }
           git push origin HEAD

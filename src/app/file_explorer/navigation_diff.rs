@@ -2,9 +2,7 @@
 
 use std::path::PathBuf;
 
-use eframe::egui::{self, RichText, ScrollArea, Ui};
-
-use crate::theme::*;
+use eframe::egui::{self, ScrollArea, Ui};
 
 use super::super::OxiApp;
 use super::{editor_logic::char_index_to_byte, support::language_for_path};
@@ -95,27 +93,8 @@ impl OxiApp {
         let Some((title, diff_text)) = self.conv.git.diff.clone() else {
             return;
         };
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.label(RichText::new("Diff").size(FS_H3).color(c_text()).strong());
-            ui.label(
-                RichText::new(&title)
-                    .size(FS_SMALL)
-                    .color(c_text_muted())
-                    .monospace(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
-                    .on_hover_text("Close diff (Esc)")
-                    .clicked()
-                {
-                    self.close_editor_git_diff();
-                }
-            });
-        });
-        ui.add_space(2.0);
-        crate::ui::chrome::hairline(ui);
+        // No internal header: the tab strip already labels/closes this diff, so the colored,
+        // read-only body flows straight under the tabs and reads as part of the editor.
         ui.add_space(4.0);
 
         let wrap_width = ui.available_width().max(200.0);

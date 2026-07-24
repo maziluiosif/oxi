@@ -487,16 +487,24 @@ impl OxiApp {
                                 .clip_rect()
                                 .expand2(egui::vec2(0.0, TRANSCRIPT_CULL_MARGIN));
                             let width_bits = col_w.round().to_bits();
-                            // Keep culling mode independent of hover and wheel state. Toggling from
-                            // real widgets to cached placeholders when the pointer enters/leaves the
-                            // chat changes the reported content height for conversations containing
-                            // stateful blocks, which can make the scrollbar disappear and re-wrap a
-                            // borderline line. The large viewport margin guarantees visible units
-                            // are real widgets even while normal culling remains enabled.
-                            //
-                            // Selection is the one exception: render all units while a selection or
-                            // drag-select exists so egui does not drop an off-screen endpoint.
-                            let cull_enabled = !user_has_selection;
+                            // Normally cull to keep per-frame cost O(visible). Two exceptions keep
+                            // text selection working:
+                            //   1. While a selection or drag-select exists, render every unit so
+                            //      egui does not drop an off-screen endpoint (it deselects the moment
+                            //      either endpoint's label is not rendered this frame).
+                            //   2. While the pointer merely rests over the transcript, render every
+                            //      unit too. egui latches a press to a widget using the PREVIOUS
+                            //      frame's rects, so the message under the pointer must already be a
+                            //      real laid-out widget before the click — a culled `add_space`
+                            //      placeholder is not selectable, so the user sees the I-beam cursor
+                            //      but nothing selects.
+                            let pointer_over_transcript = ui.ctx().input(|input| {
+                                input
+                                    .pointer
+                                    .interact_pos()
+                                    .is_some_and(|pos| ui.clip_rect().contains(pos))
+                            });
+                            let cull_enabled = !(user_has_selection || pointer_over_transcript);
                             for (start, end) in units {
                                 let messages = &self.conv.workspaces[wi].sessions[si].messages;
                                 let fingerprint =

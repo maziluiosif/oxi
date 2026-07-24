@@ -78,4 +78,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "Built $APP (version $VERSION)"
+# Apple Silicon binaries are linker-signed ad hoc, but Gatekeeper assesses the complete app
+# bundle. Seal the executable, Info.plist, and resources under one coherent ad-hoc signature.
+# This is not Developer ID notarization; users must still explicitly bypass quarantine.
+codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
+
+echo "Built and ad-hoc signed $APP (version $VERSION)"

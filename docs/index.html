@@ -398,9 +398,11 @@
           <span class="chip">🍺 Homebrew</span>
         </div>
         <div class="code">
-<span class="c"># macOS (Apple Silicon) &amp; Linux (x86_64)</span><br>
+<span class="c"># macOS (Apple Silicon; ad-hoc signed, not notarized)</span><br>
 <span class="p">brew</span> tap maziluiosif/tap<br>
-<span class="p">brew</span> install oxi
+<span class="p">brew</span> install --cask --no-quarantine oxi<br><br>
+<span class="c"># Linux (x86_64)</span><br>
+<span class="p">brew</span> install --cask oxi
         </div>
         <div class="install-tabs" style="padding-top:16px;">
           <span class="chip">🦀 From source</span>

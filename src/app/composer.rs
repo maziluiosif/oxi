@@ -9,7 +9,6 @@ use eframe::egui::{
     Sense, Stroke, TextEdit, TextureHandle, Ui, text::CCursor, text::CCursorRange,
 };
 
-use crate::agent::context_char_budget_from_tokens;
 use crate::theme::*;
 
 use super::composer_helpers::{

@@ -20,8 +20,6 @@ pub use approval::ApprovalDecision;
 pub use complete::{CompleteEvent, CompleteRequest, spawn_completion};
 pub use events::{AgentEvent, AgentOutcome, TokenUsage};
 pub(crate) use history::flatten_assistant;
-pub use history::{
-    DEFAULT_CHARS_PER_TOKEN, calibrate_chars_per_token, context_char_budget_from_tokens,
-};
+pub use history::{AUTO_COMPACT_THRESHOLD, DEFAULT_CHARS_PER_TOKEN, calibrate_chars_per_token};
 pub use models::fetch_models;
 pub use runner::spawn_agent_run;

@@ -248,6 +248,8 @@ pub async fn run_anthropic_loop(
     let cancel = ctx.cancel;
     let max_rounds = ctx.max_rounds;
     let effort_override = ctx.effort_override;
+    let context_char_budget = ctx.context_char_budget;
+    let tools_chars = ctx.tools_chars;
     let gate = &mut *ctx.gate;
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let anthropic_tools = to_anthropic_tools(tools_openai);
@@ -263,6 +265,13 @@ pub async fn run_anthropic_loop(
         if max_rounds != 0 && round > max_rounds {
             return Err(format!("Too many tool rounds (>{max_rounds})"));
         }
+        // Trim the canonical history under the context ceiling before translating it, so a long
+        // multi-round run can't overflow the window mid-flight. A no-op until it's needed.
+        crate::agent::history::trim_wire_history_to_budget(
+            openai_messages,
+            tools_chars,
+            context_char_budget,
+        );
         let (system, anth_msgs) = to_anthropic_messages(openai_messages, cache_control.clone());
         let _ = tx.send(AgentEvent::AgentStart);
         let mut body = json!({

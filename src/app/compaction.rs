@@ -16,8 +16,10 @@ use super::{OxiApp, SessionKey};
 
 /// Keep this many most-recent user turns verbatim; everything older is summarized.
 pub(crate) const COMPACT_KEEP_RECENT_TURNS: usize = 4;
-/// Auto-compact when estimated context reaches this fraction of the window.
-pub(crate) const AUTO_COMPACT_THRESHOLD: f32 = 0.85;
+/// Auto-compact when estimated context reaches this fraction of the window. This is the
+/// primary rung of the shared context ladder defined in [`crate::agent`]; the trimmer's
+/// ceiling sits above it as a safety valve.
+pub(crate) const AUTO_COMPACT_THRESHOLD: f32 = crate::agent::AUTO_COMPACT_THRESHOLD;
 /// Hard cap on the transcript handed to the summarizer; older text is dropped (tail kept).
 const COMPACT_TRANSCRIPT_CAP_CHARS: usize = 300_000;
 

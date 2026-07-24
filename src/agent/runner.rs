@@ -172,6 +172,9 @@ pub fn spawn_agent_run(
         let mcp = crate::agent::mcp::McpManager::new();
         mcp.sync_servers(&settings.mcp_servers);
         tools.extend(mcp.tool_definitions());
+        // The tool definitions ride along in every request, so count them as fixed overhead when
+        // deciding how much history fits under the trim ceiling.
+        let tools_chars: usize = tools.iter().map(|v| v.to_string().len()).sum();
         let wire_fingerprint = wire_fingerprint_for(&settings, &system, &tools);
         let prior_wire = wire_candidate
             .filter(|cache| cache.fingerprint == wire_fingerprint)
@@ -185,10 +188,10 @@ pub fn spawn_agent_run(
                     "content": user_content_to_openai(&last_user.text, &last_user.attachments),
                 }));
             }
-            trim_wire_history_to_budget(&mut wire, context_budget);
+            trim_wire_history_to_budget(&mut wire, tools_chars, context_budget);
             wire
         } else {
-            build_openai_messages(&system, &chat_for_history, context_budget)
+            build_openai_messages(&system, &chat_for_history, tools_chars, context_budget)
         };
         let tool_env = ToolEnv {
             enabled: settings.tools_enabled.clone(),
@@ -252,6 +255,8 @@ pub fn spawn_agent_run(
                             gate: &mut gate,
                             max_rounds,
                             effort_override,
+                            context_char_budget: context_budget,
+                            tools_chars,
                         },
                         &creds.0,
                         &creds.1,
@@ -280,6 +285,8 @@ pub fn spawn_agent_run(
                             gate: &mut gate,
                             max_rounds,
                             effort_override,
+                            context_char_budget: context_budget,
+                            tools_chars,
                         },
                         &key,
                         &[],
@@ -310,6 +317,8 @@ pub fn spawn_agent_run(
                         gate: &mut gate,
                         max_rounds,
                         effort_override,
+                        context_char_budget: context_budget,
+                        tools_chars,
                     },
                     &key,
                     &[],
@@ -339,6 +348,8 @@ pub fn spawn_agent_run(
                         gate: &mut gate,
                         max_rounds,
                         effort_override,
+                        context_char_budget: context_budget,
+                        tools_chars,
                     },
                     &key,
                     &openrouter_extra_headers(&cfg),
@@ -369,6 +380,8 @@ pub fn spawn_agent_run(
                         gate: &mut gate,
                         max_rounds,
                         effort_override,
+                        context_char_budget: context_budget,
+                        tools_chars,
                     },
                     &key,
                     &api_version,
@@ -398,6 +411,8 @@ pub fn spawn_agent_run(
                         gate: &mut gate,
                         max_rounds,
                         effort_override,
+                        context_char_budget: context_budget,
+                        tools_chars,
                     },
                     &key,
                     &[],
@@ -429,6 +444,8 @@ pub fn spawn_agent_run(
                         gate: &mut gate,
                         max_rounds,
                         effort_override,
+                        context_char_budget: context_budget,
+                        tools_chars,
                     },
                     &key,
                     &[],
@@ -458,6 +475,8 @@ pub fn spawn_agent_run(
                         gate: &mut gate,
                         max_rounds,
                         effort_override,
+                        context_char_budget: context_budget,
+                        tools_chars,
                     },
                     &key,
                     &[],
@@ -496,6 +515,8 @@ pub fn spawn_agent_run(
                             gate: &mut gate,
                             max_rounds,
                             effort_override,
+                            context_char_budget: context_budget,
+                            tools_chars,
                         },
                         &key,
                         &[],
@@ -524,6 +545,8 @@ pub fn spawn_agent_run(
                             gate: &mut gate,
                             max_rounds,
                             effort_override,
+                            context_char_budget: context_budget,
+                            tools_chars,
                         },
                         &key,
                         &[],
