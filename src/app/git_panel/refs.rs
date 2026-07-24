@@ -176,6 +176,8 @@ impl OxiApp {
         if response.clicked() {
             self.request(GitOp::ShowCommit(commit.hash.clone()));
             self.conv.diff_view_open = true;
+            // Open the commit diff as an editor tab, like working-tree file diffs.
+            self.conv.editor.diff_tab_active = true;
         } else if response.secondary_clicked() {
             let hash = commit.hash.clone();
             ui.ctx().copy_text(hash.clone());

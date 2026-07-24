@@ -663,7 +663,14 @@ impl OxiApp {
             chat_ui.shrink_clip_rect(chat_rect);
             {
                 let ui = &mut chat_ui;
-                let editor_open = self.conv.editor.active_document().is_some();
+                // An active git-diff tab is also an "editor open" state, even with no file
+                // document behind it: the diff should render in the editor pane (as its own tab)
+                // rather than falling back to the in-chat diff view. This makes the editor the
+                // default home for every diff, whether or not a file was already open.
+                let editor_open = self.conv.editor.active_document().is_some()
+                    || (self.conv.editor.diff_tab_active
+                        && self.conv.diff_view_open
+                        && self.conv.git.diff.is_some());
                 Frame::new()
                     .fill(c_bg_main())
                     .inner_margin(Margin {

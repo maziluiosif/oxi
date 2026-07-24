@@ -123,6 +123,16 @@ impl OxiApp {
             c.key.session_idx += 1;
         }
 
+        // Surface the new chat no matter what was showing: hide any open editor/history diff so
+        // the transcript is in front, and if the sidebar is browsing files, flip it back to the
+        // chat list so the new chat is visible there too.
+        self.reveal_chat_view();
+        if self.conv.sidebar_open
+            && self.conv.sidebar_mode == super::state::SidebarMode::Explorer
+        {
+            self.conv.sidebar_mode = super::state::SidebarMode::Chats;
+        }
+
         self.conv.scroll_to_bottom_once = true;
         self.conv.focus_chat_input_next_frame = true;
         self.persist_active_session_selection();
