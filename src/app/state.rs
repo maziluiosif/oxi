@@ -98,8 +98,10 @@ pub struct EditorState {
     pub find_focus_editor_pending: bool,
     /// Move keyboard focus into the Find input on its next render.
     pub focus_find_next_frame: bool,
-    /// Return keyboard focus to the editor on its next render (Escape, definition jumps).
+    /// Return keyboard focus to the editor on its next render (definition/history jumps).
     pub focus_editor_next_frame: bool,
+    /// Collapse the active editor selection to its primary caret on the next render.
+    pub clear_editor_selection_next_frame: bool,
     /// Document opened explicitly from GitPanel. Only this document receives full-row Git
     /// highlighting; normal editor/Explorer/file-picker opens retain gutter-only markers.
     pub git_full_highlight_path: Option<PathBuf>,

@@ -157,7 +157,11 @@ impl OxiApp {
         };
         let transcript = compaction_transcript(&messages[..split_len]);
         let session_file = self.session_by_key(key).session_file.clone();
-        let config = self.conv.settings.active_config().clone();
+        let session_config = self.ensure_session_config(key);
+        let mut config = self.conv.settings.provider(session_config.provider).clone();
+        config.model_id = session_config.model_id;
+        config.effort = session_config.effort;
+        config.context_window = session_config.context_window;
         let (rx, _handle) = spawn_completion(CompleteRequest {
             config,
             system_prompt: COMPACTION_SYSTEM_PROMPT.to_string(),

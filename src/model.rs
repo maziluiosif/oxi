@@ -1,5 +1,39 @@
 //! Domain types and pure helpers (no egui).
 
+use serde::{Deserialize, Serialize};
+
+use crate::settings::{AppSettings, LlmProviderKind, ProviderConfig};
+
+/// Provider/model choices that belong to one chat rather than to the application globally.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionConfig {
+    pub provider: LlmProviderKind,
+    pub model_id: String,
+    #[serde(default)]
+    pub effort: String,
+    #[serde(default)]
+    pub context_window: Option<usize>,
+}
+
+impl SessionConfig {
+    pub fn from_provider(config: &ProviderConfig) -> Self {
+        Self {
+            provider: config.provider,
+            model_id: config.model_id.clone(),
+            effort: config.effort.clone(),
+            context_window: config.context_window,
+        }
+    }
+
+    pub fn apply_to_settings(&self, settings: &mut AppSettings) {
+        settings.active_provider = self.provider;
+        let config = settings.provider_mut(self.provider);
+        config.model_id = self.model_id.clone();
+        config.effort = self.effort.clone();
+        config.context_window = self.context_window;
+    }
+}
+
 /// Provider-native conversation cache. The transcript remains the source of truth; this cache is
 /// reused only when its stable fingerprint matches the complete current request environment.
 #[derive(Clone, Debug)]
@@ -82,6 +116,9 @@ impl ChatMessage {
 pub struct Session {
     pub title: String,
     pub messages: Vec<ChatMessage>,
+    /// Provider/model choices pinned to this chat. Legacy sessions without this metadata inherit
+    /// the current application selection once, then persist it on their next save.
+    pub config: Option<SessionConfig>,
     /// Local session file when persistence is enabled.
     pub session_file: Option<String>,
     /// `true` once this tab's transcript was loaded from disk or created locally in-memory.

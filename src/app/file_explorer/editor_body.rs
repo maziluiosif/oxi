@@ -72,6 +72,8 @@ impl OxiApp {
         let focus_editor_for_find = std::mem::take(&mut self.conv.editor.find_focus_editor_pending);
         let focus_editor_requested =
             focus_editor_for_find || std::mem::take(&mut self.conv.editor.focus_editor_next_frame);
+        let clear_selection_requested =
+            std::mem::take(&mut self.conv.editor.clear_editor_selection_next_frame);
         self.conv.editor.find_select_pending = false;
         self.conv.editor.find_reveal_pending = false;
         let logical_line_count = self.conv.editor.documents[index]
@@ -249,6 +251,39 @@ impl OxiApp {
                                 document.dirty = document.content != document.saved_content;
                                 document.layout_cache = EditorLayoutCache::default();
                                 document.minimap_cache = None;
+                            }
+                            if clear_selection_requested {
+                                if let Some(range) = output.cursor_range
+                                    && !range.is_empty()
+                                {
+                                    let caret = egui::text::CCursorRange::one(range.primary);
+                                    output.state.cursor.set_char_range(Some(caret));
+                                    output.state.clone().store(ui.ctx(), output.response.id);
+                                    output.cursor_range = Some(caret);
+                                }
+                                output.response.request_focus();
+                            }
+                            // TextEdit's large minimum height makes its hit area extend below the
+                            // document. Explicitly map a click in that blank tail to EOF; otherwise
+                            // egui can retain the previous caret instead of treating the area as the
+                            // end of the last line.
+                            let clicked_below_document = output.response.clicked()
+                                && ui.input(|input| input.modifiers.is_none())
+                                && output
+                                    .response
+                                    .interact_pointer_pos()
+                                    .is_some_and(|pointer| {
+                                        pointer.y
+                                            > output.galley_pos.y + output.galley.rect.bottom()
+                                    });
+                            if clicked_below_document {
+                                let end =
+                                    egui::text::CCursor::new(document.content.chars().count());
+                                let caret = egui::text::CCursorRange::one(end);
+                                output.state.cursor.set_char_range(Some(caret));
+                                output.state.clone().store(ui.ctx(), output.response.id);
+                                output.cursor_range = Some(caret);
+                                output.response.request_focus();
                             }
                             // TextEdit reports `text_clip_rect` as the full text rect — the whole
                             // document laid out inside the ScrollArea — not the visible viewport.

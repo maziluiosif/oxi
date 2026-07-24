@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::hydrate;
-use crate::model::{ChatMessage, Session, WireCache};
+use crate::model::{ChatMessage, Session, SessionConfig, WireCache};
 
 use super::dedupe::dedupe_trailing_duplicate_messages;
 use super::format::{chat_message_to_json_entries, session_file_stem_or_generated};
@@ -13,12 +13,17 @@ use super::paths::session_file_path;
 
 #[cfg(test)]
 pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
-    let (messages, _wire) = load_session_messages_with_wire(session_file)?;
-    Some(messages)
+    let (loaded, _wire) = load_session_messages_with_wire(session_file)?;
+    Some(loaded.messages)
 }
 
-/// Loaded chat messages plus an optional, derived provider wire cache.
-type SessionMessagesWithWire = (Vec<ChatMessage>, Option<WireCache>);
+/// Authoritative session data loaded from disk, plus an optional derived provider wire cache.
+pub struct LoadedSessionMessages {
+    pub messages: Vec<ChatMessage>,
+    pub config: Option<SessionConfig>,
+}
+
+type SessionMessagesWithWire = (LoadedSessionMessages, Option<WireCache>);
 
 /// Load chat messages plus any persisted provider wire history.
 pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMessagesWithWire> {
@@ -26,6 +31,7 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
     let reader = BufReader::new(file);
     let mut saw_header = false;
     let mut messages = Vec::new();
+    let mut config: Option<SessionConfig> = None;
     let mut wire: Option<WireCache> = None;
 
     for (line_idx, line) in reader.lines().enumerate() {
@@ -69,6 +75,9 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
                     messages.push(message.clone());
                 }
             }
+            Some("session_config") => {
+                config = serde_json::from_value(value.clone()).ok();
+            }
             Some("wire_history") => {
                 // Legacy numeric fingerprints deliberately never match the stable v1 key.
                 let fingerprint = value.get("fingerprint").and_then(|v| match v {
@@ -96,7 +105,13 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
     let chat = hydrate::messages_from_get_messages(&json!({
         "messages": messages,
     }));
-    Some((chat, wire))
+    Some((
+        LoadedSessionMessages {
+            messages: chat,
+            config,
+        },
+        wire,
+    ))
 }
 
 pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(), String> {
@@ -123,6 +138,22 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         .map_err(|e| e.to_string())?
     )
     .map_err(|e| e.to_string())?;
+
+    if let Some(config) = session.config.as_ref() {
+        writeln!(
+            file,
+            "{}",
+            serde_json::to_string(&json!({
+                "type": "session_config",
+                "provider": config.provider,
+                "model_id": config.model_id,
+                "effort": config.effort,
+                "context_window": config.context_window,
+            }))
+            .map_err(|e| e.to_string())?
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     if !session.title.trim().is_empty() {
         writeln!(
@@ -229,6 +260,22 @@ fn replace_synced_file(tmp_path: &Path, destination: &Path) -> Result<(), String
         let _ = dir.sync_all();
     }
     Ok(())
+}
+
+pub fn load_session_config(path: &Path) -> Option<SessionConfig> {
+    let file = File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value = serde_json::from_str::<Value>(trimmed).ok()?;
+        if value.get("type").and_then(Value::as_str) == Some("session_config") {
+            return serde_json::from_value(value).ok();
+        }
+    }
+    None
 }
 
 pub fn parse_session_header_and_messages(path: &Path) -> Option<(Option<String>, Option<String>)> {

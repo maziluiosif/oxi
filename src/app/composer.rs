@@ -448,7 +448,7 @@ impl OxiApp {
                             .clicked()
                             && !selected
                         {
-                            self.conv.settings.active_provider = *kind;
+                            self.set_active_session_provider(*kind);
                             self.save_settings_quietly();
                             // Remote/local HF choices come from its downloaded-model list;
                             // `/v1/models` only reports the one model currently loaded.
@@ -538,7 +538,7 @@ impl OxiApp {
                 // and the user cannot retry it from this combo without switching away first.
                 self.start_selected_local_hf_model(ui.ctx(), &model_id);
             } else {
-                self.conv.settings.provider_mut(kind).model_id = model_id;
+                self.set_active_session_model(model_id);
                 self.save_settings_quietly();
             }
         }
@@ -609,7 +609,7 @@ impl OxiApp {
                 .on_hover_text("Thinking / reasoning level");
         });
         if let Some(effort) = changed {
-            self.conv.settings.provider_mut(kind).effort = effort;
+            self.set_active_session_effort(effort);
             self.save_settings_quietly();
         }
     }

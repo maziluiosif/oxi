@@ -374,8 +374,9 @@ impl OxiApp {
             && !self.confirm_prompt_open()
             && self.conv.editor.active_document().is_some()
         {
-            // Typing in the editor: keep Escape inside the editing surface.
-            self.conv.editor.focus_editor_next_frame = true;
+            // Escape in the editor collapses any selection to its primary caret while keeping
+            // keyboard focus in the editing surface.
+            self.conv.editor.clear_editor_selection_next_frame = true;
         } else if escape && !self.conv.terminal_open && !self.confirm_prompt_open() {
             self.focus_active_view_next_frame();
         }

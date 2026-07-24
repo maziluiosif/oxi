@@ -43,6 +43,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
         .map(|session| Session {
             title: session.title,
             messages: Vec::new(),
+            config: session.config,
             session_file: Some(session.path),
             messages_loaded: false,
             input_text: String::new(),
@@ -57,11 +58,13 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
 struct LoadedSession {
     path: String,
     title: String,
+    config: Option<crate::model::SessionConfig>,
     modified: SystemTime,
 }
 
 fn parse_session_file(path: &Path) -> Option<LoadedSession> {
     let (session_name, first_user_message) = parse_session_header_and_messages(path)?;
+    let config = io::load_session_config(path);
     let modified = fs::metadata(path).ok()?.modified().ok()?;
     let title = session_name
         .or_else(|| first_user_message.map(|text| make_session_title(&text)))
@@ -70,6 +73,7 @@ fn parse_session_file(path: &Path) -> Option<LoadedSession> {
     Some(LoadedSession {
         path: path.to_string_lossy().to_string(),
         title,
+        config,
         modified,
     })
 }
@@ -78,7 +82,10 @@ fn parse_session_file(path: &Path) -> Option<LoadedSession> {
 mod tests {
     use super::*;
     use crate::hydrate;
-    use crate::model::{AssistantBlock, ChatMessage, MsgRole, Session, UserAttachment, WireCache};
+    use crate::model::{
+        AssistantBlock, ChatMessage, MsgRole, Session, SessionConfig, UserAttachment, WireCache,
+    };
+    use crate::settings::LlmProviderKind;
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
@@ -195,6 +202,7 @@ mod tests {
         let mut session = Session {
             title: "Chat".into(),
             messages: vec![],
+            config: None,
             session_file: None,
             messages_loaded: true,
             input_text: String::new(),
@@ -219,10 +227,40 @@ mod tests {
     }
 
     #[test]
+    fn save_and_reload_preserves_session_config() {
+        let root = temp_root("session-config-roundtrip");
+        let config = SessionConfig {
+            provider: LlmProviderKind::OpenRouter,
+            model_id: "anthropic/claude-sonnet-5".into(),
+            effort: "high".into(),
+            context_window: Some(200_000),
+        };
+        let mut session = Session {
+            title: "Chat".into(),
+            messages: vec![],
+            config: Some(config.clone()),
+            session_file: None,
+            messages_loaded: true,
+            input_text: String::new(),
+            pending_images: Vec::new(),
+            chars_per_token: None,
+            wire_cache: None,
+            modified: SystemTime::now(),
+        };
+
+        save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
+        let (loaded, _) =
+            load_session_messages_with_wire(session.session_file.as_deref().unwrap()).unwrap();
+
+        assert_eq!(loaded.config, Some(config));
+    }
+
+    #[test]
     fn save_session_messages_dedupes_duplicate_full_history_before_writing() {
         let root = temp_root("save-dedupe");
         let mut session = Session {
             title: "Chat".into(),
+            config: None,
             messages: hydrate::messages_from_get_messages(&json!({
                 "messages": [
                     { "role": "user", "content": "hello" },
@@ -254,6 +292,7 @@ mod tests {
         let root = temp_root("formatting-roundtrip");
         let mut session = Session {
             title: "Chat".into(),
+            config: None,
             messages: vec![
                 ChatMessage {
                     role: MsgRole::User,
@@ -316,6 +355,7 @@ mod tests {
         let root = temp_root("worked-duration-roundtrip");
         let mut session = Session {
             title: "Chat".into(),
+            config: None,
             messages: vec![
                 ChatMessage {
                     role: MsgRole::User,

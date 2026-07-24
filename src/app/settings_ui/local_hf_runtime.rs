@@ -323,7 +323,7 @@ impl OxiApp {
         } else {
             cfg.base_url = format!("http://127.0.0.1:{port}/v1");
         }
-        self.conv.settings.active_provider = kind;
+        self.set_active_session_provider(kind);
         self.refresh_local_hf_model_choices();
         let _ = self.conv.settings.save();
     }
