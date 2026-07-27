@@ -5,7 +5,7 @@ use vt100::MouseProtocolEncoding as MEnc;
 
 use super::TerminalSelection;
 
-pub(super) fn ordered_selection(selection: TerminalSelection) -> ((u16, u16), (u16, u16)) {
+pub(super) fn ordered_selection(selection: TerminalSelection) -> ((i64, u16), (i64, u16)) {
     if selection.anchor <= selection.focus {
         (selection.anchor, selection.focus)
     } else {

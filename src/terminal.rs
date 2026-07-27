@@ -34,9 +34,13 @@ struct MouseState {
 
 #[derive(Clone, Copy, Debug)]
 struct TerminalSelection {
-    anchor: (u16, u16), // (row, col)
-    focus: (u16, u16),
+    /// Endpoints use rows relative to the live viewport (`visible row - scrollback offset`) so
+    /// they stay attached to the selected output while the viewport scrolls.
+    anchor: (i64, u16), // (logical row, col)
+    focus: (i64, u16),
     dragging: bool,
+    drag_origin: Pos2,
+    pointer: Pos2,
 }
 
 fn shell_cwd(cwd: &str) -> String {
@@ -97,6 +101,8 @@ pub struct TerminalSession {
     selection: Option<TerminalSelection>,
     /// Scrollback view offset (rows up from the bottom) used when no app grabs the mouse.
     scroll_offset: usize,
+    /// Fractional lines accumulated by selection edge auto-scroll between frames.
+    selection_scroll_remainder: f32,
 }
 
 impl TerminalSession {
@@ -262,6 +268,7 @@ impl TerminalSession {
             mouse: MouseState::default(),
             selection: None,
             scroll_offset: 0,
+            selection_scroll_remainder: 0.0,
         })
     }
 
@@ -410,6 +417,25 @@ impl TerminalSession {
         }
     }
 
+    /// Move the local scrollback viewport by a signed line count and clamp it to the available
+    /// history. Positive values reveal older output.
+    fn scroll_scrollback(&mut self, lines: i64) -> bool {
+        if lines == 0 {
+            return false;
+        }
+        let previous = self.scroll_offset;
+        let requested = if lines > 0 {
+            previous.saturating_add(lines as usize)
+        } else {
+            previous.saturating_sub(lines.unsigned_abs() as usize)
+        };
+        if let Ok(mut parser) = self.parser.lock() {
+            parser.screen_mut().set_scrollback(requested);
+            self.scroll_offset = parser.screen().scrollback();
+        }
+        self.scroll_offset != previous
+    }
+
     /// Forward mouse interactions: wheel + (when an app enables mouse mode) press/release/motion.
     /// When no app has grabbed the mouse, the wheel scrolls the local scrollback buffer.
     fn handle_mouse(&mut self, ui: &Ui, rect: Rect, cell_w: f32, cell_h: f32, hovered: bool) {
@@ -433,43 +459,12 @@ impl TerminalSession {
             (col, row)
         };
 
-        // Wheel.
-        if hovered {
-            let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll_y.abs() > 0.5 {
-                let up = scroll_y > 0.0;
-                if mode == MMode::None {
-                    // Local scrollback: positive delta scrolls toward older output.
-                    let lines = ((scroll_y.abs() / cell_h).ceil() as usize).clamp(1, 6);
-                    if up {
-                        self.scroll_offset = self.scroll_offset.saturating_add(lines);
-                    } else {
-                        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
-                    }
-                } else if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-                    let (col, row) = cell_at(pos);
-                    let base = if up { 64 } else { 65 };
-                    let notches = ((scroll_y.abs() / 40.0).round() as usize).clamp(1, 5);
-                    let mut out = Vec::new();
-                    for _ in 0..notches {
-                        out.extend_from_slice(&encode_mouse(
-                            encoding,
-                            base,
-                            col,
-                            row,
-                            true,
-                            false,
-                            egui::Modifiers::default(),
-                        ));
-                    }
-                    self.send(&out);
-                }
-            }
-        }
-
         if mode == MMode::None {
             self.mouse.held = None;
             self.mouse.last_cell = None;
+
+            // Update the drag first. Wheel input can arrive while `Response::hovered()` is false
+            // because egui gives the active drag exclusive pointer ownership.
             let events = ui.input(|i| i.events.clone());
             for event in events {
                 match event {
@@ -480,15 +475,19 @@ impl TerminalSession {
                         ..
                     } if rect.contains(pos) || self.selection.is_some_and(|s| s.dragging) => {
                         let (col, row) = cell_at(pos);
+                        let point = (i64::from(row) - self.scroll_offset as i64, col);
                         if pressed {
                             self.selection = Some(TerminalSelection {
-                                anchor: (row, col),
-                                focus: (row, col),
+                                anchor: point,
+                                focus: point,
                                 dragging: true,
+                                drag_origin: pos,
+                                pointer: pos,
                             });
                         } else if let Some(selection) = self.selection.as_mut() {
-                            selection.focus = (row, col);
+                            selection.focus = point;
                             selection.dragging = false;
+                            selection.pointer = pos;
                         }
                     }
                     Event::PointerMoved(pos) => {
@@ -496,13 +495,105 @@ impl TerminalSession {
                             && selection.dragging
                         {
                             let (col, row) = cell_at(pos);
-                            selection.focus = (row, col);
+                            selection.focus = (i64::from(row) - self.scroll_offset as i64, col);
+                            selection.pointer = pos;
                         }
                     }
                     _ => {}
                 }
             }
+
+            let dragging = self.selection.is_some_and(|selection| selection.dragging);
+            if dragging
+                && let Some(pos) = ui.input(|input| input.pointer.interact_pos())
+                && let Some(selection) = self.selection.as_mut()
+            {
+                selection.pointer = pos;
+            }
+
+            let scroll_y = if hovered || dragging {
+                ui.input(|input| input.smooth_scroll_delta.y)
+            } else {
+                0.0
+            };
+            let mut lines = if scroll_y.abs() > 0.5 {
+                let magnitude = ((scroll_y.abs() / cell_h).ceil() as i64).clamp(1, 6);
+                if scroll_y > 0.0 {
+                    magnitude
+                } else {
+                    -magnitude
+                }
+            } else {
+                0
+            };
+
+            if let Some(selection) = self.selection.filter(|selection| {
+                selection.dragging && selection.pointer.distance(selection.drag_origin) > 6.0
+            }) {
+                // Keep scrolling while the pointer is held near or beyond an edge, including when
+                // it has left the window and pointer-move events become sparse.
+                ui.ctx().request_repaint();
+                const EDGE_ZONE: f32 = 28.0;
+                const MAX_SPEED: f32 = 36.0; // lines per second at one edge-zone of depth
+                let velocity = if selection.pointer.y < rect.top() + EDGE_ZONE {
+                    ((rect.top() + EDGE_ZONE - selection.pointer.y) / EDGE_ZONE).clamp(0.0, 3.0)
+                        * MAX_SPEED
+                } else if selection.pointer.y > rect.bottom() - EDGE_ZONE {
+                    -((selection.pointer.y - (rect.bottom() - EDGE_ZONE)) / EDGE_ZONE)
+                        .clamp(0.0, 3.0)
+                        * MAX_SPEED
+                } else {
+                    0.0
+                };
+                let dt = ui
+                    .input(|input| input.stable_dt)
+                    .clamp(1.0 / 240.0, 1.0 / 30.0);
+                self.selection_scroll_remainder += velocity * dt;
+                let edge_lines = self.selection_scroll_remainder.trunc() as i64;
+                self.selection_scroll_remainder -= edge_lines as f32;
+                lines += edge_lines;
+            } else {
+                self.selection_scroll_remainder = 0.0;
+            }
+
+            if self.scroll_scrollback(lines) {
+                // Keep the moving endpoint under the pointer after the viewport changes. The
+                // anchor remains tied to its original logical row, allowing selections larger than
+                // the visible terminal.
+                if let Some(selection) = self.selection.as_mut()
+                    && selection.dragging
+                {
+                    let (col, row) = cell_at(selection.pointer);
+                    selection.focus = (i64::from(row) - self.scroll_offset as i64, col);
+                }
+                ui.ctx().request_repaint();
+            }
             return;
+        }
+
+        // An application has enabled terminal mouse reporting, so wheel events belong to it.
+        if hovered {
+            let scroll_y = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll_y.abs() > 0.5
+                && let Some(pos) = ui.input(|i| i.pointer.hover_pos())
+            {
+                let (col, row) = cell_at(pos);
+                let base = if scroll_y > 0.0 { 64 } else { 65 };
+                let notches = ((scroll_y.abs() / 40.0).round() as usize).clamp(1, 5);
+                let mut out = Vec::new();
+                for _ in 0..notches {
+                    out.extend_from_slice(&encode_mouse(
+                        encoding,
+                        base,
+                        col,
+                        row,
+                        true,
+                        false,
+                        egui::Modifiers::default(),
+                    ));
+                }
+                self.send(&out);
+            }
         }
 
         // Buttons + motion.
@@ -580,20 +671,45 @@ impl TerminalSession {
             return None;
         }
         let (start, end) = ordered_selection(selection);
-        let parser = self.parser.lock().ok()?;
-        let screen = parser.screen();
-        let (_, cols) = screen.size();
+        let mut parser = self.parser.lock().ok()?;
+        let screen = parser.screen_mut();
+        let (rows, cols) = screen.size();
+        let saved_offset = screen.scrollback();
+
+        // Discover the oldest available logical row. vt100 exposes a clamping setter rather than
+        // the scrollback length directly; restore the user's viewport before returning.
+        screen.set_scrollback(usize::MAX);
+        let max_offset = screen.scrollback();
+        screen.set_scrollback(saved_offset);
+        let first_available_row = -(max_offset as i64);
+        let last_available_row = i64::from(rows.saturating_sub(1));
+        let start_row = start.0.max(first_available_row);
+        let end_row = end.0.min(last_available_row);
+        if start_row > end_row {
+            return None;
+        }
+
         let mut output = String::new();
-        for row in start.0..=end.0 {
-            let first_col = if row == start.0 { start.1 } else { 0 };
-            let last_col = if row == end.0 {
+        for logical_row in start_row..=end_row {
+            let requested_offset = logical_row.unsigned_abs() as usize;
+            screen.set_scrollback(if logical_row < 0 { requested_offset } else { 0 });
+            let visible_row = logical_row + screen.scrollback() as i64;
+            let Ok(visible_row) = u16::try_from(visible_row) else {
+                continue;
+            };
+            if visible_row >= rows {
+                continue;
+            }
+
+            let first_col = if logical_row == start.0 { start.1 } else { 0 };
+            let last_col = if logical_row == end.0 {
                 end.1
             } else {
                 cols.saturating_sub(1)
             };
             let mut line = String::new();
             for col in first_col..=last_col {
-                let Some(cell) = screen.cell(row, col) else {
+                let Some(cell) = screen.cell(visible_row, col) else {
                     continue;
                 };
                 if !cell.is_wide_continuation() {
@@ -601,10 +717,11 @@ impl TerminalSession {
                 }
             }
             output.push_str(line.trim_end());
-            if row != end.0 {
+            if logical_row != end_row {
                 output.push('\n');
             }
         }
+        screen.set_scrollback(saved_offset);
         (!output.is_empty()).then_some(output)
     }
 
@@ -651,7 +768,8 @@ impl TerminalSession {
                         return false;
                     }
                     let (start, end) = ordered_selection(selection);
-                    (row, col) >= start && (row, col) <= end
+                    let point = (i64::from(row) - self.scroll_offset as i64, col);
+                    point >= start && point <= end
                 });
                 let fmt = TextFormat {
                     font_id: font.clone(),
