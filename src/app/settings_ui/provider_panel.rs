@@ -71,6 +71,19 @@ impl OxiApp {
                     }
                 });
             });
+            // The combo replaces the free-text field once a list arrives, so keep an explicit
+            // escape hatch for ids the provider doesn't advertise (e.g. `claude-opus-5`, which
+            // the Claude Code ACP adapter only offers once it is named — see
+            // `ProviderConfig::acp_env`).
+            if have {
+                ui.add_space(4.0);
+                field_label(ui, "Custom model id");
+                settings_text_field(
+                    ui,
+                    &mut self.conv.settings.provider_mut(kind).model_id,
+                    "e.g. claude-opus-5",
+                );
+            }
             // Status line for the model fetch.
             if let Some(f) = self.conv.fetched_models.get(&kind) {
                 if let Some(e) = f.error.clone() {

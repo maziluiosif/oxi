@@ -329,6 +329,42 @@ impl ProviderConfig {
         }
     }
 
+    /// Model ids the Claude Code adapter always advertises itself. Anything else is a custom id
+    /// (`claude-opus-5`, a dated snapshot, …) that the adapter only offers once `ANTHROPIC_MODEL`
+    /// names it — see [`Self::acp_env`].
+    const CLAUDE_ACP_BUILTIN_MODELS: [&'static str; 4] = ["default", "opus", "sonnet", "haiku"];
+
+    /// Environment variables for the ACP agent subprocess: the provider's API key (when set) plus,
+    /// for Claude Code, `ANTHROPIC_MODEL` when the configured model is not one of the adapter's
+    /// built-in aliases. The adapter validates `session/set_config_option` against its advertised
+    /// list, so without this a custom id is silently ignored and the session stays on whatever the
+    /// `opus`/`sonnet` aliases currently resolve to. With it, the adapter exposes the id as a
+    /// "Custom model" option *and* makes it the session default.
+    pub fn acp_env(&self) -> Vec<(String, String)> {
+        let mut env = Vec::new();
+        let key = self.api_key.trim();
+        if !key.is_empty() {
+            match self.provider {
+                LlmProviderKind::ClaudeCodeAcp => {
+                    env.push(("ANTHROPIC_API_KEY".to_string(), key.to_string()));
+                }
+                LlmProviderKind::CodexAcp => {
+                    env.push(("CODEX_API_KEY".to_string(), key.to_string()));
+                    env.push(("OPENAI_API_KEY".to_string(), key.to_string()));
+                }
+                _ => {}
+            }
+        }
+        let model = self.model_id.trim();
+        if self.provider == LlmProviderKind::ClaudeCodeAcp
+            && !model.is_empty()
+            && !Self::CLAUDE_ACP_BUILTIN_MODELS.contains(&model)
+        {
+            env.push(("ANTHROPIC_MODEL".to_string(), model.to_string()));
+        }
+        env
+    }
+
     /// The command line used to spawn the ACP agent, falling back to that agent's built-in default.
     pub fn effective_acp_command(&self) -> String {
         let t = self.acp_command.trim();
