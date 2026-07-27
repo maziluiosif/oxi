@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-27
+
+### Added
+- Global autosaved scratchpad that persists across workspace switches
+- Per-session model settings persistence (provider, model, effort, context window)
+- Auto-scroll near viewport edges while dragging text
+- Copy selected text across visible and historical rows
+
+### Changed
+- Selection now preserved while scrolling using logical scrollback rows
+- Wheel scrolling now allowed during active text selection
+- Editor blank-area caret placement improved
+- Settings access moved to explorer footer
+- Session config now used for streaming and compaction
+- Editor Escape and blank-area click behavior improved
+- Running chats remain visible in folded workspaces
+- Workspace switch notices now shown in sidebar when blocked by unsaved changes
+
+
 ### Fixed
 - Allow terminal scrollback and edge auto-scroll while selecting text
 
@@ -591,7 +610,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/maziluiosif/oxi/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/maziluiosif/oxi/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/maziluiosif/oxi/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/maziluiosif/oxi/compare/v0.21.0...v0.21.1
