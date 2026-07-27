@@ -72,11 +72,15 @@ impl OxiApp {
                                 for (index, document) in
                                     self.conv.editor.documents.iter().enumerate()
                                 {
-                                    let name = document
-                                        .path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy();
+                                    let name = if document.is_scratchpad {
+                                        std::borrow::Cow::Borrowed("Scratchpad")
+                                    } else {
+                                        document
+                                            .path
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                    };
                                     let label = if document.is_dirty() {
                                         format!("{name}  ●")
                                     } else {
@@ -166,12 +170,16 @@ impl OxiApp {
                                             save = true;
                                             ui.close();
                                         }
-                                        if ui.button("Reveal in Explorer").clicked() {
+                                        if !document.is_scratchpad
+                                            && ui.button("Reveal in Explorer").clicked()
+                                        {
                                             select = Some(index);
                                             reveal = true;
                                             ui.close();
                                         }
-                                        if ui.button("Unsaved changes diff").clicked() {
+                                        if !document.is_scratchpad
+                                            && ui.button("Unsaved changes diff").clicked()
+                                        {
                                             select = Some(index);
                                             toggle_diff = true;
                                             ui.close();
@@ -282,11 +290,15 @@ impl OxiApp {
                                 for (index, document) in
                                     self.conv.editor.documents.iter().enumerate()
                                 {
-                                    let name = document
-                                        .path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy();
+                                    let name = if document.is_scratchpad {
+                                        std::borrow::Cow::Borrowed("Scratchpad")
+                                    } else {
+                                        document
+                                            .path
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                    };
                                     if ui
                                         .selectable_label(
                                             !git_diff_active
@@ -340,6 +352,7 @@ impl OxiApp {
                 .editor
                 .documents
                 .get(index)
+                .filter(|document| !document.is_scratchpad)
                 .map(|document| document.path.clone())
             {
                 self.reveal_editor_file_in_explorer(&path);
@@ -361,10 +374,23 @@ impl OxiApp {
             self.conv.editor.show_diff = !self.conv.editor.show_diff;
         }
         if let Some(index) = close {
+            if self.conv.editor.documents[index].is_scratchpad {
+                self.autosave_scratchpad(index);
+            }
             if self.conv.editor.documents[index].is_dirty() {
                 self.conv.editor.error = Some("Save the file before closing its tab.".into());
             } else {
                 self.conv.editor.documents.remove(index);
+                self.conv.editor.hidden_active =
+                    self.conv.editor.hidden_active.and_then(|hidden| {
+                        if hidden == index {
+                            None
+                        } else if hidden > index {
+                            Some(hidden - 1)
+                        } else {
+                            Some(hidden)
+                        }
+                    });
                 self.conv.editor.active = if self.conv.editor.documents.is_empty() {
                     None
                 } else {

@@ -133,6 +133,7 @@ impl OxiApp {
         }
 
         let key = self.active_session_key();
+        self.ensure_session_config(key);
         if self
             .run_state(key)
             .is_some_and(|state| state.waiting_response)
@@ -150,11 +151,13 @@ impl OxiApp {
 
         // Auto-compaction: if the context is near full, summarize first and defer this send.
         if !skip_autocompact && self.conv.compaction.is_none() {
-            let max_tokens = self
-                .conv
-                .settings
-                .active_config()
-                .effective_context_window(self.conv.settings.context_window_default);
+            let config = self.ensure_session_config(key);
+            let mut provider = self.conv.settings.provider(config.provider).clone();
+            provider.model_id = config.model_id;
+            provider.effort = config.effort;
+            provider.context_window = config.context_window;
+            let max_tokens =
+                provider.effective_context_window(self.conv.settings.context_window_default);
             let est_tokens = self.estimated_session_context_tokens(key);
             if max_tokens > 0
                 && est_tokens as f32
@@ -478,7 +481,9 @@ impl OxiApp {
             }
             s.messages[..s.messages.len() - 1].to_vec()
         };
-        let settings = self.conv.settings.clone();
+        let mut settings = self.conv.settings.clone();
+        self.ensure_session_config(key)
+            .apply_to_settings(&mut settings);
         let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
             .session_file
             .clone();

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::model::{MsgRole, Session};
+use crate::model::{MsgRole, Session, SessionConfig};
 use crate::session_store;
 use crate::settings::AppSettings;
 
@@ -145,6 +145,7 @@ impl OxiApp {
                 active_workspace,
                 input: String::new(),
                 sidebar_search: String::new(),
+                sidebar_notice: None,
                 renaming_session: None,
                 rename_draft: String::new(),
                 chat_scroll_id: egui::Id::new("main_chat_scroll"),
@@ -235,6 +236,7 @@ impl OxiApp {
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
         app.ensure_active_session_loaded();
+        app.restore_active_session_config();
         app
     }
 
@@ -395,19 +397,32 @@ impl OxiApp {
         {
             return;
         }
-        if self.conv.editor.any_dirty() {
-            self.conv.editor.error = Some("Save the open file before switching workspace.".into());
+        if self.conv.editor.any_dirty_workspace_file() {
+            let message = "Save the open file before switching workspace.".to_string();
+            self.conv.editor.error = Some(message.clone());
+            self.conv.sidebar_notice = Some(message);
             return;
         }
-        self.conv.editor.documents.clear();
+        self.capture_active_session_config();
+        self.conv.sidebar_notice = None;
+        self.conv
+            .editor
+            .documents
+            .retain(|document| document.is_scratchpad);
         self.conv.editor.active = None;
-        self.conv.editor.hidden_active = None;
+        self.conv.editor.hidden_active = self
+            .conv
+            .editor
+            .documents
+            .iter()
+            .position(|document| document.is_scratchpad);
         let target_si = self.conv.workspaces[workspace_idx].active;
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
         self.conv.scroll_to_bottom_once = true;
         self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
+        self.restore_active_session_config();
         self.persist_active_session_selection();
         self.refresh_git_cwd();
         // Respawn the embedded shell so it starts in the new workspace cwd.
@@ -433,14 +448,26 @@ impl OxiApp {
             return;
         }
         let workspace_changed = workspace_idx != self.conv.active_workspace;
-        if workspace_changed && self.conv.editor.any_dirty() {
-            self.conv.editor.error = Some("Save the open file before switching workspace.".into());
+        if workspace_changed && self.conv.editor.any_dirty_workspace_file() {
+            let message = "Save the open file before switching workspace.".to_string();
+            self.conv.editor.error = Some(message.clone());
+            self.conv.sidebar_notice = Some(message);
             return;
         }
+        self.capture_active_session_config();
+        self.conv.sidebar_notice = None;
         if workspace_changed {
-            self.conv.editor.documents.clear();
+            self.conv
+                .editor
+                .documents
+                .retain(|document| document.is_scratchpad);
             self.conv.editor.active = None;
-            self.conv.editor.hidden_active = None;
+            self.conv.editor.hidden_active = self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .position(|document| document.is_scratchpad);
         }
         self.swap_session_input(workspace_idx, session_idx);
         self.conv.active_workspace = workspace_idx;
@@ -449,6 +476,7 @@ impl OxiApp {
         self.reveal_chat_view();
         self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
+        self.restore_active_session_config();
         self.persist_active_session_selection();
         if workspace_changed {
             self.refresh_git_cwd();
@@ -461,6 +489,7 @@ impl OxiApp {
         Session {
             title: title.into(),
             messages: vec![],
+            config: None,
             session_file: None,
             messages_loaded: true,
             input_text: String::new(),
@@ -484,6 +513,71 @@ impl OxiApp {
         } else {
             sessions
         }
+    }
+
+    pub(crate) fn capture_active_session_config(&mut self) {
+        let key = self.active_session_key();
+        let config = SessionConfig::from_provider(self.conv.settings.active_config());
+        if self.session_by_key(key).config.as_ref() == Some(&config) {
+            return;
+        }
+        self.session_mut_by_key(key).config = Some(config);
+
+        // Existing chats must retain the selection across restarts, not just while this process
+        // is alive. Brand-new empty chats remain in memory until their first message as before.
+        if self.session_by_key(key).session_file.is_some() {
+            let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
+            if let Err(error) =
+                session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
+            {
+                self.run_state_mut(key).stream_error =
+                    Some(format!("Save session config: {error}"));
+            }
+        }
+    }
+
+    pub(crate) fn ensure_session_config(&mut self, key: SessionKey) -> SessionConfig {
+        if let Some(config) = self.session_by_key(key).config.clone() {
+            return config;
+        }
+        let config = SessionConfig::from_provider(self.conv.settings.active_config());
+        self.session_mut_by_key(key).config = Some(config.clone());
+        config
+    }
+
+    pub(crate) fn set_active_session_provider(
+        &mut self,
+        provider: crate::settings::LlmProviderKind,
+    ) {
+        let key = self.active_session_key();
+        let config = SessionConfig::from_provider(self.conv.settings.provider(provider));
+        self.session_mut_by_key(key).config = Some(config);
+        self.conv.settings.active_provider = provider;
+    }
+
+    pub(crate) fn set_active_session_model(&mut self, model_id: String) {
+        let key = self.active_session_key();
+        let config = self.ensure_session_config(key);
+        self.conv.settings.provider_mut(config.provider).model_id = model_id.clone();
+        let session = self.session_mut_by_key(key);
+        let session_config = session.config.as_mut().expect("session config initialized");
+        session_config.model_id = model_id;
+        session.wire_cache = None;
+    }
+
+    pub(crate) fn set_active_session_effort(&mut self, effort: String) {
+        let key = self.active_session_key();
+        let config = self.ensure_session_config(key);
+        self.conv.settings.provider_mut(config.provider).effort = effort.clone();
+        let session = self.session_mut_by_key(key);
+        let session_config = session.config.as_mut().expect("session config initialized");
+        session_config.effort = effort;
+        session.wire_cache = None;
+    }
+
+    fn restore_active_session_config(&mut self) {
+        let config = self.ensure_session_config(self.active_session_key());
+        config.apply_to_settings(&mut self.conv.settings);
     }
 
     pub(crate) fn sync_active_session_to_settings(&mut self) {
@@ -534,7 +628,8 @@ impl OxiApp {
                 session_store::load_session_messages_with_wire(&session_file)
         {
             let session = self.session_mut(active);
-            session.messages = messages;
+            session.messages = messages.messages;
+            session.config = messages.config;
             session.messages_loaded = true;
             if let Some(cache) = wire {
                 session.wire_cache = Some(cache);

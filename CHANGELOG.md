@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Allow terminal scrollback and edge auto-scroll while selecting text
+
 ## [0.22.1] - 2026-07-24
 
 ### Fixed

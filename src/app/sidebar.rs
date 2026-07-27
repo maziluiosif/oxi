@@ -62,6 +62,18 @@ impl OxiApp {
 
         ui.add_space(8.0);
 
+        if let Some(notice) = self.conv.sidebar_notice.clone() {
+            Frame::new()
+                .fill(c_error_bg())
+                .stroke(Stroke::new(1.0, c_error_fg().gamma_multiply(0.45)))
+                .corner_radius(CornerRadius::same(RADIUS_ROW))
+                .inner_margin(Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(notice).size(FS_TINY).color(c_error_fg()));
+                });
+            ui.add_space(8.0);
+        }
+
         const FOOTER_H: f32 = 36.0;
         let scroll_h = (ui.available_height() - FOOTER_H).max(48.0);
         ScrollArea::vertical()
@@ -208,8 +220,8 @@ impl OxiApp {
             if sidebar_changed {
                 return;
             }
-            // Folding hides the normal chat list. The chat currently open in the main view and
-            // any chat that needs attention are handled as exceptions in the loop below.
+            // Folding hides the normal chat list. The chat currently open in the main view,
+            // in-progress chats, and chats that need attention remain visible.
             let mut visible_sessions = 0usize;
             for si in 0..n_sessions {
                 if sidebar_changed {
@@ -218,13 +230,14 @@ impl OxiApp {
                 if folded {
                     let key = self.session_key(wi, si);
                     let globally_selected = wi == self.conv.active_workspace && si == active_si;
+                    let running = self.session_row_is_running(wi, si);
                     let needs_attention = self.run_state(key).is_some_and(|run| {
                         run.completion_unseen
                             || (run.pending_approval.is_some()
                                 && (key != self.active_session_key()
                                     || !self.active_chat_is_visible(ui.ctx())))
                     });
-                    if !globally_selected && !needs_attention {
+                    if !globally_selected && !running && !needs_attention {
                         continue;
                     }
                 }
@@ -438,7 +451,9 @@ impl OxiApp {
                     return;
                 }
             }
-            if visible_sessions == 0 {
+            // A folded workspace with no exceptional rows is intentionally just its header;
+            // "No chats yet" would otherwise make folding look as if the workspace were empty.
+            if visible_sessions == 0 && (!folded || !q.is_empty()) {
                 ui.horizontal(|ui| {
                     ui.add_space(10.0);
                     let msg = if q.is_empty() {

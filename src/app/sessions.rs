@@ -84,6 +84,7 @@ impl OxiApp {
         // current draft before changing the active index; otherwise the new blank chat shows
         // the previous chat's text/images until the user switches away and back.
         self.cancel_edit_last_prompt();
+        self.capture_active_session_config();
         let active_workspace = self.conv.active_workspace;
         let old_session = self.active_workspace().active;
         self.conv.workspaces[active_workspace].sessions[old_session].input_text =
@@ -95,9 +96,11 @@ impl OxiApp {
         self.conv.composer_notice = None;
 
         let old_states = std::mem::take(&mut self.flow.sessions);
-        self.active_workspace_mut()
-            .sessions
-            .insert(0, Self::blank_session(title));
+        let mut session = Self::blank_session(title);
+        session.config = Some(crate::model::SessionConfig::from_provider(
+            self.conv.settings.active_config(),
+        ));
+        self.active_workspace_mut().sessions.insert(0, session);
         self.active_workspace_mut().active = 0;
 
         self.flow.sessions = old_states
@@ -458,9 +461,11 @@ impl OxiApp {
         self.active_workspace_mut().sessions.remove(idx);
 
         if deleting_last_session {
-            self.active_workspace_mut()
-                .sessions
-                .push(Self::blank_session("Chat 1"));
+            let mut session = Self::blank_session("Chat 1");
+            session.config = Some(crate::model::SessionConfig::from_provider(
+                self.conv.settings.active_config(),
+            ));
+            self.active_workspace_mut().sessions.push(session);
             self.active_workspace_mut().active = 0;
             self.flow.sessions = old_states
                 .into_iter()
