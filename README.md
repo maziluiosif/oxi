@@ -4,13 +4,12 @@
 
 **Project page: [maziluiosif.github.io/oxi](https://maziluiosif.github.io/oxi/)** · **[Download a release](https://github.com/maziluiosif/oxi/releases)** · [Build from source](#build-and-run-from-source)
 
-**oxi** is a native, local-first coding-agent desktop app for people who want to run *any* model — your own local GGUF, an Ollama/LM Studio server, a box you SSH into, or a hosted API — without an Electron shell and without your code, keys, or history leaving your machine.
+**oxi** is a native, local-first coding agent. One Rust binary, no Electron, ~110 MB idle.
 
-It is a single native binary built in Rust with **egui/eframe**: a chat-driven coding agent, a workspace file explorer and multi-tab code editor, local workspace tools, session persistence, Git controls, an embedded terminal, and local voice dictation — all rooted in your own directories.
-
-**Why it exists:** the polished commercial coding tools assume you'll use their cloud and their subscription model. oxi is the opposite bet — bring your own model, keep everything local, own your data. If you run local or self-hosted models, care about privacy, or just don't want a browser engine eating your RAM, oxi is built for you.
-
-The default workflow is coding-agent oriented, but the system prompt is editable, so oxi can be adapted to other assistant workflows too.
+- **Light and fast** — Rust + egui, a single native binary with no bundled browser engine.
+- **Runs your models for you** — search HuggingFace for GGUF, download it, install a matching `llama-server`, start and stop it, all from the UI — on this machine or on a GPU box over SSH. It also talks to LM Studio and Ollama.
+- **Or use the subscription you already pay for** — drive Claude Code, Cursor, or Codex CLI in-app over ACP, sign in to ChatGPT/Codex directly, or point it at any hosted API.
+- **Voice dictation built in** — local Whisper, no cloud round-trip.
 
 ![oxi demo](assets/demo/demo.gif)
 
