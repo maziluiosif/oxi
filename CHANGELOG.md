@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-07-28
+
+### Added
+- Support for custom Claude ACP models via `ANTHROPIC_MODEL` environment variable
+- Free-text model field alongside fetched provider options
+
+### Changed
+- Centralized ACP subprocess environment configuration
+- Improved installation guidance in documentation with explicit xattr steps for macOS quarantine handling
+- Added animated product demo to README and website
+
+
 ## [0.23.0] - 2026-07-27
 
 ### Added
@@ -610,7 +622,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/maziluiosif/oxi/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/maziluiosif/oxi/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/maziluiosif/oxi/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/maziluiosif/oxi/compare/v0.21.1...v0.22.0
