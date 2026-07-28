@@ -80,3 +80,35 @@ cargo test -- --ignored
   `type!:` for breaking changes). They provide deterministic release notes and version
   selection if the optional LLM changelog service is unavailable. You normally should
   not edit `CHANGELOG.md` or bump the crate version by hand.
+
+## Licensing of contributions
+
+oxi is released under the [MIT License](LICENSE). Contributions are accepted under the
+same license.
+
+### Sign your commits
+
+By submitting a pull request you certify the
+[Developer Certificate of Origin](https://developercertificate.org/): that you wrote the
+contribution yourself, or otherwise have the right to submit it under the project's
+license. Certify it by adding a `Signed-off-by` line to every commit, which `git commit -s`
+adds for you:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+The name and email in the sign-off must match the commit author.
+
+### Grant
+
+You keep the copyright to your contribution. Alongside the MIT license, you also grant the
+maintainer a perpetual, worldwide, irrevocable, royalty-free right to use, reproduce,
+modify, distribute and sublicense it, including under license terms that differ from the
+MIT License.
+
+This exists so the project can be relicensed or dual-licensed in the future without having
+to track down every past contributor, which is a practical dead end once a project has any
+real number of them. It does not let anyone take away what is already published: every
+release made under the MIT License stays MIT, permanently, and anyone may keep using and
+forking those releases under those terms.
