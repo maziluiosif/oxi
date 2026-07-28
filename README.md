@@ -2,7 +2,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/website-maziluiosif.github.io%2Foxi-e26a2c)](https://maziluiosif.github.io/oxi/)
 
-**Website: [maziluiosif.github.io/oxi](https://maziluiosif.github.io/oxi/)** · [Download](https://github.com/maziluiosif/oxi/releases)
+**Project page: [maziluiosif.github.io/oxi](https://maziluiosif.github.io/oxi/)** · **[Download a release](https://github.com/maziluiosif/oxi/releases)** · [Build from source](#build-and-run-from-source)
 
 **oxi** is a native, local-first coding-agent desktop app for people who want to run *any* model — your own local GGUF, an Ollama/LM Studio server, a box you SSH into, or a hosted API — without an Electron shell and without your code, keys, or history leaving your machine.
 
@@ -12,46 +12,11 @@ It is a single native binary built in Rust with **egui/eframe**: a chat-driven c
 
 The default workflow is coding-agent oriented, but the system prompt is editable, so oxi can be adapted to other assistant workflows too.
 
+![oxi demo](assets/demo/demo.gif)
+
 ![oxi chat UI](assets/screenshots/chat.png)
 
 ## Install
-
-### Homebrew
-
-The tap distributes the precompiled release as a Homebrew Cask and is updated automatically on every release.
-
-macOS Apple Silicon (the app is ad-hoc signed but not Apple-notarized, so quarantine must be explicitly disabled through Homebrew's Cask options):
-
-```bash
-brew tap maziluiosif/tap
-HOMEBREW_CASK_OPTS="--no-quarantine" brew install --cask oxi
-```
-
-This installs `oxi.app` in `/Applications` and exposes the `oxi` command. Only bypass quarantine when you trust this repository and its published release.
-
-Linux x86_64:
-
-```bash
-brew tap maziluiosif/tap
-brew install --cask oxi
-```
-
-If you previously installed the old formula, migrate once with `brew uninstall --formula oxi` before running the appropriate Cask command above. The `oxi` command launches the app from any directory, using that directory as the first workspace.
-
-### Manual download
-
-Precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to each [GitHub release](https://github.com/maziluiosif/oxi/releases).
-
-#### macOS Gatekeeper / quarantine note
-
-The macOS bundle is ad-hoc signed for integrity but is not Apple-notarized. If you trust this repository and download the archive manually, copy the extracted app to `/Applications`, then explicitly remove its quarantine attributes:
-
-```bash
-xattr -cr /Applications/oxi.app
-open /Applications/oxi.app
-```
-
-For a standalone binary, use `xattr -c /path/to/oxi`. Do not disable Gatekeeper globally.
 
 ### Build and run from source
 
@@ -95,6 +60,42 @@ Binary output:
 ```bash
 target/release/oxi
 ```
+
+### Download a prebuilt release
+
+If you would rather not compile, precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to every [GitHub release](https://github.com/maziluiosif/oxi/releases). Download the archive for your platform, extract it, and run the app.
+
+#### macOS: clear the quarantine flag
+
+The macOS bundle is ad-hoc signed for integrity but is **not** Apple-notarized, so anything you download from a browser gets Gatekeeper's quarantine attribute and macOS will refuse to open it ("app is damaged" / "unidentified developer"). Move the extracted app to `/Applications` and clear that attribute once:
+
+```bash
+xattr -cr /Applications/oxi.app
+open /Applications/oxi.app
+```
+
+For a standalone binary rather than the `.app` bundle, use `xattr -c /path/to/oxi`. Only do this for software you trust, and do not disable Gatekeeper globally.
+
+### Homebrew
+
+The tap distributes the same precompiled release as a Homebrew Cask and is updated automatically on every release.
+
+```bash
+brew tap maziluiosif/tap
+brew install --cask oxi
+```
+
+This installs `oxi.app` into `/Applications` and exposes the `oxi` command, which launches the app from any directory and uses that directory as the first workspace.
+
+On macOS, because the build is not notarized, run the quarantine step once after installing:
+
+```bash
+xattr -cr /Applications/oxi.app
+```
+
+On Linux x86_64 no extra step is needed.
+
+If you previously installed the old formula, migrate once with `brew uninstall --formula oxi` before running the Cask command above.
 
 ## Why oxi
 

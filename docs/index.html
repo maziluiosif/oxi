@@ -208,7 +208,7 @@
 
       <div class="shot">
         <div class="bar"><span></span><span></span><span></span></div>
-        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/chat.png" alt="oxi chat UI" loading="lazy" />
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/demo/demo.gif" alt="oxi in action" />
       </div>
     </div>
   </div>
@@ -391,29 +391,37 @@
       <div class="section-head">
         <div class="eyebrow">Install</div>
         <h2>Up and running in seconds</h2>
-        <p>Homebrew for macOS (Apple Silicon) and Linux (x86_64), or grab a precompiled archive.</p>
+        <p>Build it yourself from source, grab a precompiled archive, or install the Homebrew Cask.</p>
       </div>
       <div class="install">
         <div class="install-tabs">
-          <span class="chip">🍺 Homebrew</span>
-        </div>
-        <div class="code">
-<span class="c"># macOS (Apple Silicon; ad-hoc signed, not notarized)</span><br>
-<span class="p">brew</span> tap maziluiosif/tap<br>
-<span class="p">HOMEBREW_CASK_OPTS</span>=&quot;--no-quarantine&quot; <span class="p">brew</span> install --cask oxi<br><br>
-<span class="c"># Linux (x86_64)</span><br>
-<span class="p">brew</span> install --cask oxi
-        </div>
-        <div class="install-tabs" style="padding-top:16px;">
           <span class="chip">🦀 From source</span>
         </div>
         <div class="code">
-<span class="c"># requires the Rust toolchain</span><br>
+<span class="c"># requires the Rust toolchain and native C/C++ build tools</span><br>
 <span class="p">cargo</span> run --release
+        </div>
+        <div class="install-tabs" style="padding-top:16px;">
+          <span class="chip">⬇ Prebuilt release</span>
+        </div>
+        <div class="code">
+<span class="c"># download + extract the archive for your platform, then on macOS:</span><br>
+<span class="c"># the build is ad-hoc signed but not notarized, so clear quarantine once</span><br>
+<span class="p">xattr</span> -cr /Applications/oxi.app<br>
+<span class="p">open</span> /Applications/oxi.app
+        </div>
+        <div class="install-tabs" style="padding-top:16px;">
+          <span class="chip">🍺 Homebrew</span>
+        </div>
+        <div class="code">
+<span class="p">brew</span> tap maziluiosif/tap<br>
+<span class="p">brew</span> install --cask oxi<br><br>
+<span class="c"># macOS only: clear quarantine once after installing</span><br>
+<span class="p">xattr</span> -cr /Applications/oxi.app
         </div>
       </div>
       <p class="install-note">
-        Prefer a manual download? Precompiled archives for macOS, Linux, and Windows are attached to every
+        Precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to every
         <a href="https://github.com/maziluiosif/oxi/releases">GitHub release</a>.
       </p>
     </div>
