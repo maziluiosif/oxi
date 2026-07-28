@@ -611,20 +611,7 @@ async fn run_acp_turn(
         })
         .unwrap_or_default();
 
-    let mut env = Vec::new();
-    let key = cfg.api_key.trim();
-    if !key.is_empty() {
-        match cfg.provider {
-            LlmProviderKind::ClaudeCodeAcp => {
-                env.push(("ANTHROPIC_API_KEY".to_string(), key.to_string()));
-            }
-            LlmProviderKind::CodexAcp => {
-                env.push(("CODEX_API_KEY".to_string(), key.to_string()));
-                env.push(("OPENAI_API_KEY".to_string(), key.to_string()));
-            }
-            _ => {}
-        }
-    }
+    let env = cfg.acp_env();
 
     let req = crate::agent::acp::AcpPrompt {
         session_key: acp_session_key,

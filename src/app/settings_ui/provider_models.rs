@@ -48,20 +48,7 @@ impl OxiApp {
             .unwrap_or_else(|| format!("mem:{}:{}", key.workspace_idx, key.session_idx));
         let cwd =
             std::path::PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
-        let mut env = Vec::new();
-        let api_key = cfg.api_key.trim();
-        if !api_key.is_empty() {
-            match cfg.provider {
-                LlmProviderKind::ClaudeCodeAcp => {
-                    env.push(("ANTHROPIC_API_KEY".to_string(), api_key.to_string()));
-                }
-                LlmProviderKind::CodexAcp => {
-                    env.push(("CODEX_API_KEY".to_string(), api_key.to_string()));
-                    env.push(("OPENAI_API_KEY".to_string(), api_key.to_string()));
-                }
-                _ => {}
-            }
-        }
+        let env = cfg.acp_env();
         let command_line = cfg.effective_acp_command();
         let acp = self.acp.clone();
 

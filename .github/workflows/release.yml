@@ -294,10 +294,13 @@ jobs:
               binary "#{appdir}/oxi.app/Contents/MacOS/oxi", target: "oxi"
 
               caveats <<~EOS
-                oxi is ad-hoc signed but not Apple-notarized. Install it explicitly without
-                quarantine only when you trust its source and published release:
+                oxi is ad-hoc signed but not Apple-notarized, so macOS quarantines it on install.
+                Clear the quarantine attribute once, then launch it:
 
-                  HOMEBREW_CASK_OPTS="--no-quarantine" brew install --cask maziluiosif/tap/oxi
+                  xattr -cr /Applications/oxi.app
+                  open /Applications/oxi.app
+
+                Only do this for software you trust, and do not disable Gatekeeper globally.
 
                 Run \`oxi\` from a project directory to open it as the first workspace.
               EOS
@@ -328,15 +331,19 @@ jobs:
 
           ### macOS (Apple Silicon)
 
-          oxi is ad-hoc signed but not Apple-notarized. Only bypass quarantine when you trust the
-          project and its published release:
-
           ```sh
           brew tap maziluiosif/tap
-          HOMEBREW_CASK_OPTS="--no-quarantine" brew install --cask oxi
+          brew install --cask oxi
           ```
 
           This installs `oxi.app` in `/Applications` and exposes the `oxi` command.
+
+          oxi is ad-hoc signed but not Apple-notarized, so macOS quarantines it. Clear the
+          quarantine attribute once after installing:
+
+          ```sh
+          xattr -cr /Applications/oxi.app
+          ```
 
           ### Linux (x86_64)
 
