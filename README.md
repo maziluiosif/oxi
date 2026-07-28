@@ -6,10 +6,11 @@
 
 **oxi** is a native, local-first coding agent. One Rust binary, no Electron, ~110 MB idle.
 
-- **Light and fast** — Rust + egui, a single native binary with no bundled browser engine.
-- **Runs your models for you** — search HuggingFace for GGUF, download it, install a matching `llama-server`, start and stop it, all from the UI — on this machine or on a GPU box over SSH. It also talks to LM Studio and Ollama.
-- **Or use the subscription you already pay for** — drive Claude Code, Cursor, or Codex CLI in-app over ACP, sign in to ChatGPT/Codex directly, or point it at any hosted API.
-- **Voice dictation built in** — local Whisper, no cloud round-trip.
+- **Light and fast:** Rust + egui, a single native binary with no bundled browser engine.
+- **Runs your models for you:** search HuggingFace for GGUF, download it, install a matching `llama-server`, start and stop it, all from the UI, either on this machine or on a GPU box over SSH. It also talks to LM Studio and Ollama.
+- **Or use the subscription you already pay for:** drive Claude Code, Cursor, or Codex CLI in-app over ACP, sign in to ChatGPT/Codex directly, or point it at any hosted API.
+- **Voice dictation built in:** local Whisper, no cloud round-trip.
+- **Web search with no API key:** the agent searches through Bing, DuckDuckGo, or your own self-hosted SearXNG. No search API to sign up for, no key to paste, no per-query billing.
 
 ![oxi demo](assets/demo/demo.gif)
 
@@ -21,9 +22,9 @@
 
 Requirements:
 
-- Rust toolchain compatible with the crate's `rust-version` in `Cargo.toml`
-- desktop environment supported by `eframe`
-- native C/C++ build tools required by the local Whisper voice-dictation dependency
+- **Rust 1.92 or newer** (the crate uses edition 2024). Install it with [rustup](https://rustup.rs), then confirm with `rustc --version`.
+- a desktop environment supported by `eframe`
+- native C/C++ build tools, required by the local Whisper voice-dictation dependency
 
 #### Windows prerequisites
 
@@ -98,15 +99,16 @@ If you previously installed the old formula, migrate once with `brew uninstall -
 
 ## Why oxi
 
-- **Any model, no lock-in** — hosted APIs (OpenAI, Azure, OpenRouter, GPT Codex, OpenCode Go, Anthropic-compatible), local servers (LM Studio, Ollama), oxi-managed HuggingFace GGUF models via `llama-server`, or agent CLIs over ACP (Claude Code, Cursor, Codex). Switch providers from one control.
-- **Local-first by design** — settings, sessions, tool execution, SSH credentials, OAuth tokens, local models, and voice models stay on your machine. No account required to use your own models.
-- **Local & self-hosted friendly** — run GGUF models oxi downloads for you, connect to an LM Studio/Ollama server, or tunnel to a GPU box over SSH — no external `ssh` binary needed.
-- **Native, not Electron** — Rust + egui, a single binary, no bundled browser engine. Low idle RAM (see below).
-- **Workspace file explorer + code editor** — a multi-tab editor with syntax highlighting, minimap, find/replace, external-change detection, and Git changes opened inline — not just a chat window.
-- **Workspace-aware agent tools** — inspect and search code, read/write/edit/delete/move files, create directories, inspect Git state/diffs, run verification commands, call MCP servers, and search/fetch web content.
-- **Built-in developer surfaces** — source-control panel, diffs, commit-message generation, and a workspace-rooted terminal.
-- **User-controlled prompting** — editable agent prompt, `@`-mention files/folders into a message, and a separate commit-message prompt.
-- **Local voice dictation** — optional microphone dictation using local Whisper models.
+- **Any model, no lock-in:** hosted APIs (OpenAI, Azure, OpenRouter, GPT Codex, OpenCode Go, Anthropic-compatible), local servers (LM Studio, Ollama), oxi-managed HuggingFace GGUF models via `llama-server`, or agent CLIs over ACP (Claude Code, Cursor, Codex). Switch providers from one control.
+- **Local-first by design:** settings, sessions, tool execution, SSH credentials, OAuth tokens, local models, and voice models stay on your machine. No account required to use your own models.
+- **Local & self-hosted friendly:** run GGUF models oxi downloads for you, connect to an LM Studio/Ollama server, or tunnel to a GPU box over SSH with no external `ssh` binary needed.
+- **Native, not Electron:** Rust + egui, a single binary, no bundled browser engine. Low idle RAM (see below).
+- **Workspace file explorer + code editor:** a multi-tab editor with syntax highlighting, minimap, find/replace, external-change detection, and Git changes opened inline, not just a chat window.
+- **Workspace-aware agent tools:** inspect and search code, read/write/edit/delete/move files, create directories, inspect Git state/diffs, run verification commands, call MCP servers, and search/fetch web content.
+- **Keyless web search:** `web_search` scrapes Bing RSS or DuckDuckGo directly, or queries a SearXNG instance you host yourself. Unlike tools that require a paid Brave, Tavily, or Google CSE key, this works out of the box and costs nothing.
+- **Built-in developer surfaces:** source-control panel, diffs, commit-message generation, and a workspace-rooted terminal.
+- **User-controlled prompting:** editable agent prompt, `@`-mention files/folders into a message, and a separate commit-message prompt.
+- **Local voice dictation:** optional microphone dictation using local Whisper models.
 
 ![oxi RAM usage](assets/screenshots/resource_ussage.png)
 
@@ -173,7 +175,7 @@ The agent can call these tools when enabled in Settings:
 | `codebase_search` | Rank code and matching lines for a natural-language query |
 | `git_status` | Show the workspace's staged, unstaged, and untracked changes |
 | `git_diff` | Show staged/unstaged or revision-based Git diffs |
-| `web_search` | Search the web through Bing RSS, DuckDuckGo, or a configured SearXNG instance |
+| `web_search` | Search the web through Bing RSS, DuckDuckGo, or a configured SearXNG instance, with no API key |
 | `web_fetch` | Fetch a URL and return readable text |
 | `mcp_<server>_<tool>` | Call tools exposed by enabled stdio MCP servers |
 
@@ -233,13 +235,13 @@ The commit-message generator can use the active provider or a provider/model pin
 
 oxi is more than a chat window: it includes a workspace file explorer and a multi-tab text editor so you can read and edit code next to the agent.
 
-- **Explorer tree** — browse the active workspace, with Git status coloring on entries and dimming for Git-ignored paths.
-- **Context-menu file operations** — create, rename, and delete files/folders from the tree, and reveal a path in the OS file manager.
-- **Multi-tab editor** — open several files at once, each in its own tab, with syntax highlighting.
-- **Minimap** — a scrollable overview of the current file; you can scroll while hovering over it.
-- **Find / replace** — in-file search and replace with match highlighting.
-- **External-change detection** — oxi notices when a file changes on disk (e.g. after an agent edit) and keeps the view in sync.
-- **Git changes inline** — open a Git diff as an editor tab, with files staying open and editable beside it.
+- **Explorer tree:** browse the active workspace, with Git status coloring on entries and dimming for Git-ignored paths.
+- **Context-menu file operations:** create, rename, and delete files/folders from the tree, and reveal a path in the OS file manager.
+- **Multi-tab editor:** open several files at once, each in its own tab, with syntax highlighting.
+- **Minimap:** a scrollable overview of the current file; you can scroll while hovering over it.
+- **Find / replace:** in-file search and replace with match highlighting.
+- **External-change detection:** oxi notices when a file changes on disk (e.g. after an agent edit) and keeps the view in sync.
+- **Git changes inline:** open a Git diff as an editor tab, with files staying open and editable beside it.
 
 ### Embedded terminal
 
@@ -336,7 +338,7 @@ The **Local HF** and **Remote HF** providers let oxi manage GGUF models directly
 The two providers differ only in *where* the managed runtime runs:
 
 - **Local HF** runs the oxi-managed `llama-server` on this machine.
-- **Remote HF** runs the same oxi-managed workflow — install runtime, download GGUF, start/stop, tunnel chat — on another host over SSH. It is always remote; there is no local/remote toggle.
+- **Remote HF** runs the same oxi-managed workflow (install runtime, download GGUF, start/stop, tunnel chat) on another host over SSH. It is always remote; there is no local/remote toggle.
 
 Remote HF is a dedicated provider now. If you previously configured **Local HF** with an SSH compute target, oxi migrates that setup to **Remote HF** automatically on first launch.
 
@@ -424,7 +426,7 @@ oxi stores an editable main agent system prompt.
 
 Supported placeholder:
 
-- `{tools_list}` — replaced with the enabled tool names
+- `{tools_list}`: replaced with the enabled tool names
 
 At runtime, the prompt builder also appends:
 
@@ -438,19 +440,21 @@ There is also a separate editable system prompt for AI commit-message generation
 
 ## Web search
 
-The `web_search` tool supports multiple backends:
+The agent can search the web without any search API key. There is no Brave, Tavily, Serper, or Google CSE account to create, no key to paste into settings, and no per-query cost. The `web_search` tool queries public endpoints directly, or your own SearXNG instance if you prefer to keep queries in-house.
 
-- **Bing** — default zero-config backend using RSS results
-- **DuckDuckGo** — optional backend
-- **SearXNG** — user-configured instance URL; JSON support must be available
+Backends:
 
-`web_fetch` is separate and can fetch readable text from HTTP(S) URLs.
+- **Bing:** the default. Zero config, reads Bing's public RSS search feed, capped at around 10 results per query.
+- **DuckDuckGo:** optional, parses the HTML results endpoint. Also zero config, though DuckDuckGo sometimes answers with a bot-challenge page.
+- **SearXNG:** point oxi at the URL of a SearXNG instance you host. The instance must have the JSON output format enabled. This keeps every query on infrastructure you control and lets you pick which upstream engines are used.
+
+Pick the backend in Settings. `web_fetch` is a separate tool that pulls readable text out of an HTTP(S) URL, also without a key. Both web tools are read-only and run without an approval prompt.
 
 ## Appearance
 
 Settings include theme and density controls. Built-in themes are managed by the theme catalog, and UI density is applied through egui zoom so text and spacing scale together. A custom theme can also be loaded from a JSON spec.
 
-Built-in themes: **Dark**, **Light**, **Midnight**, **Sublime**, and **Sublime 4** (`mariana`). Each theme restyles the whole app — chrome, transcript, syntax highlighting, and the editor — consistently.
+Built-in themes: **Dark**, **Light**, **Midnight**, **Sublime**, and **Sublime 4** (`mariana`). Each theme restyles the whole app consistently: chrome, transcript, syntax highlighting, and the editor.
 
 | Sublime 4 | Sublime |
 |---|---|
@@ -464,23 +468,23 @@ Built-in themes: **Dark**, **Light**, **Midnight**, **Sublime**, and **Sublime 4
 
 High-level source layout:
 
-- `src/main.rs` — native `eframe` entry point, window setup, panic logging
-- `src/app/` — app state, sidebar, composer, settings page, session/workspace behavior, Git/terminal panels
-- `src/app/file_explorer/` — workspace file explorer, multi-tab code editor, minimap, find/replace, and inline Git-diff tabs
-- `src/agent/` — agent runner, prompts, provider adapters, history conversion/trimming, approvals, tool execution
-- `src/agent/tools/` — filesystem, shell/search, codebase-search, Git inspection, web, and reversible-turn tool implementations
-- `src/git.rs` — background Git worker and typed Git operations
-- `src/terminal.rs` — PTY terminal session
-- `src/local_models.rs` — HuggingFace GGUF downloads and local `llama-server` runtime management
-- `src/local_models_remote.rs` — remote SSH helpers for Local HF
-- `src/voice_engine.rs` — local microphone capture and Whisper transcription
-- `src/voice_models.rs` — Whisper model catalog/downloads
-- `src/oauth/` — Codex OAuth and token persistence
-- `src/compute/` — SSH tunnels and credential storage
-- `src/session_store/` — session loading/saving and storage path handling
-- `src/settings/` — persistent settings and provider config model
-- `src/theme/` — theme catalog, palette, formatting, and style helpers
-- `src/ui/` — shared UI chrome helpers
+- `src/main.rs`: native `eframe` entry point, window setup, panic logging
+- `src/app/`: app state, sidebar, composer, settings page, session/workspace behavior, Git/terminal panels
+- `src/app/file_explorer/`: workspace file explorer, multi-tab code editor, minimap, find/replace, and inline Git-diff tabs
+- `src/agent/`: agent runner, prompts, provider adapters, history conversion/trimming, approvals, tool execution
+- `src/agent/tools/`: filesystem, shell/search, codebase-search, Git inspection, web, and reversible-turn tool implementations
+- `src/git.rs`: background Git worker and typed Git operations
+- `src/terminal.rs`: PTY terminal session
+- `src/local_models.rs`: HuggingFace GGUF downloads and local `llama-server` runtime management
+- `src/local_models_remote.rs`: remote SSH helpers for Local HF
+- `src/voice_engine.rs`: local microphone capture and Whisper transcription
+- `src/voice_models.rs`: Whisper model catalog/downloads
+- `src/oauth/`: Codex OAuth and token persistence
+- `src/compute/`: SSH tunnels and credential storage
+- `src/session_store/`: session loading/saving and storage path handling
+- `src/settings/`: persistent settings and provider config model
+- `src/theme/`: theme catalog, palette, formatting, and style helpers
+- `src/ui/`: shared UI chrome helpers
 
 Important runtime behavior:
 

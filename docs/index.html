@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>oxi — native, local-first, run-any-model coding agent</title>
-  <meta name="description" content="oxi is a native, local-first coding-agent desktop app built in Rust with egui. A single binary that runs any model — local GGUF, Ollama/LM Studio, SSH-tunneled runtimes, hosted APIs, or Claude Code / Cursor / Codex over ACP. No Electron, no cloud lock-in." />
+  <title>oxi: a native, local-first coding agent</title>
+  <meta name="description" content="oxi is a desktop coding agent built in Rust with egui. One native binary, around 110 MB idle. It downloads and runs GGUF models for you, connects to LM Studio, Ollama or a GPU box over SSH, and works with hosted APIs or your existing Claude Code, Cursor and Codex subscriptions over ACP." />
 
   <!-- Open Graph / social -->
-  <meta property="og:title" content="oxi — native, local-first, run-any-model coding agent" />
-  <meta property="og:description" content="A single Rust binary. Run any model — local GGUF, Ollama/LM Studio, SSH, hosted APIs, or agent CLIs over ACP. No Electron, no cloud lock-in." />
+  <meta property="og:title" content="oxi: a native, local-first coding agent" />
+  <meta property="og:description" content="One Rust binary, around 110 MB idle. It downloads and runs GGUF models for you, locally or over SSH, and also talks to LM Studio, Ollama, hosted APIs, and agent CLIs over ACP." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://maziluiosif.github.io/oxi/" />
   <meta property="og:image" content="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/chat.png" />
@@ -113,13 +113,12 @@
     .hero-note { color: var(--muted); font-size: 0.85rem; }
 
     /* Shot frame */
+    /* Sized to the demo's native 800px so the capture stays sharp. */
     .shot {
-      margin: 54px auto 0; max-width: 940px; border: 1px solid var(--border); border-radius: var(--radius);
+      margin: 54px auto 0; max-width: 802px; border: 1px solid var(--border); border-radius: var(--radius);
       overflow: hidden; box-shadow: 0 30px 80px -30px rgba(0,0,0,0.6); background: var(--card); position: relative;
     }
-    .shot .bar { display: flex; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--bg-soft); }
-    .shot .bar span { width: 11px; height: 11px; border-radius: 50%; background: var(--border); }
-    .shot .bar span:nth-child(1){ background:#ec6a5e; } .shot .bar span:nth-child(2){ background:#f4bf4f; } .shot .bar span:nth-child(3){ background:#61c554; }
+    .shot img { width: 100%; }
 
     /* Sections */
     section { padding: 72px 0; }
@@ -135,10 +134,9 @@
       transition: border-color .15s ease, transform .15s ease;
     }
     .card:hover { border-color: color-mix(in srgb, var(--rust) 50%, var(--border)); transform: translateY(-3px); }
-    .card .ico { font-size: 1.5rem; margin-bottom: 14px; display: inline-block; }
     .card h3 { margin: 0 0 8px; font-size: 1.12rem; letter-spacing: -0.01em; }
     .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
-    .card p code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 0.85em; color: var(--rust-2); }
+    .card p code, .subtitle code, .install-note code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 0.85em; color: var(--rust-2); }
 
     /* Screenshot gallery */
     .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
@@ -192,23 +190,22 @@
   <!-- HERO -->
   <div class="hero">
     <div class="wrap">
-      <span class="badge">🦀 Built in <b>Rust + egui</b> · single native binary · no Electron</span>
+      <span class="badge">Built in <b>Rust + egui</b> · single native binary · ~110 MB idle</span>
       <h1>Run <span class="grad">any model</span>,<br>keep everything local</h1>
       <p class="subtitle">
-        oxi is a native, local-first coding agent that talks to whatever model you choose —
-        a local GGUF, an Ollama or LM Studio server, a box you SSH into, a hosted API, or an
-        agent CLI over ACP — without a browser engine and without your code, keys, or history
-        leaving your machine.
+        A desktop coding agent that manages your models for you. Find a GGUF on HuggingFace and
+        oxi downloads it, installs a matching <code>llama-server</code>, and runs it, either on
+        this machine or on a GPU box over SSH. LM Studio, Ollama, hosted APIs, and agent CLIs
+        over ACP work too.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases">⬇ Download latest release</a>
-        <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi">★ Star on GitHub</a>
+        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases">Download latest release</a>
+        <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi">Star on GitHub</a>
       </div>
       <p class="hero-note">macOS (arm64) · Linux (x86_64) · Windows (x86_64) · MIT licensed</p>
 
       <div class="shot">
-        <div class="bar"><span></span><span></span><span></span></div>
-        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/demo/demo.gif" alt="oxi in action" />
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/demo/demo.gif" alt="oxi fixing a failing test with a local model" />
       </div>
     </div>
   </div>
@@ -218,49 +215,49 @@
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Why oxi</div>
-        <h2>The opposite bet from cloud coding tools</h2>
-        <p>The polished commercial tools assume you'll use their cloud and their subscription. oxi assumes the opposite: bring your own model, keep everything local, own your data.</p>
+        <h2>Built for people who run their own models</h2>
+        <p>Most of the polished coding tools assume you will use their cloud and their subscription. oxi assumes you would rather bring your own model and keep your work on your machine.</p>
       </div>
       <div class="grid">
         <div class="card">
-          <span class="ico">🧠</span>
-          <h3>Any model, no lock-in</h3>
-          <p>Hosted APIs, local servers, oxi-managed GGUF models, or agent CLIs over ACP — switch providers from one control.</p>
+          <h3>Light and fast</h3>
+          <p>Rust and egui in a single binary, with no bundled browser engine. Around 110 MB of RAM at idle.</p>
         </div>
         <div class="card">
-          <span class="ico">🔒</span>
-          <h3>Local-first by design</h3>
-          <p>Settings, sessions, tool execution, SSH credentials, OAuth tokens, and models all stay on your machine. No account needed to use your own models.</p>
+          <h3>It manages the models</h3>
+          <p>Search HuggingFace for GGUF files, download them, install a matching <code>llama-server</code>, then start and stop it from the UI.</p>
         </div>
         <div class="card">
-          <span class="ico">⚡</span>
-          <h3>Native, not Electron</h3>
-          <p>Rust + egui, a single binary, no bundled browser engine — and a low idle memory footprint.</p>
+          <h3>Local, remote, or hosted</h3>
+          <p>Run the model here, tunnel to a GPU box over SSH, or point oxi at LM Studio, Ollama, or a hosted API.</p>
         </div>
         <div class="card">
-          <span class="ico">🧩</span>
-          <h3>Local &amp; self-hosted models</h3>
-          <p>Run GGUF models oxi downloads for you via <code>llama-server</code>, connect to LM Studio or Ollama, or tunnel to a GPU box over SSH.</p>
+          <h3>Use a subscription you already have</h3>
+          <p>Drive Claude Code, Cursor, or Codex CLI inside oxi over ACP, or sign in to ChatGPT and Codex directly.</p>
         </div>
         <div class="card">
-          <span class="ico">🗂️</span>
-          <h3>File explorer + code editor</h3>
-          <p>A multi-tab editor with syntax highlighting, minimap, find/replace, external-change detection, and Git changes opened inline — not just a chat window.</p>
-        </div>
-        <div class="card">
-          <span class="ico">🛠️</span>
-          <h3>Workspace-aware tools</h3>
-          <p>Read, write, edit, grep, find, codebase search, Git inspection, verification commands, MCP servers, and web search/fetch.</p>
-        </div>
-        <div class="card">
-          <span class="ico">🌿</span>
-          <h3>Git, terminal &amp; diffs built in</h3>
-          <p>A source-control panel with stage/commit/push, AI commit messages, inline diffs, and a workspace-rooted PTY terminal.</p>
-        </div>
-        <div class="card">
-          <span class="ico">🎙️</span>
           <h3>Local voice dictation</h3>
-          <p>Optional microphone dictation using local Whisper models — loaded lazily, unloaded when idle. Nothing leaves the machine.</p>
+          <p>Dictate using local Whisper models. They load only when you transcribe and unload again when idle.</p>
+        </div>
+        <div class="card">
+          <h3>File explorer and code editor</h3>
+          <p>A multi-tab editor with syntax highlighting, minimap, find and replace, external-change detection, and Git diffs opened inline.</p>
+        </div>
+        <div class="card">
+          <h3>Git, terminal, and diffs</h3>
+          <p>A source-control panel with stage, commit, and push, plus AI commit messages, inline diffs, and a workspace-rooted PTY terminal.</p>
+        </div>
+        <div class="card">
+          <h3>Workspace-aware tools</h3>
+          <p>Read, write, edit, grep, find, codebase search, Git inspection, verification commands, MCP servers, and web search.</p>
+        </div>
+        <div class="card">
+          <h3>Web search without an API key</h3>
+          <p>The agent searches through Bing, DuckDuckGo, or a <code>SearXNG</code> instance you host yourself. No search API to sign up for, no key to paste, and nothing to pay per query.</p>
+        </div>
+        <div class="card">
+          <h3>Nothing phones home</h3>
+          <p>Settings, sessions, tool execution, and models stay local. API keys and tokens go to the OS keychain rather than a config file, and no account is required.</p>
         </div>
       </div>
     </div>
@@ -270,25 +267,22 @@
   <section id="control" style="background: var(--bg-soft);">
     <div class="wrap">
       <div class="section-head">
-        <div class="eyebrow">You fully control it</div>
-        <h2>Your machine. Your models. Your prompt.</h2>
-        <p>oxi ships with a sensible coding-agent prompt — but it's just an editable template. Rewrite it and the agent becomes whatever you need.</p>
+        <div class="eyebrow">Prompts</div>
+        <h2>The system prompt is yours to edit</h2>
+        <p>oxi ships with a coding-agent prompt, but it is only a template. Rewrite it and the agent becomes whatever you need.</p>
       </div>
       <div class="grid">
         <div class="card">
-          <span class="ico">✍️</span>
           <h3>Editable system prompt</h3>
-          <p>One editable template with a <code>{tools_list}</code> placeholder. Keep the coding defaults, or replace them entirely. <code>@</code>-mention files and folders into a message.</p>
+          <p>One template with a <code>{tools_list}</code> placeholder. Keep the coding defaults or replace them entirely, and <code>@</code>-mention files and folders into a message.</p>
         </div>
         <div class="card">
-          <span class="ico">🎭</span>
-          <h3>Coding agent, or anything</h3>
-          <p>Point it at a repo as a coding assistant, or repurpose it into a reviewer, researcher, or writing partner.</p>
+          <h3>Not only for coding</h3>
+          <p>Point it at a repo as a coding assistant, or repurpose it as a reviewer, researcher, or writing partner.</p>
         </div>
         <div class="card">
-          <span class="ico">🚫</span>
-          <h3>No vendor lock-in</h3>
-          <p>Nothing hard-coded by a cloud provider. Your data, keys, and instructions never leave your machine.</p>
+          <h3>A separate commit prompt</h3>
+          <p>AI commit messages have their own editable prompt, and can run on a different provider than the chat.</p>
         </div>
       </div>
     </div>
@@ -325,8 +319,8 @@
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Themes</div>
-        <h2>Make it yours</h2>
-        <p>Built-in themes restyle the whole app — chrome, transcript, syntax highlighting, and the editor — consistently. Custom themes load from a JSON spec.</p>
+        <h2>Five built-in themes</h2>
+        <p>Each theme restyles the whole app consistently: chrome, transcript, syntax highlighting, and the editor. Custom themes load from a JSON spec.</p>
       </div>
       <div class="gallery">
         <figure>
@@ -354,7 +348,7 @@
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Screenshots</div>
-        <h2>See it in action</h2>
+        <h2>A closer look</h2>
       </div>
       <div class="gallery">
         <figure>
@@ -390,19 +384,26 @@
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Install</div>
-        <h2>Up and running in seconds</h2>
-        <p>Build it yourself from source, grab a precompiled archive, or install the Homebrew Cask.</p>
+        <h2>Three ways to get it</h2>
+        <p>Build from source, download a prebuilt archive, or install the Homebrew cask.</p>
       </div>
       <div class="install">
         <div class="install-tabs">
-          <span class="chip">🦀 From source</span>
+          <span class="chip">From source</span>
         </div>
         <div class="code">
-<span class="c"># requires the Rust toolchain and native C/C++ build tools</span><br>
+<span class="c"># needs Rust 1.92 or newer, plus native C/C++ build tools</span><br>
+<span class="c"># for the local Whisper dependency</span><br>
 <span class="p">cargo</span> run --release
         </div>
+        <p class="install-note" style="text-align:left; margin: 10px 8px 0;">
+          oxi is built on Rust edition 2024 and needs toolchain <b>1.92</b> or newer. Install one with
+          <a href="https://rustup.rs">rustup</a>, then check yours with <code>rustc --version</code>.
+          On Windows you also need LLVM, CMake, and the Visual Studio C++ build tools, which the
+          <a href="https://github.com/maziluiosif/oxi#windows-prerequisites">README covers in detail</a>.
+        </p>
         <div class="install-tabs" style="padding-top:16px;">
-          <span class="chip">⬇ Prebuilt release</span>
+          <span class="chip">Prebuilt release</span>
         </div>
         <div class="code">
 <span class="c"># download + extract the archive for your platform, then on macOS:</span><br>
@@ -411,7 +412,7 @@
 <span class="p">open</span> /Applications/oxi.app
         </div>
         <div class="install-tabs" style="padding-top:16px;">
-          <span class="chip">🍺 Homebrew</span>
+          <span class="chip">Homebrew</span>
         </div>
         <div class="code">
 <span class="p">brew</span> tap maziluiosif/tap<br>
@@ -430,12 +431,12 @@
   <!-- FINAL CTA -->
   <section style="text-align:center;">
     <div class="wrap">
-      <h2 style="font-size: clamp(1.8rem,4vw,2.6rem); letter-spacing:-0.02em; margin:0 0 14px;">Own your coding agent.</h2>
+      <h2 style="font-size: clamp(1.8rem,4vw,2.6rem); letter-spacing:-0.02em; margin:0 0 14px;">Try it on your own repo</h2>
       <p style="color:var(--muted); max-width:560px; margin:0 auto 30px; font-size:1.05rem;">
-        One binary. Your machine. Your models.
+        Download a build, or compile it yourself in a few minutes.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases">⬇ Download oxi</a>
+        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases">Download oxi</a>
         <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi#readme">Read the docs</a>
       </div>
     </div>
