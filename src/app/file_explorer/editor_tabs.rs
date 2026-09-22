@@ -100,6 +100,14 @@ impl OxiApp {
                                         egui::vec2(tab_width, 28.0),
                                         egui::Sense::click(),
                                     );
+                                    response.widget_info(|| {
+                                        egui::WidgetInfo::selected(
+                                            egui::WidgetType::SelectableLabel,
+                                            ui.is_enabled(),
+                                            active,
+                                            &label,
+                                        )
+                                    });
                                     // The close hit target overlaps the tab response. Test the full rectangle
                                     // so the name and close icon still share one hover surface.
                                     let hovered = ui.rect_contains_pointer(rect);
@@ -143,6 +151,20 @@ impl OxiApp {
                                         ui.id().with(("editor_tab_close", index)),
                                         egui::Sense::click(),
                                     );
+                                    close_response.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::WidgetType::Button,
+                                            ui.is_enabled(),
+                                            format!(
+                                                "Close {}",
+                                                document
+                                                    .path
+                                                    .file_name()
+                                                    .unwrap_or_default()
+                                                    .to_string_lossy()
+                                            ),
+                                        )
+                                    });
                                     ui.painter().text(
                                         close_rect.center(),
                                         egui::Align2::CENTER_CENTER,
@@ -374,32 +396,7 @@ impl OxiApp {
             self.conv.editor.show_diff = !self.conv.editor.show_diff;
         }
         if let Some(index) = close {
-            if self.conv.editor.documents[index].is_scratchpad {
-                self.autosave_scratchpad(index);
-            }
-            if self.conv.editor.documents[index].is_dirty() {
-                self.conv.editor.error = Some("Save the file before closing its tab.".into());
-            } else {
-                self.conv.editor.documents.remove(index);
-                self.conv.editor.hidden_active =
-                    self.conv.editor.hidden_active.and_then(|hidden| {
-                        if hidden == index {
-                            None
-                        } else if hidden > index {
-                            Some(hidden - 1)
-                        } else {
-                            Some(hidden)
-                        }
-                    });
-                self.conv.editor.active = if self.conv.editor.documents.is_empty() {
-                    None
-                } else {
-                    Some(index.min(self.conv.editor.documents.len() - 1))
-                };
-                if self.conv.editor.active.is_some() {
-                    self.conv.editor.focus_editor_next_frame = true;
-                }
-            }
+            self.request_close_editor_tab(index);
         }
     }
 }

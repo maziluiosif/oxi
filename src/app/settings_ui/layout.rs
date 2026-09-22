@@ -64,6 +64,7 @@ impl OxiApp {
 
     fn continue_after_settings_exit(&mut self, action: SettingsExitAction) {
         match action {
+            SettingsExitAction::NewChat => self.new_chat(),
             SettingsExitAction::BackToChat => {
                 self.focus_active_view_next_frame();
             }
@@ -73,9 +74,7 @@ impl OxiApp {
                 self.conv.sidebar_open = !chats_on;
                 if !chats_on {
                     self.conv.sidebar_mode = crate::app::state::SidebarMode::Chats;
-                    if self.conv.editor.active.is_some() {
-                        self.conv.editor.hidden_active = self.conv.editor.active.take();
-                    }
+                    self.reveal_chat_view();
                 }
                 self.focus_active_view_next_frame();
             }

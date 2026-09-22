@@ -255,6 +255,38 @@ pub fn icon_glyph_rich(icon: &str, size: f32, color: Color32) -> RichText {
         .font(FontId::new(size, icon_font()))
 }
 
+fn icon_accessible_label(icon: &str) -> &str {
+    match icon {
+        ICON_CLOSE => "Close",
+        ICON_PLUS => "Add",
+        ICON_FILE => "File",
+        ICON_PROMPTS => "Scratchpad",
+        ICON_SETTINGS => "Settings",
+        ICON_MENU => "Chats",
+        ICON_EXPLORER => "Files",
+        ICON_TERMINAL => "Terminal",
+        ICON_GIT => "Git changes",
+        ICON_REFRESH => "Refresh",
+        ICON_SEND => "Send message",
+        ICON_STOP => "Stop",
+        ICON_ATTACH => "Attach image",
+        ICON_MIC => "Dictation",
+        ICON_EXTERNAL => "Open",
+        ICON_TRASH => "Delete",
+        ICON_FOLDER_PLUS => "Add workspace",
+        ICON_COPY => "Copy",
+        ICON_CHEVRON_LEFT => "Back",
+        ICON_CHEVRON_RIGHT => "Expand",
+        ICON_ANGLE_UP => "Collapse",
+        ICON_ANGLE_DOWN => "Expand",
+        ICON_SEARCH => "Search",
+        ICON_DOWNLOAD => "Download",
+        ICON_UPLOAD => "Upload",
+        ICON_PLAY => "Start",
+        _ => icon,
+    }
+}
+
 /// Visual spec for [`icon_button_core`]: rest/hover fills and strokes plus the resting glyph ink.
 /// The hover glyph ink is always the accent — every clickable icon in the app shares the sidebar
 /// "Add workspace" hover language.
@@ -295,7 +327,26 @@ pub fn icon_button_core_with_hover(
     look: &IconButtonLook,
 ) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = show_hover_visuals && response.hovered();
+    response.widget_info(|| {
+        if matches!(
+            icon,
+            ICON_MENU | ICON_EXPLORER | ICON_TERMINAL | ICON_GIT | ICON_MIC
+        ) {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                active,
+                icon_accessible_label(icon),
+            )
+        } else {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                icon_accessible_label(icon),
+            )
+        }
+    });
+    let hovered = show_hover_visuals && (response.hovered() || response.has_focus());
     let fill = if hovered { look.hover_fill } else { look.fill };
     let stroke = if hovered {
         look.hover_stroke
@@ -384,7 +435,14 @@ pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> 
 pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color32) -> Response {
     const SIDE: f32 = 18.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(SIDE, SIDE), Sense::click());
-    let hovered = resp.hovered();
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            icon_accessible_label(icon),
+        )
+    });
+    let hovered = resp.hovered() || resp.has_focus();
     if hovered {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(4), c_row_active());

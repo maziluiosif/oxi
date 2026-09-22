@@ -203,27 +203,41 @@ impl OxiApp {
             self.autosave_scratchpad(index);
             return;
         }
-        let document = &mut self.conv.editor.documents[index];
-        match std::fs::write(&document.path, document.content.as_bytes()) {
-            Ok(()) => {
-                document.saved_content.clone_from(&document.content);
-                document.dirty = false;
-                document.disk_modified = std::fs::metadata(&document.path)
-                    .and_then(|metadata| metadata.modified())
-                    .ok();
-                document.externally_modified = false;
-                self.conv.editor.error = None;
-                let _ = self
-                    .conv
-                    .git_tx
-                    .as_ref()
-                    .map(|tx| tx.send(crate::git::GitOp::Refresh));
+        let path = self.conv.editor.documents[index].path.clone();
+        if let Err(error) = self.save_editor_document(index, false) {
+            if self.conv.editor.documents[index].externally_modified {
+                self.conv.editor.prompt = Some(super::super::state::EditorPrompt::Overwrite {
+                    path,
+                    close_after: false,
+                });
             }
-            Err(error) => self.conv.editor.error = Some(format!("Could not save file: {error}")),
+            self.conv.editor.error = Some(error);
         }
     }
 
+    pub(super) fn save_editor_document(
+        &mut self,
+        index: usize,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        self.conv.editor.documents[index].save_to_disk(overwrite)?;
+        self.conv.editor.error = None;
+        if let Some(tx) = &self.conv.git_tx {
+            let _ = tx.send(crate::git::GitOp::Refresh);
+        }
+        Ok(())
+    }
+
     pub(super) fn check_external_file_changes(&mut self) {
+        if self
+            .conv
+            .editor
+            .last_external_check
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(500))
+        {
+            return;
+        }
+        self.conv.editor.last_external_check = Some(std::time::Instant::now());
         for document in &mut self.conv.editor.documents {
             if document.is_scratchpad && document.is_dirty() {
                 continue;
@@ -231,10 +245,7 @@ impl OxiApp {
             let modified = std::fs::metadata(&document.path)
                 .and_then(|metadata| metadata.modified())
                 .ok();
-            if modified.is_some()
-                && document.disk_modified.is_some()
-                && modified != document.disk_modified
-            {
+            if modified != document.disk_modified {
                 document.externally_modified = true;
             }
         }
@@ -260,5 +271,36 @@ impl OxiApp {
             }
             Err(error) => self.conv.editor.error = Some(format!("Could not reload file: {error}")),
         }
+    }
+}
+
+impl EditorDocument {
+    /// Compare actual bytes, not only mtimes: another tool can preserve the timestamp.
+    pub(super) fn save_to_disk(&mut self, overwrite: bool) -> Result<(), String> {
+        if !overwrite && !self.is_scratchpad {
+            match std::fs::read(&self.path) {
+                Ok(bytes) if bytes == self.saved_content.as_bytes() => {}
+                Ok(_) => {
+                    self.externally_modified = true;
+                    return Err("The file changed on disk. Review it before overwriting.".into());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.externally_modified = true;
+                    return Err(
+                        "The file was removed from disk. Overwrite will recreate it.".into(),
+                    );
+                }
+                Err(error) => return Err(format!("Could not check file before saving: {error}")),
+            }
+        }
+        std::fs::write(&self.path, self.content.as_bytes())
+            .map_err(|e| format!("Could not save file: {e}"))?;
+        self.saved_content.clone_from(&self.content);
+        self.dirty = false;
+        self.disk_modified = std::fs::metadata(&self.path)
+            .and_then(|m| m.modified())
+            .ok();
+        self.externally_modified = false;
+        Ok(())
     }
 }
