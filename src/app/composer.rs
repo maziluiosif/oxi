@@ -12,8 +12,8 @@ use eframe::egui::{
 use crate::theme::*;
 
 use super::composer_helpers::{
-    context_indicator_color, estimate_message_chars, format_context_tokens, paint_arc,
-    short_model_label,
+    context_indicator_color, estimate_message_chars, format_context_tokens, format_tokens_per_sec,
+    paint_arc, short_model_label,
 };
 use super::{OxiApp, SessionKey};
 
@@ -384,6 +384,9 @@ impl OxiApp {
             }
 
             self.render_context_indicator(ui);
+            if !compact {
+                self.render_tokens_per_sec(ui);
+            }
 
             // Keep the primary keyboard action discoverable while the composer has focus.
             // On smaller windows the compact version retains the information without pushing

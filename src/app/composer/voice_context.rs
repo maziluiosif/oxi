@@ -182,6 +182,33 @@ impl OxiApp {
         }
     }
 
+    /// Output speed of the running turn (or the last finished one) beside the context ring.
+    /// Hidden until a provider has streamed long enough to measure a meaningful rate.
+    pub(super) fn render_tokens_per_sec(&self, ui: &mut Ui) {
+        let Some(rate) = self
+            .active_run_state()
+            .map(|s| {
+                if s.turn_usage.output_tokens_per_sec().is_some() {
+                    s.turn_usage
+                } else {
+                    s.last_turn_usage
+                }
+            })
+            .and_then(|usage| usage.output_tokens_per_sec())
+        else {
+            return;
+        };
+        ui.label(
+            RichText::new(format_tokens_per_sec(rate))
+                .size(FS_TINY)
+                .color(c_text_faint()),
+        )
+        .on_hover_text(
+            "Output speed of the latest response, measured while the model streams \
+             (tool runs and approvals excluded)",
+        );
+    }
+
     fn estimated_active_context_chars(&self) -> usize {
         let key = self.active_session_key();
         let current_input = self.conv.input.len()
