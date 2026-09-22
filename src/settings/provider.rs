@@ -86,6 +86,11 @@ impl LlmProviderKind {
         )
     }
 
+    /// GGUF models that oxi downloads and serves itself through llama-server.
+    pub fn is_managed_hf(self) -> bool {
+        matches!(self, LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf)
+    }
+
     pub fn default_base_url(&self) -> &'static str {
         match self {
             LlmProviderKind::OpenAi | LlmProviderKind::GptCodex => "https://api.openai.com/v1",
