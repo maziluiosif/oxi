@@ -44,6 +44,7 @@ impl eframe::App for OxiApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.guard_editor_exit(ctx);
         self.poll_windows_clipboard_image_paste(ctx);
         self.handle_hold_space_dictation(ctx);
         self.handle_global_shortcuts(ctx);
@@ -100,6 +101,7 @@ impl eframe::App for OxiApp {
             0,
             c_bg_main(),
         );
+        crate::ui::window_chrome::title_bar_drag_strip(ui);
 
         // Persistent status bar (sidebar/git/terminal/settings toggles + branch) — claims the very
         // bottom strip of the window, below the terminal panel. It stays visible on Settings too;
@@ -128,6 +130,7 @@ impl eframe::App for OxiApp {
 
         // Shared destructive-action confirmation modal, on top of everything.
         self.render_confirm_prompt(ui.ctx());
+        self.render_editor_prompt(ui.ctx());
     }
 }
 
@@ -238,6 +241,9 @@ impl OxiApp {
     /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds and F12 navigates
     /// to a Rust definition in an open editor, Cmd/Ctrl+. stops a run.
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.confirm_prompt_open() {
+            return;
+        }
         let cmd = Modifiers::COMMAND;
         let cmd_shift = Modifiers::COMMAND.plus(Modifiers::SHIFT);
         let (
@@ -270,8 +276,8 @@ impl OxiApp {
             )
         });
 
-        if new_chat && !self.conv.settings_open {
-            self.new_chat();
+        if new_chat {
+            self.request_settings_exit(super::state::SettingsExitAction::NewChat);
         }
         if toggle_term {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleTerminal);

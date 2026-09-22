@@ -18,7 +18,7 @@ impl OxiApp {
     /// True while the confirmation modal is up — used to suppress Enter-to-send in
     /// the composer, which would otherwise fire together with Enter-to-confirm.
     pub(crate) fn confirm_prompt_open(&self) -> bool {
-        self.conv.confirm_prompt.is_some()
+        self.conv.confirm_prompt.is_some() || self.conv.editor.prompt.is_some()
     }
 
     pub(crate) fn render_confirm_prompt(&mut self, ctx: &egui::Context) {

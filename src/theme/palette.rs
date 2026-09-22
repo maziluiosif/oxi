@@ -556,12 +556,6 @@ pub fn c_composer_focus_border() -> Color32 {
     surface_tint(p.border, p.accent, 115)
 }
 
-/// Soft accent border for user chat bubbles so they separate from the transcript.
-pub fn c_user_bubble_border() -> Color32 {
-    let p = active_palette();
-    surface_tint(p.border, p.accent, 70)
-}
-
 // ── Tool pill palettes (single source of truth for the transcript tool pills + edit blocks) ──
 
 /// Background for a plain (done) tool pill. Uses the theme's input surface on dark themes so

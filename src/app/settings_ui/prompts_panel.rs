@@ -90,6 +90,7 @@ impl OxiApp {
             let current = self.conv.settings.commit_msg_provider;
             let current_label = current.map_or("Use active provider", |provider| provider.label());
             egui::ComboBox::from_id_salt("commit_message_provider_combo")
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .selected_text(current_label)
                 .width(320.0)
                 .show_ui(ui, |ui| {

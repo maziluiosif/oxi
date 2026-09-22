@@ -72,10 +72,17 @@ cargo test -- --ignored
 
 - Keep PRs focused — one logical change per PR is easier to review and bisect than a
   bundle of unrelated fixes.
+- To cut a release, run **Actions → Prepare release**. It opens (or refreshes) the
+  `dev` → `master` pull request, titled with the version it will publish and carrying a
+  preview of the release notes.
 - Merging into `master` starts the release workflow. It generates release notes and a
   SemVer bump from commits since the latest `v*` tag, builds every supported platform,
   then commits `CHANGELOG.md`, `Cargo.toml`, and `Cargo.lock`, tags and publishes the
-  release, then opens a `master` → `dev` sync PR and auto-merges it after CI passes.
+  release with a `SHA256SUMS` file, then opens a `master` → `dev` sync PR and
+  auto-merges it after CI passes.
+- CI runs on Linux (fmt, clippy, tests), macOS (clippy, tests) and Windows (clippy), plus
+  `cargo audit`. A daily audit also opens an issue when a new RustSec advisory affects
+  `dev`.
 - Use Conventional Commit prefixes where possible (`feat:`, `fix:`, `security:`, and
   `type!:` for breaking changes). They provide deterministic release notes and version
   selection if the optional LLM changelog service is unavailable. You normally should

@@ -16,7 +16,11 @@ mod find_replace;
 mod layout_cache;
 mod minimap;
 mod navigation_diff;
+mod safety;
 mod support;
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) use minimap::MinimapGeometry;
 pub(crate) use support::find_match_ranges;
@@ -25,6 +29,9 @@ pub(crate) use layout_cache::EditorLayoutCache;
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
+        // Keep polling for external file changes while the editor is visible.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500));
         self.check_external_file_changes();
         self.render_editor_tabs(ui);
         if self.conv.editor.diff_tab_active
@@ -47,7 +54,7 @@ impl OxiApp {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("File changed on disk.").color(c_warning_fg()));
                 if ui.button("Reload from disk").clicked() {
-                    self.reload_active_editor_file();
+                    self.request_reload_editor_file();
                 }
             });
         }

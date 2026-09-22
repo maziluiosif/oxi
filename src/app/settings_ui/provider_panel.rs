@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Align, Layout, RichText, Ui};
 
-use crate::settings::{ComputeLocation, LlmProviderKind, SshConfig};
+use crate::settings::LlmProviderKind;
 use crate::theme::*;
 use crate::ui::chrome::{
     alert_banner, card_frame, field_hint, field_label, field_label_first, nested_card_frame,
@@ -14,6 +14,13 @@ use super::super::OxiApp;
 
 impl OxiApp {
     pub(super) fn render_provider_config(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
+        // oxi runs these models itself, so model id, endpoint and key are derived from the
+        // guided setup instead of being typed in.
+        if kind.is_managed_hf() {
+            self.render_managed_hf_setup(ui, kind);
+            return;
+        }
+
         // ── Model ──────────────────────────────────────────────────────────
         card_frame().show(ui, |ui| {
             settings_card_header(ui, "Model", Some("Primary model id and context window for this provider."));
@@ -46,6 +53,7 @@ impl OxiApp {
                             current.clone()
                         };
                         egui::ComboBox::from_id_salt(("model_combo", kind.slug()))
+                            .icon(crate::ui::chrome::combo_chevron_icon)
                             .selected_text(label)
                             .width(ui.available_width())
                             .show_ui(ui, |ui| {
@@ -114,6 +122,7 @@ impl OxiApp {
                     .effective_context_window(self.conv.settings.context_window_default);
                 field_label(ui, "Context window (tokens, 0 = auto)");
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     let mut value = cw.unwrap_or(0).to_string();
                     let hint = format!("auto ({resolved})");
                     if settings_text_field_width(ui, &mut value, &hint, 160.0).changed() {
@@ -181,6 +190,7 @@ impl OxiApp {
                     .map(|(_, label)| *label)
                     .unwrap_or("default");
                 egui::ComboBox::from_id_salt(("effort_combo", kind.slug()))
+                    .icon(crate::ui::chrome::combo_chevron_icon)
                     .selected_text(selected)
                     .width(180.0)
                     .show_ui(ui, |ui| {
@@ -303,23 +313,8 @@ impl OxiApp {
             }
         });
 
-        // ── Compute target / managed HF runtimes ───────────────────────────
-        if kind == LlmProviderKind::LocalHf {
-            self.render_local_hf_section(ui, kind);
-        } else if kind == LlmProviderKind::RemoteHf {
-            if !matches!(
-                self.conv.settings.provider(kind).location,
-                ComputeLocation::RemoteSsh(_)
-            ) {
-                self.conv.settings.provider_mut(kind).location =
-                    ComputeLocation::RemoteSsh(SshConfig {
-                        remote_runtime_port: kind.default_remote_runtime_port(),
-                        ..SshConfig::default()
-                    });
-            }
-            self.render_compute_target_section(ui, kind);
-            self.render_local_hf_section(ui, kind);
-        } else if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
+        // ── Compute target ─────────────────────────────────────────────────
+        if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
             self.render_compute_target_section(ui, kind);
         }
     }

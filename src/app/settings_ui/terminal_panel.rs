@@ -29,6 +29,7 @@ impl OxiApp {
                 let current = self.conv.settings.windows_terminal;
                 let wsl_available = crate::terminal::wsl_available();
                 eframe::egui::ComboBox::from_id_salt("windows_terminal_combo")
+                    .icon(crate::ui::chrome::combo_chevron_icon)
                     .selected_text(current.label())
                     .width(320.0)
                     .show_ui(ui, |ui| {

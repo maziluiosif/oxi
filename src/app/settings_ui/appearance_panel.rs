@@ -42,6 +42,7 @@ impl OxiApp {
                 .unwrap_or("Default");
             let mut next_theme = None;
             egui::ComboBox::from_id_salt("appearance_theme_combo")
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .selected_text(selected_theme)
                 .width(320.0)
                 .show_ui(ui, |ui| {
@@ -77,6 +78,7 @@ impl OxiApp {
                 .unwrap_or("Default");
             let mut selected = None;
             egui::ComboBox::from_id_salt("interface_font_combo")
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .selected_text(current_name)
                 .width(320.0)
                 .height(360.0)
@@ -119,6 +121,7 @@ impl OxiApp {
                 .unwrap_or("Default");
             let mut selected = None;
             egui::ComboBox::from_id_salt("monospace_font_combo")
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .selected_text(current_name)
                 .width(320.0)
                 .height(360.0)
@@ -160,6 +163,7 @@ impl OxiApp {
                 Some("Scales the whole UI (density / zoom)."),
             );
             egui::ComboBox::from_id_salt("appearance_density_combo")
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .selected_text(current_density.label())
                 .width(320.0)
                 .show_ui(ui, |ui| {

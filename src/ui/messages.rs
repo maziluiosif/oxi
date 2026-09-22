@@ -214,11 +214,16 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
         let response = ui
             .with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                 ui.set_max_width(col_w);
+                // Borderless bubble with a tighter bottom-right corner pointing at its sender.
                 Frame::new()
                     .fill(c_user_bubble())
-                    .stroke(Stroke::new(1.0, c_user_bubble_border()))
-                    .corner_radius(CornerRadius::same(RADIUS_CARD))
-                    .inner_margin(Margin::symmetric(12, 9))
+                    .corner_radius(CornerRadius {
+                        nw: RADIUS_PANEL,
+                        ne: RADIUS_PANEL,
+                        sw: RADIUS_PANEL,
+                        se: 4,
+                    })
+                    .inner_margin(Margin::symmetric(14, 10))
                     .show(ui, |ui| {
                         ui.set_max_width(bubble_w);
                         if !msg.text.is_empty() {
@@ -617,9 +622,15 @@ pub fn render_assistant_blocks(
         if let AssistantBlock::Answer(text) = block
             && (!text.trim().is_empty() || streaming)
         {
+            let (body, error) = split_error_tail(text);
             let response = ui
                 .vertical(|ui| {
-                    render_answer_markdown(ui, msg_idx, worked_end + i, text, streaming);
+                    if !body.trim().is_empty() || (streaming && error.is_none()) {
+                        render_answer_markdown(ui, msg_idx, worked_end + i, body, streaming);
+                    }
+                    if let Some(error) = error {
+                        render_error_callout(ui, error);
+                    }
                 })
                 .response;
             if !text.trim().is_empty() {
@@ -633,9 +644,70 @@ pub fn render_assistant_blocks(
     }
 }
 
+/// Run failures are appended to the answer as a `[Error] …` line. Split that tail off so it
+/// renders as a callout instead of reading like part of the model's reply.
+fn split_error_tail(text: &str) -> (&str, Option<&str>) {
+    const MARKER: &str = "[Error] ";
+    let at = if text.starts_with(MARKER) {
+        Some(0)
+    } else {
+        text.find(&format!("\n{MARKER}")).map(|i| i + 1)
+    };
+    match at {
+        Some(at) => (&text[..at], Some(text[at + MARKER.len()..].trim())),
+        None => (text, None),
+    }
+}
+
+fn render_error_callout(ui: &mut Ui, error: &str) {
+    ui.add_space(4.0);
+    Frame::new()
+        .fill(c_error_bg())
+        .stroke(Stroke::new(1.0, c_error_fg().gamma_multiply(0.35)))
+        .corner_radius(CornerRadius::same(RADIUS_CARD))
+        .inner_margin(Margin::symmetric(12, 9))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(crate::ui::chrome::icon_glyph_rich(
+                    ICON_WARNING,
+                    FS_SMALL,
+                    c_error_fg(),
+                ));
+                // Errors quote commands in Markdown backticks; show them as plain text here.
+                let error = error.replace('`', "");
+                ui.add(
+                    Label::new(
+                        RichText::new(error)
+                            .size(FS_SMALL)
+                            .line_height(Some(FS_SMALL * 1.4))
+                            .color(c_text()),
+                    )
+                    .wrap()
+                    .selectable(true),
+                );
+            });
+        });
+    ui.add_space(4.0);
+}
+
 #[cfg(test)]
 mod answer_render_tests {
-    use super::floor_char_boundary;
+    use super::{floor_char_boundary, split_error_tail};
+
+    #[test]
+    fn error_tail_is_split_from_the_answer() {
+        assert_eq!(split_error_tail("[Error] boom\n"), ("", Some("boom")));
+        assert_eq!(
+            split_error_tail("partial reply\n[Error] Agent stopped unexpectedly.\n"),
+            ("partial reply\n", Some("Agent stopped unexpectedly."))
+        );
+        assert_eq!(
+            split_error_tail("no [Error] here"),
+            ("no [Error] here", None)
+        );
+    }
 
     #[test]
     fn floor_boundary_never_splits_utf8() {

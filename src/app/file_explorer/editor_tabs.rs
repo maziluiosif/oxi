@@ -26,7 +26,15 @@ impl OxiApp {
         let git_diff_active = git_diff_tab && self.conv.editor.diff_tab_active;
         let can_go_back = !self.conv.editor.navigation_back.is_empty();
         let can_go_forward = !self.conv.editor.navigation_forward.is_empty();
-        let tab_strip_width = (ui.available_width() - 126.0).max(80.0);
+        let sidebar_open = self.conv.sidebar_open;
+        let tab_strip_width = (ui.available_width()
+            - 126.0
+            - if sidebar_open {
+                0.0
+            } else {
+                crate::ui::window_chrome::TRAFFIC_LIGHTS_W
+            })
+        .max(80.0);
 
         Frame::new()
             .fill(c_bg_elevated_2())
@@ -35,6 +43,10 @@ impl OxiApp {
                 ui.set_height(34.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
+                    if !sidebar_open {
+                        // The macOS traffic lights sit over the window's top-left corner.
+                        ui.add_space(crate::ui::window_chrome::TRAFFIC_LIGHTS_W);
+                    }
                     let back = ui.add_enabled(
                         can_go_back,
                         egui::Button::new(icon_glyph_rich(
@@ -100,6 +112,14 @@ impl OxiApp {
                                         egui::vec2(tab_width, 28.0),
                                         egui::Sense::click(),
                                     );
+                                    response.widget_info(|| {
+                                        egui::WidgetInfo::selected(
+                                            egui::WidgetType::SelectableLabel,
+                                            ui.is_enabled(),
+                                            active,
+                                            &label,
+                                        )
+                                    });
                                     // The close hit target overlaps the tab response. Test the full rectangle
                                     // so the name and close icon still share one hover surface.
                                     let hovered = ui.rect_contains_pointer(rect);
@@ -143,6 +163,20 @@ impl OxiApp {
                                         ui.id().with(("editor_tab_close", index)),
                                         egui::Sense::click(),
                                     );
+                                    close_response.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::WidgetType::Button,
+                                            ui.is_enabled(),
+                                            format!(
+                                                "Close {}",
+                                                document
+                                                    .path
+                                                    .file_name()
+                                                    .unwrap_or_default()
+                                                    .to_string_lossy()
+                                            ),
+                                        )
+                                    });
                                     ui.painter().text(
                                         close_rect.center(),
                                         egui::Align2::CENTER_CENTER,
@@ -374,32 +408,7 @@ impl OxiApp {
             self.conv.editor.show_diff = !self.conv.editor.show_diff;
         }
         if let Some(index) = close {
-            if self.conv.editor.documents[index].is_scratchpad {
-                self.autosave_scratchpad(index);
-            }
-            if self.conv.editor.documents[index].is_dirty() {
-                self.conv.editor.error = Some("Save the file before closing its tab.".into());
-            } else {
-                self.conv.editor.documents.remove(index);
-                self.conv.editor.hidden_active =
-                    self.conv.editor.hidden_active.and_then(|hidden| {
-                        if hidden == index {
-                            None
-                        } else if hidden > index {
-                            Some(hidden - 1)
-                        } else {
-                            Some(hidden)
-                        }
-                    });
-                self.conv.editor.active = if self.conv.editor.documents.is_empty() {
-                    None
-                } else {
-                    Some(index.min(self.conv.editor.documents.len() - 1))
-                };
-                if self.conv.editor.active.is_some() {
-                    self.conv.editor.focus_editor_next_frame = true;
-                }
-            }
+            self.request_close_editor_tab(index);
         }
     }
 }
