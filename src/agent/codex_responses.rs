@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
+use std::time::Instant;
 
 use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -526,13 +527,19 @@ pub async fn run_codex_responses_loop(
         let mut sse_state = CodexStreamState::default();
         let mut stream_error: Option<String> = None;
         let mut round_usage = TokenUsage::default();
+        // Output throughput is measured from the first streamed chunk to the end of the
+        // stream, so request setup, tool runs and approvals never count against it.
+        let mut first_chunk_at: Option<Instant> = None;
         let _ = tx.send(AgentEvent::TextStart);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::SeqCst) {
                 break;
             }
             let chunk = match chunk {
-                Ok(c) => c,
+                Ok(c) => {
+                    first_chunk_at.get_or_insert_with(Instant::now);
+                    c
+                }
                 Err(e) => {
                     stream_error = Some(e.to_string());
                     break;
@@ -583,6 +590,9 @@ pub async fn run_codex_responses_loop(
             continue;
         }
         stream_retries = 0;
+        if let Some(started) = first_chunk_at {
+            round_usage.record_generation(started.elapsed());
+        }
         if !round_usage.is_zero() {
             let _ = tx.send(AgentEvent::Usage(round_usage));
         }

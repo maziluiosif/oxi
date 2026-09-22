@@ -695,15 +695,23 @@ fn format_token_usage(usage: TokenUsage) -> String {
     let input = usage.total_input();
     let output = usage.output_tokens;
     let cached = usage.cache_hit_pct();
-    if input == 0 {
-        return format!("{} out", format_token_count(output));
+    let mut text = if input == 0 {
+        format!("{} out", format_token_count(output))
+    } else {
+        format!(
+            "{} in ({}% cached) · {} out",
+            format_token_count(input),
+            cached,
+            format_token_count(output)
+        )
+    };
+    if let Some(rate) = usage.output_tokens_per_sec() {
+        text.push_str(&format!(
+            " · {}",
+            super::composer_helpers::format_tokens_per_sec(rate)
+        ));
     }
-    format!(
-        "{} in ({}% cached) · {} out",
-        format_token_count(input),
-        cached,
-        format_token_count(output)
-    )
+    text
 }
 
 fn format_token_count(tokens: u64) -> String {
