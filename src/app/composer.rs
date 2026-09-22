@@ -97,23 +97,6 @@ fn quiet_combo_style(ui: &mut Ui) {
     widgets.open.corner_radius = CornerRadius::same(255);
 }
 
-/// Nerd Font chevron for the quiet combos — the default painted triangle is nearly
-/// invisible on these dark surfaces.
-fn quiet_combo_icon(
-    ui: &Ui,
-    rect: egui::Rect,
-    visuals: &egui::style::WidgetVisuals,
-    _is_open: bool,
-) {
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        ICON_ANGLE_DOWN,
-        egui::FontId::new(10.0, icon_font()),
-        visuals.fg_stroke.color,
-    );
-}
-
 /// How long a composer notice stays visible.
 const COMPOSER_NOTICE_SECS: f32 = 5.0;
 
@@ -449,7 +432,7 @@ impl OxiApp {
             let label = composer_provider_label(active_provider);
             let resp = ComboBox::from_id_salt("provider_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
-                .icon(quiet_combo_icon)
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .width(provider_w)
                 .height(300.0)
                 .show_ui(ui, |ui| {
@@ -520,7 +503,7 @@ impl OxiApp {
             let label = short_model_label(&current, model_chars);
             let resp = ComboBox::from_id_salt("active_model_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
-                .icon(quiet_combo_icon)
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .width(model_w)
                 .height(300.0)
                 .show_ui(ui, |ui| {
@@ -608,7 +591,7 @@ impl OxiApp {
             // or when switching between Auto / Medium / XHigh.
             ComboBox::from_id_salt("active_effort_combo")
                 .selected_text(RichText::new(selected).size(FS_SMALL).color(c_text_muted()))
-                .icon(quiet_combo_icon)
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .width(72.0)
                 .show_ui(ui, |ui| {
                     for (value, label) in values {
