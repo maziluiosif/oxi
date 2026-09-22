@@ -18,6 +18,7 @@ mod minimap;
 mod navigation_diff;
 mod safety;
 mod support;
+mod syntax_window;
 
 #[cfg(test)]
 mod tests;
