@@ -177,6 +177,16 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Write SHA-256 checksums
+        working-directory: dist
+        run: |
+          sha256sum oxi-* > SHA256SUMS
+          cat SHA256SUMS
+          {
+            echo
+            echo "Verify a download with \`shasum -a 256 -c SHA256SUMS --ignore-missing\`."
+          } >> ../release_notes.md
+
       - name: Publish one GitHub release with all platforms
         uses: softprops/action-gh-release@v3
         with:

@@ -13,10 +13,17 @@ on:
         required: false
         type: string
 
+# A new push to a pull request supersedes the run for its previous commit. Branch pushes and
+# dispatched runs are never cancelled: releases depend on them completing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Required status check on dev: keep the job id `ci`.
   ci:
     runs-on: ubuntu-latest
     steps:
@@ -61,11 +68,47 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: cargo test
+        run: cargo test
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      # Prebuilt binary: compiling cargo-audit from source took ~3 minutes per run.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
       - name: cargo audit
         # Ignore policy (with rationale per advisory) lives in .cargo/audit.toml.
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit
+        run: cargo audit
+
+  # macOS is the primary desktop target and carries platform-only code (window chrome,
+  # keychain, bundling); check it here instead of first compiling it in a release build.
+  macos-check:
+    name: macos-check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test
         run: cargo test
@@ -80,11 +123,13 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-check
 
-      # Keep platform-specific APIs honest before a merge can reach the release pipeline.
-      - name: cargo check --all-targets
-        run: cargo check --all-targets
+      # Lint the cfg(windows) code too, so platform-specific warnings can't reach a release.
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
