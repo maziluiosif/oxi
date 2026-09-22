@@ -103,6 +103,8 @@ pub const ICON_FOLDER: &str = "\u{f024b}";
 pub const ICON_FOLDER_OPEN: &str = "\u{f0770}";
 /// Check inside a circle — affirmative pill ("Signed in", committed) (`nf-fa-check-circle`).
 pub const ICON_CHECK_CIRCLE: &str = "\u{f058}";
+/// Warning triangle (error callouts).
+pub const ICON_WARNING: &str = "\u{f071}";
 /// Up angle chevron — "stage" direction / collapse hint (`nf-fa-angle-up`).
 pub const ICON_ANGLE_UP: &str = "\u{f077}";
 /// Down angle chevron — unfold/expand hint (`nf-fa-angle-down`).

@@ -10,21 +10,52 @@ use crate::theme::*;
 mod copy_modal;
 pub use copy_modal::*;
 
+/// Chevron used by every dropdown instead of egui's default filled triangle.
+pub fn combo_chevron_icon(
+    ui: &Ui,
+    rect: egui::Rect,
+    visuals: &egui::style::WidgetVisuals,
+    _is_open: bool,
+) {
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        ICON_ANGLE_DOWN,
+        FontId::new(10.0, icon_font()),
+        visuals.fg_stroke.color,
+    );
+}
+
 pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
+    let id = ui.id().with(("sidebar_text_field", hint));
+    let focused = ui.ctx().memory(|m| m.has_focus(id));
     Frame::new()
         .fill(c_bg_input())
-        .stroke(Stroke::new(1.0, c_border_subtle()))
-        .corner_radius(RADIUS_BUTTON)
-        .inner_margin(Margin::symmetric(7, 2))
+        .stroke(Stroke::new(
+            1.0,
+            if focused {
+                c_composer_focus_border()
+            } else {
+                c_border_subtle()
+            },
+        ))
+        .corner_radius(RADIUS_CHIP)
+        .inner_margin(Margin::symmetric(8, 4))
         .show(ui, |ui| {
-            ui.add(
-                TextEdit::singleline(text)
-                    .frame(egui::Frame::NONE)
-                    .margin(Margin::symmetric(1, 0))
-                    .font(FontId::proportional(FS_TINY))
-                    .desired_width(ui.available_width())
-                    .hint_text(hint),
-            )
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(icon_glyph_rich(ICON_SEARCH, FS_TINY, c_text_faint()));
+                ui.add(
+                    TextEdit::singleline(text)
+                        .id(id)
+                        .frame(egui::Frame::NONE)
+                        .margin(Margin::symmetric(1, 0))
+                        .font(FontId::proportional(FS_SMALL))
+                        .desired_width(ui.available_width())
+                        .hint_text(hint),
+                )
+            })
+            .inner
         })
         .inner
 }
@@ -541,7 +572,7 @@ pub fn primary_button_widget(label: &str) -> egui::Button<'_> {
         .fill(c_accent())
         .stroke(Stroke::NONE)
         .corner_radius(RADIUS_BUTTON)
-        .min_size(egui::vec2(0.0, 26.0))
+        .min_size(egui::vec2(64.0, 28.0))
 }
 pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
     ui.add(primary_button_widget(label))
@@ -555,7 +586,7 @@ pub fn primary_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Bu
         .fill(c_accent())
         .stroke(Stroke::NONE)
         .corner_radius(RADIUS_BUTTON)
-        .min_size(egui::vec2(0.0, 26.0))
+        .min_size(egui::vec2(64.0, 28.0))
 }
 
 /// Neutral secondary button — used for Sign out, Delete, etc. (with `danger` color swap).
@@ -569,7 +600,7 @@ pub fn ghost_button_widget(label: &str, danger: bool) -> egui::Button<'_> {
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
         .corner_radius(RADIUS_BUTTON)
-        .min_size(egui::vec2(0.0, 26.0))
+        .min_size(egui::vec2(64.0, 28.0))
 }
 pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
     ui.add(ghost_button_widget(label, danger))

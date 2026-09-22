@@ -2,8 +2,7 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Button, CornerRadius, FontId, Frame, Label, Margin, RichText, ScrollArea, Stroke,
-    Ui,
+    self, Align, CornerRadius, FontId, Frame, Label, Margin, RichText, ScrollArea, Stroke, Ui,
 };
 
 use crate::agent::{ApprovalDecision, TokenUsage};
@@ -106,21 +105,25 @@ impl OxiApp {
                         egui::Layout::right_to_left(Align::Center),
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            if ui
-                                .add_sized(
-                                    [28.0, 28.0],
-                                    Button::new(crate::ui::chrome::icon_glyph_rich(
-                                        ICON_PLUS,
-                                        FS_SMALL,
-                                        crate::theme::c_on_accent(),
-                                    ))
-                                    .fill(c_accent())
-                                    .stroke(Stroke::NONE)
-                                    .corner_radius(RADIUS_CHIP),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text("Start a new chat in this workspace (Cmd/Ctrl+N)")
-                                .clicked()
+                            // Quiet outline button: the composer's send button is the one
+                            // strongly colored action on screen.
+                            if crate::ui::chrome::icon_button_core(
+                                ui,
+                                ICON_PLUS,
+                                egui::vec2(28.0, 28.0),
+                                FS_SMALL,
+                                false,
+                                &crate::ui::chrome::IconButtonLook {
+                                    fill: c_bg_elevated(),
+                                    hover_fill: c_row_hover(),
+                                    stroke: c_border_subtle(),
+                                    hover_stroke: c_border(),
+                                    rounding: CornerRadius::same(RADIUS_CHIP),
+                                    glyph: c_text(),
+                                },
+                            )
+                            .on_hover_text("Start a new chat in this workspace (Cmd/Ctrl+N)")
+                            .clicked()
                             {
                                 self.new_chat();
                             }
@@ -144,8 +147,8 @@ impl OxiApp {
                                 ui.add(
                                     Label::new(
                                         RichText::new(session_title)
-                                            .size(FS_SMALL)
-                                            .color(c_text())
+                                            .size(FS_BODY)
+                                            .color(c_text_strong())
                                             .strong(),
                                     )
                                     .truncate(),
@@ -260,7 +263,7 @@ impl OxiApp {
         let col_w = content_wrap_width(ui);
         let compact = col_w < 560.0;
         ui.add_space(if compact { 20.0 } else { 44.0 });
-        ui.set_max_width(col_w.min(520.0));
+        ui.set_max_width(col_w.min(640.0));
         ui.vertical(|ui| {
             ui.label(
                 RichText::new("What should oxi help with?")
@@ -279,6 +282,7 @@ impl OxiApp {
             ui.add_space(if compact { 12.0 } else { 18.0 });
 
             ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
                 if crate::ui::chrome::ghost_button_icon(
                     ui,
                     ICON_FOLDER_PLUS,
@@ -303,51 +307,46 @@ impl OxiApp {
                     .color(c_text_faint())
                     .strong(),
             );
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             let prompts = [
-                "Analyze this repo and suggest the highest-impact improvements",
-                "Find TODOs and risky code paths in this workspace",
-                "Explain how this project is structured",
-                "Run the tests and fix the first failing issue",
+                (
+                    ICON_MAGIC,
+                    "Improve",
+                    "Analyze this repo and suggest the highest-impact improvements",
+                ),
+                (
+                    ICON_SEARCH,
+                    "Review",
+                    "Find TODOs and risky code paths in this workspace",
+                ),
+                (
+                    ICON_EXPLORER,
+                    "Explain",
+                    "Explain how this project is structured",
+                ),
+                (
+                    ICON_PLAY,
+                    "Fix tests",
+                    "Run the tests and fix the first failing issue",
+                ),
             ];
             let shown = if compact { &prompts[..2] } else { &prompts[..] };
-            for prompt in shown {
-                let response = Frame::new()
-                    .fill(c_bg_input())
-                    .stroke(Stroke::new(1.0, c_border_subtle()))
-                    .corner_radius(CornerRadius::same(RADIUS_CHIP))
-                    .inner_margin(Margin::symmetric(12, 8))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.add_space(1.0);
-                            ui.label(
-                                RichText::new(ICON_EXTERNAL)
-                                    .font(FontId::new(FS_SMALL, icon_font()))
-                                    .color(c_accent()),
-                            );
-                            ui.add_space(5.0);
-                            ui.label(RichText::new(*prompt).size(FS_SMALL).color(c_text()));
-                        });
-                    })
-                    .response
-                    .interact(egui::Sense::click());
-                if response.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    ui.painter().rect_stroke(
-                        response.rect,
-                        CornerRadius::same(RADIUS_CHIP),
-                        Stroke::new(1.0, crate::theme::c_pill_selected_border()),
-                        egui::StrokeKind::Middle,
-                    );
-                }
-                if response.clicked() {
-                    self.conv.input = prompt.to_string();
-                    // A suggestion is a starting point, not a terminal action: put the caret
-                    // directly in the composer so the user can tailor it immediately.
-                    self.conv.focus_chat_input_next_frame = true;
-                }
-                ui.add_space(5.0);
+            let columns = if compact { 1 } else { 2 };
+            const GAP: f32 = 8.0;
+            let card_w = (ui.available_width() - GAP * (columns - 1) as f32) / columns as f32;
+            for row in shown.chunks(columns) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = GAP;
+                    for &(icon, title, prompt) in row {
+                        if suggestion_card(ui, card_w, icon, title, prompt).clicked() {
+                            self.conv.input = prompt.to_string();
+                            // A suggestion is a starting point, not a terminal action: put
+                            // the caret in the composer so the user can tailor it.
+                            self.conv.focus_chat_input_next_frame = true;
+                        }
+                    }
+                });
+                ui.add_space(GAP);
             }
         });
     }
@@ -689,6 +688,65 @@ impl OxiApp {
             ui.ctx().request_repaint();
         }
     }
+}
+
+/// Starter-prompt card for the empty chat state: icon, short title, and the prompt itself.
+fn suggestion_card(
+    ui: &mut Ui,
+    width: f32,
+    icon: &str,
+    title: &str,
+    prompt: &str,
+) -> egui::Response {
+    const H: f32 = 74.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, H), egui::Sense::click());
+    let hovered = response.hovered();
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(RADIUS_CARD),
+        if hovered {
+            c_row_hover()
+        } else {
+            c_bg_elevated()
+        },
+        Stroke::new(
+            1.0,
+            if hovered {
+                crate::theme::c_pill_selected_border()
+            } else {
+                c_border_subtle()
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let inner = rect.shrink2(egui::vec2(14.0, 11.0));
+    let layout = egui::Layout::top_down(Align::Min);
+    // A child Ui paints inside the allocated card without claiming more parent space.
+    let ui = &mut ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(layout));
+    ui.set_max_width(inner.width());
+    ui.spacing_mut().item_spacing = egui::vec2(7.0, 4.0);
+    ui.horizontal(|ui| {
+        ui.label(crate::ui::chrome::icon_glyph_rich(
+            icon,
+            FS_SMALL,
+            c_accent(),
+        ));
+        ui.label(
+            RichText::new(title)
+                .size(FS_SMALL)
+                .color(c_text_strong())
+                .strong(),
+        );
+    });
+    ui.add(
+        Label::new(RichText::new(prompt).size(FS_TINY).color(c_text_muted()))
+            .wrap()
+            .selectable(false),
+    );
+    response
 }
 
 fn format_token_usage(usage: TokenUsage) -> String {
