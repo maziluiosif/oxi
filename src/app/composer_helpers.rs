@@ -6,6 +6,15 @@ use crate::model::{AssistantBlock, ChatMessage, MsgRole};
 use crate::theme::{c_accent, c_danger, c_warning_fg};
 
 /// Truncate by characters, not bytes: provider/model identifiers may contain non-ASCII text.
+/// Compact output-throughput label, e.g. `42.3 tok/s` (whole numbers from 100 up).
+pub(super) fn format_tokens_per_sec(rate: f64) -> String {
+    if rate >= 100.0 {
+        format!("{rate:.0} tok/s")
+    } else {
+        format!("{rate:.1} tok/s")
+    }
+}
+
 pub(super) fn truncate_label(text: &str, max_chars: usize) -> String {
     let mut chars = text.chars();
     let prefix: String = chars.by_ref().take(max_chars).collect();

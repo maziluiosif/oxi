@@ -1,3 +1,5 @@
+#[path = "composer/text_menu.rs"]
+mod text_menu;
 #[path = "composer/voice_context.rs"]
 mod voice_context;
 
@@ -12,8 +14,8 @@ use eframe::egui::{
 use crate::theme::*;
 
 use super::composer_helpers::{
-    context_indicator_color, estimate_message_chars, format_context_tokens, paint_arc,
-    short_model_label,
+    context_indicator_color, estimate_message_chars, format_context_tokens, format_tokens_per_sec,
+    paint_arc, short_model_label,
 };
 use super::{OxiApp, SessionKey};
 
@@ -212,6 +214,13 @@ impl OxiApp {
                             .desired_rows(1)
                             .frame(egui::Frame::NONE)
                             .show(ui);
+                        self.composer_text_menu(
+                            ui,
+                            input_id,
+                            &te_output.response,
+                            &te_output.galley,
+                            te_output.galley_pos,
+                        );
                         if self.conv.focus_chat_input_next_frame {
                             // Navigation should put the caret at the end of any existing draft,
                             // not at egui's default/start position.
@@ -384,6 +393,9 @@ impl OxiApp {
             }
 
             self.render_context_indicator(ui);
+            if !compact {
+                self.render_tokens_per_sec(ui);
+            }
 
             // Keep the primary keyboard action discoverable while the composer has focus.
             // On smaller windows the compact version retains the information without pushing
