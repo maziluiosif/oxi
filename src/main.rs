@@ -67,6 +67,7 @@ fn app_icon() -> IconData {
 
 fn main() -> eframe::Result<()> {
     install_panic_hook();
+    secrets::prefetch_unified();
     let options = eframe::NativeOptions {
         viewport: ui::window_chrome::configure_viewport(
             eframe::egui::ViewportBuilder::default()
