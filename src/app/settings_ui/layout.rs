@@ -64,6 +64,7 @@ impl OxiApp {
 
     fn continue_after_settings_exit(&mut self, action: SettingsExitAction) {
         match action {
+            SettingsExitAction::NewChat => self.new_chat(),
             SettingsExitAction::BackToChat => {
                 self.focus_active_view_next_frame();
             }
@@ -73,9 +74,7 @@ impl OxiApp {
                 self.conv.sidebar_open = !chats_on;
                 if !chats_on {
                     self.conv.sidebar_mode = crate::app::state::SidebarMode::Chats;
-                    if self.conv.editor.active.is_some() {
-                        self.conv.editor.hidden_active = self.conv.editor.active.take();
-                    }
+                    self.reveal_chat_view();
                 }
                 self.focus_active_view_next_frame();
             }
@@ -194,7 +193,7 @@ impl OxiApp {
                         .inner_margin(Margin {
                             left: 12,
                             right: 10,
-                            top: 12,
+                            top: 12 + crate::ui::window_chrome::TITLEBAR_H as i8,
                             bottom: 12,
                         })
                         .show(ui, |ui| {
@@ -366,6 +365,7 @@ impl OxiApp {
                     });
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
                         let dirty = self.settings_dirty();
                         if ui
                             .add_enabled(dirty, crate::ui::chrome::primary_button_widget("Save"))
@@ -456,38 +456,38 @@ impl OxiApp {
 
 /// Small "Active" / "Signed in" pill.
 pub(super) fn active_pill(ui: &mut Ui, text: &str) {
-    Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(
-            c_accent().r(),
-            c_accent().g(),
-            c_accent().b(),
-            32,
-        ))
-        .stroke(Stroke::new(
-            1.0,
-            Color32::from_rgba_unmultiplied(c_accent().r(), c_accent().g(), c_accent().b(), 90),
-        ))
-        .corner_radius(999.0)
-        .inner_margin(Margin::symmetric(10, 3))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).size(FS_TINY).color(c_accent()).strong());
-        });
+    let tint = |alpha| {
+        Color32::from_rgba_unmultiplied(c_accent().r(), c_accent().g(), c_accent().b(), alpha)
+    };
+    status_pill(ui, text, c_accent(), tint(32), tint(90));
 }
 
 pub(super) fn inactive_pill(ui: &mut Ui, text: &str) {
-    Frame::new()
-        .fill(c_bg_elevated_2())
-        .stroke(Stroke::new(1.0, c_border_subtle()))
-        .corner_radius(999.0)
-        .inner_margin(Margin::symmetric(10, 3))
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(text)
-                    .size(FS_TINY)
-                    .color(c_text_muted())
-                    .strong(),
-            );
-        });
+    status_pill(
+        ui,
+        text,
+        c_text_muted(),
+        c_bg_elevated_2(),
+        c_border_subtle(),
+    );
+}
+
+/// Painted at a fixed size: a Frame inside a right-to-left row stretches to the row height.
+fn status_pill(ui: &mut Ui, text: &str, fg: Color32, fill: Color32, stroke: Color32) {
+    let galley =
+        ui.painter()
+            .layout_no_wrap(text.to_string(), egui::FontId::proportional(FS_TINY), fg);
+    let size = egui::vec2(galley.size().x + 18.0, 20.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter().rect(
+        rect,
+        egui::CornerRadius::same(10),
+        fill,
+        Stroke::new(1.0, stroke),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .galley(rect.center() - galley.size() * 0.5, galley, fg);
 }
 
 pub(super) fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Response {

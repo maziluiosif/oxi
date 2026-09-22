@@ -16,10 +16,36 @@ impl OxiApp {
     pub(crate) fn render_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
 
+        // Primary action first, with its shortcut, like other chat apps.
+        let new_chat = crate::ui::chrome::flat_button_icon(
+            ui,
+            ICON_PLUS,
+            "New chat",
+            FS_SMALL,
+            egui::vec2(ui.available_width(), 30.0),
+            c_text(),
+        )
+        .on_hover_text("Start a new chat in the active workspace");
+        ui.painter().text(
+            new_chat.rect.right_center() - egui::vec2(8.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            if cfg!(target_os = "macos") {
+                "⌘N"
+            } else {
+                "Ctrl+N"
+            },
+            FontId::proportional(FS_TINY),
+            c_text_faint(),
+        );
+        if new_chat.clicked() {
+            self.new_chat();
+        }
+        ui.add_space(6.0);
+
         // Search row + add-workspace button.
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.set_height(24.0);
+            ui.set_height(28.0);
 
             let add_w = 22.0;
             let clear_w = if self.conv.sidebar_search.is_empty() {
@@ -33,7 +59,7 @@ impl OxiApp {
                 - ui.spacing().item_spacing.x * if clear_w > 0.0 { 2.0 } else { 1.0 })
             .max(48.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(search_w, 24.0),
+                egui::vec2(search_w, 28.0),
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_width(search_w);
@@ -636,7 +662,7 @@ impl OxiApp {
                     .inner_margin(Margin {
                         left: 12,
                         right: 10,
-                        top: 12,
+                        top: 12 + crate::ui::window_chrome::TITLEBAR_H as i8,
                         bottom: 12,
                     })
                     .show(&mut sidebar_ui, |ui| {

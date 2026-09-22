@@ -315,8 +315,12 @@ impl OxiApp {
     ) {
         let is_remote = kind == LlmProviderKind::RemoteHf;
         let port = self.conv.local_models.runtime_port;
+        let context = self.conv.local_models.context_size;
         let cfg = self.conv.settings.provider_mut(kind);
         cfg.model_id = m.id.clone();
+        // A GGUF name rarely matches the model catalog, so budget against the context the
+        // server was actually started with rather than a guessed default.
+        cfg.context_window = Some(context);
         if is_remote {
             // Chat requests go through compute::resolve_base_url, which opens/reuses the SSH tunnel.
             cfg.base_url.clear();

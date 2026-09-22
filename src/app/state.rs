@@ -41,6 +41,7 @@ pub enum SettingsTab {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SettingsExitAction {
     BackToChat,
+    NewChat,
     ToggleSidebar,
     ToggleExplorer,
     ToggleTerminal,
@@ -66,8 +67,19 @@ pub enum SidebarMode {
     Explorer,
 }
 
+#[derive(Clone)]
+pub enum EditorPrompt {
+    Close(PathBuf),
+    Reload(PathBuf),
+    Overwrite { path: PathBuf, close_after: bool },
+    Exit,
+}
+
 #[derive(Default)]
 pub struct EditorState {
+    pub prompt: Option<EditorPrompt>,
+    pub allow_exit: bool,
+    pub last_external_check: Option<Instant>,
     pub documents: Vec<EditorDocument>,
     pub active: Option<usize>,
     /// Active tab remembered while the chat/agent view is shown.
@@ -180,6 +192,31 @@ impl EditorDocument {
 }
 
 impl EditorState {
+    /// Remove a tab without changing the visible document when another tab is closed.
+    pub fn remove_document(&mut self, index: usize) {
+        if index >= self.documents.len() {
+            return;
+        }
+        self.documents.remove(index);
+        let remaining = self.documents.len();
+        let remap = |selected: Option<usize>| {
+            selected.and_then(|selected| {
+                if selected == index {
+                    (remaining > 0).then(|| index.min(remaining - 1))
+                } else {
+                    Some(if selected > index {
+                        selected - 1
+                    } else {
+                        selected
+                    })
+                }
+            })
+        };
+        self.active = remap(self.active);
+        self.hidden_active = remap(self.hidden_active);
+        self.file_picker_previous_active = remap(self.file_picker_previous_active);
+    }
+
     pub fn active_document(&self) -> Option<&EditorDocument> {
         self.active.and_then(|index| self.documents.get(index))
     }

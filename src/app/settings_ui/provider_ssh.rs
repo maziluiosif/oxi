@@ -16,13 +16,23 @@ impl OxiApp {
     /// "Local" vs "Remote (SSH)" compute target, shown only for self-hosted runtimes
     /// (LM Studio / Ollama / Local HF) where running on another host over SSH is meaningful.
     pub(super) fn render_compute_target_section(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
-        ui.add_space(12.0);
+        // Remote HF shows this inside its numbered "Connect to the host" step, which already
+        // explains the context, so the card stays terse there.
+        let guided = kind == LlmProviderKind::RemoteHf;
+        if !guided {
+            ui.add_space(12.0);
+        }
         card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Compute target",
-                Some("Where the model runtime listens: this machine, or another host via SSH tunnel."),
-            );
+            ui.set_min_width(ui.available_width());
+            if guided {
+                settings_card_header(ui, "Server", None);
+            } else {
+                settings_card_header(
+                    ui,
+                    "Compute target",
+                    Some("Where the model runtime listens: this machine, or another host via SSH tunnel."),
+                );
+            }
             let is_remote = matches!(
                 self.conv.settings.provider(kind).location,
                 ComputeLocation::RemoteSsh(_)
@@ -46,19 +56,17 @@ impl OxiApp {
             if let ComputeLocation::RemoteSsh(cfg) =
                 &mut self.conv.settings.provider_mut(kind).location
             {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(
-                        if kind == LlmProviderKind::RemoteHf {
-                            "Runs the oxi-managed HF model on another host over SSH. oxi can install llama-server, download GGUF files, start/stop the runtime, and tunnel chat to it."
-                        } else {
-                            "Runs the model on another host (e.g. a machine on your LAN) over SSH. The runtime must listen on 127.0.0.1 there; oxi forwards a local port to it."
-                        },
-                    )
-                    .size(FS_TINY)
-                    .color(c_text_faint()),
-                );
-                ui.add_space(6.0);
+                if !guided {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(
+                            "Runs the model on another host (e.g. a machine on your LAN) over SSH. The runtime must listen on 127.0.0.1 there; oxi forwards a local port to it.",
+                        )
+                        .size(FS_TINY)
+                        .color(c_text_faint()),
+                    );
+                    ui.add_space(6.0);
+                }
 
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {

@@ -225,6 +225,7 @@ impl OxiApp {
             );
             let current = self.conv.settings.web_search_backend;
             egui::ComboBox::from_id_salt("web_search_backend_combo")
+                .icon(crate::ui::chrome::combo_chevron_icon)
                 .selected_text(current.label())
                 .width(220.0)
                 .show_ui(ui, |ui| {
