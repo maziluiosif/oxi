@@ -1,0 +1,66 @@
+name: Prepare release
+
+# One click in Actions opens (or refreshes) the dev -> master release pull request, titled with
+# the version it will publish and carrying a preview of the release notes. Merging that pull
+# request runs release.yml, which regenerates the final notes and publishes the release.
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+          # Tags are needed to find the previous release.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Same generator as the release itself, run without committing anything.
+      - name: Preview version and release notes
+        id: gen
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: anthropic/claude-haiku-4.5
+        run: python .github/scripts/release_changelog.py
+
+      - name: Open or update the release pull request
+        if: steps.gen.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${{ steps.gen.outputs.version }}"
+          {
+            echo "Merging this pull request publishes **v${version}** for macOS, Linux and Windows."
+            echo
+            echo "Release notes preview (regenerated at release time, so wording may differ slightly):"
+            echo
+            cat release_notes.md
+          } > body.md
+          pr=$(gh pr list --base master --head dev --state open --json number --jq '.[0].number')
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "Release v${version}" --body-file body.md
+          else
+            gh pr create --base master --head dev --title "Release v${version}" --body-file body.md
+          fi
+          # Pull requests opened with GITHUB_TOKEN do not trigger pull_request workflows, so
+          # run CI for the release head explicitly.
+          gh workflow run ci.yml --ref dev
+
+      - name: Nothing to release
+        if: steps.gen.outputs.released != 'true'
+        run: echo "::notice::dev has no file changes since the last release."

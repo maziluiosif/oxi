@@ -1,0 +1,58 @@
+name: Security audit
+
+# New RustSec advisories land independently of code changes. Checking daily surfaces them as an
+# issue right away, instead of first showing up as an unrelated pull request's failing check.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        id: audit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo audit --color never 2>&1 | tee audit.txt
+
+      - name: Report advisories in an issue
+        if: steps.audit.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title="cargo audit: new advisories on dev"
+          {
+            echo "The daily \`cargo audit\` run found advisories that are not in \`.cargo/audit.toml\`."
+            echo "Bump the affected crates (\`cargo update -p <crate>\`) or add a documented ignore."
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo '```'
+            grep -E '^(Crate|Version|Title|ID|Solution):' audit.txt || tail -n 40 audit.txt
+            echo '```'
+          } > body.md
+          issue=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then
+            # Refresh the open issue in place rather than adding a comment every day.
+            gh issue edit "$issue" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
+          exit 1
