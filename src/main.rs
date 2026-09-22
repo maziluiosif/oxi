@@ -68,12 +68,14 @@ fn app_icon() -> IconData {
 fn main() -> eframe::Result<()> {
     install_panic_hook();
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_inner_size([1240.0, 820.0])
-            .with_min_inner_size([980.0, 680.0])
-            .with_title("oxi")
-            .with_drag_and_drop(true)
-            .with_icon(app_icon()),
+        viewport: ui::window_chrome::configure_viewport(
+            eframe::egui::ViewportBuilder::default()
+                .with_inner_size([1240.0, 820.0])
+                .with_min_inner_size([980.0, 680.0])
+                .with_title("oxi")
+                .with_drag_and_drop(true)
+                .with_icon(app_icon()),
+        ),
         ..Default::default()
     };
     eframe::run_native(

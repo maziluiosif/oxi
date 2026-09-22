@@ -4,3 +4,4 @@ pub mod chrome;
 pub mod diff;
 pub mod messages;
 pub mod preview_expand;
+pub mod window_chrome;

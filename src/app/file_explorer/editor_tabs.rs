@@ -26,7 +26,15 @@ impl OxiApp {
         let git_diff_active = git_diff_tab && self.conv.editor.diff_tab_active;
         let can_go_back = !self.conv.editor.navigation_back.is_empty();
         let can_go_forward = !self.conv.editor.navigation_forward.is_empty();
-        let tab_strip_width = (ui.available_width() - 126.0).max(80.0);
+        let sidebar_open = self.conv.sidebar_open;
+        let tab_strip_width = (ui.available_width()
+            - 126.0
+            - if sidebar_open {
+                0.0
+            } else {
+                crate::ui::window_chrome::TRAFFIC_LIGHTS_W
+            })
+        .max(80.0);
 
         Frame::new()
             .fill(c_bg_elevated_2())
@@ -35,6 +43,10 @@ impl OxiApp {
                 ui.set_height(34.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
+                    if !sidebar_open {
+                        // The macOS traffic lights sit over the window's top-left corner.
+                        ui.add_space(crate::ui::window_chrome::TRAFFIC_LIGHTS_W);
+                    }
                     let back = ui.add_enabled(
                         can_go_back,
                         egui::Button::new(icon_glyph_rich(

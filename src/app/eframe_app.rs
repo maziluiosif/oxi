@@ -101,6 +101,7 @@ impl eframe::App for OxiApp {
             0,
             c_bg_main(),
         );
+        crate::ui::window_chrome::title_bar_drag_strip(ui);
 
         // Persistent status bar (sidebar/git/terminal/settings toggles + branch) — claims the very
         // bottom strip of the window, below the terminal panel. It stays visible on Settings too;
