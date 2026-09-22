@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-09-22
+
+### Added
+- Guided setup for local and remote HuggingFace models with numbered steps and status indicators
+- Provider selection via grouped chips instead of dropdown
+- HuggingFace model results expand in place with per-file download buttons and recommended Q4_K_M marking
+- Advanced section for port, context, GPU layers, and runtime path configuration
+- Sidebar search field and improved 'New chat' row with keyboard shortcut
+- Empty chat starter prompts displayed as two-column grid of cards
+- Confirmation dialogs before losing unsaved edits in editor tabs
+- Save/discard/cancel options when closing dirty tabs or quitting with unsaved files
+- File change detection that asks before overwriting external changes or recreating deleted files
+- Unified transparent title bar on macOS with window drag and zoom support
+- Accessible names and keyboard focus indicators for icon buttons
+
+### Changed
+- Settings UI redesigned with fixed-size status pills, roomier buttons, and consistent chevrons on dropdowns
+- Chat UI now features borderless user bubbles, larger chat title, and quieter new-chat button
+- Run errors displayed as callouts in chat
+- Context size is now a single value with oxi budgeting against server-started context
+- Model id, base URL, and API key are now derived automatically
+- Editor tab bar adjusts spacing for macOS traffic lights when sidebar is closed
+
+### Security
+- Bump event-listener to 5.4.2 (RUSTSEC-2026-0221)
+
+
 ## [0.25.0] - 2026-09-22
 
 ### Added
@@ -633,7 +660,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/maziluiosif/oxi/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/maziluiosif/oxi/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/maziluiosif/oxi/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/maziluiosif/oxi/compare/v0.22.1...v0.23.0
