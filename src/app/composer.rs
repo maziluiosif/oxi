@@ -1,3 +1,5 @@
+#[path = "composer/text_menu.rs"]
+mod text_menu;
 #[path = "composer/voice_context.rs"]
 mod voice_context;
 
@@ -212,6 +214,13 @@ impl OxiApp {
                             .desired_rows(1)
                             .frame(egui::Frame::NONE)
                             .show(ui);
+                        self.composer_text_menu(
+                            ui,
+                            input_id,
+                            &te_output.response,
+                            &te_output.galley,
+                            te_output.galley_pos,
+                        );
                         if self.conv.focus_chat_input_next_frame {
                             // Navigation should put the caret at the end of any existing draft,
                             // not at egui's default/start position.
