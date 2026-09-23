@@ -262,36 +262,38 @@ fn replace_synced_file(tmp_path: &Path, destination: &Path) -> Result<(), String
     Ok(())
 }
 
-pub fn load_session_config(path: &Path) -> Option<SessionConfig> {
-    let file = File::open(path).ok()?;
-    let reader = BufReader::new(file);
-    for line in reader.lines().map_while(Result::ok) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let value = serde_json::from_str::<Value>(trimmed).ok()?;
-        if value.get("type").and_then(Value::as_str) == Some("session_config") {
-            return serde_json::from_value(value).ok();
-        }
-    }
-    None
+/// What the sidebar needs from a session file, gathered in a single pass.
+#[derive(Debug, Default)]
+pub struct SessionSummary {
+    pub name: Option<String>,
+    pub first_user_message: Option<String>,
+    pub config: Option<SessionConfig>,
 }
 
-pub fn parse_session_header_and_messages(path: &Path) -> Option<(Option<String>, Option<String>)> {
-    let file = File::open(path).ok()?;
-    let reader = BufReader::new(file);
+/// Scan a session file for its title, first user message and model config.
+///
+/// Session files can be megabytes of tool output and images, and every one of them is
+/// scanned at startup to build the chat list. Only a handful of lines matter, so lines are
+/// matched as raw bytes first and JSON-parsed only when they can hold a wanted field.
+/// Returns `None` when the file lacks a valid session header. A damaged line later in the
+/// file does not hide the session: opening it recovers every intact entry.
+pub fn scan_session_summary(path: &Path) -> Option<SessionSummary> {
+    let mut reader = BufReader::with_capacity(64 * 1024, File::open(path).ok()?);
+    let mut line = Vec::new();
     let mut saw_header = false;
-    let mut session_name: Option<String> = None;
-    let mut first_user_message: Option<String> = None;
+    let mut summary = SessionSummary::default();
 
-    for line in reader.lines().map_while(Result::ok) {
-        let trimmed = line.trim();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).ok()? == 0 {
+            break;
+        }
+        let trimmed = line.trim_ascii();
         if trimmed.is_empty() {
             continue;
         }
-        let value = serde_json::from_str::<Value>(trimmed).ok()?;
         if !saw_header {
+            let value = serde_json::from_slice::<Value>(trimmed).ok()?;
             let header_type = value.get("type").and_then(Value::as_str);
             let header_id = value.get("id").and_then(Value::as_str);
             if header_type != Some("session") || header_id.is_none() {
@@ -301,29 +303,48 @@ pub fn parse_session_header_and_messages(path: &Path) -> Option<(Option<String>,
             continue;
         }
 
+        let wants_name = summary.name.is_none() && contains(trimmed, b"session_info");
+        let wants_config = summary.config.is_none() && contains(trimmed, b"session_config");
+        let wants_message =
+            summary.first_user_message.is_none() && contains(trimmed, b"\"message\"");
+        if !(wants_name || wants_config || wants_message) {
+            if summary.name.is_some()
+                && summary.config.is_some()
+                && summary.first_user_message.is_some()
+            {
+                break;
+            }
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(trimmed) else {
+            continue;
+        };
         match value.get("type").and_then(Value::as_str) {
-            Some("session_info") if session_name.is_none() => {
-                session_name = value
+            Some("session_info") if summary.name.is_none() => {
+                summary.name = value
                     .get("name")
                     .and_then(Value::as_str)
                     .map(str::trim)
                     .filter(|name| !name.is_empty())
                     .map(ToOwned::to_owned);
             }
-            Some("message") if first_user_message.is_none() => {
+            Some("session_config") if summary.config.is_none() => {
+                summary.config = serde_json::from_value(value).ok();
+            }
+            Some("message") if summary.first_user_message.is_none() => {
                 if let Some(message) = value.get("message") {
-                    first_user_message = extract_first_user_message(message);
+                    summary.first_user_message = extract_first_user_message(message);
                 }
             }
             _ => {}
         }
     }
 
-    if !saw_header {
-        return None;
-    }
+    saw_header.then_some(summary)
+}
 
-    Some((session_name, first_user_message))
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    memchr::memmem::find(haystack, needle).is_some()
 }
 
 fn extract_first_user_message(message: &Value) -> Option<String> {
@@ -361,7 +382,7 @@ mod tests {
 
     /// Writes `bytes` to a fresh temp file and returns its path. Session files on disk
     /// can be corrupted by a crash mid-write, manual editing, or a bug in an older
-    /// version, so `load_session_messages`/`parse_session_header_and_messages` need to
+    /// version, so `load_session_messages`/`scan_session_summary` need to
     /// degrade gracefully rather than panic on any of these shapes.
     fn temp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let nanos = SystemTime::now()
@@ -488,50 +509,79 @@ mod tests {
     }
 
     #[test]
-    fn parse_session_header_and_messages_empty_file_returns_none() {
+    fn scan_session_summary_empty_file_returns_none() {
         let path = temp_file("empty2.jsonl", b"");
-        assert!(parse_session_header_and_messages(&path).is_none());
+        assert!(scan_session_summary(&path).is_none());
     }
 
     #[test]
-    fn parse_session_header_and_messages_missing_header_returns_none() {
+    fn scan_session_summary_missing_header_returns_none() {
         let path = temp_file(
             "no-header2.jsonl",
             b"{\"type\":\"session_info\",\"name\":\"Chat\"}\n",
         );
-        assert!(parse_session_header_and_messages(&path).is_none());
+        assert!(scan_session_summary(&path).is_none());
     }
 
     #[test]
-    fn parse_session_header_and_messages_invalid_json_returns_none() {
+    fn scan_session_summary_keeps_session_with_damaged_line() {
+        // A crash mid-write leaves a broken line; opening the chat recovers the intact
+        // entries (see `load_session_messages_truncated_last_line_recovers_valid_prefix`),
+        // so the chat must stay listed.
         let path = temp_file(
             "bad-json2.jsonl",
-            b"{\"type\":\"session\",\"id\":\"abc\"}\n{{{\n",
+            b"{\"type\":\"session\",\"id\":\"abc\"}\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"kept\"}}\n\
+              {\"type\":\"message\",\"message\":{\"rol",
         );
-        assert!(parse_session_header_and_messages(&path).is_none());
+        let summary = scan_session_summary(&path).unwrap();
+        assert_eq!(summary.first_user_message.as_deref(), Some("kept"));
     }
 
     #[test]
-    fn parse_session_header_and_messages_header_only_returns_empty_fields() {
+    fn scan_session_summary_header_only_returns_empty_fields() {
         let path = temp_file(
             "header-only.jsonl",
             b"{\"type\":\"session\",\"id\":\"abc\"}\n",
         );
-        let (name, first_message) = parse_session_header_and_messages(&path).unwrap();
-        assert_eq!(name, None);
-        assert_eq!(first_message, None);
+        let summary = scan_session_summary(&path).unwrap();
+        assert_eq!(summary.name, None);
+        assert_eq!(summary.first_user_message, None);
+        assert!(summary.config.is_none());
     }
 
     #[test]
-    fn parse_session_header_and_messages_extracts_name_and_first_user_message() {
+    fn scan_session_summary_extracts_name_first_user_message_and_config() {
         let path = temp_file(
             "full.jsonl",
             b"{\"type\":\"session\",\"id\":\"abc\"}\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":\"ignored\"}}\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hello there\"}}\n\
+              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"later\"}}\n\
               {\"type\":\"session_info\",\"name\":\"My Chat\"}\n\
-              {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hello there\"}}\n",
+              {\"type\":\"session_info\",\"name\":\"Second\"}\n",
         );
-        let (name, first_message) = parse_session_header_and_messages(&path).unwrap();
-        assert_eq!(name, Some("My Chat".to_string()));
-        assert_eq!(first_message, Some("hello there".to_string()));
+        let summary = scan_session_summary(&path).unwrap();
+        assert_eq!(summary.name.as_deref(), Some("My Chat"));
+        assert_eq!(summary.first_user_message.as_deref(), Some("hello there"));
+    }
+
+    #[test]
+    fn scan_session_summary_reads_session_config() {
+        let mut entry = serde_json::to_value(SessionConfig {
+            provider: crate::settings::LlmProviderKind::OpenRouter,
+            model_id: "m".into(),
+            effort: String::new(),
+            context_window: Some(1234),
+        })
+        .unwrap();
+        entry["type"] = json!("session_config");
+        let path = temp_file(
+            "config.jsonl",
+            format!("{{\"type\":\"session\",\"id\":\"abc\"}}\n{entry}\n").as_bytes(),
+        );
+        let config = scan_session_summary(&path).unwrap().config.unwrap();
+        assert_eq!(config.model_id, "m");
+        assert_eq!(config.context_window, Some(1234));
     }
 }

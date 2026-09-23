@@ -4,7 +4,7 @@ mod io;
 mod paths;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::model::{Session, make_session_title};
@@ -13,7 +13,6 @@ use crate::model::{Session, make_session_title};
 pub use dedupe::chat_messages_equal;
 #[cfg(test)]
 pub use io::load_session_messages;
-use io::parse_session_header_and_messages;
 pub use io::{load_session_messages_with_wire, save_session_messages};
 use paths::{agent_dir, configured_session_dir, default_session_dir};
 
@@ -29,12 +28,12 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
         return Vec::new();
     };
 
-    let mut sessions: Vec<LoadedSession> = entries
+    let paths: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
-        .filter_map(|path| parse_session_file(&path))
         .collect();
+    let mut sessions = parse_session_files(&paths);
 
     sessions.sort_by_key(|b| std::cmp::Reverse(b.modified));
 
@@ -62,12 +61,47 @@ struct LoadedSession {
     modified: SystemTime,
 }
 
+/// Summarise session files on a few threads: startup lists every chat, and a busy workspace
+/// holds hundreds of files that are independent of each other.
+fn parse_session_files(paths: &[PathBuf]) -> Vec<LoadedSession> {
+    const MIN_PER_THREAD: usize = 16;
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(paths.len().div_ceil(MIN_PER_THREAD))
+        .max(1);
+    if threads == 1 {
+        return paths.iter().filter_map(|p| parse_session_file(p)).collect();
+    }
+    let chunk = paths.len().div_ceil(threads);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = paths
+            .chunks(chunk)
+            .map(|part| {
+                scope.spawn(move || {
+                    part.iter()
+                        .filter_map(|p| parse_session_file(p))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().unwrap_or_default())
+            .collect()
+    })
+}
+
 fn parse_session_file(path: &Path) -> Option<LoadedSession> {
-    let (session_name, first_user_message) = parse_session_header_and_messages(path)?;
-    let config = io::load_session_config(path);
+    let summary = io::scan_session_summary(path)?;
+    let config = summary.config;
     let modified = fs::metadata(path).ok()?.modified().ok()?;
-    let title = session_name
-        .or_else(|| first_user_message.map(|text| make_session_title(&text)))
+    let title = summary
+        .name
+        .or_else(|| {
+            summary
+                .first_user_message
+                .map(|text| make_session_title(&text))
+        })
         .unwrap_or_else(|| "New chat".to_string());
 
     Some(LoadedSession {
