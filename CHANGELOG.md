@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - File opening no longer blocks UI during syntax highlighting
 - Tree-sitter highlight queries now compiled once per language and shared
-- Syntax highlighting for tree-sitter languages now happens on background thread
+- Common tree-sitter highlight queries and syntect grammars are prepared on a background thread at launch
 - Syntax color layout now only computed for visible lines plus margin
 - Syntect language highlighting moved to worker thread
 - Keychain reading moved to background at launch to avoid blocking window appearance

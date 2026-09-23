@@ -680,12 +680,18 @@ pub fn badge_failed_parts() -> (Color32, Color32, Color32) {
     }
 }
 
+/// Serializes tests that switch or depend on the process-wide palette; the test harness runs
+/// them in parallel, so a switch could otherwise land between two reads in another test.
+#[cfg(test)]
+pub(crate) static PALETTE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn set_and_read_active_palette() {
+        let _guard = PALETTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_active_palette(Palette::LIGHT);
         assert_eq!(active_palette(), Palette::LIGHT);
         assert_eq!(c_bg_main(), Palette::LIGHT.bg_main);
