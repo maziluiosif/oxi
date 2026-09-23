@@ -129,18 +129,31 @@ pub fn paint_three_dots(
     }
 }
 
+/// Whole-second elapsed label for live timers: "0s", "42s", "3m 05s", "1h 02m". Sub-second
+/// precision would make the label flicker on every repaint.
 pub fn format_stream_elapsed(d: Duration) -> String {
-    let total_ms = d.as_millis() as u64;
-    if total_ms < 1000 {
-        return format!("{total_ms}ms");
-    }
-    let s = total_ms / 1000;
+    let s = d.as_secs();
     if s < 60 {
         return format!("{s}s");
     }
     let m = s / 60;
-    let rs = s % 60;
-    format!("{m}m{rs:02}")
+    if m < 60 {
+        return format!("{m}m {:02}s", s % 60);
+    }
+    format!("{}h {:02}m", m / 60, m % 60)
+}
+
+/// `128000` → `"128,000"`.
+pub fn group_thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Coarse "time ago" label for sidebar rows: "now", "5m", "6h", "18h", "3d".
@@ -230,6 +243,22 @@ mod tests {
         );
         // Future timestamps (clock skew) clamp to "now" rather than underflowing.
         assert_eq!(format_relative_time(now + Duration::from_secs(3600)), "now");
+    }
+
+    #[test]
+    fn group_thousands_inserts_commas() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(128_000), "128,000");
+        assert_eq!(group_thousands(1_048_576), "1,048,576");
+    }
+
+    #[test]
+    fn format_stream_elapsed_whole_seconds() {
+        assert_eq!(format_stream_elapsed(Duration::from_millis(237)), "0s");
+        assert_eq!(format_stream_elapsed(Duration::from_secs(42)), "42s");
+        assert_eq!(format_stream_elapsed(Duration::from_secs(185)), "3m 05s");
+        assert_eq!(format_stream_elapsed(Duration::from_secs(3720)), "1h 02m");
     }
 
     #[test]

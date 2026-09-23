@@ -176,13 +176,31 @@ pub fn settings_card_header(ui: &mut Ui, title: &str, help: Option<&str>) {
     ui.add_space(8.0);
 }
 
-/// A card frame used to group related settings. Matches the elevated background + subtle border.
-pub fn card_frame() -> Frame {
-    Frame::new()
-        .fill(c_bg_elevated())
-        .stroke(Stroke::new(1.0, c_border_subtle()))
-        .corner_radius(RADIUS_CARD)
-        .inner_margin(Margin::symmetric(14, 12))
+/// A card used to group related settings. Matches the elevated background + subtle border.
+/// Cards always span the full content width so a page's stack of cards lines up, whatever
+/// each one contains.
+pub fn card_frame() -> Card {
+    Card
+}
+
+pub struct Card;
+
+impl Card {
+    pub fn show<R>(
+        self,
+        ui: &mut Ui,
+        add_contents: impl FnOnce(&mut Ui) -> R,
+    ) -> egui::InnerResponse<R> {
+        Frame::new()
+            .fill(c_bg_elevated())
+            .stroke(Stroke::new(1.0, c_border_subtle()))
+            .corner_radius(RADIUS_CARD)
+            .inner_margin(Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                add_contents(ui)
+            })
+    }
 }
 
 /// Slightly elevated card variant — used for nested sub-cards inside a panel.
@@ -493,31 +511,6 @@ pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color
 
 /// Small pill-style status badge: `running` / `done` / `failed`. Uses the shared semantic badge
 /// palette from [`crate::theme`] so every badge across the app shares one set of colors.
-pub fn status_badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32, stroke: Color32) {
-    Frame::new()
-        .fill(bg)
-        .stroke(Stroke::new(1.0, stroke))
-        .corner_radius(CornerRadius::same(255))
-        .inner_margin(Margin::symmetric(7, 2))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).size(FS_TINY).color(fg));
-        });
-}
-
-/// Pre-colored variants of [`status_badge`] for the three standard tool states.
-pub fn running_badge(ui: &mut Ui) {
-    let (fg, bg, stroke) = crate::theme::badge_running_parts();
-    status_badge(ui, "running", fg, bg, stroke)
-}
-pub fn done_badge(ui: &mut Ui) {
-    let (fg, bg, stroke) = crate::theme::badge_done_parts();
-    status_badge(ui, "done", fg, bg, stroke)
-}
-pub fn failed_badge(ui: &mut Ui) {
-    let (fg, bg, stroke) = crate::theme::badge_failed_parts();
-    status_badge(ui, "failed", fg, bg, stroke)
-}
-
 /// Pill-style tab used for provider selection or sub-tabs. Returns `true` when clicked.
 pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     let text_size = FS_SMALL;

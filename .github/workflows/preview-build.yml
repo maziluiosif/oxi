@@ -1,0 +1,119 @@
+name: Preview build
+
+# Downloadable macOS, Linux and Windows builds of a branch, to try a change before it is
+# released. Add the `build` label to a pull request (new pushes rebuild while it stays), or
+# run it from Actions for any branch. Not on every push: the Windows build alone takes
+# ~15 minutes.
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: preview-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'build') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'build'))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: oxi-macos-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: oxi-linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: oxi-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Same cache key as release.yml, so preview builds and releases warm each other.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libgl1-mesa-dev
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          bash scripts/bundle-macos.sh "target/${{ matrix.target }}/release/oxi" dist
+          tar -czf "${{ matrix.name }}.tar.gz" -C dist oxi.app
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf "${{ matrix.name }}.tar.gz" -C "target/${{ matrix.target }}/release" oxi
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/oxi.exe" -DestinationPath "${{ matrix.name }}.zip"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.*
+          if-no-files-found: error
+          retention-days: 14
+
+  comment:
+    needs: build
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Link the builds on the pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "**Preview builds** for ${SHA:0:7} are ready: download them from the *Artifacts* section of [this run](${RUN_URL}#artifacts)."
+            echo
+            echo "- macOS (Apple Silicon): \`oxi-macos-arm64\`. Unsigned, so clear the quarantine once: \`xattr -cr oxi.app\`"
+            echo "- Linux (x86_64): \`oxi-linux-x86_64\`"
+            echo "- Windows (x86_64): \`oxi-windows-x86_64\`"
+            echo
+            echo "Kept for 14 days. New pushes rebuild while the \`build\` label stays on."
+          } > body.md
+          # Keep one comment per pull request, updated on every rebuild.
+          gh pr comment "$PR" --edit-last --create-if-none --body-file body.md

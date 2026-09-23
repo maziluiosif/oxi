@@ -11,7 +11,7 @@
   <meta property="og:description" content="One Rust binary, around 110 MB idle. It downloads and runs GGUF models for you, locally or over SSH, and also talks to LM Studio, Ollama, hosted APIs, and agent CLIs over ACP." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://maziluiosif.github.io/oxi/" />
-  <meta property="og:image" content="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/chat.png" />
+  <meta property="og:image" content="https://maziluiosif.github.io/oxi/media/poster.jpg" />
   <meta name="twitter:card" content="summary_large_image" />
 
   <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" />
@@ -27,8 +27,9 @@
       --rust: #e26a2c;
       --rust-2: #f4923f;
       --accent: #58c4dc;
+      --ok: #3fb97a;
       --radius: 14px;
-      --maxw: 1080px;
+      --maxw: 1120px;
     }
     @media (prefers-color-scheme: light) {
       :root {
@@ -41,6 +42,7 @@
         --rust: #d15a1c;
         --rust-2: #e07a2e;
         --accent: #1f8ba3;
+        --ok: #1f9a5c;
       }
     }
     * { box-sizing: border-box; }
@@ -55,7 +57,8 @@
     }
     a { color: var(--rust-2); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    img { max-width: 100%; height: auto; display: block; }
+    img, video { max-width: 100%; height: auto; display: block; }
+    code { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
     .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
 
     /* Nav */
@@ -66,7 +69,7 @@
       border-bottom: 1px solid var(--border);
     }
     .nav-inner { display: flex; align-items: center; gap: 16px; height: 60px; }
-    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.15rem; letter-spacing: -0.02em; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.15rem; letter-spacing: -0.02em; color: var(--text); }
     .brand img { width: 26px; height: 26px; border-radius: 6px; }
     .nav-links { margin-left: auto; display: flex; gap: 22px; align-items: center; }
     .nav-links a { color: var(--muted); font-size: 0.92rem; font-weight: 500; }
@@ -76,13 +79,13 @@
       font-weight: 600; font-size: 0.9rem;
     }
     .nav-cta:hover { background: var(--rust-2); text-decoration: none; }
-    @media (max-width: 640px) { .nav-links a:not(.nav-cta) { display: none; } }
+    @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
 
     /* Hero */
-    .hero { padding: 84px 0 48px; text-align: center; position: relative; overflow: hidden; }
+    .hero { padding: 76px 0 40px; text-align: center; position: relative; overflow: hidden; }
     .hero::before {
       content: ""; position: absolute; inset: 0;
-      background: radial-gradient(60% 60% at 50% 0%, color-mix(in srgb, var(--rust) 22%, transparent), transparent 70%);
+      background: radial-gradient(60% 55% at 50% 0%, color-mix(in srgb, var(--rust) 22%, transparent), transparent 70%);
       pointer-events: none;
     }
     .badge {
@@ -92,19 +95,24 @@
       margin-bottom: 26px;
     }
     .badge b { color: var(--rust-2); }
+    .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
     h1 {
-      font-size: clamp(2.2rem, 6vw, 3.8rem); line-height: 1.05; letter-spacing: -0.03em;
+      font-size: clamp(2.3rem, 6vw, 3.9rem); line-height: 1.04; letter-spacing: -0.035em;
       margin: 0 0 20px; font-weight: 800;
     }
     h1 .grad {
       background: linear-gradient(120deg, var(--rust), var(--rust-2));
       -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     }
-    .subtitle { font-size: clamp(1.05rem, 2.2vw, 1.3rem); color: var(--muted); max-width: 700px; margin: 0 auto 34px; }
+    .subtitle { font-size: clamp(1.05rem, 2.2vw, 1.28rem); color: var(--muted); max-width: 720px; margin: 0 auto 34px; }
+    .subtitle code, .card code, .step code, .install-note code {
+      background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px;
+      font-size: 0.85em; color: var(--rust-2);
+    }
     .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
     .btn {
       display: inline-flex; align-items: center; gap: 9px; padding: 13px 24px; border-radius: 12px;
-      font-weight: 650; font-size: 1rem; border: 1px solid transparent; transition: transform .12s ease;
+      font-weight: 650; font-size: 1rem; border: 1px solid transparent; transition: transform .12s ease, background .12s ease;
     }
     .btn:hover { transform: translateY(-2px); text-decoration: none; }
     .btn-primary { background: var(--rust); color: #fff; }
@@ -112,47 +120,64 @@
     .btn-ghost { background: var(--card); color: var(--text); border-color: var(--border); }
     .hero-note { color: var(--muted); font-size: 0.85rem; }
 
-    /* Shot frame */
-    /* Sized to the demo's native 800px so the capture stays sharp. */
+    /* App window frame around the demo */
     .shot {
-      margin: 54px auto 0; max-width: 802px; border: 1px solid var(--border); border-radius: var(--radius);
-      overflow: hidden; box-shadow: 0 30px 80px -30px rgba(0,0,0,0.6); background: var(--card); position: relative;
+      margin: 50px auto 0; max-width: 1040px; border: 1px solid var(--border); border-radius: 12px;
+      overflow: hidden; background: #22262e; position: relative;
+      box-shadow: 0 40px 100px -40px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.03) inset;
     }
-    .shot img { width: 100%; }
+    .shot video { width: 100%; aspect-ratio: 1600 / 1006; background: #22262e; }
+    .shot-caption { color: var(--muted); font-size: 0.85rem; margin-top: 14px; }
 
     /* Sections */
-    section { padding: 72px 0; }
-    .section-head { text-align: center; max-width: 660px; margin: 0 auto 48px; }
-    .section-head h2 { font-size: clamp(1.7rem, 4vw, 2.4rem); letter-spacing: -0.02em; margin: 0 0 12px; }
+    section { padding: 80px 0; }
+    section.soft { background: var(--bg-soft); }
+    .section-head { text-align: center; max-width: 680px; margin: 0 auto 48px; }
+    .section-head h2 { font-size: clamp(1.7rem, 4vw, 2.45rem); letter-spacing: -0.025em; margin: 0 0 12px; line-height: 1.15; }
     .section-head p { color: var(--muted); font-size: 1.05rem; margin: 0; }
-    .eyebrow { color: var(--rust-2); font-weight: 700; font-size: 0.82rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 10px; }
+    .eyebrow { color: var(--rust-2); font-weight: 700; font-size: 0.8rem; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 10px; }
 
     /* Feature grid */
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px; }
     .card {
-      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px 24px;
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px;
       transition: border-color .15s ease, transform .15s ease;
     }
     .card:hover { border-color: color-mix(in srgb, var(--rust) 50%, var(--border)); transform: translateY(-3px); }
-    .card h3 { margin: 0 0 8px; font-size: 1.12rem; letter-spacing: -0.01em; }
+    .card h3 { margin: 0 0 8px; font-size: 1.08rem; letter-spacing: -0.01em; }
     .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
-    .card p code, .subtitle code, .install-note code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 0.85em; color: var(--rust-2); }
+    .card .new { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: 2px; }
 
-    /* Screenshot gallery */
-    .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
-    .gallery figure { margin: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--card); }
-    .gallery figcaption { padding: 12px 16px; font-size: 0.88rem; color: var(--muted); border-top: 1px solid var(--border); }
+    /* Performance stats */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+    .stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 22px 20px; }
+    .stat .value { font-size: 2.3rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; color: var(--text); }
+    .stat .value small { font-size: 1.05rem; font-weight: 700; color: var(--muted); margin-left: 3px; }
+    .stat .label { color: var(--muted); font-size: 0.92rem; margin-top: 8px; }
+    .stats-note { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: 22px; }
 
-    /* Install */
-    .install { background: var(--bg-soft); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; max-width: 720px; margin: 0 auto; }
-    .code {
-      background: #0a0c0f; color: #e6e9ef; border-radius: 10px; padding: 20px 22px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-      font-size: 0.92rem; overflow-x: auto; line-height: 1.7;
+    /* How it works */
+    .steps { display: grid; gap: 64px; }
+    .step { display: grid; grid-template-columns: 1fr 1.35fr; gap: 44px; align-items: center; }
+    .step:nth-child(even) { grid-template-columns: 1.35fr 1fr; }
+    .step:nth-child(even) .step-text { order: 2; }
+    .step-num { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: var(--rust); color: #fff; font-weight: 800; font-size: 0.9rem; margin-bottom: 14px; }
+    .step h3 { font-size: 1.5rem; letter-spacing: -0.02em; margin: 0 0 10px; line-height: 1.2; }
+    .step p { color: var(--muted); margin: 0 0 12px; }
+    .step ul { color: var(--muted); margin: 0; padding-left: 18px; }
+    .step li { margin: 4px 0; }
+    .frame { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px -30px rgba(0,0,0,0.6); }
+    @media (max-width: 860px) {
+      .step, .step:nth-child(even) { grid-template-columns: 1fr; gap: 22px; }
+      .step:nth-child(even) .step-text { order: 0; }
     }
-    @media (prefers-color-scheme: light) { .code { background: #1c2027; } }
-    .code .c { color: #7f8896; } .code .p { color: var(--rust-2); }
-    .install-tabs { display: flex; gap: 8px; padding: 8px 8px 12px; flex-wrap: wrap; }
-    .install-note { color: var(--muted); font-size: 0.9rem; text-align: center; margin-top: 18px; }
+
+    /* Themes gallery */
+    .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+    .gallery figure:first-child { grid-column: 1 / -1; }
+    @media (max-width: 720px) { .gallery { grid-template-columns: 1fr; } }
+    .gallery figure { margin: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--card); }
+    .gallery figcaption { padding: 11px 16px; font-size: 0.88rem; color: var(--muted); border-top: 1px solid var(--border); }
 
     /* Providers strip */
     .providers { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
@@ -162,27 +187,50 @@
     }
     .chip b { color: var(--rust-2); font-weight: 700; }
 
+    /* Install */
+    .install { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; max-width: 760px; margin: 0 auto; }
+    .tabs { display: flex; gap: 6px; padding: 8px 8px 12px; flex-wrap: wrap; }
+    .tab {
+      font: inherit; font-size: 0.9rem; font-weight: 600; color: var(--muted); background: transparent;
+      border: 1px solid var(--border); border-radius: 999px; padding: 7px 16px; cursor: pointer;
+    }
+    .tab[aria-selected="true"] { color: var(--text); background: var(--bg-soft); border-color: color-mix(in srgb, var(--rust) 55%, var(--border)); }
+    .panel[hidden] { display: none; }
+    .code {
+      background: #0a0c0f; color: #e6e9ef; border-radius: 10px; padding: 20px 22px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.92rem; overflow-x: auto; line-height: 1.7; white-space: pre;
+    }
+    @media (prefers-color-scheme: light) { .code { background: #1c2027; } }
+    .code .c { color: #7f8896; } .code .p { color: var(--rust-2); }
+    .install-note { color: var(--muted); font-size: 0.9rem; margin: 12px 8px 4px; }
+
     /* Footer */
     footer { border-top: 1px solid var(--border); padding: 40px 0; color: var(--muted); font-size: 0.9rem; }
     .foot-inner { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
     .foot-links { display: flex; gap: 20px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .btn, .card { transition: none; }
+      .btn:hover, .card:hover { transform: none; }
+    }
   </style>
 </head>
 <body>
 
   <header class="nav">
     <div class="wrap nav-inner">
-      <div class="brand">
-        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" alt="oxi" />
+      <a class="brand" href="#">
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" alt="" />
         oxi
-      </div>
+      </a>
       <nav class="nav-links">
+        <a href="#how">How it works</a>
         <a href="#features">Features</a>
-        <a href="#themes">Themes</a>
-        <a href="#screenshots">Screenshots</a>
+        <a href="#performance">Performance</a>
         <a href="#install">Install</a>
         <a href="https://github.com/maziluiosif/oxi">GitHub</a>
-        <a class="nav-cta" href="https://github.com/maziluiosif/oxi/releases">Download</a>
+        <a class="nav-cta" href="https://github.com/maziluiosif/oxi/releases/latest">Download</a>
       </nav>
     </div>
   </header>
@@ -190,25 +238,79 @@
   <!-- HERO -->
   <div class="hero">
     <div class="wrap">
-      <span class="badge">Built in <b>Rust + egui</b> · single native binary · ~110 MB idle</span>
+      <span class="badge"><span class="dot"></span> Built in <b>Rust + egui</b> · one native binary · ~110 MB idle</span>
       <h1>Run <span class="grad">any model</span>,<br>keep everything local</h1>
       <p class="subtitle">
-        A desktop coding agent that manages your models for you. Find a GGUF on HuggingFace and
-        oxi downloads it, installs a matching <code>llama-server</code>, and runs it, either on
-        this machine or on a GPU box over SSH. LM Studio, Ollama, hosted APIs, and agent CLIs
-        over ACP work too.
+        A fast desktop coding agent that manages your models for you. Pick a GGUF from HuggingFace
+        and oxi downloads it, installs <code>llama-server</code>, and runs it on this machine or a GPU
+        box over SSH. LM Studio, Ollama, hosted APIs, and agent CLIs over ACP work too.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases">Download latest release</a>
+        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases/latest">Download the latest release</a>
         <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi">Star on GitHub</a>
       </div>
-      <p class="hero-note">macOS (arm64) · Linux (x86_64) · Windows (x86_64) · MIT licensed</p>
+      <p class="hero-note">macOS (Apple Silicon) · Linux (x86_64) · Windows (x86_64) · MIT licensed</p>
 
       <div class="shot">
-        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/demo/demo.gif" alt="oxi fixing a failing test with a local model" />
+        <video id="demo" autoplay muted loop playsinline preload="metadata" poster="media/poster.jpg"
+               aria-label="oxi running the tests of a Python project with a local Qwen model, fixing the failing one, and showing the change in the editor and Git panel">
+          <source src="media/demo.mp4" type="video/mp4" />
+        </video>
       </div>
+      <p class="shot-caption">A local Qwen 2.5 Coder model finds a failing test, fixes it, and hands you the diff.</p>
     </div>
   </div>
+
+  <!-- HOW IT WORKS -->
+  <section id="how" class="soft">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">How it works</div>
+        <h2>From a model on HuggingFace to a reviewed fix</h2>
+        <p>Three steps, all in one window, with nothing leaving your machine unless you choose a hosted provider.</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-text">
+            <span class="step-num">1</span>
+            <h3>Pick a model, click Run</h3>
+            <p>Local models are a guided setup instead of a wall of settings.</p>
+            <ul>
+              <li>Install the <code>llama.cpp</code> runtime with one button.</li>
+              <li>Search HuggingFace and download the GGUF you want. The usual choice is marked.</li>
+              <li><b>Run</b> starts the model and makes it the one new chats use.</li>
+            </ul>
+          </div>
+          <div class="frame"><img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/local-models.png" alt="Local HF settings with the runtime installed and a Qwen model running" loading="lazy" /></div>
+        </div>
+        <div class="step">
+          <div class="step-text">
+            <span class="step-num">2</span>
+            <h3>Ask, and watch it work</h3>
+            <p>The agent reads, edits, and runs commands in your workspace, and every step stays visible.</p>
+            <ul>
+              <li>Reasoning, tool calls, and their output as they happen.</li>
+              <li>Edits arrive as side-by-side diffs.</li>
+              <li>Output speed in tokens per second, next to the context gauge.</li>
+            </ul>
+          </div>
+          <div class="frame"><img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/agent-run.png" alt="The agent running tests, reading stats.py and showing its edit as a diff" loading="lazy" /></div>
+        </div>
+        <div class="step">
+          <div class="step-text">
+            <span class="step-num">3</span>
+            <h3>Review, then commit</h3>
+            <p>Changed lines are highlighted right in the editor, next to the source-control panel.</p>
+            <ul>
+              <li>Stage, commit, and push, with AI commit messages if you want them.</li>
+              <li>A real editor with tabs, minimap, and find and replace, plus a terminal.</li>
+            </ul>
+          </div>
+          <div class="frame"><img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/editor-git.png" alt="The fixed file open in the editor with changed lines highlighted and the Git panel listing it" loading="lazy" /></div>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- FEATURES -->
   <section id="features">
@@ -216,7 +318,7 @@
       <div class="section-head">
         <div class="eyebrow">Why oxi</div>
         <h2>Built for people who run their own models</h2>
-        <p>Most of the polished coding tools assume you will use their cloud and their subscription. oxi assumes you would rather bring your own model and keep your work on your machine.</p>
+        <p>Most polished coding tools assume you will use their cloud and their subscription. oxi assumes you would rather bring your own model and keep your work on your machine.</p>
       </div>
       <div class="grid">
         <div class="card">
@@ -224,28 +326,24 @@
           <p>Rust and egui in a single binary, with no bundled browser engine. Around 110 MB of RAM at idle.</p>
         </div>
         <div class="card">
-          <h3>It manages the models</h3>
-          <p>Search HuggingFace for GGUF files, download them, install a matching <code>llama-server</code>, then start and stop it from the UI.</p>
+          <h3>It manages the models <span class="new">Improved</span></h3>
+          <p>A step-by-step setup finds GGUF files on HuggingFace, installs <code>llama-server</code>, and starts a model in one click.</p>
         </div>
         <div class="card">
           <h3>Local, remote, or hosted</h3>
-          <p>Run the model here, tunnel to a GPU box over SSH, or point oxi at LM Studio, Ollama, or a hosted API.</p>
+          <p>Run the model here, on a GPU box over SSH, or point oxi at LM Studio, Ollama, or a hosted API.</p>
         </div>
         <div class="card">
           <h3>Use a subscription you already have</h3>
           <p>Drive Claude Code, Cursor, or Codex CLI inside oxi over ACP, or sign in to ChatGPT and Codex directly.</p>
         </div>
         <div class="card">
-          <h3>Local voice dictation</h3>
-          <p>Dictate using local Whisper models. They load only when you transcribe and unload again when idle.</p>
+          <h3>Editor and Git built in</h3>
+          <p>A multi-tab editor with syntax highlighting and minimap, a source-control panel, inline diffs, and a workspace terminal.</p>
         </div>
         <div class="card">
-          <h3>File explorer and code editor</h3>
-          <p>A multi-tab editor with syntax highlighting, minimap, find and replace, external-change detection, and Git diffs opened inline.</p>
-        </div>
-        <div class="card">
-          <h3>Git, terminal, and diffs</h3>
-          <p>A source-control panel with stage, commit, and push, plus AI commit messages, inline diffs, and a workspace-rooted PTY terminal.</p>
+          <h3>Never lose an edit <span class="new">New</span></h3>
+          <p>oxi asks before closing unsaved tabs or quitting, and never silently overwrites a file that changed on disk.</p>
         </div>
         <div class="card">
           <h3>Workspace-aware tools</h3>
@@ -253,18 +351,52 @@
         </div>
         <div class="card">
           <h3>Web search without an API key</h3>
-          <p>The agent searches through Bing, DuckDuckGo, or a <code>SearXNG</code> instance you host yourself. No search API to sign up for, no key to paste, and nothing to pay per query.</p>
+          <p>Search through Bing, DuckDuckGo, or a <code>SearXNG</code> instance you host. No key to paste, nothing to pay per query.</p>
         </div>
         <div class="card">
           <h3>Nothing phones home</h3>
-          <p>Settings, sessions, tool execution, and models stay local. API keys and tokens go to the OS keychain rather than a config file, and no account is required.</p>
+          <p>Settings, chats, tool runs, and models stay local. Keys go to the OS keychain, and no account is required.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- CONTROL -->
-  <section id="control" style="background: var(--bg-soft);">
+  <!-- PERFORMANCE -->
+  <section id="performance" class="soft">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Performance</div>
+        <h2>Fast is the point</h2>
+        <p>oxi is native from top to bottom, and it gets measured. These numbers come from the real UI rendering a real workspace.</p>
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <div class="value">~1<small>ms</small></div>
+          <div class="label">to draw a frame of a long conversation</div>
+        </div>
+        <div class="stat">
+          <div class="value">46<small>ms</small></div>
+          <div class="label">to list about 200 chats at launch</div>
+        </div>
+        <div class="stat">
+          <div class="value">17<small>ms</small></div>
+          <div class="label">to open a 940-line Rust file, highlighted</div>
+        </div>
+        <div class="stat">
+          <div class="value">5<small>ms</small></div>
+          <div class="label">per keystroke in an 8,000-line file</div>
+        </div>
+        <div class="stat">
+          <div class="value">~110<small>MB</small></div>
+          <div class="label">of memory at idle</div>
+        </div>
+      </div>
+      <p class="stats-note">Release build on Apple Silicon (v0.26).</p>
+    </div>
+  </section>
+
+  <!-- PROMPTS -->
+  <section id="control">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Prompts</div>
@@ -274,27 +406,27 @@
       <div class="grid">
         <div class="card">
           <h3>Editable system prompt</h3>
-          <p>One template with a <code>{tools_list}</code> placeholder. Keep the coding defaults or replace them entirely, and <code>@</code>-mention files and folders into a message.</p>
+          <p>One template with a <code>{tools_list}</code> placeholder. Keep the coding defaults or replace them, and <code>@</code>-mention files and folders into a message.</p>
         </div>
         <div class="card">
           <h3>Not only for coding</h3>
           <p>Point it at a repo as a coding assistant, or repurpose it as a reviewer, researcher, or writing partner.</p>
         </div>
         <div class="card">
-          <h3>A separate commit prompt</h3>
-          <p>AI commit messages have their own editable prompt, and can run on a different provider than the chat.</p>
+          <h3>Local voice dictation</h3>
+          <p>Dictate with local Whisper models. They load only when you transcribe and unload again when idle.</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- PROVIDERS -->
-  <section style="padding-top:0;">
+  <section class="soft">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Providers</div>
         <h2>Bring your own model</h2>
-        <p>One configuration per provider kind, switchable from the composer or Settings.</p>
+        <p>Switch per chat from the composer, or pick the default in Settings.</p>
       </div>
       <div class="providers">
         <span class="chip"><b>Local HF</b> · GGUF</span>
@@ -315,116 +447,77 @@
   </section>
 
   <!-- THEMES -->
-  <section id="themes" style="background: var(--bg-soft);">
+  <section id="themes">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Themes</div>
         <h2>Five built-in themes</h2>
-        <p>Each theme restyles the whole app consistently: chrome, transcript, syntax highlighting, and the editor. Custom themes load from a JSON spec.</p>
+        <p>Each theme restyles the whole app: chrome, transcript, syntax highlighting, and the editor. Custom themes load from a JSON spec.</p>
       </div>
       <div class="gallery">
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-mariana.png" alt="Sublime 4 theme" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-mariana.png" alt="oxi in the Sublime 4 theme" loading="lazy" />
           <figcaption>Sublime 4</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-sublime.png" alt="Sublime theme" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-dark.png" alt="oxi in the Dark theme" loading="lazy" />
+          <figcaption>Dark</figcaption>
+        </figure>
+        <figure>
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-sublime.png" alt="oxi in the Sublime theme" loading="lazy" />
           <figcaption>Sublime</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-midnight.png" alt="Midnight theme" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-midnight.png" alt="oxi in the Midnight theme" loading="lazy" />
           <figcaption>Midnight</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-light.png" alt="Light theme" loading="lazy" />
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-light.png" alt="oxi in the Light theme" loading="lazy" />
           <figcaption>Light</figcaption>
         </figure>
       </div>
     </div>
   </section>
 
-  <!-- SCREENSHOTS -->
-  <section id="screenshots">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="eyebrow">Screenshots</div>
-        <h2>A closer look</h2>
-      </div>
-      <div class="gallery">
-        <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/scr1.png" alt="Git and terminal" loading="lazy" />
-          <figcaption>Git and terminal</figcaption>
-        </figure>
-        <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/scr2.png" alt="Diff view" loading="lazy" />
-          <figcaption>Diff view</figcaption>
-        </figure>
-        <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/set1.png" alt="Provider settings" loading="lazy" />
-          <figcaption>Provider profiles</figcaption>
-        </figure>
-        <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/set2.png" alt="Editable system prompt" loading="lazy" />
-          <figcaption>Editable system prompt</figcaption>
-        </figure>
-        <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/ssh-remote-compute.png" alt="SSH remote compute" loading="lazy" />
-          <figcaption>Remote compute over SSH</figcaption>
-        </figure>
-        <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/resource_ussage.png" alt="RAM usage" loading="lazy" />
-          <figcaption>Low memory footprint</figcaption>
-        </figure>
-      </div>
-    </div>
-  </section>
-
   <!-- INSTALL -->
-  <section id="install" style="background: var(--bg-soft);">
+  <section id="install" class="soft">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Install</div>
-        <h2>Three ways to get it</h2>
-        <p>Build from source, download a prebuilt archive, or install the Homebrew cask.</p>
+        <h2>Get it in a minute</h2>
+        <p>Install the Homebrew cask, download a prebuilt archive, or build from source.</p>
       </div>
       <div class="install">
-        <div class="install-tabs">
-          <span class="chip">From source</span>
+        <div class="tabs" role="tablist" aria-label="Install method">
+          <button class="tab" role="tab" aria-selected="true" aria-controls="p-brew" id="t-brew">Homebrew</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="p-release" id="t-release" tabindex="-1">Prebuilt release</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="p-source" id="t-source" tabindex="-1">From source</button>
         </div>
-        <div class="code">
-<span class="c"># needs Rust 1.92 or newer, plus native C/C++ build tools</span><br>
-<span class="c"># for the local Whisper dependency</span><br>
-<span class="p">cargo</span> run --release
+        <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew">
+          <div class="code"><span class="p">brew</span> tap maziluiosif/tap
+<span class="p">brew</span> install --cask oxi
+
+<span class="c"># macOS only: the build is ad-hoc signed but not notarized,</span>
+<span class="c"># so clear the quarantine flag once after installing</span>
+<span class="p">xattr</span> -cr /Applications/oxi.app</div>
         </div>
-        <p class="install-note" style="text-align:left; margin: 10px 8px 0;">
-          oxi is built on Rust edition 2024 and needs toolchain <b>1.92</b> or newer. Install one with
-          <a href="https://rustup.rs">rustup</a>, then check yours with <code>rustc --version</code>.
-          On Windows you also need LLVM, CMake, and the Visual Studio C++ build tools, which the
-          <a href="https://github.com/maziluiosif/oxi#windows-prerequisites">README covers in detail</a>.
-        </p>
-        <div class="install-tabs" style="padding-top:16px;">
-          <span class="chip">Prebuilt release</span>
-        </div>
-        <div class="code">
-<span class="c"># download + extract the archive for your platform, then on macOS:</span><br>
-<span class="c"># the build is ad-hoc signed but not notarized, so clear quarantine once</span><br>
-<span class="p">xattr</span> -cr /Applications/oxi.app<br>
-<span class="p">open</span> /Applications/oxi.app
-        </div>
-        <div class="install-tabs" style="padding-top:16px;">
-          <span class="chip">Homebrew</span>
-        </div>
-        <div class="code">
-<span class="p">brew</span> tap maziluiosif/tap<br>
-<span class="p">brew</span> install --cask oxi<br><br>
-<span class="c"># macOS only: clear quarantine once after installing</span><br>
+        <div class="panel" role="tabpanel" id="p-release" aria-labelledby="t-release" hidden>
+          <div class="code"><span class="c"># download and extract the archive for your platform, then on macOS:</span>
 <span class="p">xattr</span> -cr /Applications/oxi.app
+<span class="p">open</span> /Applications/oxi.app
+
+<span class="c"># every release ships SHA256SUMS; verify your download with</span>
+<span class="p">shasum</span> -a 256 -c SHA256SUMS --ignore-missing</div>
+          <p class="install-note">Archives for macOS (Apple Silicon), Linux (x86_64), and Windows (x86_64) are attached to every <a href="https://github.com/maziluiosif/oxi/releases">GitHub release</a>.</p>
+        </div>
+        <div class="panel" role="tabpanel" id="p-source" aria-labelledby="t-source" hidden>
+          <div class="code"><span class="c"># needs Rust 1.92 or newer, plus native C/C++ build tools</span>
+<span class="p">git</span> clone https://github.com/maziluiosif/oxi
+<span class="p">cd</span> oxi
+<span class="p">cargo</span> run --release</div>
+          <p class="install-note">Install Rust with <a href="https://rustup.rs">rustup</a>. On Windows you also need LLVM, CMake, and the Visual Studio C++ build tools; the <a href="https://github.com/maziluiosif/oxi#windows-prerequisites">README</a> has the details.</p>
         </div>
       </div>
-      <p class="install-note">
-        Precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to every
-        <a href="https://github.com/maziluiosif/oxi/releases">GitHub release</a>.
-      </p>
     </div>
   </section>
 
@@ -436,7 +529,7 @@
         Download a build, or compile it yourself in a few minutes.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases">Download oxi</a>
+        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases/latest">Download oxi</a>
         <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi#readme">Read the docs</a>
       </div>
     </div>
@@ -445,7 +538,7 @@
   <footer>
     <div class="wrap foot-inner">
       <div class="brand" style="font-size:1rem;">
-        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" alt="oxi" style="width:22px;height:22px;border-radius:5px;" />
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" alt="" style="width:22px;height:22px;border-radius:5px;" />
         oxi
       </div>
       <div class="foot-links">
@@ -456,5 +549,33 @@
     </div>
   </footer>
 
+  <script>
+    // Install tabs (arrow keys move between them, per the ARIA tabs pattern).
+    const tabs = [...document.querySelectorAll('[role="tab"]')];
+    function select(tab) {
+      for (const t of tabs) {
+        const on = t === tab;
+        t.setAttribute('aria-selected', on);
+        t.tabIndex = on ? 0 : -1;
+        document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+      }
+      tab.focus();
+    }
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => select(tab));
+      tab.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight') select(tabs[(i + 1) % tabs.length]);
+        if (e.key === 'ArrowLeft') select(tabs[(i - 1 + tabs.length) % tabs.length]);
+      });
+    });
+
+    // Respect reduced motion: show the first frame and let people press play.
+    const demo = document.getElementById('demo');
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      demo.removeAttribute('autoplay');
+      demo.pause();
+      demo.controls = true;
+    }
+  </script>
 </body>
 </html>

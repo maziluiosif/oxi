@@ -249,7 +249,11 @@ impl OxiApp {
                                         bottom: 48,
                                     })
                                     .show(ui, |ui| {
-                                        ui.set_max_width(SETTINGS_CONTENT_MAX);
+                                        // Never wider than the viewport: a fixed 820 laid a
+                                        // narrow window's content out past its right edge.
+                                        ui.set_max_width(
+                                            SETTINGS_CONTENT_MAX.min(ui.available_width()),
+                                        );
                                         self.render_settings_body(ui);
                                     });
                             });
@@ -322,19 +326,6 @@ impl OxiApp {
         }
     }
 
-    fn settings_tab_label(tab: SettingsTab) -> &'static str {
-        match tab {
-            SettingsTab::Providers => "Models & providers",
-            SettingsTab::Agent => "Tools & safety",
-            SettingsTab::GitHub => "GitHub",
-            SettingsTab::Prompts => "Prompts",
-            SettingsTab::Voice => "Voice",
-            SettingsTab::Terminal => "Terminal",
-            SettingsTab::Appearance => "Appearance",
-            SettingsTab::About => "About",
-        }
-    }
-
     fn render_settings_header(&mut self, ui: &mut Ui) {
         Frame::new()
             .fill(c_bg_main())
@@ -346,23 +337,14 @@ impl OxiApp {
             })
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("Settings")
-                                .size(FS_H1)
-                                .color(c_text())
-                                .strong(),
-                        );
-                        ui.add_space(2.0);
-                        ui.label(
-                            RichText::new(format!(
-                                "Settings › {}",
-                                Self::settings_tab_label(self.conv.settings_tab)
-                            ))
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                        );
-                    });
+                    // The page's own section title names the tab; a breadcrumb here only
+                    // repeated it.
+                    ui.label(
+                        RichText::new("Settings")
+                            .size(FS_H1)
+                            .color(c_text())
+                            .strong(),
+                    );
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
@@ -529,13 +511,16 @@ pub(super) fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Respons
         egui::StrokeKind::Middle,
     );
     let icon_col = if enabled { c_accent() } else { c_text_faint() };
-    let top = rect.center().y - label_galley.rect.height() * 0.5;
+    // Center each galley on its own: the icon font's line height differs from the UI font's,
+    // so sharing the label's top left the check mark riding high.
+    let icon_top = rect.center().y - icon_galley.rect.height() * 0.5;
+    let label_top = rect.center().y - label_galley.rect.height() * 0.5;
     let icon_x = rect.left() + pad.x;
     let label_x = icon_x + icon_galley.rect.width() + icon_gap;
     ui.painter()
-        .galley(egui::pos2(icon_x, top), icon_galley, icon_col);
+        .galley(egui::pos2(icon_x, icon_top), icon_galley, icon_col);
     ui.painter()
-        .galley(egui::pos2(label_x, top), label_galley, text_col);
+        .galley(egui::pos2(label_x, label_top), label_galley, text_col);
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

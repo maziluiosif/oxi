@@ -140,6 +140,7 @@ impl OxiApp {
             Ok(()) => {
                 self.conv.editor.file_operation = None;
                 self.conv.editor.error = None;
+                self.conv.explorer_cache.invalidate();
             }
             Err(error) => self.conv.editor.error = Some(format!("File operation failed: {error}")),
         }

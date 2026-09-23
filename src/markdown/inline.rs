@@ -260,7 +260,6 @@ pub(super) fn render_inline_until(
                         RichText::new(label).color(c_accent()).size(SZ_BODY),
                         dest,
                     ));
-                    ui.add_space(2.0);
                 }
                 Event::Start(Tag::Image { dest_url, .. }) => {
                     if !job.text.is_empty() {

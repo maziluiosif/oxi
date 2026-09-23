@@ -15,6 +15,8 @@ mod composer_helpers;
 mod confirm;
 mod connection;
 mod conversation;
+#[cfg(test)]
+mod demo_recording;
 mod eframe_app;
 mod file_explorer;
 mod git_panel;
@@ -57,6 +59,9 @@ pub struct OxiApp {
     /// Windows bitmap-only clipboards do not generate egui paste events. This latches the
     /// physical Ctrl+V chord so one key press attaches at most one image.
     clipboard_image_paste_key_down: bool,
+    /// Size of the fixed part of every request (system prompt + tool definitions), reused by the
+    /// per-frame context meter. See [`OxiApp::estimated_session_context_chars`].
+    context_overhead_cache: std::cell::RefCell<Option<composer::ContextOverhead>>,
 }
 
 impl OxiApp {
@@ -164,6 +169,7 @@ impl OxiApp {
                 sidebar_mode: state::SidebarMode::default(),
                 explorer_expanded: std::collections::HashSet::new(),
                 explorer_collapsed_roots: std::collections::HashSet::new(),
+                explorer_cache: Default::default(),
                 editor: state::EditorState::default(),
                 settings_sidebar_width: 220.0,
                 terminal_open: settings.terminal_open,
@@ -182,6 +188,8 @@ impl OxiApp {
                 diff_view_open: false,
                 diff_job_cache: None,
                 transcript_heights: std::collections::HashMap::new(),
+                transcript_rendered: std::collections::HashSet::new(),
+                sidebar_search_cache: std::collections::HashMap::new(),
                 git_open,
                 git_width,
                 git_tab: crate::app::git_panel::GitTab::default(),
@@ -232,6 +240,7 @@ impl OxiApp {
             acp: crate::agent::acp::AcpManager::spawn(),
             voice,
             clipboard_image_paste_key_down: false,
+            context_overhead_cache: Default::default(),
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
@@ -483,6 +492,24 @@ impl OxiApp {
             // Respawn the embedded shell so it starts in the new workspace cwd.
             self.terminal = None;
         }
+    }
+
+    /// Cheap check (safe per frame) for whether the active provider can plausibly send: false
+    /// only for hosted APIs that certainly need a key and have none, in settings or the
+    /// environment. Local servers, ACP agents and OAuth-backed providers are assumed ready;
+    /// they report their own, more specific errors.
+    pub(crate) fn active_provider_ready(&self) -> bool {
+        use crate::settings::LlmProviderKind::*;
+        let settings = &self.conv.settings;
+        let kind = settings.active_provider;
+        let base_url = settings.provider(kind).base_url.to_ascii_lowercase();
+        let needs_key = match kind {
+            OpenRouter | OpenCodeGo => true,
+            OpenAi => base_url.trim().is_empty() || base_url.contains("api.openai.com"),
+            CustomAnthropic => base_url.trim().is_empty() || base_url.contains("anthropic.com"),
+            _ => false,
+        };
+        !needs_key || settings.provider_is_configured(kind, &crate::oauth::OAuthStore::default())
     }
 
     pub(crate) fn blank_session(title: impl Into<String>) -> Session {

@@ -269,6 +269,9 @@ mod tests {
 
     #[test]
     fn unknown_language_uses_theme_foreground() {
+        let _guard = super::super::palette::PALETTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let job = highlight_code("hello", "definitely-unknown", FontId::monospace(12.0));
         assert_eq!(
             job.sections[0].format.color,

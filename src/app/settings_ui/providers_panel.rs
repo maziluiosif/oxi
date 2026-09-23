@@ -36,22 +36,13 @@ impl OxiApp {
         let provider = self.conv.settings_provider_tab;
         ui.add_space(4.0);
         card_frame().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        RichText::new(provider.label())
-                            .size(FS_H3)
-                            .color(c_text_strong())
-                            .strong(),
-                    );
-                    ui.add_space(2.0);
-                    ui.label(
-                        RichText::new(provider_blurb(provider))
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                    );
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            // Action first (right-aligned), so the description wraps in whatever is left
+            // instead of running underneath it in a narrow window.
+            let width = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 0.0),
+                Layout::right_to_left(Align::Center),
+                |ui| {
                     if self.conv.settings.active_provider == provider {
                         super::layout::active_pill(ui, "Active");
                     } else if crate::ui::chrome::primary_button(ui, "Make active")
@@ -60,8 +51,26 @@ impl OxiApp {
                     {
                         self.conv.settings.active_provider = provider;
                     }
-                });
-            });
+                    ui.add_space(12.0);
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        ui.label(
+                            RichText::new(provider.label())
+                                .size(FS_H3)
+                                .color(c_text_strong())
+                                .strong(),
+                        );
+                        ui.add_space(2.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(provider_blurb(provider))
+                                    .size(FS_TINY)
+                                    .color(c_text_muted()),
+                            )
+                            .wrap(),
+                        );
+                    });
+                },
+            );
         });
         ui.add_space(12.0);
 

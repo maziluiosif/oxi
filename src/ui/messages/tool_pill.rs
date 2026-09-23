@@ -14,10 +14,10 @@ use crate::ui::preview_expand::{
 };
 
 use super::thinking::{render_thinking_group_block, thinking_group_is_live};
-use crate::ui::diff::{diff_layout_job, split_chat_diff_layout_jobs};
+use crate::ui::diff::{diff_layout_job, show_split_chat_diff};
 
-use super::tool_format::{diff_counts, mono_output_job, tool_icon, tool_summary_text};
-use super::{is_edit_like_tool, selectable_layout_job, selectable_layout_job_with_wrap};
+use super::tool_format::{diff_counts, mono_output_job, tool_icon, tool_summary};
+use super::{is_edit_like_tool, selectable_layout_job};
 
 const BLOCK_PREVIEW_LINES: usize = 10;
 const EDIT_PREVIEW_LINES: usize = 10;
@@ -85,7 +85,6 @@ pub(super) fn render_tool_pill(
     let tool_in_flight = streaming && is_error.is_none();
     let running = tool_in_flight && is_last_in_run;
 
-    let status_done = !running && !has_error;
     let pill_bg = if has_error {
         crate::theme::c_tool_error_bg()
     } else if running {
@@ -117,7 +116,7 @@ pub(super) fn render_tool_pill(
     };
 
     let icon = tool_icon(name);
-    let summary = tool_summary_text(
+    let summary = tool_summary(
         name,
         args_summary.as_ref(),
         output,
@@ -125,6 +124,10 @@ pub(super) fn render_tool_pill(
         *is_error,
         running,
     );
+    let diff_stats = diff
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+        .map(diff_counts);
 
     // Click-to-expand: keyed on the stable provider tool-call id so the fold state survives
     // re-layout; falls back to the transcript position when the id is missing.
@@ -153,30 +156,15 @@ pub(super) fn render_tool_pill(
                         .font(FontId::new(FS_SMALL + 0.5, icon_font()))
                         .color(icon_color),
                 );
-                ui.label(
-                    RichText::new(tool_status_label(name))
-                        .size(FS_SMALL)
-                        .color(name_color),
-                );
-                let avail = ui.available_width();
-                let summary_resp = ui.add(
+                ui.add(
                     Label::new(
-                        RichText::new(summary.as_str())
+                        RichText::new(summary.action.as_str())
                             .size(FS_SMALL)
-                            .color(summary_color)
-                            .monospace(),
+                            .color(name_color),
                     )
-                    .truncate(),
+                    .selectable(false),
                 );
-                let full_w = ui.fonts_mut(|f| {
-                    f.layout_no_wrap(summary.clone(), FontId::monospace(FS_SMALL), summary_color)
-                        .rect
-                        .width()
-                });
-                if full_w > avail {
-                    summary_resp
-                        .on_hover_text(RichText::new(summary.as_str()).size(FS_TINY).monospace());
-                }
+                // Right-side status first so the (truncated) detail takes whatever is left.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if can_expand {
                         ui.add(
@@ -199,13 +187,22 @@ pub(super) fn render_tool_pill(
                                 .size(10.0)
                                 .color(c_text_muted()),
                         );
-                        ui.add_space(4.0);
-                        crate::ui::chrome::running_badge(ui);
-                    } else if has_error {
-                        crate::ui::chrome::failed_badge(ui);
-                    } else if status_done {
-                        crate::ui::chrome::done_badge(ui);
+                    } else if !has_error && let Some((added, removed)) = diff_stats {
+                        diff_stat_labels(ui, added, removed);
                     }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        if !summary.detail.is_empty() {
+                            ui.add(
+                                Label::new(
+                                    RichText::new(summary.detail.as_str())
+                                        .size(FS_SMALL)
+                                        .color(summary_color)
+                                        .monospace(),
+                                )
+                                .truncate(),
+                            );
+                        }
+                    });
                 });
             });
         });
@@ -261,6 +258,31 @@ pub(super) fn render_tool_pill(
             ui.label(RichText::new(caption).size(FS_TINY).color(c_text_faint()));
         }
     }
+    ui.add_space(3.0);
+}
+
+/// Colored `+N -M` line counts, laid out for a right-to-left row (removed is added first so it
+/// ends up on the right).
+fn diff_stat_labels(ui: &mut Ui, added: usize, removed: usize) {
+    ui.spacing_mut().item_spacing.x = 5.0;
+    ui.add(
+        Label::new(
+            RichText::new(format!("-{removed}"))
+                .size(FS_TINY)
+                .color(c_diff_del_fg())
+                .monospace(),
+        )
+        .selectable(false),
+    );
+    ui.add(
+        Label::new(
+            RichText::new(format!("+{added}"))
+                .size(FS_TINY)
+                .color(c_diff_add_fg())
+                .monospace(),
+        )
+        .selectable(false),
+    );
     ui.add_space(3.0);
 }
 
@@ -471,77 +493,81 @@ fn render_edit_tool_block(
                                 }),
                         );
 
-                        ui.label(
-                            RichText::new(tool_summary_text(
-                                name,
-                                args_summary.as_ref(),
-                                "",
-                                rendered_diff.as_ref(),
-                                *is_error,
-                                running,
-                            ))
-                            .size(FS_SMALL)
-                            .color(if has_error {
-                                crate::theme::c_tool_error_fg()
-                            } else {
-                                c_text()
-                            })
-                            .monospace()
-                            .strong(),
+                        let summary = tool_summary(
+                            name,
+                            args_summary.as_ref(),
+                            "",
+                            rendered_diff.as_ref(),
+                            *is_error,
+                            running,
+                        );
+                        let fg = if has_error {
+                            crate::theme::c_tool_error_fg()
+                        } else {
+                            c_text()
+                        };
+                        ui.add(
+                            Label::new(RichText::new(summary.action).size(FS_SMALL).color(fg))
+                                .selectable(false),
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let unfold = ui
-                                .add(
-                                    Label::new(
-                                        RichText::new(if is_open {
-                                            ICON_ANGLE_UP
-                                        } else {
-                                            ICON_ANGLE_DOWN
-                                        })
-                                        .font(FontId::new(FS_TINY, icon_font()))
-                                        .color(c_text_faint()),
-                                    )
-                                    .sense(egui::Sense::click()),
+                            ui.add(
+                                Label::new(
+                                    RichText::new(if is_open {
+                                        ICON_ANGLE_UP
+                                    } else {
+                                        ICON_ANGLE_DOWN
+                                    })
+                                    .font(FontId::new(FS_TINY, icon_font()))
+                                    .color(c_text_faint()),
                                 )
-                                .on_hover_text(if is_open { "Fold edit" } else { "Unfold edit" });
-                            if unfold.clicked() {
-                                set_expanded(ui, open_id, !is_open);
-                            }
-
+                                .selectable(false),
+                            );
+                            ui.add_space(2.0);
                             if running {
                                 ui.add(
                                     eframe::egui::Spinner::new()
                                         .size(10.0)
                                         .color(c_text_muted()),
                                 );
-                                ui.add_space(4.0);
-                                crate::ui::chrome::running_badge(ui);
-                            } else if has_diff {
-                                ui.label(
-                                    RichText::new(format!("-{removed}"))
-                                        .size(FS_TINY)
-                                        .color(c_diff_del_fg())
-                                        .monospace(),
-                                );
-                                ui.add_space(2.0);
-                                ui.label(
-                                    RichText::new(format!("+{added}"))
-                                        .size(FS_TINY)
-                                        .color(c_diff_add_fg())
-                                        .monospace(),
-                                );
-                                ui.add_space(4.0);
-                                crate::ui::chrome::done_badge(ui);
-                            } else if has_error {
-                                crate::ui::chrome::failed_badge(ui);
+                            } else if has_diff && !has_error {
+                                diff_stat_labels(ui, added, removed);
                             }
+                            ui.with_layout(
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    if !summary.detail.is_empty() {
+                                        ui.add(
+                                            Label::new(
+                                                RichText::new(summary.detail)
+                                                    .size(FS_SMALL)
+                                                    .color(fg)
+                                                    .monospace(),
+                                            )
+                                            .truncate(),
+                                        );
+                                    }
+                                },
+                            );
                         });
                     });
                 })
                 .response;
 
-            let _ = header_resp;
+            // The whole header toggles the diff (not just the chevron).
+            if has_diff {
+                let rect = header_resp.rect;
+                let pointer_inside = ui
+                    .ctx()
+                    .input(|i| i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
+                if pointer_inside {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    if ui.ctx().input(|i| i.pointer.primary_clicked()) {
+                        set_expanded(ui, open_id, !is_open);
+                    }
+                }
+            }
 
             // ── Diff block ───────────────────────────────────────────────────
             if is_open
@@ -566,30 +592,15 @@ fn render_edit_tool_block(
                         let max_rows = (!expanded).then_some(EDIT_PREVIEW_LINES);
                         let frame = Frame::new()
                             .fill(diff_bg)
-                            .stroke(Stroke::new(1.0, c_border()))
-                            .corner_radius(CornerRadius::same(RADIUS_CHIP))
-                            .inner_margin(Margin::symmetric(8, 5))
+                            .inner_margin(Margin::symmetric(2, 0))
                             .show(ui, |ui| {
-                                let (left, right) =
-                                    split_chat_diff_layout_jobs(diff_text, max_rows);
-                                ui.columns(2, |columns| {
-                                    egui::ScrollArea::horizontal()
-                                        .id_salt((msg_idx, block_idx, "before"))
-                                        .auto_shrink([false, true])
-                                        .show(&mut columns[0], |ui| {
-                                            selectable_layout_job_with_wrap(
-                                                ui, left, expanded, false,
-                                            );
-                                        });
-                                    egui::ScrollArea::horizontal()
-                                        .id_salt((msg_idx, block_idx, "after"))
-                                        .auto_shrink([false, true])
-                                        .show(&mut columns[1], |ui| {
-                                            selectable_layout_job_with_wrap(
-                                                ui, right, expanded, false,
-                                            );
-                                        });
-                                });
+                                show_split_chat_diff(
+                                    ui,
+                                    diff_text,
+                                    max_rows,
+                                    Id::new((msg_idx, block_idx, "split_diff")),
+                                    expanded,
+                                );
                             });
                         if overflow {
                             clickable_expand_overlay(ui, frame.response.rect, persist_id);

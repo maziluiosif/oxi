@@ -61,7 +61,7 @@ pub(super) fn line_top(galley: &Galley, target: usize) -> f32 {
 }
 
 /// Byte range covering logical lines `lines` of `text`, including their trailing newlines.
-fn line_byte_range(text: &str, lines: &Range<usize>) -> Range<usize> {
+pub(super) fn line_byte_range(text: &str, lines: &Range<usize>) -> Range<usize> {
     let mut start = (lines.start == 0).then_some(0);
     let mut end = text.len();
     for (newline, (index, _)) in text.match_indices('\n').enumerate() {

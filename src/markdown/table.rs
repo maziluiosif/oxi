@@ -25,6 +25,9 @@ fn collect_table_data(it: &mut ParserPeek<'_>) -> Vec<Vec<TableCellData>> {
             }
             Some(Event::Start(Tag::TableHead)) => {
                 it.next();
+                // pulldown-cmark puts the header cells directly inside `TableHead`, with no
+                // `TableRow` around them; accept both shapes.
+                let mut header = Vec::new();
                 loop {
                     match it.peek() {
                         Some(Event::End(TagEnd::TableHead)) => {
@@ -35,11 +38,21 @@ fn collect_table_data(it: &mut ParserPeek<'_>) -> Vec<Vec<TableCellData>> {
                             it.next();
                             rows.push(collect_row_cells(it, true));
                         }
+                        Some(Event::Start(Tag::TableCell)) => {
+                            it.next();
+                            header.push(TableCellData {
+                                text: collect_cell_text(it),
+                                is_header: true,
+                            });
+                        }
                         Some(_) => {
                             it.next();
                         }
                         None => break,
                     }
+                }
+                if !header.is_empty() {
+                    rows.insert(0, header);
                 }
             }
             Some(Event::Start(Tag::TableRow)) => {
@@ -224,4 +237,34 @@ pub(super) fn render_table(
             });
     });
     ui.add_space(6.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn table_rows(markdown: &str) -> Vec<Vec<(String, bool)>> {
+        let mut it = pulldown_cmark::Parser::new_ext(markdown, super::super::MD_OPTIONS).peekable();
+        while let Some(event) = it.next() {
+            if let Event::Start(Tag::Table(_)) = event {
+                return collect_table_data(&mut it)
+                    .into_iter()
+                    .map(|row| row.into_iter().map(|c| (c.text, c.is_header)).collect())
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    #[test]
+    fn table_keeps_its_header_row() {
+        let rows = table_rows("| column | value |\n|---|---|\n| retries | 3 |\n");
+        assert_eq!(
+            rows,
+            vec![
+                vec![("column".into(), true), ("value".into(), true)],
+                vec![("retries".into(), false), ("3".into(), false)],
+            ]
+        );
+    }
 }

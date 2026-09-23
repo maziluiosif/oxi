@@ -26,13 +26,18 @@ mod tests;
 pub(crate) use minimap::MinimapGeometry;
 pub(crate) use support::find_match_ranges;
 
+pub(crate) use explorer_tree::ExplorerCache;
 pub(crate) use layout_cache::EditorLayoutCache;
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
-        // Keep polling for external file changes while the editor is visible.
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(500));
+        // Keep polling for external file changes while the editor is visible. Only while the
+        // window has focus: regaining focus delivers an event (and so a frame) that runs the
+        // check anyway, and an idle background window should cost nothing.
+        if ui.ctx().input(|i| i.focused) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(1500));
+        }
         self.check_external_file_changes();
         self.render_editor_tabs(ui);
         if self.conv.editor.diff_tab_active

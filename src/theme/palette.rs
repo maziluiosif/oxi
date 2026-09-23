@@ -366,11 +366,19 @@ pub fn active_palette() -> Palette {
     ACTIVE_PALETTE.read().map(|g| *g).unwrap_or(Palette::DARK)
 }
 
+static PALETTE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Swap the active palette. Call [`super::setup_style`] afterwards to rebuild egui visuals.
 pub fn set_active_palette(p: Palette) {
     if let Ok(mut guard) = ACTIVE_PALETTE.write() {
         *guard = p;
     }
+    PALETTE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Bumped on every palette switch. Caches that bake theme colors into galleys key on it.
+pub fn palette_generation() -> u64 {
+    PALETTE_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 macro_rules! palette_accessors {
@@ -378,7 +386,12 @@ macro_rules! palette_accessors {
         $(
             #[inline]
             pub fn $name() -> Color32 {
-                active_palette().$field
+                // Read the one field under the lock instead of copying the whole palette:
+                // these accessors run thousands of times per frame.
+                ACTIVE_PALETTE
+                    .read()
+                    .map(|p| p.$field)
+                    .unwrap_or(Palette::DARK.$field)
             }
         )*
     };
@@ -619,66 +632,10 @@ pub fn c_tool_diff_bg() -> Color32 {
     if p.dark_base { p.bg_input } else { p.bg_main }
 }
 
-// ── Status-badge tints ("running" / "done" / "failed" chips under tool pills) ──
-
-// These chips sit on *every* tool pill, so they were the loudest repeated element in the
-// transcript. The tints are kept deliberately quiet — a faint wash over the pill surface with
-// a slightly dimmed colored label — so state reads at a glance without shouting. `done` (the
-// resting state of every finished call) is the quietest; `running`/`failed` carry a bit more
-// so the two states worth noticing still stand out. All derived from the active palette via
-// `surface_tint` so every theme (dark and light) stays consistent.
-
-/// Running badge (accent): (fg, bg, stroke).
-pub fn badge_running_parts() -> (Color32, Color32, Color32) {
-    let p = active_palette();
-    if p.dark_base {
-        (
-            surface_tint(p.accent, p.bg_elevated_2, 40),
-            surface_tint(p.bg_elevated_2, p.accent, 24),
-            surface_tint(p.border, p.accent, 55),
-        )
-    } else {
-        (
-            p.accent,
-            surface_tint(p.bg_elevated_2, p.accent, 22),
-            surface_tint(p.border, p.accent, 70),
-        )
-    }
-}
-/// Done badge (success): (fg, bg, stroke). The quietest of the three.
-pub fn badge_done_parts() -> (Color32, Color32, Color32) {
-    let p = active_palette();
-    if p.dark_base {
-        (
-            surface_tint(p.diff_add_fg, p.bg_elevated_2, 55),
-            surface_tint(p.bg_elevated_2, p.success, 16),
-            surface_tint(p.border, p.success, 42),
-        )
-    } else {
-        (
-            surface_tint(p.diff_add_fg, p.bg_main, 30),
-            surface_tint(p.bg_elevated_2, p.success, 18),
-            surface_tint(p.border, p.success, 60),
-        )
-    }
-}
-/// Failed badge (danger): (fg, bg, stroke).
-pub fn badge_failed_parts() -> (Color32, Color32, Color32) {
-    let p = active_palette();
-    if p.dark_base {
-        (
-            surface_tint(p.diff_del_fg, p.bg_elevated_2, 40),
-            surface_tint(p.bg_elevated_2, p.danger, 22),
-            surface_tint(p.border, p.danger, 55),
-        )
-    } else {
-        (
-            p.danger,
-            surface_tint(p.bg_elevated_2, p.danger, 22),
-            surface_tint(p.border, p.danger, 70),
-        )
-    }
-}
+/// Serializes tests that switch or depend on the process-wide palette; the test harness runs
+/// them in parallel, so a switch could otherwise land between two reads in another test.
+#[cfg(test)]
+pub(crate) static PALETTE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -686,6 +643,7 @@ mod tests {
 
     #[test]
     fn set_and_read_active_palette() {
+        let _guard = PALETTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_active_palette(Palette::LIGHT);
         assert_eq!(active_palette(), Palette::LIGHT);
         assert_eq!(c_bg_main(), Palette::LIGHT.bg_main);

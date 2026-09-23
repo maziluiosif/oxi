@@ -15,7 +15,8 @@ pub struct EditorSyntaxState {
     content: String,
     content_revision: Option<u64>,
     tree: Tree,
-    job: egui::text::LayoutJob,
+    /// The last highlighted byte range and its job, reused while nothing changed.
+    job: Option<(std::ops::Range<usize>, egui::text::LayoutJob)>,
     palette: SyntaxPalette,
     parser: Parser,
     query: Arc<Query>,
@@ -59,59 +60,84 @@ pub fn highlight_editor_code(
     language: &str,
     font_id: FontId,
 ) -> Option<egui::text::LayoutJob> {
-    highlight_editor_code_with_revision(state, content, language, font_id, None)
+    highlight_editor_code_with_revision(state, content, language, font_id, None, None)
 }
 
+/// Syntax-colored layout of `content[byte_range]` (the whole text when `None`). The returned
+/// job holds only that slice of text, with section ranges relative to its start.
+///
+/// The parse tree is kept per document and edited incrementally; only the requested range is
+/// queried and colored, so a keystroke in a large file costs about one screen of work instead
+/// of re-coloring the whole document.
 pub fn highlight_editor_code_with_revision(
     state: &mut Option<EditorSyntaxState>,
     content: &str,
     language: &str,
     font_id: FontId,
     content_revision: Option<u64>,
+    byte_range: Option<std::ops::Range<usize>>,
 ) -> Option<egui::text::LayoutJob> {
     let (ts_language, _) = language_config(language)?;
     let palette = active_palette().syntax;
-    if let Some(current) = state.as_ref()
-        && current.language == language
-        && current.palette == palette
-        && content_revision.map_or_else(
-            || current.content == content,
-            |revision| current.content_revision == Some(revision),
-        )
-    {
-        return Some(current.job.clone());
-    }
+    let range = byte_range.unwrap_or(0..content.len());
+    let range = range.start.min(content.len())..range.end.min(content.len());
+    let range = floor_char_boundary(content, range.start)..floor_char_boundary(content, range.end);
 
-    if let Some(current) = state.as_mut()
-        && current.language == language
-        && current.palette == palette
-    {
-        let edit = input_edit(&current.content, content);
-        current.tree.edit(&edit);
-        let tree = current.parser.parse(content, Some(&current.tree))?;
-        let job = layout_job(content, &tree, &current.query, palette, font_id);
-        current.content = content.to_owned();
-        current.content_revision = content_revision;
-        current.tree = tree;
-        current.job = job.clone();
-        return Some(job);
-    }
-
-    let mut parser = Parser::new();
-    parser.set_language(&ts_language).ok()?;
-    let query = highlight_query(language)?;
-    let tree = parser.parse(content, None)?;
-    let job = layout_job(content, &tree, &query, palette, font_id);
-    *state = Some(EditorSyntaxState {
-        language: language.to_owned(),
-        content: content.to_owned(),
-        content_revision,
-        tree,
-        job: job.clone(),
-        palette,
-        parser,
-        query,
+    let same_language = state
+        .as_ref()
+        .is_some_and(|current| current.language == language);
+    let up_to_date = state.as_ref().is_some_and(|current| {
+        same_language
+            && content_revision.map_or_else(
+                || current.content == content,
+                |revision| current.content_revision == Some(revision),
+            )
     });
+
+    if !up_to_date {
+        if let Some(current) = state.as_mut().filter(|_| same_language) {
+            let edit = input_edit(&current.content, content);
+            current.tree.edit(&edit);
+            let tree = current.parser.parse(content, Some(&current.tree))?;
+            current.content = content.to_owned();
+            current.content_revision = content_revision;
+            current.tree = tree;
+            current.job = None;
+        } else {
+            let mut parser = Parser::new();
+            parser.set_language(&ts_language).ok()?;
+            let query = highlight_query(language)?;
+            let tree = parser.parse(content, None)?;
+            *state = Some(EditorSyntaxState {
+                language: language.to_owned(),
+                content: content.to_owned(),
+                content_revision,
+                tree,
+                job: None,
+                palette,
+                parser,
+                query,
+            });
+        }
+    }
+
+    let current = state.as_mut()?;
+    if current.palette == palette
+        && let Some((cached_range, job)) = &current.job
+        && *cached_range == range
+    {
+        return Some(job.clone());
+    }
+    let job = layout_job(
+        content,
+        range.clone(),
+        &current.tree,
+        &current.query,
+        palette,
+        font_id,
+    );
+    current.palette = palette;
+    current.job = Some((range, job.clone()));
     Some(job)
 }
 
@@ -190,54 +216,62 @@ fn language_config(language: &str) -> Option<(tree_sitter::Language, Cow<'static
 }
 fn layout_job(
     content: &str,
+    range: std::ops::Range<usize>,
     tree: &Tree,
     query: &Query,
     palette: SyntaxPalette,
     font_id: FontId,
 ) -> egui::text::LayoutJob {
-    let names = query.capture_names();
-    let mut colors = vec![palette.foreground; content.len()];
-    let mut priorities = vec![0usize; content.len()];
+    let text = &content[range.clone()];
+    let base = range.start;
+    // Color per capture, resolved once instead of substring-matching every capture's name.
+    let capture_colors: Vec<egui::Color32> = query
+        .capture_names()
+        .iter()
+        .map(|name| capture_color(name, palette))
+        .collect();
+    let mut colors = vec![palette.foreground; text.len()];
+    let mut priorities = vec![0u32; text.len()];
     let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(range.clone());
     let mut captures = cursor.captures(query, tree.root_node(), content.as_bytes());
     while let Some((matched, capture_index)) = captures.next() {
         let capture = matched.captures[*capture_index];
-        let name = names[capture.index as usize];
-        let color = capture_color(name, palette);
-        let range = capture.node.byte_range();
-        if range.end <= colors.len() {
-            // Prefer the more specific (shorter) capture when query patterns overlap. This keeps
-            // nested strings/escapes, fields, and function names from being flattened by a later
-            // broad parent capture.
-            let priority = content.len().saturating_sub(range.len());
-            for index in range {
-                if priority >= priorities[index] {
-                    priorities[index] = priority;
-                    colors[index] = color;
-                }
+        let color = capture_colors[capture.index as usize];
+        let node = capture.node.byte_range();
+        // Prefer the more specific (shorter) capture when query patterns overlap. This keeps
+        // nested strings/escapes, fields, and function names from being flattened by a later
+        // broad parent capture.
+        let priority = u32::MAX.saturating_sub(node.len().min(u32::MAX as usize) as u32);
+        let start = node.start.max(range.start) - base;
+        let end = node.end.min(range.end).saturating_sub(base);
+        for index in start..end.max(start) {
+            if priority >= priorities[index] {
+                priorities[index] = priority;
+                colors[index] = color;
             }
         }
     }
 
     let mut job = egui::text::LayoutJob {
-        text: content.to_owned(),
+        text: text.to_owned(),
         ..Default::default()
     };
     // Whitespace is invisible, so it joins whichever run it touches. Otherwise every space
     // between two tokens of the same color splits the run, and text layout cost grows with
     // the number of sections.
-    let bytes = content.as_bytes();
+    let bytes = text.as_bytes();
     let mut start = 0;
-    while start < content.len() {
+    while start < text.len() {
         let color = bytes[start..]
             .iter()
             .position(|b| !b.is_ascii_whitespace())
             .map_or(palette.foreground, |offset| colors[start + offset]);
         let mut end = start + 1;
-        while end < content.len() && (colors[end] == color || bytes[end].is_ascii_whitespace()) {
+        while end < text.len() && (colors[end] == color || bytes[end].is_ascii_whitespace()) {
             end += 1;
         }
-        while end < content.len() && !content.is_char_boundary(end) {
+        while end < text.len() && !text.is_char_boundary(end) {
             end += 1;
         }
         job.sections.push(egui::text::LayoutSection {
@@ -294,23 +328,24 @@ fn name_is_comment_color(color: egui::Color32, palette: SyntaxPalette) -> bool {
 }
 
 fn input_edit(old: &str, new: &str) -> InputEdit {
-    let mut start = 0;
-    for (a, b) in old.chars().zip(new.chars()) {
-        if a != b {
-            break;
-        }
-        start += a.len_utf8();
+    // Common prefix and suffix by bytes (memcmp speed on large buffers), then pulled back to
+    // char boundaries so the edit never splits a UTF-8 sequence.
+    let (a, b) = (old.as_bytes(), new.as_bytes());
+    let mut start = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    while start > 0 && (!old.is_char_boundary(start) || !new.is_char_boundary(start)) {
+        start -= 1;
     }
-    let mut suffix = 0;
-    for (a, b) in old[start..].chars().rev().zip(new[start..].chars().rev()) {
-        if a != b {
-            break;
-        }
-        let width = a.len_utf8();
-        if suffix + width > old.len() - start || suffix + width > new.len() - start {
-            break;
-        }
-        suffix += width;
+    let max_suffix = (a.len() - start).min(b.len() - start);
+    let mut suffix = a[a.len() - max_suffix..]
+        .iter()
+        .rev()
+        .zip(b[b.len() - max_suffix..].iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    while suffix > 0
+        && (!old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix))
+    {
+        suffix -= 1;
     }
     let old_end = old.len() - suffix;
     let new_end = new.len() - suffix;
@@ -327,7 +362,7 @@ fn input_edit(old: &str, new: &str) -> InputEdit {
 fn point_at(text: &str, byte: usize) -> Point {
     let byte = floor_char_boundary(text, byte);
     let prefix = &text[..byte];
-    let row = prefix.bytes().filter(|byte| *byte == b'\n').count();
+    let row = memchr::memchr_iter(b'\n', prefix.as_bytes()).count();
     let column = prefix
         .rsplit_once('\n')
         .map_or(prefix.len(), |(_, tail)| tail.len());
@@ -364,6 +399,53 @@ mod tests {
             job.text.is_char_boundary(section.byte_range.start.0)
                 && job.text.is_char_boundary(section.byte_range.end.0)
         }));
+    }
+
+    #[test]
+    fn range_highlight_matches_the_full_job() {
+        let source = "fn one() { let a = \"x\"; }\nfn two() { let b = 2; }\nfn three() {}\n";
+        let font = FontId::monospace(12.0);
+        let mut full_state = None;
+        let full = highlight_editor_code(&mut full_state, source, "rs", font.clone()).unwrap();
+        let line_two = source.find("fn two").unwrap()..source.find("fn three").unwrap();
+        let mut state = None;
+        let part = highlight_editor_code_with_revision(
+            &mut state,
+            source,
+            "rs",
+            font,
+            Some(1),
+            Some(line_two.clone()),
+        )
+        .unwrap();
+        assert_eq!(part.text, &source[line_two.clone()]);
+        // Same color at every byte as the whole-document job.
+        let color_at = |job: &egui::text::LayoutJob, byte: usize| {
+            job.sections
+                .iter()
+                .find(|s| s.byte_range.start.0 <= byte && byte < s.byte_range.end.0)
+                .map(|s| s.format.color)
+        };
+        for byte in 0..part.text.len() {
+            if part.text.as_bytes()[byte].is_ascii_whitespace() {
+                continue;
+            }
+            assert_eq!(
+                color_at(&part, byte),
+                color_at(&full, line_two.start + byte)
+            );
+        }
+    }
+
+    #[test]
+    fn input_edit_finds_the_changed_span() {
+        let edit = input_edit("let a = 1;\nlet b = 2;", "let a = 1;\nlet bb = 2;");
+        assert_eq!(edit.start_byte, 16);
+        assert_eq!(edit.old_end_byte, 16);
+        assert_eq!(edit.new_end_byte, 17);
+        assert_eq!(edit.start_position, Point::new(1, 5));
+        let unicode = input_edit("a↑b", "a↓b");
+        assert_eq!((unicode.start_byte, unicode.old_end_byte), (1, 4));
     }
 
     #[test]

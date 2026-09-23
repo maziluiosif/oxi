@@ -676,25 +676,121 @@ fn render_error_callout(ui: &mut Ui, error: &str) {
                     c_error_fg(),
                 ));
                 // Errors quote commands in Markdown backticks; show them as plain text here.
+                let hint = error_hint(error);
                 let error = error.replace('`', "");
-                ui.add(
-                    Label::new(
-                        RichText::new(error)
-                            .size(FS_SMALL)
-                            .line_height(Some(FS_SMALL * 1.4))
-                            .color(c_text()),
-                    )
-                    .wrap()
-                    .selectable(true),
-                );
+                ui.vertical(|ui| {
+                    ui.add(
+                        Label::new(
+                            RichText::new(error)
+                                .size(FS_SMALL)
+                                .line_height(Some(FS_SMALL * 1.4))
+                                .color(c_text()),
+                        )
+                        .wrap()
+                        .selectable(true),
+                    );
+                    if let Some(hint) = hint {
+                        ui.add_space(2.0);
+                        ui.add(
+                            Label::new(RichText::new(hint).size(FS_SMALL).color(c_text_muted()))
+                                .wrap(),
+                        );
+                    }
+                });
             });
         });
     ui.add_space(4.0);
 }
 
+/// A next step for the most common run failures, which otherwise surface as raw provider
+/// messages.
+fn error_hint(error: &str) -> Option<&'static str> {
+    let e = error.to_ascii_lowercase();
+    // Status codes count only as whole numbers ("HTTP 429", not a port like 14290).
+    let code = |code: &str| {
+        e.match_indices(code).any(|(at, _)| {
+            let before = e[..at].chars().next_back();
+            let after = e[at + code.len()..].chars().next();
+            !before.is_some_and(|c| c.is_ascii_digit())
+                && !after.is_some_and(|c| c.is_ascii_digit())
+        })
+    };
+    let has = |needles: &[&str]| {
+        needles.iter().any(|n| {
+            if n.bytes().all(|b| b.is_ascii_digit()) {
+                code(n)
+            } else {
+                e.contains(n)
+            }
+        })
+    };
+    if has(&[
+        "401",
+        "unauthorized",
+        "invalid api key",
+        "invalid_api_key",
+        "incorrect api key",
+    ]) {
+        Some("Check the API key in Settings → Models & providers.")
+    } else if has(&["403", "forbidden", "permission denied"]) {
+        Some(
+            "The key works but has no access to this model; pick another model or check the account.",
+        )
+    } else if has(&[
+        "429",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "quota",
+    ]) {
+        Some("The provider is rate limiting or the quota is used up; wait a moment and try again.")
+    } else if has(&[
+        "context length",
+        "context_length",
+        "maximum context",
+        "too many tokens",
+        "prompt is too long",
+    ]) {
+        Some(
+            "The conversation no longer fits the model's context; start a new chat or use a model with a larger window.",
+        )
+    } else if has(&[
+        "connection refused",
+        "error sending request",
+        "dns error",
+        "failed to connect",
+        "could not connect",
+    ]) {
+        Some(
+            "Couldn't reach the server. For a local model, make sure it is running; otherwise check the base URL and your connection.",
+        )
+    } else if has(&["timed out", "timeout"]) {
+        Some("The request timed out; the server may be busy or still loading the model.")
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod answer_render_tests {
-    use super::{floor_char_boundary, split_error_tail};
+    use super::{error_hint, floor_char_boundary, split_error_tail};
+
+    #[test]
+    fn common_errors_get_a_hint() {
+        assert!(
+            error_hint("HTTP 401 Unauthorized")
+                .unwrap()
+                .contains("API key")
+        );
+        assert!(error_hint("error sending request for url (http://127.0.0.1:8080)").is_some());
+        assert!(error_hint("Agent stopped unexpectedly.").is_none());
+        assert!(error_hint("bound to port 14290").is_none());
+        assert!(
+            error_hint("HTTP 429 Too Many Requests")
+                .unwrap()
+                .contains("rate")
+        );
+    }
 
     #[test]
     fn error_tail_is_split_from_the_answer() {
