@@ -84,12 +84,27 @@ if __name__ == "__main__":
 fn record_demo() {
     let out = PathBuf::from(std::env::var("OXI_DEMO_FRAMES").expect("OXI_DEMO_FRAMES"));
     let stills = std::env::var_os("OXI_DEMO_STILLS").map(PathBuf::from);
+    run_demo(Some(out), stills);
+}
+
+/// Every key screen as a still, without the video frames or real-time pacing. Used to review UI
+/// changes: `OXI_GALLERY=/some/dir cargo test --release render_gallery -- --ignored`.
+#[test]
+#[ignore = "renders UI review stills; set OXI_GALLERY to the output folder"]
+fn render_gallery() {
+    let stills = PathBuf::from(std::env::var("OXI_GALLERY").expect("OXI_GALLERY"));
+    run_demo(None, Some(stills));
+}
+
+fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     let scratch = std::env::temp_dir().join(format!("oxi-demo-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     let home = scratch.join("home");
     let project = scratch.join("Projects").join("stats-kit");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&out).unwrap();
+    if let Some(out) = &out {
+        std::fs::create_dir_all(out).unwrap();
+    }
     if let Some(stills) = &stills {
         std::fs::create_dir_all(stills).unwrap();
     }
@@ -134,8 +149,46 @@ fn record_demo() {
         },
     };
 
+    let gallery = rec.out.is_none();
     // 1. The model is already downloaded and running: the guided Local HF setup.
     rec.harness.run_steps(4);
+    if gallery {
+        rec.still("empty-chat");
+        rec.app().conv.settings.active_provider = LlmProviderKind::OpenRouter;
+        rec.harness.run_steps(3);
+        rec.still("empty-chat-setup");
+        rec.app().conv.settings.active_provider = LlmProviderKind::LocalHf;
+        use super::state::SettingsTab;
+        rec.app().open_settings_page();
+        for (tab, name) in [
+            (SettingsTab::Agent, "settings-agent"),
+            (SettingsTab::GitHub, "settings-github"),
+            (SettingsTab::Prompts, "settings-prompts"),
+            (SettingsTab::Voice, "settings-voice"),
+            (SettingsTab::Terminal, "settings-terminal"),
+            (SettingsTab::Appearance, "settings-appearance"),
+            (SettingsTab::About, "settings-about"),
+        ] {
+            rec.app().conv.settings_tab = tab;
+            rec.harness.run_steps(3);
+            rec.still(name);
+        }
+        for provider in [
+            LlmProviderKind::OpenAi,
+            LlmProviderKind::ClaudeCodeAcp,
+            LlmProviderKind::Ollama,
+        ] {
+            let app = rec.app();
+            app.conv.settings_tab = SettingsTab::Providers;
+            app.conv.settings_provider_tab = provider;
+            rec.harness.run_steps(3);
+            rec.still(&format!("settings-provider-{provider:?}").to_lowercase());
+        }
+        rec.app().conv.settings_tab = SettingsTab::Providers;
+        rec.app().conv.settings_open = false;
+        rec.app().conv.settings_original = None;
+        rec.harness.run_steps(3);
+    }
     {
         let app = rec.app();
         app.open_settings_page();
@@ -191,6 +244,24 @@ fn record_demo() {
         0.7,
     );
     rec.still("agent-run");
+    if gallery {
+        for id in ["call_1", "call_2"] {
+            let persist =
+                crate::ui::preview_expand::expand_persist_id(egui::Id::new(("tool_pill", id)));
+            rec.harness
+                .ctx
+                .data_mut(|d| d.insert_persisted(persist, true));
+        }
+        rec.harness.run_steps(4);
+        rec.still("agent-run-expanded");
+        for id in ["call_1", "call_2"] {
+            let persist =
+                crate::ui::preview_expand::expand_persist_id(egui::Id::new(("tool_pill", id)));
+            rec.harness
+                .ctx
+                .data_mut(|d| d.insert_persisted(persist, false));
+        }
+    }
     // The same moment in every theme (stills only, not part of the video).
     for theme in ["mariana", "sublime", "midnight", "light", "dark"] {
         crate::theme::apply_theme(&rec.harness.ctx, theme);
@@ -212,6 +283,116 @@ fn record_demo() {
     rec.finish_turn();
     rec.hold(2.2);
     rec.still("chat");
+    if gallery {
+        {
+            let app = rec.app();
+            let key = app.active_session_key();
+            app.run_state_mut(key).stream_error =
+                Some("HTTP 401 Unauthorized: invalid API key for this endpoint".into());
+        }
+        rec.harness.run_steps(3);
+        rec.still("chat-error");
+        {
+            let app = rec.app();
+            let key = app.active_session_key();
+            let run = app.run_state_mut(key);
+            run.stream_error = None;
+            run.pending_approval = Some(super::state::PendingApproval {
+                name: "bash".into(),
+                summary: "rm -rf build/ && python3 -m unittest -q".into(),
+            });
+        }
+        rec.harness.run_steps(3);
+        rec.still("chat-approval");
+        // A small window: every row has to wrap or truncate instead of overflowing.
+        rec.harness.set_size(egui::vec2(760.0, 560.0));
+        rec.harness.run_steps(4);
+        rec.still("narrow-chat");
+        rec.app().open_settings_page();
+        rec.harness.run_steps(4);
+        rec.still("narrow-settings");
+        rec.app().conv.settings_open = false;
+        rec.app().conv.settings_original = None;
+        rec.harness.set_size(SIZE);
+        rec.harness.run_steps(4);
+        {
+            let app = rec.app();
+            let key = app.active_session_key();
+            app.run_state_mut(key).pending_approval = None;
+        }
+        rec.harness.run_steps(2);
+    }
+    if gallery {
+        let selected = rec.drag_select_label("All 5 tests pass", false);
+        println!("PROFILE text selection in the short demo chat: {selected}");
+        rec.profile("chat idle", false);
+        rec.profile("chat hover", true);
+        // A long, markdown-heavy conversation, scrolled with the wheel.
+        {
+            let app = rec.app();
+            app.active_session_mut().messages = heavy_transcript(300);
+            app.conv.scroll_to_bottom_once = true;
+        }
+        rec.harness.run_steps(4);
+        rec.still("chat-heavy");
+        rec.profile("heavy idle", false);
+        rec.profile_scroll("heavy scroll");
+        rec.profile("heavy hover", true);
+        rec.profile_streaming("heavy stream");
+        for streaming in [false, true] {
+            let selected = rec.drag_select_label("That is the whole story for turn", streaming);
+            println!(
+                "PROFILE text selection in a 300-turn chat (streaming={streaming}): {selected}"
+            );
+        }
+        // Scrolled up into the middle of the history, where units on both sides are culled.
+        rec.harness
+            .event(Event::PointerMoved(egui::pos2(700.0, 400.0)));
+        for _ in 0..40 {
+            rec.harness.event(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 400.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            rec.harness.step();
+        }
+        rec.harness.run_steps(20);
+        let selected = rec.drag_select_label("That is the whole story for turn", false);
+        println!("PROFILE text selection after scrolling up a 300-turn chat: {selected}");
+        rec.app().conv.scroll_to_bottom_once = true;
+        rec.harness.run_steps(4);
+        // A long chat history in the sidebar.
+        {
+            let app = rec.app();
+            let wi = app.conv.active_workspace;
+            for i in 0..400 {
+                let mut session =
+                    OxiApp::blank_session(format!("Earlier chat number {i} about retries"));
+                session.messages_loaded = false;
+                app.conv.workspaces[wi].sessions.push(session);
+            }
+        }
+        rec.harness.run_steps(3);
+        rec.still("sidebar-400");
+        rec.app().conv.sidebar_search = "csv".into();
+        rec.harness.run_steps(3);
+        rec.still("sidebar-search");
+        rec.app().conv.sidebar_search.clear();
+        rec.profile("400 chats idle", false);
+        rec.profile("400 chats hover", true);
+        {
+            let app = rec.app();
+            let wi = app.conv.active_workspace;
+            app.conv.workspaces[wi].sessions.truncate(5);
+        }
+        {
+            let app = rec.app();
+            app.active_session_mut().messages.truncate(2);
+            app.conv.scroll_to_bottom_once = true;
+        }
+        rec.harness.run_steps(4);
+    }
 
     // 4. Review the change in the editor, with the Git panel open.
     {
@@ -223,11 +404,69 @@ fn record_demo() {
     }
     rec.hold(4.0);
     rec.still("editor-git");
+    if gallery {
+        use crate::app::git_panel::GitTab;
+        rec.app().conv.git_tab = GitTab::History;
+        rec.harness.run_steps(4);
+        rec.still("git-history");
+        rec.app().conv.git_tab = GitTab::Branches;
+        rec.harness.run_steps(4);
+        rec.still("git-branches");
+        rec.app().conv.git_tab = GitTab::Changes;
+        rec.app().conv.editor.find_open = true;
+        rec.app().conv.editor.find_query = "ordered".into();
+        rec.harness.run_steps(4);
+        rec.still("editor-find");
+        rec.app().conv.editor.find_open = false;
+        rec.app().open_file_picker();
+        rec.harness.run_steps(4);
+        rec.still("file-picker");
+        rec.app().cancel_file_picker();
+        rec.harness.run_steps(2);
+        rec.profile("editor idle", false);
+        rec.profile("editor hover", true);
+        // A 20k-line file: idle, wheel scrolling, and typing at the caret.
+        let big = project.join("big.py");
+        let mut source = String::new();
+        for i in 0..20_000 {
+            source.push_str(&format!(
+                "def handler_{i}(values, limit={i}):\n    return [v * 2 for v in values if v < limit]  # {i}\n"
+            ));
+        }
+        std::fs::write(&big, source).unwrap();
+        rec.app()
+            .open_editor_file(std::fs::canonicalize(&big).unwrap());
+        rec.hold(1.0);
+        rec.profile("big file idle", false);
+        rec.profile_scroll("big file scroll");
+        rec.profile_typing("big file typing");
+        // Colors must still match the text after edits (the highlight is now per window).
+        rec.harness.run_steps(4);
+        rec.still("big-file-after-typing");
+    }
+    if gallery {
+        rec.app().conv.terminal_open = true;
+        rec.hold(1.5);
+        rec.still("terminal");
+        crate::theme::apply_theme(&rec.harness.ctx, "light");
+        rec.harness.run_steps(3);
+        rec.still("editor-light");
+        {
+            let app = rec.app();
+            app.conv.terminal_open = false;
+            app.conv.git_open = false;
+            app.conv.editor.documents.clear();
+            app.conv.editor.active = None;
+        }
+        rec.harness.run_steps(3);
+        rec.still("chat-light");
+    }
 }
 
 struct Recorder<'a> {
     harness: Harness<'a, OxiApp>,
-    out: PathBuf,
+    /// Video frames go here; `None` renders stills only, as fast as possible.
+    out: Option<PathBuf>,
     stills: Option<PathBuf>,
     frame: usize,
     project: PathBuf,
@@ -244,10 +483,13 @@ impl Recorder<'_> {
     fn shot(&mut self) {
         let started = Instant::now();
         self.harness.step();
+        let Some(out) = self.out.clone() else {
+            return;
+        };
         let mut image = self.harness.render().expect("render frame");
         paint_traffic_lights(&mut image);
         image
-            .save(self.out.join(format!("frame_{:05}.png", self.frame)))
+            .save(out.join(format!("frame_{:05}.png", self.frame)))
             .expect("save frame");
         self.frame += 1;
         if let Some(rest) = FRAME.checked_sub(started.elapsed()) {
@@ -266,6 +508,254 @@ impl Recorder<'_> {
         image
             .save(dir.join(format!("{name}.png")))
             .expect("save still");
+    }
+
+    /// Time `frames` UI frames of the current app state and print mean/p50/max.
+    ///
+    /// Frames run on a separate plain egui context, not the harness: kittest keeps AccessKit
+    /// on, and exporting every text row to the accessibility tree dominated the numbers (the real
+    /// app only pays that while an assistive client is connected). `events` supplies the input
+    /// for frame `i` and may mutate the app first (e.g. to stream text in).
+    fn measure(
+        &mut self,
+        label: &str,
+        frames: usize,
+        mut events: impl FnMut(usize, &mut OxiApp) -> Vec<Event>,
+    ) {
+        const WARM_UP: usize = 12;
+        let ctx = egui::Context::default();
+        let theme = self.app().conv.settings.theme_id.clone();
+        crate::theme::apply_theme(&ctx, &theme);
+        egui_extras::install_image_loaders(&ctx);
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut times = Vec::with_capacity(frames);
+        let mut repaint_causes = Vec::new();
+        for i in 0..WARM_UP + frames {
+            let app = self.harness.state_mut();
+            let mut raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                time: Some(i as f64 / 60.0),
+                predicted_dt: 1.0 / 60.0,
+                focused: true,
+                events: if i < WARM_UP {
+                    Vec::new()
+                } else {
+                    events(i - WARM_UP, app)
+                },
+                ..Default::default()
+            };
+            raw.viewports
+                .entry(egui::ViewportId::ROOT)
+                .or_default()
+                .native_pixels_per_point = Some(SCALE);
+            let started = Instant::now();
+            let _ = ctx.run_ui(raw, |ui| {
+                eframe::App::logic(app, ui.ctx(), &mut frame);
+                eframe::App::ui(app, ui, &mut frame);
+            });
+            if i >= WARM_UP {
+                times.push(started.elapsed());
+            }
+            if i + 1 == WARM_UP + frames {
+                repaint_causes = ctx
+                    .repaint_causes()
+                    .iter()
+                    .map(|c| format!("{}:{} {}", c.file, c.line, c.reason))
+                    .collect();
+            }
+        }
+        times.sort();
+        let mean = times.iter().sum::<Duration>() / frames as u32;
+        println!(
+            "PROFILE {label:<16} mean {:>7.3} ms  p50 {:>7.3} ms  max {:>7.3} ms",
+            mean.as_secs_f64() * 1e3,
+            times[frames / 2].as_secs_f64() * 1e3,
+            times[frames - 1].as_secs_f64() * 1e3,
+        );
+        if label.ends_with("idle") {
+            // Anything still asking for frames while idle keeps the CPU awake for nothing.
+            repaint_causes.sort();
+            repaint_causes.dedup();
+            for cause in repaint_causes {
+                println!("PROFILE   repaint requested by {cause}");
+            }
+        }
+    }
+
+    /// Press-drag-release across the on-screen label containing `text`, the way a user selects
+    /// it, and report whether the transcript then holds a selection. With `streaming` the last
+    /// reply keeps growing (and the view stuck to the bottom) while the pointer moves.
+    fn drag_select_label(&mut self, text: &str, streaming: bool) -> bool {
+        use egui_kittest::kittest::Queryable;
+        if streaming {
+            let app = self.app();
+            let mut reply = message(
+                MsgRole::Assistant,
+                "",
+                vec![AssistantBlock::Answer(String::new())],
+            );
+            reply.streaming = true;
+            app.active_session_mut().messages.push(reply);
+            app.conv.scroll_to_bottom_once = true;
+        }
+        let grow = |rec: &mut Self| {
+            if !streaming {
+                return;
+            }
+            if let Some(AssistantBlock::Answer(t)) = rec
+                .app()
+                .active_session_mut()
+                .messages
+                .last_mut()
+                .and_then(|m| m.blocks.last_mut())
+            {
+                t.push_str("more streamed words ");
+            }
+        };
+        self.harness.run_steps(6);
+        // AccessKit bounds are physical pixels; pointer events are in points. Several turns
+        // share the text: take the on-screen match nearest the window's middle.
+        let Some(rect) = self
+            .harness
+            .query_all_by_label_contains(text)
+            .map(|node| {
+                let r = node.rect();
+                egui::Rect::from_min_max(
+                    (r.min.to_vec2() / SCALE).to_pos2(),
+                    (r.max.to_vec2() / SCALE).to_pos2(),
+                )
+            })
+            .filter(|r| (60.0..SIZE.y - 160.0).contains(&r.center().y))
+            .min_by_key(|r| (r.center().y - SIZE.y / 2.0).abs() as i64)
+        else {
+            println!("PROFILE   label {text:?} not on screen");
+            return false;
+        };
+        let from = egui::pos2(rect.left() + 3.0, rect.center().y);
+        let to = egui::pos2(rect.right() - 3.0, rect.center().y);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.harness.event(Event::PointerMoved(from));
+        for _ in 0..6 {
+            grow(self);
+            self.harness.step();
+        }
+        self.harness.event(button(from, true));
+        self.harness.step();
+        for i in 1..=8 {
+            grow(self);
+            self.harness
+                .event(Event::PointerMoved(from.lerp(to, i as f32 / 8.0)));
+            self.harness.step();
+            if std::env::var_os("OXI_DEBUG_SELECT").is_some() {
+                let ctx = &self.harness.ctx;
+                println!(
+                    "SEL frame {i}: down={} press_origin={:?} dragged={:?} exists={} sel={} over_egui={} time={}",
+                    ctx.input(|i| i.pointer.primary_down()),
+                    ctx.input(|i| i.pointer.press_origin()),
+                    ctx.dragged_id(),
+                    ctx.dragged_id()
+                        .and_then(|id| ctx.read_response(id))
+                        .is_some(),
+                    ctx.plugin::<egui::text_selection::LabelSelectionState>()
+                        .lock()
+                        .has_selection(),
+                    ctx.is_pointer_over_egui(),
+                    ctx.input(|i| i.time),
+                );
+            }
+        }
+        self.harness.event(button(to, false));
+        self.harness.step();
+        let selected = self
+            .harness
+            .ctx
+            .plugin::<egui::text_selection::LabelSelectionState>()
+            .lock()
+            .has_selection();
+        self.harness.event(button(to, true));
+        self.harness.event(button(to, false));
+        self.harness.run_steps(2);
+        if streaming {
+            self.app().active_session_mut().messages.pop();
+        }
+        selected
+    }
+
+    /// Frames with no input, or with the pointer wandering over the window.
+    fn profile(&mut self, label: &str, hover: bool) {
+        self.measure(label, 200, |i, _| {
+            if !hover {
+                return vec![Event::PointerMoved(egui::pos2(700.0, 400.0))];
+            }
+            let t = i as f32 / 200.0;
+            vec![Event::PointerMoved(egui::pos2(
+                300.0 + 600.0 * t,
+                150.0 + 400.0 * ((t * 7.0).sin() * 0.5 + 0.5),
+            ))]
+        });
+    }
+
+    /// Frames while a long markdown reply streams in (a few tokens per frame) at the bottom of
+    /// the current transcript, the pointer resting over it.
+    fn profile_streaming(&mut self, label: &str) {
+        let chunk = "The retry loop keeps `attempt` bounded, and **each** failure is logged. ";
+        {
+            let app = self.app();
+            let mut reply = message(
+                MsgRole::Assistant,
+                "",
+                vec![AssistantBlock::Answer(String::new())],
+            );
+            reply.streaming = true;
+            app.active_session_mut().messages.push(reply);
+        }
+        self.measure(label, 300, |i, app| {
+            if let Some(AssistantBlock::Answer(text)) = app
+                .active_session_mut()
+                .messages
+                .last_mut()
+                .and_then(|m| m.blocks.last_mut())
+            {
+                text.push_str(chunk);
+                if i % 12 == 11 {
+                    text.push_str("\n\n");
+                }
+            }
+            vec![Event::PointerMoved(egui::pos2(700.0, 400.0))]
+        });
+        self.app().active_session_mut().messages.pop();
+    }
+
+    /// Frames while typing one character per frame into the focused editor.
+    fn profile_typing(&mut self, label: &str) {
+        self.measure(label, 120, |i, app| {
+            if i == 0 {
+                app.conv.editor.focus_editor_next_frame = true;
+                return Vec::new();
+            }
+            vec![Event::Text(if i % 20 == 19 { "\n" } else { "x" }.into())]
+        });
+    }
+
+    /// Frames with the wheel scrolling up, then back down, over the middle of the window.
+    fn profile_scroll(&mut self, label: &str) {
+        self.measure(label, 240, |i, _| {
+            let dy = if i < 120 { 120.0 } else { -120.0 };
+            vec![
+                Event::PointerMoved(egui::pos2(700.0, 400.0)),
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, dy),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                },
+            ]
+        });
     }
 
     fn hold(&mut self, seconds: f32) {
@@ -362,6 +852,46 @@ impl Recorder<'_> {
         }));
         self.tx = None;
     }
+}
+
+/// `turns` user/assistant pairs mixing prose, lists, tables, code blocks and tool calls.
+fn heavy_transcript(turns: usize) -> Vec<ChatMessage> {
+    let mut messages = Vec::with_capacity(turns * 2);
+    for turn in 0..turns {
+        messages.push(message(
+            MsgRole::User,
+            &format!("Question {turn}: how does the reporting pipeline handle retries?"),
+            vec![],
+        ));
+        let answer = format!(
+            "## Step {turn}\n\nThe pipeline **retries** failed uploads with `backoff()`; see \
+             [the docs](https://example.com). It keeps a queue per target:\n\n\
+             - first item with `inline code`\n- second item\n- third item\n\n\
+             | column | value |\n|---|---|\n| retries | {turn} |\n| delay | 2s |\n\n\
+             ```rust\nfn backoff(attempt: u32) -> Duration {{\n    let base = 250;\n    \
+             Duration::from_millis(base * 2u64.pow(attempt))\n}}\n```\n\n\
+             That is the whole story for turn {turn}."
+        );
+        messages.push(message(
+            MsgRole::Assistant,
+            "",
+            vec![
+                AssistantBlock::Thinking("Let me look at how retries are scheduled.".into()),
+                AssistantBlock::Tool {
+                    tool_call_id: format!("heavy_{turn}"),
+                    name: "read".into(),
+                    args_summary: Some(r#"{"path":"src/pipeline/retry.rs"}"#.into()),
+                    output: "line\n".repeat(40),
+                    diff: None,
+                    is_error: Some(false),
+                    full_output_path: None,
+                    output_truncated: false,
+                },
+                AssistantBlock::Answer(answer),
+            ],
+        ));
+    }
+    messages
 }
 
 fn chunks(text: &str, size: usize) -> Vec<String> {
