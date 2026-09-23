@@ -72,6 +72,9 @@ cargo test -- --ignored
 
 - Keep PRs focused — one logical change per PR is easier to review and bisect than a
   bundle of unrelated fixes.
+- To try a change before it is released, add the `build` label to its pull request (or run
+  **Actions → Preview build** for any branch). macOS, Linux and Windows builds are attached
+  to the run, and the pull request gets a comment linking them.
 - To cut a release, run **Actions → Prepare release**. It opens (or refreshes) the
   `dev` → `master` pull request, titled with the version it will publish and carrying a
   preview of the release notes.
