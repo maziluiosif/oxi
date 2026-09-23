@@ -67,7 +67,9 @@ fn app_icon() -> IconData {
 
 fn main() -> eframe::Result<()> {
     install_panic_hook();
+    // Warm slow first-use work on background threads while the window is created.
     secrets::prefetch_unified();
+    theme::prewarm_editor_highlighting();
     let options = eframe::NativeOptions {
         viewport: ui::window_chrome::configure_viewport(
             eframe::egui::ViewportBuilder::default()

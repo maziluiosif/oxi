@@ -16,7 +16,7 @@ use super::editor_paint::{
 use super::support::{
     apply_definition_underline, apply_search_highlights, find_match_ranges, language_for_path,
 };
-use super::{EditorLayoutCache, minimap};
+use super::{EditorLayoutCache, minimap, syntax_window};
 
 pub(super) type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
     Vec<(usize, f32)>,
@@ -413,13 +413,23 @@ impl OxiApp {
                             let wrap_width_bits =
                                 output.galley.job.wrap.max_width.round().to_bits();
                             let pixels_per_point_bits = ui.ctx().pixels_per_point().to_bits();
+                            let window = syntax_window::line_window(
+                                &output.galley,
+                                output.galley_pos,
+                                viewport_clip,
+                            );
+                            let cached_lines = &document.layout_cache.syntax_lines;
                             let can_reuse_syntax = find_ranges.is_empty()
                                 && hovered_definition.is_none()
                                 && document.layout_cache.revision == document.content_revision
                                 && document.layout_cache.wrap_width_bits == wrap_width_bits
                                 && document.layout_cache.pixels_per_point_bits
-                                    == pixels_per_point_bits;
+                                    == pixels_per_point_bits
+                                && cached_lines.start <= window.visible.start
+                                && cached_lines.end >= window.visible.end;
                             let mut syntax_job = None;
+                            let mut highlight_pending = false;
+                            let mut syntax_lines = document.layout_cache.syntax_lines.clone();
                             let visible_galley = if can_reuse_syntax {
                                 document.layout_cache.syntax.as_ref().map(Arc::clone)
                             } else {
@@ -433,27 +443,45 @@ impl OxiApp {
                                     FontId::monospace(FS_SMALL),
                                     Some(document.content_revision),
                                 )
-                                .unwrap_or_else(|| {
-                                    themed_highlight(
-                                        ui,
+                                .or_else(|| {
+                                    crate::theme::highlight_code_async(
                                         &document.content,
                                         &extension,
                                         FontId::monospace(FS_SMALL),
+                                        ui.ctx(),
+                                    )
+                                })
+                                .unwrap_or_else(|| {
+                                    // Highlighting runs in the background; show plain text now
+                                    // and let the next frame pick the colors up.
+                                    highlight_pending = true;
+                                    egui::text::LayoutJob::simple(
+                                        document.content.clone(),
+                                        FontId::monospace(FS_SMALL),
+                                        c_text(),
+                                        f32::INFINITY,
                                     )
                                 });
-                                if document.minimap_cache.is_none() {
+                                if document.minimap_cache.is_none()
+                                    || (!highlight_pending
+                                        && document.layout_cache.minimap_placeholder)
+                                {
+                                    document.minimap_cache = None;
                                     minimap::ensure_geometry(
                                         &document.content,
                                         &job,
                                         &mut document.minimap_cache,
                                     );
+                                    document.layout_cache.minimap_placeholder = highlight_pending;
                                 }
                                 apply_search_highlights(&mut job, &find_ranges, active_find_match);
                                 if let Some(range) = hovered_definition.as_ref() {
                                     apply_definition_underline(&mut job, range);
                                 }
                                 job.wrap.max_width = output.galley.job.wrap.max_width;
-                                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job.clone()));
+                                syntax_lines = window.padded.clone();
+                                let visible_job = syntax_window::slice_job(&job, &syntax_lines);
+                                let galley = ui.fonts_mut(|fonts| fonts.layout_job(visible_job));
                                 syntax_job = Some(job);
                                 // Store only when the cache keys already describe this exact
                                 // layout (they are written by the geometry layouter). Overwriting
@@ -461,12 +489,14 @@ impl OxiApp {
                                 // wrap width as current and corrupt both caches.
                                 if find_ranges.is_empty()
                                     && hovered_definition.is_none()
+                                    && !highlight_pending
                                     && document.layout_cache.revision == document.content_revision
                                     && document.layout_cache.wrap_width_bits == wrap_width_bits
                                     && document.layout_cache.pixels_per_point_bits
                                         == pixels_per_point_bits
                                 {
                                     document.layout_cache.syntax = Some(Arc::clone(&galley));
+                                    document.layout_cache.syntax_lines = syntax_lines.clone();
                                 }
                                 galley
                             });
@@ -544,9 +574,15 @@ impl OxiApp {
                                 );
                             }
 
-                            // TextEdit's geometry is transparent; paint the cached syntax galley.
+                            // TextEdit's geometry is transparent; paint the syntax galley, which
+                            // covers only a window of lines, at that window's first row.
+                            let syntax_origin = output.galley_pos
+                                + egui::vec2(
+                                    0.0,
+                                    syntax_window::line_top(&output.galley, syntax_lines.start),
+                                );
                             ui.painter().with_clip_rect(viewport_clip).galley(
-                                output.galley_pos,
+                                syntax_origin,
                                 visible_galley,
                                 c_text(),
                             );
@@ -803,13 +839,4 @@ fn has_mutating_text_input(ui: &Ui) -> bool {
             _ => false,
         })
     })
-}
-
-fn themed_highlight(
-    _ui: &Ui,
-    content: &str,
-    language: &str,
-    font_id: FontId,
-) -> egui::text::LayoutJob {
-    crate::theme::highlight_code(content, language, font_id)
 }

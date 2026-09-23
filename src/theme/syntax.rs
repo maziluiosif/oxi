@@ -17,6 +17,12 @@ use super::{SyntaxPalette, active_palette};
 const HIGHLIGHT_CACHE_LIMIT: usize = 32;
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+
+/// Load syntect's bundled grammars (~60 ms) ahead of the first Markdown or other
+/// non-tree-sitter file.
+pub(super) fn prewarm_syntax_set() {
+    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+}
 static HIGHLIGHT_CACHE: OnceLock<Mutex<Vec<(HighlightKey, egui::text::LayoutJob)>>> =
     OnceLock::new();
 
@@ -99,34 +105,94 @@ fn normalized_language(language: &str) -> &str {
 /// Results are cached because editor layout requests this on every frame.
 pub fn highlight_code(content: &str, language: &str, font_id: FontId) -> egui::text::LayoutJob {
     let palette = active_palette().syntax;
-    let language = normalized_language(language);
     let key = HighlightKey {
         content: content.to_owned(),
-        language: language.to_owned(),
+        language: normalized_language(language).to_owned(),
         font_id: font_id.clone(),
         palette,
     };
-    let cache = HIGHLIGHT_CACHE.get_or_init(|| Mutex::new(Vec::new()));
-    if let Ok(mut entries) = cache.lock()
-        && let Some(index) = entries.iter().position(|(cached, _)| cached == &key)
-    {
-        let entry = entries.remove(index);
-        let job = entry.1.clone();
-        entries.push(entry);
+    if let Some(job) = cached_highlight(&key) {
         return job;
     }
+    highlight_and_cache(key)
+}
 
+/// Like [`highlight_code`], but never blocks the UI: on a cache miss the text is
+/// highlighted on a worker thread and `ctx` repaints when it is ready. Returns `None`
+/// meanwhile, so callers can show plain text. Syntect's regex grammars (Markdown in
+/// particular) can take 100 ms+ for a few hundred lines.
+pub fn highlight_code_async(
+    content: &str,
+    language: &str,
+    font_id: FontId,
+    ctx: &egui::Context,
+) -> Option<egui::text::LayoutJob> {
+    static PENDING: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    let key = HighlightKey {
+        content: content.to_owned(),
+        language: normalized_language(language).to_owned(),
+        font_id,
+        palette: active_palette().syntax,
+    };
+    if let Some(job) = cached_highlight(&key) {
+        return Some(job);
+    }
+    let id = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        hasher.finish()
+    };
+    let pending = PENDING.get_or_init(Default::default);
+    if pending.lock().is_ok_and(|mut set| set.insert(id)) {
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            highlight_and_cache(key);
+            if let Ok(mut set) = pending.lock() {
+                set.remove(&id);
+            }
+            ctx.request_repaint();
+        });
+    }
+    None
+}
+
+fn cached_highlight(key: &HighlightKey) -> Option<egui::text::LayoutJob> {
+    let cache = HIGHLIGHT_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    let mut entries = cache.lock().ok()?;
+    let index = entries.iter().position(|(cached, _)| cached == key)?;
+    // Move to the back: the cache evicts from the front.
+    let entry = entries.remove(index);
+    let job = entry.1.clone();
+    entries.push(entry);
+    Some(job)
+}
+
+fn highlight_and_cache(key: HighlightKey) -> egui::text::LayoutJob {
     let syntax_set = SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines);
+    let language = key.language.as_str();
     let job = if let Some(syntax) = syntax_set
         .find_syntax_by_extension(language)
         .or_else(|| syntax_set.find_syntax_by_token(language))
         .or_else(|| syntax_set.find_syntax_by_name(language))
     {
-        highlight_uncached(content, syntax, syntax_set, palette, font_id)
+        highlight_uncached(
+            &key.content,
+            syntax,
+            syntax_set,
+            key.palette,
+            key.font_id.clone(),
+        )
     } else {
-        egui::text::LayoutJob::simple(content.into(), font_id, palette.foreground, f32::INFINITY)
+        egui::text::LayoutJob::simple(
+            key.content.clone(),
+            key.font_id.clone(),
+            key.palette.foreground,
+            f32::INFINITY,
+        )
     };
 
+    let cache = HIGHLIGHT_CACHE.get_or_init(|| Mutex::new(Vec::new()));
     if let Ok(mut entries) = cache.lock() {
         if entries.len() >= HIGHLIGHT_CACHE_LIMIT {
             entries.remove(0);
