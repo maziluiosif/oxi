@@ -135,16 +135,34 @@ pub struct UnifiedSecrets {
 const UNIFIED_ACCOUNT: &str = "oxi-secrets";
 
 static UNIFIED_CACHE: Mutex<Option<UnifiedSecrets>> = Mutex::new(None);
+/// Serializes the first keychain read so concurrent callers (the startup prefetch and the
+/// settings load) wait for one read instead of each hitting the keychain, which could also
+/// raise a second authorization prompt.
+static UNIFIED_LOAD: Mutex<()> = Mutex::new(());
+
+/// Warm the secrets cache in the background. The first keychain access costs ~150 ms on
+/// macOS; started at launch it overlaps window and GPU setup instead of delaying them.
+pub fn prefetch_unified() {
+    std::thread::spawn(|| {
+        load_unified();
+    });
+}
 
 /// Load the unified secrets blob, migrating from the old per-item accounts on first read
 /// if the unified item doesn't exist yet. Cached for the rest of the process.
 pub fn load_unified() -> UnifiedSecrets {
-    if let Some(s) = UNIFIED_CACHE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-    {
-        return s.clone();
+    let cached = || {
+        UNIFIED_CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    };
+    if let Some(s) = cached() {
+        return s;
+    }
+    let _loading = UNIFIED_LOAD.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(s) = cached() {
+        return s;
     }
     let stored = load_blob(UNIFIED_ACCOUNT);
     let unified = if !stored.is_empty() {
@@ -152,8 +170,12 @@ pub fn load_unified() -> UnifiedSecrets {
     } else {
         migrate_legacy_accounts()
     };
-    *UNIFIED_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(unified.clone());
-    unified
+    // A save that landed while this read was in flight is newer; keep it.
+    UNIFIED_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert(unified)
+        .clone()
 }
 
 pub fn save_unified(unified: &UnifiedSecrets) -> Result<(), String> {
