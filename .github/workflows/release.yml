@@ -230,6 +230,15 @@ jobs:
           # than retaining a history-only difference which appears in the next release PR.
           sync_sha=""
           for _ in $(seq 1 120); do
+            # GitHub can hold the pull_request run of a bot-opened PR as "action_required".
+            # While held, the PR shows no checks at all (not even the dispatched run above),
+            # so the required check never passes. The head is our own release commit.
+            for run in $(gh run list --workflow ci.yml --commit "$release_sha" \
+                --json databaseId,conclusion \
+                --jq '.[] | select(.conclusion == "action_required") | .databaseId'); do
+              gh api --method POST "repos/${GH_REPO}/actions/runs/${run}/approve" \
+                || echo "::warning::Could not approve CI run ${run}; approve it in the Actions tab."
+            done
             state=$(gh pr view "$pr" --json state --jq .state)
             if [ "$state" = "MERGED" ]; then
               sync_sha=$(gh pr view "$pr" --json mergeCommit --jq .mergeCommit.oid)
