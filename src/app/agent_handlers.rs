@@ -246,6 +246,8 @@ impl OxiApp {
                     Some(tool_call_id.as_str())
                 };
                 self.finalize_tool_run(key, id, is_error, full_output_path, diff);
+                // The tool may have created, moved or deleted files: show them right away.
+                self.conv.explorer_cache.invalidate();
             }
             AgentEvent::StreamRetry { attempt, reason } => {
                 eprintln!("[oxi] stream retry (attempt {attempt}): {reason}");

@@ -45,44 +45,53 @@ impl AppSettings {
         &self,
         oauth: &crate::oauth::OAuthStore,
     ) -> Vec<LlmProviderKind> {
-        let has_profile_key =
-            |kind: LlmProviderKind| !self.provider(kind).api_key.trim().is_empty();
         LlmProviderKind::ALL
             .into_iter()
-            .filter(|&kind| match kind {
-                LlmProviderKind::LmStudio
-                | LlmProviderKind::Ollama
-                | LlmProviderKind::LocalHf
-                | LlmProviderKind::RemoteHf => true,
-                // Claude Code handles its own auth (subscription login or ANTHROPIC_API_KEY),
-                // so it's always offered; the subprocess reports a clear error if not logged in.
-                LlmProviderKind::ClaudeCodeAcp
-                | LlmProviderKind::CursorAcp
-                | LlmProviderKind::CodexAcp => true,
-                LlmProviderKind::AzureOpenAi => true,
-                LlmProviderKind::CustomAnthropic => {
-                    has_profile_key(kind)
-                        || std::env::var("CUSTOM_ANTHROPIC_API_KEY").is_ok()
-                        || std::env::var("ANTHROPIC_API_KEY").is_ok()
-                }
-                LlmProviderKind::OpenAi => {
-                    has_profile_key(kind) || std::env::var("OPENAI_API_KEY").is_ok()
-                }
-                LlmProviderKind::OpenRouter => {
-                    has_profile_key(kind) || std::env::var("OPENROUTER_API_KEY").is_ok()
-                }
-                LlmProviderKind::OpenCodeGo => {
-                    has_profile_key(kind)
-                        || std::env::var("OPENCODE_GO_API_KEY").is_ok()
-                        || std::env::var("OPENCODE_API_KEY").is_ok()
-                }
-                LlmProviderKind::GptCodex => {
-                    oauth.openai_codex.is_some()
-                        || has_profile_key(kind)
-                        || std::env::var("OPENAI_API_KEY").is_ok()
-                }
-            })
+            .filter(|&kind| self.provider_is_configured(kind, oauth))
             .collect()
+    }
+
+    /// Whether one provider is usable as configured; see [`Self::configured_provider_kinds`].
+    pub fn provider_is_configured(
+        &self,
+        kind: LlmProviderKind,
+        oauth: &crate::oauth::OAuthStore,
+    ) -> bool {
+        let has_profile_key =
+            |kind: LlmProviderKind| !self.provider(kind).api_key.trim().is_empty();
+        match kind {
+            LlmProviderKind::LmStudio
+            | LlmProviderKind::Ollama
+            | LlmProviderKind::LocalHf
+            | LlmProviderKind::RemoteHf => true,
+            // Claude Code handles its own auth (subscription login or ANTHROPIC_API_KEY),
+            // so it's always offered; the subprocess reports a clear error if not logged in.
+            LlmProviderKind::ClaudeCodeAcp
+            | LlmProviderKind::CursorAcp
+            | LlmProviderKind::CodexAcp => true,
+            LlmProviderKind::AzureOpenAi => true,
+            LlmProviderKind::CustomAnthropic => {
+                has_profile_key(kind)
+                    || std::env::var("CUSTOM_ANTHROPIC_API_KEY").is_ok()
+                    || std::env::var("ANTHROPIC_API_KEY").is_ok()
+            }
+            LlmProviderKind::OpenAi => {
+                has_profile_key(kind) || std::env::var("OPENAI_API_KEY").is_ok()
+            }
+            LlmProviderKind::OpenRouter => {
+                has_profile_key(kind) || std::env::var("OPENROUTER_API_KEY").is_ok()
+            }
+            LlmProviderKind::OpenCodeGo => {
+                has_profile_key(kind)
+                    || std::env::var("OPENCODE_GO_API_KEY").is_ok()
+                    || std::env::var("OPENCODE_API_KEY").is_ok()
+            }
+            LlmProviderKind::GptCodex => {
+                oauth.openai_codex.is_some()
+                    || has_profile_key(kind)
+                    || std::env::var("OPENAI_API_KEY").is_ok()
+            }
+        }
     }
 
     /// URL passed to the `web_search` tool as its base.

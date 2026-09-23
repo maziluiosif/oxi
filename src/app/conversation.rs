@@ -30,13 +30,16 @@ impl OxiApp {
             return;
         }
         ui.spacing_mut().item_spacing.y = 4.0;
-        if let Some(ref e) = self.conn.connect_error {
-            crate::ui::chrome::alert_banner(ui, &format!("Connection: {e}"), true);
-            ui.add_space(4.0);
+        if let Some(e) = self.conn.connect_error.clone()
+            && dismissible_error(ui, "Connection problem", &e)
+        {
+            self.conn.connect_error = None;
         }
-        if let Some(e) = active_stream_error {
-            crate::ui::chrome::alert_banner(ui, &format!("Agent: {e}"), false);
-            ui.add_space(4.0);
+        if let Some(e) = active_stream_error
+            && dismissible_error(ui, "Something went wrong", &e)
+        {
+            let key = self.active_session_key();
+            self.run_state_mut(key).stream_error = None;
         }
     }
 
@@ -51,33 +54,60 @@ impl OxiApp {
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new(format!("Approve `{}`?", pa.name))
-                        .size(FS_SMALL)
-                        .color(c_text())
-                        .strong(),
-                );
-                if !pa.summary.is_empty() {
-                    ui.add_space(2.0);
-                    ui.label(
-                        RichText::new(&pa.summary)
-                            .size(FS_TINY)
-                            .color(c_text_muted())
-                            .monospace(),
-                    );
-                }
-                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if crate::ui::chrome::primary_button(ui, "Approve").clicked() {
+                    ui.spacing_mut().item_spacing.x = 7.0;
+                    ui.label(crate::ui::chrome::icon_glyph_rich(
+                        ICON_AGENT,
+                        FS_SMALL,
+                        c_accent(),
+                    ));
+                    ui.label(
+                        RichText::new(approval_question(&pa.name))
+                            .size(FS_SMALL)
+                            .color(c_text_strong())
+                            .strong(),
+                    );
+                });
+                if !pa.summary.is_empty() {
+                    ui.add_space(6.0);
+                    Frame::new()
+                        .fill(c_bg_input())
+                        .stroke(Stroke::new(1.0, c_border_subtle()))
+                        .corner_radius(CornerRadius::same(RADIUS_CHIP))
+                        .inner_margin(Margin::symmetric(8, 6))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(
+                                Label::new(
+                                    RichText::new(&pa.summary)
+                                        .size(FS_SMALL)
+                                        .color(c_text())
+                                        .monospace(),
+                                )
+                                .wrap()
+                                .selectable(true),
+                            );
+                        });
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if crate::ui::chrome::primary_button(ui, "Allow")
+                        .on_hover_text("Run this call")
+                        .clicked()
+                    {
                         self.respond_to_approval(ApprovalDecision::Approve);
                     }
-                    if crate::ui::chrome::ghost_button(ui, "Approve rest", false)
-                        .on_hover_text("Run this and auto-approve the rest of this turn")
+                    if crate::ui::chrome::ghost_button(ui, "Allow for this turn", false)
+                        .on_hover_text("Run this and allow the rest of this turn without asking")
                         .clicked()
                     {
                         self.respond_to_approval(ApprovalDecision::ApproveRest);
                     }
-                    if crate::ui::chrome::ghost_button(ui, "Deny", true).clicked() {
+                    if crate::ui::chrome::ghost_button(ui, "Deny", true)
+                        .on_hover_text("Skip this call; the agent is told it was denied")
+                        .clicked()
+                    {
                         self.respond_to_approval(ApprovalDecision::Deny);
                     }
                 });
@@ -216,6 +246,15 @@ impl OxiApp {
                 None => "Running".to_string(),
             };
             (label, c_accent(), hover)
+        } else if !self.active_provider_ready() {
+            (
+                "Needs API key".to_string(),
+                crate::theme::c_warning_fg(),
+                format!(
+                    "{} has no API key yet — add one in Settings → Models & providers",
+                    self.conv.settings.active_provider.label()
+                ),
+            )
         } else {
             let mut hover = "Ready to send".to_string();
             if let Some(usage) = self.active_run_state().map(|s| s.last_turn_usage)
@@ -272,35 +311,64 @@ impl OxiApp {
                     .strong(),
             );
             ui.add_space(5.0);
+            let workspace = workspace_sidebar_label(&self.active_workspace().root_path);
             ui.label(
-                RichText::new(
-                    "Start with a workspace task, inspect code, or configure your provider.",
-                )
+                RichText::new(format!(
+                    "Ask anything about {workspace}, or start from one of these."
+                ))
                 .size(FS_BODY)
                 .color(c_text_muted()),
             );
             ui.add_space(if compact { 12.0 } else { 18.0 });
 
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                if crate::ui::chrome::ghost_button_icon(
-                    ui,
-                    ICON_FOLDER_PLUS,
-                    "Add workspace",
-                    false,
-                )
-                .clicked()
-                {
-                    self.open_workspace_folder();
-                }
-                if crate::ui::chrome::ghost_button_icon(ui, ICON_SETTINGS, "Open settings", false)
-                    .clicked()
-                {
-                    self.open_settings_page();
-                }
-            });
+            // Sending would fail right away without credentials: say so up front, with the fix
+            // one click away, instead of leaving the user to discover it from an error.
+            let provider = self.conv.settings.active_provider;
+            if !self.active_provider_ready() {
+                Frame::new()
+                    .fill(crate::theme::c_warning_bg())
+                    .stroke(Stroke::new(1.0, crate::theme::c_warning_stroke()))
+                    .corner_radius(CornerRadius::same(RADIUS_CARD))
+                    .inner_margin(egui::Margin::symmetric(14, 12))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 7.0;
+                            ui.label(crate::ui::chrome::icon_glyph_rich(
+                                ICON_WARNING,
+                                FS_SMALL,
+                                crate::theme::c_warning_fg(),
+                            ));
+                            ui.label(
+                                RichText::new(format!("{} needs an API key", provider.label()))
+                                    .size(FS_SMALL)
+                                    .color(c_text_strong())
+                                    .strong(),
+                            );
+                        });
+                        ui.add_space(2.0);
+                        ui.label(
+                            RichText::new(
+                                "Add one in Settings, or switch to a local model or an agent \
+                                 you are already signed in to.",
+                            )
+                            .size(FS_SMALL)
+                            .color(c_text_muted()),
+                        );
+                        ui.add_space(8.0);
+                        if ui
+                            .add(crate::ui::chrome::primary_button_widget("Set up model"))
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            self.open_settings_page();
+                            self.conv.settings_tab = super::state::SettingsTab::Providers;
+                            self.conv.settings_provider_tab = provider;
+                        }
+                    });
+                ui.add_space(if compact { 12.0 } else { 18.0 });
+            }
 
-            ui.add_space(if compact { 12.0 } else { 20.0 });
             ui.label(
                 RichText::new("Try one of these")
                     .size(FS_TINY)
@@ -491,19 +559,29 @@ impl OxiApp {
                             //   1. While a selection or drag-select exists, render every unit so
                             //      egui does not drop an off-screen endpoint (it deselects the moment
                             //      either endpoint's label is not rendered this frame).
-                            //   2. While the pointer merely rests over the transcript, render every
-                            //      unit too. egui latches a press to a widget using the PREVIOUS
-                            //      frame's rects, so the message under the pointer must already be a
-                            //      real laid-out widget before the click — a culled `add_space`
-                            //      placeholder is not selectable, so the user sees the I-beam cursor
-                            //      but nothing selects.
-                            let pointer_over_transcript = ui.ctx().input(|input| {
-                                input
-                                    .pointer
-                                    .interact_pos()
-                                    .is_some_and(|pos| ui.clip_rect().contains(pos))
+                            //   2. While the pointer rests over the transcript (not scrolling),
+                            //      never cull a unit that was rendered last frame. egui latches a
+                            //      press to a widget using the PREVIOUS frame's rects, so the
+                            //      message under the pointer must already be a real laid-out widget
+                            //      before the click; with stick-to-bottom nudging the offset every
+                            //      frame, plain culling made units near the margin flip between a
+                            //      label and an `add_space` placeholder. Keeping the rendered set
+                            //      sticky gives the same stability as rendering everything, at the
+                            //      cost of only the units that have actually been on screen —
+                            //      rendering the whole history cost ~27 ms/frame at 300 turns.
+                            let (pointer_over_transcript, scrolling) = ui.ctx().input(|input| {
+                                (
+                                    input
+                                        .pointer
+                                        .interact_pos()
+                                        .is_some_and(|pos| ui.clip_rect().contains(pos)),
+                                    input.smooth_scroll_delta.y.abs() > 0.5,
+                                )
                             });
-                            let cull_enabled = !(user_has_selection || pointer_over_transcript);
+                            let cull_enabled = !user_has_selection;
+                            let keep_rendered = pointer_over_transcript && !scrolling;
+                            let previously_rendered =
+                                std::mem::take(&mut self.conv.transcript_rendered);
                             for (start, end) in units {
                                 let messages = &self.conv.workspaces[wi].sessions[si].messages;
                                 let fingerprint =
@@ -522,15 +600,20 @@ impl OxiApp {
                                 if cull_enabled
                                     && let Some(height) = cached_height
                                     && (top > viewport.bottom() || top + height < viewport.top())
+                                    && !(keep_rendered && previously_rendered.contains(&key))
                                 {
                                     ui.add_space(height);
                                     continue;
                                 }
-                                // Give every unit a stable id scope keyed by its start index, so a
+                                // Give every unit an explicit id keyed by its start index, so a
                                 // message's inner auto-id widgets do not depend on how many earlier
                                 // units were rendered vs replaced by `add_space` (which changes as
-                                // units scroll in and out of the culled region).
-                                ui.push_id(key, |ui| {
+                                // units scroll in and out of the culled region). `push_id` is not
+                                // enough: egui salts a child's ids with the parent's running child
+                                // count, so every label's id shifted whenever culling changed —
+                                // which dropped a text selection the moment a drag began.
+                                let unit_id = ui.id().with(key);
+                                ui.scope_builder(egui::UiBuilder::new().id(unit_id), |ui| {
                                     if messages[start].role == MsgRole::Assistant {
                                         render_assistant_message_run(
                                             ui,
@@ -546,12 +629,23 @@ impl OxiApp {
                                         );
                                     }
                                 });
+                                let height = ui.cursor().min.y - top;
+                                // Sticky only if it was actually near the viewport: units rendered
+                                // just to measure a missing height (e.g. right after a session
+                                // loads) must not pin the whole history as rendered.
+                                let near_viewport =
+                                    top <= viewport.bottom() && top + height >= viewport.top();
+                                if near_viewport
+                                    || (keep_rendered && previously_rendered.contains(&key))
+                                {
+                                    self.conv.transcript_rendered.insert(key);
+                                }
                                 self.conv.transcript_heights.insert(
                                     key,
                                     super::state::TranscriptUnitHeight {
                                         width_bits,
                                         fingerprint,
-                                        height: ui.cursor().min.y - top,
+                                        height,
                                     },
                                 );
                             }
@@ -691,6 +785,64 @@ impl OxiApp {
 }
 
 /// Starter-prompt card for the empty chat state: icon, short title, and the prompt itself.
+/// Plain-language question for an approval prompt.
+fn approval_question(tool: &str) -> String {
+    match tool {
+        "bash" => "Run this command?".to_string(),
+        "write" => "Write this file?".to_string(),
+        "edit" => "Edit this file?".to_string(),
+        "delete" => "Delete this?".to_string(),
+        "move" => "Move this?".to_string(),
+        "mkdir" => "Create this folder?".to_string(),
+        other => format!("Allow {}?", tool_status_label(other)),
+    }
+}
+
+/// Error callout above the transcript, in the same style as the in-transcript run errors.
+/// Returns true when the user dismissed it.
+fn dismissible_error(ui: &mut Ui, title: &str, detail: &str) -> bool {
+    let mut dismissed = false;
+    Frame::new()
+        .fill(c_error_bg())
+        .stroke(Stroke::new(1.0, c_error_fg().gamma_multiply(0.35)))
+        .corner_radius(CornerRadius::same(RADIUS_CARD))
+        .inner_margin(Margin::symmetric(12, 9))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(crate::ui::chrome::icon_glyph_rich(
+                    ICON_WARNING,
+                    FS_SMALL,
+                    c_error_fg(),
+                ));
+                ui.with_layout(egui::Layout::right_to_left(Align::Min), |ui| {
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 18.0, false)
+                        .on_hover_text("Dismiss")
+                        .clicked()
+                    {
+                        dismissed = true;
+                    }
+                    ui.with_layout(egui::Layout::top_down(Align::Min), |ui| {
+                        ui.label(
+                            RichText::new(title)
+                                .size(FS_SMALL)
+                                .color(c_text_strong())
+                                .strong(),
+                        );
+                        ui.add(
+                            Label::new(RichText::new(detail).size(FS_SMALL).color(c_text()))
+                                .wrap()
+                                .selectable(true),
+                        );
+                    });
+                });
+            });
+        });
+    ui.add_space(4.0);
+    dismissed
+}
+
 fn suggestion_card(
     ui: &mut Ui,
     width: f32,

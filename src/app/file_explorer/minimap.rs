@@ -90,11 +90,8 @@ fn build_geometry(
         };
         for fragment in section_text.split_inclusive('\n') {
             let text = fragment.trim_end_matches('\n');
-            let leading_text: String = text
-                .chars()
-                .take_while(|character| character.is_whitespace())
-                .collect();
-            let visible_start = advance_columns(column, &leading_text);
+            let leading_text = &text[..text.len() - text.trim_start().len()];
+            let visible_start = advance_columns(column, leading_text);
             let visible_end = advance_columns(visible_start, text.trim());
             if visible_end > visible_start {
                 segments.push(MinimapSegment {
@@ -120,6 +117,87 @@ fn build_geometry(
         indent_columns,
         segments,
     }
+}
+
+/// How long the text must stay unchanged before the minimap is re-colored after an edit.
+const RECOLOR_AFTER_EDIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Keep the document's minimap in step with its text.
+///
+/// After an edit the geometry is rebuilt at once from the plain text: line count and indent
+/// guides (which the editor paints from it) stay exact at the cost of a linear scan. The syntax
+/// colors need a whole-document highlight, far too slow to redo on every keystroke in a large
+/// file, so they are filled in once typing pauses. `full_job` is a whole-document colored job
+/// when the caller already has one.
+pub(super) fn refresh(
+    ctx: &egui::Context,
+    document: &mut crate::app::state::EditorDocument,
+    extension: &str,
+    full_job: Option<&egui::text::LayoutJob>,
+) {
+    if document.minimap_cache.is_none() {
+        match full_job {
+            Some(job) => {
+                ensure_geometry(&document.content, job, &mut document.minimap_cache);
+                document.layout_cache.minimap_placeholder = false;
+            }
+            None => {
+                let plain = plain_job(&document.content);
+                ensure_geometry(&document.content, &plain, &mut document.minimap_cache);
+                document.layout_cache.minimap_placeholder = true;
+            }
+        }
+        return;
+    }
+    if !document.layout_cache.minimap_placeholder {
+        return;
+    }
+    if let Some(edited_at) = document.layout_cache.edited_at {
+        let settled = edited_at.elapsed();
+        if settled < RECOLOR_AFTER_EDIT {
+            ctx.request_repaint_after(RECOLOR_AFTER_EDIT - settled);
+            return;
+        }
+    }
+    let colored = match full_job {
+        Some(job) => Some(job.clone()),
+        None => crate::theme::highlight_editor_code_with_revision(
+            &mut document.syntax_state,
+            &document.content,
+            extension,
+            egui::FontId::monospace(FS_SMALL),
+            Some(document.content_revision),
+            None,
+        )
+        .or_else(|| {
+            crate::theme::highlight_code_async(
+                &document.content,
+                extension,
+                egui::FontId::monospace(FS_SMALL),
+                ctx,
+            )
+        }),
+    };
+    if let Some(job) = colored {
+        document.minimap_cache = None;
+        ensure_geometry(&document.content, &job, &mut document.minimap_cache);
+        document.layout_cache.minimap_placeholder = false;
+    }
+}
+
+/// One foreground-colored section over the whole text. [`build_geometry`] reads only section
+/// ranges and colors, so the text itself is not copied.
+fn plain_job(content: &str) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.sections.push(egui::text::LayoutSection {
+        leading_space: 0.0,
+        byte_range: egui::text::ByteIndex(0)..egui::text::ByteIndex(content.len()),
+        format: egui::text::TextFormat {
+            color: active_palette().syntax.foreground,
+            ..Default::default()
+        },
+    });
+    job
 }
 
 pub(super) fn ensure_geometry(

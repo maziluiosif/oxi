@@ -449,6 +449,15 @@ pub struct PromptEditState {
     pub previous_images: Vec<(String, Vec<u8>)>,
 }
 
+/// Whether one chat matched the sidebar search, and what that answer was computed from.
+pub struct SidebarSearchHit {
+    pub query: String,
+    pub title: String,
+    /// Message count and the size of the last message: changes whenever the chat does.
+    pub stamp: (usize, usize),
+    pub hit: bool,
+}
+
 /// Cached measured height of one transcript unit at a given column width and content state.
 pub struct TranscriptUnitHeight {
     pub width_bits: u32,
@@ -491,6 +500,9 @@ pub struct ConversationState {
     pub explorer_expanded: HashSet<PathBuf>,
     /// Workspace roots are open by default; this records roots explicitly folded by the user.
     pub explorer_collapsed_roots: HashSet<PathBuf>,
+    /// Directory listings and `.gitignore` patterns behind the explorer tree, so the tree is
+    /// not re-read from disk on every frame.
+    pub explorer_cache: crate::app::file_explorer::ExplorerCache,
     pub editor: EditorState,
     /// Settings page left-nav width (independent of the chat sidebar).
     pub settings_sidebar_width: f32,
@@ -525,6 +537,12 @@ pub struct ConversationState {
     /// revalidated against the column width and a cheap content fingerprint, and re-measured
     /// whenever the unit actually renders.
     pub transcript_heights: std::collections::HashMap<(usize, usize, usize), TranscriptUnitHeight>,
+    /// Transcript units laid out for real last frame. While the pointer rests over the
+    /// transcript none of them is culled, so the widget under the cursor cannot flip between a
+    /// real label and a placeholder right before a click. See `render_conversation`.
+    pub transcript_rendered: std::collections::HashSet<(usize, usize, usize)>,
+    /// Sidebar search results per chat, keyed by `(workspace_idx, session_idx)`.
+    pub sidebar_search_cache: std::collections::HashMap<(usize, usize), SidebarSearchHit>,
     /// Source-control (git) panel visibility and width (persisted in settings).
     pub git_open: bool,
     pub git_width: f32,

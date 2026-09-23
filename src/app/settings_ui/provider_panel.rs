@@ -120,11 +120,12 @@ impl OxiApp {
                     .settings
                     .provider(kind)
                     .effective_context_window(self.conv.settings.context_window_default);
-                field_label(ui, "Context window (tokens, 0 = auto)");
+                field_label(ui, "Context window (tokens, empty = auto)");
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    let mut value = cw.unwrap_or(0).to_string();
-                    let hint = format!("auto ({resolved})");
+                    // Empty when automatic, so the hint shows what "auto" resolves to.
+                    let mut value = cw.map(|n| n.to_string()).unwrap_or_default();
+                    let hint = format!("auto ({})", group_thousands(resolved as u64));
                     if settings_text_field_width(ui, &mut value, &hint, 160.0).changed() {
                         let parsed = value.trim().parse::<usize>().ok();
                         self.conv.settings.provider_mut(kind).context_window =
@@ -137,7 +138,10 @@ impl OxiApp {
                         self.conv.settings.provider_mut(kind).context_window = None;
                     }
                     ui.label(
-                        RichText::new(format!("effective: {resolved}"))
+                        RichText::new(format!(
+                            "Effective: {} tokens",
+                            group_thousands(resolved as u64)
+                        ))
                             .size(FS_TINY)
                             .color(c_text_muted()),
                     );

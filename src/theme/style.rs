@@ -48,10 +48,10 @@ pub fn icon_font() -> FontFamily {
 // Always pair these with `​.font(FontId::new(<size>, icon_font()))` so they go
 // through the icon family rather than the proportional fallback chain.
 
-/// Models & providers (settings nav) — nf-md-cube.
-pub const ICON_PROVIDERS: &str = "\u{f0148}";
-/// Agent (settings nav) — nf-fa-robot.
-pub const ICON_AGENT: &str = "\u{f2bb}";
+/// Models & providers (settings nav) — nf-md-cube_outline.
+pub const ICON_PROVIDERS: &str = "\u{f01a7}";
+/// Tools & safety (settings nav) — nf-md-shield_check_outline.
+pub const ICON_AGENT: &str = "\u{f0cc8}";
 /// Appearance (settings nav) — nf-fa-adjust (half-filled circle, matches ◐).
 pub const ICON_APPEARANCE: &str = "\u{f042}";
 /// Prompts (settings nav) — nf-fa-pencil.
@@ -71,8 +71,8 @@ pub const ICON_PLUS: &str = "\u{f067}";
 /// Chevron pointed right — "hide" right panel (`nf-fa-chevron-right`).
 pub const ICON_CHEVRON_RIGHT: &str = "\u{f054}";
 pub const ICON_CHEVRON_LEFT: &str = "\u{f053}";
-/// Hamburger menu — toggle sidebar (`nf-fa-bars`).
-pub const ICON_MENU: &str = "\u{f02a}";
+/// Chats sidebar toggle (`nf-cod-comment_discussion`).
+pub const ICON_MENU: &str = "\u{eac7}";
 /// File explorer; uses the verified open-folder glyph from the bundled icon font.
 pub const ICON_EXPLORER: &str = "\u{f0770}";
 /// Regular file (`nf-fa-file-lines`).
@@ -109,8 +109,8 @@ pub const ICON_WARNING: &str = "\u{f071}";
 pub const ICON_ANGLE_UP: &str = "\u{f077}";
 /// Down angle chevron — unfold/expand hint (`nf-fa-angle-down`).
 pub const ICON_ANGLE_DOWN: &str = "\u{f078}";
-/// Magic wand — "generate" (commit-message generator) (`nf-fa-magic`).
-pub const ICON_MAGIC: &str = "\u{f135}";
+/// Sparkles — "generate" (commit-message generator, starter prompts) (`nf-md-creation`).
+pub const ICON_MAGIC: &str = "\u{f0674}";
 /// Cloud download — pull/fetch from remote (`nf-fa-cloud-download`).
 pub const ICON_DOWNLOAD: &str = "\u{f019}";
 /// Cloud upload / arrow up — push to remote (`nf-fa-cloud-upload`).
@@ -380,6 +380,10 @@ pub fn setup_style(ctx: &egui::Context) {
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, p.border_subtle);
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, p.border);
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, p.widget_active_border);
+    // Sliders: accent fill up to the handle, so the value reads even where the rail color sits
+    // close to the card surface.
+    visuals.slider_trailing_fill = true;
+    visuals.handle_shape = egui::style::HandleShape::Circle;
 
     let mut style = (*ctx.style_of(ctx.theme())).clone();
     style.visuals = visuals;
@@ -416,6 +420,8 @@ pub fn setup_style(ctx: &egui::Context) {
     style.spacing.menu_margin = egui::Margin::same(6);
     style.spacing.window_margin = egui::Margin::same(10);
     style.spacing.combo_width = 220.0;
+    style.spacing.slider_width = 240.0;
+    style.spacing.slider_rail_height = 4.0;
     // Floating scroll bars stay hidden while dormant and fade in on hover/scroll.
     style.spacing.scroll.bar_width = 6.0;
     style.spacing.scroll.floating_width = 3.0;

@@ -187,26 +187,45 @@ impl OxiApp {
                             let mut layouter =
                                 |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                                     let wrap_width_bits = wrap_width.round().to_bits();
-                                    if allow_layout_cache
-                                        && layout_cache.revision == revision
+                                    // TextEdit only needs glyph geometry here; cache it before
+                                    // egui's whole-LayoutJob hashing so selection-only frames are O(1).
+                                    let geometry_job = |text: &str| {
+                                        let mut job = egui::text::LayoutJob::simple(
+                                            text.to_owned(),
+                                            FontId::monospace(FS_SMALL),
+                                            egui::Color32::TRANSPARENT,
+                                            wrap_width,
+                                        );
+                                        job.wrap.max_width = wrap_width;
+                                        job
+                                    };
+                                    // A keystroke frame first lays out the text as it was before
+                                    // the input; that is still the cached text, so check it by
+                                    // content (a memcmp) instead of skipping the cache outright.
+                                    if layout_cache.revision == revision
                                         && layout_cache.wrap_width_bits == wrap_width_bits
                                         && layout_cache.pixels_per_point_bits
                                             == pixels_per_point_bits
                                         && let Some(galley) = &layout_cache.geometry
+                                        && (allow_layout_cache
+                                            || galley.job.text.as_str() == text.as_str())
                                     {
+                                        if layout_cache.keep_warm {
+                                            // egui keeps a laid-out line only while some frame
+                                            // uses it; serving every frame from this cache let
+                                            // them all expire, and the next keystroke then laid
+                                            // out the whole file from scratch (~300 ms at 20k
+                                            // lines). While the editor has focus, touch them.
+                                            let _ = ui.fonts_mut(|fonts| {
+                                                fonts.layout_job(geometry_job(text.as_str()))
+                                            });
+                                        }
                                         return Arc::clone(galley);
                                     }
 
-                                    // TextEdit only needs glyph geometry here; cache it before
-                                    // egui's whole-LayoutJob hashing so selection-only frames are O(1).
-                                    let mut job = egui::text::LayoutJob::simple(
-                                        text.as_str().to_owned(),
-                                        FontId::monospace(FS_SMALL),
-                                        egui::Color32::TRANSPARENT,
-                                        wrap_width,
-                                    );
-                                    job.wrap.max_width = wrap_width;
-                                    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                                    let galley = ui.fonts_mut(|fonts| {
+                                        fonts.layout_job(geometry_job(text.as_str()))
+                                    });
                                     if allow_layout_cache {
                                         layout_cache.revision = revision;
                                         layout_cache.wrap_width_bits = wrap_width_bits;
@@ -254,9 +273,13 @@ impl OxiApp {
                                 document.content_revision =
                                     document.content_revision.wrapping_add(1);
                                 document.dirty = document.content != document.saved_content;
-                                document.layout_cache = EditorLayoutCache::default();
+                                document.layout_cache = EditorLayoutCache {
+                                    edited_at: Some(std::time::Instant::now()),
+                                    ..Default::default()
+                                };
                                 document.minimap_cache = None;
                             }
+                            document.layout_cache.keep_warm = output.response.has_focus();
                             if clear_selection_requested {
                                 if let Some(range) = output.cursor_range
                                     && !range.is_empty()
@@ -421,68 +444,92 @@ impl OxiApp {
                             let cached_lines = &document.layout_cache.syntax_lines;
                             let can_reuse_syntax = find_ranges.is_empty()
                                 && hovered_definition.is_none()
+                                && document.layout_cache.syntax_palette
+                                    == crate::theme::palette_generation()
                                 && document.layout_cache.revision == document.content_revision
                                 && document.layout_cache.wrap_width_bits == wrap_width_bits
                                 && document.layout_cache.pixels_per_point_bits
                                     == pixels_per_point_bits
                                 && cached_lines.start <= window.visible.start
                                 && cached_lines.end >= window.visible.end;
-                            let mut syntax_job = None;
                             let mut highlight_pending = false;
                             let mut syntax_lines = document.layout_cache.syntax_lines.clone();
+                            // A whole-document colored job, when one is at hand for free (the
+                            // syntect path); the minimap reuses it for its colors.
+                            let mut full_job = None;
                             let visible_galley = if can_reuse_syntax {
                                 document.layout_cache.syntax.as_ref().map(Arc::clone)
                             } else {
                                 None
                             }
                             .unwrap_or_else(|| {
-                                let mut job = crate::theme::highlight_editor_code_with_revision(
-                                    &mut document.syntax_state,
+                                syntax_lines = window.padded.clone();
+                                let window_bytes = syntax_window::line_byte_range(
                                     &document.content,
-                                    &extension,
-                                    FontId::monospace(FS_SMALL),
-                                    Some(document.content_revision),
-                                )
-                                .or_else(|| {
-                                    crate::theme::highlight_code_async(
+                                    &syntax_lines,
+                                );
+                                // Tree-sitter colors just the window; other languages go through
+                                // syntect on a worker thread, which colors the whole text.
+                                let (mut job, job_start) =
+                                    match crate::theme::highlight_editor_code_with_revision(
+                                        &mut document.syntax_state,
                                         &document.content,
                                         &extension,
                                         FontId::monospace(FS_SMALL),
-                                        ui.ctx(),
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    // Highlighting runs in the background; show plain text now
-                                    // and let the next frame pick the colors up.
-                                    highlight_pending = true;
-                                    egui::text::LayoutJob::simple(
-                                        document.content.clone(),
-                                        FontId::monospace(FS_SMALL),
-                                        c_text(),
-                                        f32::INFINITY,
-                                    )
-                                });
-                                if document.minimap_cache.is_none()
-                                    || (!highlight_pending
-                                        && document.layout_cache.minimap_placeholder)
+                                        Some(document.content_revision),
+                                        Some(window_bytes.clone()),
+                                    ) {
+                                        Some(job) => (job, window_bytes.start),
+                                        None => match crate::theme::highlight_code_async(
+                                            &document.content,
+                                            &extension,
+                                            FontId::monospace(FS_SMALL),
+                                            ui.ctx(),
+                                        ) {
+                                            Some(job) => {
+                                                full_job = Some(job.clone());
+                                                (job, 0)
+                                            }
+                                            None => {
+                                                // Highlighting runs in the background; show
+                                                // plain text now and let a later frame pick the
+                                                // colors up.
+                                                highlight_pending = true;
+                                                (
+                                                    egui::text::LayoutJob::simple(
+                                                        document.content[window_bytes.clone()]
+                                                            .to_owned(),
+                                                        FontId::monospace(FS_SMALL),
+                                                        c_text(),
+                                                        f32::INFINITY,
+                                                    ),
+                                                    window_bytes.start,
+                                                )
+                                            }
+                                        },
+                                    };
+                                // Find matches and the go-to-definition underline are document
+                                // byte ranges; move them into the job's own coordinates.
+                                let job_end = job_start + job.text.len();
+                                let to_job = |range: &std::ops::Range<usize>| {
+                                    let start = range.start.clamp(job_start, job_end);
+                                    start - job_start..range.end.clamp(start, job_end) - job_start
+                                };
+                                let local_find: Vec<_> = find_ranges.iter().map(to_job).collect();
+                                apply_search_highlights(&mut job, &local_find, active_find_match);
+                                if let Some(range) = hovered_definition.as_ref()
+                                    && !to_job(range).is_empty()
                                 {
-                                    document.minimap_cache = None;
-                                    minimap::ensure_geometry(
-                                        &document.content,
-                                        &job,
-                                        &mut document.minimap_cache,
-                                    );
-                                    document.layout_cache.minimap_placeholder = highlight_pending;
-                                }
-                                apply_search_highlights(&mut job, &find_ranges, active_find_match);
-                                if let Some(range) = hovered_definition.as_ref() {
-                                    apply_definition_underline(&mut job, range);
+                                    apply_definition_underline(&mut job, &to_job(range));
                                 }
                                 job.wrap.max_width = output.galley.job.wrap.max_width;
-                                syntax_lines = window.padded.clone();
-                                let visible_job = syntax_window::slice_job(&job, &syntax_lines);
+                                let visible_job =
+                                    if job_start == 0 && job.text.len() == document.content.len() {
+                                        syntax_window::slice_job(&job, &syntax_lines)
+                                    } else {
+                                        job
+                                    };
                                 let galley = ui.fonts_mut(|fonts| fonts.layout_job(visible_job));
-                                syntax_job = Some(job);
                                 // Store only when the cache keys already describe this exact
                                 // layout (they are written by the geometry layouter). Overwriting
                                 // the keys here could relabel a geometry galley from an older
@@ -497,18 +544,12 @@ impl OxiApp {
                                 {
                                     document.layout_cache.syntax = Some(Arc::clone(&galley));
                                     document.layout_cache.syntax_lines = syntax_lines.clone();
+                                    document.layout_cache.syntax_palette =
+                                        crate::theme::palette_generation();
                                 }
                                 galley
                             });
-                            if document.minimap_cache.is_none()
-                                && let Some(job) = syntax_job.as_ref()
-                            {
-                                minimap::ensure_geometry(
-                                    &document.content,
-                                    job,
-                                    &mut document.minimap_cache,
-                                );
-                            }
+                            minimap::refresh(ui.ctx(), document, &extension, full_job.as_ref());
                             paint_indent_guides(
                                 ui,
                                 &output.galley,
@@ -526,7 +567,16 @@ impl OxiApp {
                             // gets a full-width tint; unchanged lines retain the normal editor
                             // background, so the boundary between the two is immediately visible.
                             if full_git_highlight {
-                                let change_painter = ui.painter().with_clip_rect(viewport_clip);
+                                // Up to the viewport's right edge, not just the text's: the
+                                // TextEdit is only as wide as its longest line.
+                                let tint_clip = egui::Rect::from_min_max(
+                                    viewport_clip.min,
+                                    egui::pos2(
+                                        ui.clip_rect().right().max(viewport_clip.right()),
+                                        viewport_clip.bottom(),
+                                    ),
+                                );
+                                let change_painter = ui.painter().with_clip_rect(tint_clip);
                                 let mut logical_line = 0usize;
                                 for (row, placed_row) in output.galley.rows.iter().enumerate() {
                                     if row > 0 && output.galley.rows[row - 1].ends_with_newline {
@@ -544,8 +594,8 @@ impl OxiApp {
                                     };
                                     let change = &git_line_changes[change_index];
                                     let highlight_rect = egui::Rect::from_min_max(
-                                        egui::pos2(viewport_clip.left(), row_rect.top()),
-                                        egui::pos2(viewport_clip.right(), row_rect.bottom()),
+                                        egui::pos2(tint_clip.left(), row_rect.top()),
+                                        egui::pos2(tint_clip.right(), row_rect.bottom()),
                                     );
                                     let color = match change.kind {
                                         crate::git::GitLineKind::Added => c_diff_add_bg(),

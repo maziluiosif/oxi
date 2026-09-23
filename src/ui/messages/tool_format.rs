@@ -22,21 +22,6 @@ pub(super) fn diff_counts(diff: &str) -> (usize, usize) {
     (added, removed)
 }
 
-fn tool_path_from_args(args_summary: Option<&String>) -> Option<String> {
-    let raw = args_summary?;
-    let value = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-    value
-        .get("path")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned)
-        .or_else(|| {
-            value
-                .get("filePath")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned)
-        })
-}
-
 fn short_path(path: &str, max_segments: usize) -> String {
     let segs: Vec<&str> = path
         .trim_start_matches('/')
@@ -82,136 +67,176 @@ fn count_output_lines(output: &str) -> usize {
     }
 }
 
-fn tool_action_label(name: &str) -> &'static str {
+/// Past-tense verb for a finished tool call. Unknown tools (MCP, ACP-provided) fall back to their
+/// humanized name, so the pill always says which tool ran.
+fn tool_action_label(name: &str) -> String {
     match name {
         "read" => "Read",
         "write" => "Wrote",
         "edit" => "Edited",
+        "delete" => "Deleted",
+        "move" => "Moved",
+        "mkdir" => "Created",
         "bash" => "Ran",
         "grep" => "Searched",
+        "codebase_search" => "Searched code",
         "find" => "Found files",
         "ls" => "Listed",
-        "web_search" => "Searched",
+        "git_status" => "Git status",
+        "git_diff" => "Git diff",
+        "web_search" => "Searched the web",
         "web_fetch" => "Fetched",
-        _ => "Used",
+        _ => return other_tool_label(name),
+    }
+    .to_string()
+}
+
+/// Label for tools oxi doesn't know by name: MCP tools (`mcp_<server>_<tool>`) and whatever an
+/// ACP agent reports.
+fn other_tool_label(name: &str) -> String {
+    match name.strip_prefix("mcp_") {
+        Some(rest) => format!("MCP {}", rest.replace('_', " ")),
+        None => tool_status_label(name),
     }
 }
 
-pub(super) fn tool_summary_text(
+/// Present-progressive verb shown while a tool call is still in flight.
+fn tool_running_label(name: &str) -> String {
+    match name {
+        "read" => "Reading",
+        "write" => "Writing",
+        "edit" => "Editing",
+        "delete" => "Deleting",
+        "move" => "Moving",
+        "mkdir" => "Creating",
+        "bash" => "Running",
+        "grep" => "Searching",
+        "codebase_search" => "Searching code",
+        "find" => "Finding files",
+        "ls" => "Listing",
+        "git_status" => "Git status",
+        "git_diff" => "Git diff",
+        "web_search" => "Searching the web",
+        "web_fetch" => "Fetching",
+        _ => return other_tool_label(name),
+    }
+    .to_string()
+}
+
+/// One-line description of a tool call, split so the verb can be set in the UI font and the
+/// target (path, command, query) in monospace.
+pub(super) struct ToolSummary {
+    /// "Ran", "Edited", "Reading"… (or "Failed" when the call errored).
+    pub action: String,
+    /// The call's target plus a short result meta, e.g. `stats.py · 25 lines`. May be empty.
+    pub detail: String,
+}
+
+/// Summarize a tool call for its pill/header. Diff counts are not part of the text: callers show
+/// them as colored `+N -M` badges.
+pub(super) fn tool_summary(
     name: &str,
     args_summary: Option<&String>,
     output: &str,
     diff: Option<&String>,
     is_error: Option<bool>,
     running: bool,
-) -> String {
+) -> ToolSummary {
     if running {
-        let target = tool_short_arg(name, args_summary)
-            .map(|s| format!(" · {s}"))
-            .unwrap_or_default();
-        return format!("{}{}", tool_status_label(name), target);
+        return ToolSummary {
+            action: tool_running_label(name),
+            detail: tool_target(name, args_summary).unwrap_or_default(),
+        };
     }
 
-    let has_error = is_error == Some(true);
-    let action = if has_error {
-        "Failed"
+    let action = if is_error == Some(true) {
+        format!("{} failed", other_tool_label(name))
     } else {
         tool_action_label(name)
     };
-    let mut parts = vec![action.to_string()];
-
-    match name {
-        "bash" => {
-            if let Some(raw) = args_summary
-                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
-                && let Some(cmd) = v.get("command").and_then(|x| x.as_str())
-            {
-                let p = command_preview(cmd, 42);
-                if !p.is_empty() {
-                    parts.push(format!("`{p}`"));
-                }
-            }
+    let mut parts: Vec<String> = tool_target(name, args_summary).into_iter().collect();
+    if name == "read" {
+        // The output starts with a header naming the lines actually read; counting output
+        // lines would include that header and misreport the range.
+        if let Some(range) = read_line_range(output) {
+            parts.push(range);
         }
-        "grep" => {
-            if let Some(raw) = args_summary
-                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
-            {
-                if let Some(pattern) = v.get("pattern").and_then(|x| x.as_str()) {
-                    parts.push(format!("`{}`", command_preview(pattern, 32)));
-                }
-                if let Some(path) = v.get("path").and_then(|x| x.as_str())
-                    && !path.is_empty()
-                {
-                    parts.push(format!("in {}", short_path(path, 2)));
-                }
-            }
-        }
-        "read" | "write" | "edit" | "delete" | "mkdir" | "find" | "ls" => {
-            if let Some(path) = tool_path_from_args(args_summary) {
-                parts.push(short_path(&path, 2));
-            }
-        }
-        "move" => {
-            if let Some(raw) = args_summary
-                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
-            {
-                if let Some(from) = v.get("from").and_then(|x| x.as_str()) {
-                    parts.push(short_path(from, 2));
-                }
-                if let Some(to) = v.get("to").and_then(|x| x.as_str()) {
-                    parts.push(format!("→ {}", short_path(to, 2)));
-                }
-            }
-        }
-        "web_search" => {
-            if let Some(raw) = args_summary
-                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
-                && let Some(q) = v.get("query").and_then(|x| x.as_str())
-            {
-                let p = command_preview(q, 40);
-                if !p.is_empty() {
-                    parts.push(p);
-                }
-            }
-        }
-        "web_fetch" => {
-            if let Some(raw) = args_summary
-                && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
-                && let Some(u) = v.get("url").and_then(|x| x.as_str())
-            {
-                parts.push(short_url(u, 44));
-            }
-        }
-        _ => {
-            if let Some(arg) = tool_short_arg(name, args_summary) {
-                parts.push(arg);
-            }
-        }
-    }
-
-    if let Some(diff_text) = diff.filter(|d| !d.trim().is_empty()) {
-        let (added, removed) = diff_counts(diff_text);
-        parts.push(format!("+{added} -{removed}"));
-    } else {
+    } else if diff.is_none_or(|d| d.trim().is_empty()) {
         let lines = count_output_lines(output);
-        if lines > 0 {
+        if lines > 0 && !matches!(name, "write" | "edit" | "delete" | "move" | "mkdir") {
             parts.push(format!("{lines} line{}", if lines == 1 { "" } else { "s" }));
         }
     }
+    ToolSummary {
+        action,
+        detail: parts.join(" · "),
+    }
+}
 
-    parts.join(" · ")
+/// `"lines 12–40"` from the `read` tool's `Lines 12-40` header line.
+fn read_line_range(output: &str) -> Option<String> {
+    let header = output
+        .lines()
+        .take(3)
+        .find_map(|l| l.strip_prefix("Lines "))?;
+    let (start, end) = header.trim().split_once('-')?;
+    let (start, end) = (start.parse::<usize>().ok()?, end.parse::<usize>().ok()?);
+    Some(if start == end {
+        format!("line {start}")
+    } else {
+        format!("lines {start}–{end}")
+    })
+}
+
+/// The call's main argument, shortened for a one-line pill: path, command, pattern, query, URL.
+fn tool_target(name: &str, args_summary: Option<&String>) -> Option<String> {
+    let raw = args_summary?;
+    let v = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    let str_arg = |key: &str| {
+        v.get(key)
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+    };
+    let target = match name {
+        "read" => short_path(str_arg("path").or_else(|| str_arg("filePath"))?, 2),
+        "bash" => command_preview(str_arg("command")?, 80),
+        "grep" | "codebase_search" => {
+            let pattern = str_arg("pattern").or_else(|| str_arg("query"))?;
+            match str_arg("path") {
+                Some(path) if path != "." => {
+                    format!(
+                        "{}  in {}",
+                        command_preview(pattern, 40),
+                        short_path(path, 2)
+                    )
+                }
+                _ => command_preview(pattern, 48),
+            }
+        }
+        "move" => {
+            let from = short_path(str_arg("from")?, 2);
+            match str_arg("to") {
+                Some(to) => format!("{from} → {}", short_path(to, 2)),
+                None => from,
+            }
+        }
+        "web_search" => command_preview(str_arg("query")?, 60),
+        "web_fetch" => short_url(str_arg("url")?, 56),
+        _ => return tool_short_arg(name, args_summary),
+    };
+    Some(target)
 }
 
 /// Tool icons — Nerd Font PUA codepoints rendered with the dedicated `icons` font family.
 pub(super) fn tool_icon(name: &str) -> &'static str {
     match name {
-        "read" => "\u{f021b}",  // nf-md-file_document
-        "write" => "\u{f0193}", // nf-md-file_edit
+        "read" => "\u{f09ee}",  // nf-md-file_document_outline
+        "write" => "\u{f0dc9}", // nf-md-file_document_edit_outline
         "edit" => "\u{f03eb}",  // nf-md-pencil
         "bash" => "\u{f018d}",  // nf-md-console
         "grep" => "\u{f021e}",  // nf-md-file_find
         "find" => "\u{f0349}",  // nf-md-magnify
-        "ls" => "\u{f0645}",    // nf-md-folder_open
+        "ls" => "\u{f0645}",    // nf-md-file_tree
         "web_search" => crate::theme::ICON_WEB_SEARCH,
         "web_fetch" => crate::theme::ICON_GLOBE,
         _ => "\u{f0214}", // nf-md-file
@@ -300,4 +325,37 @@ pub(super) fn mono_output_job(text: &str, wrap_width: f32) -> LayoutJob {
         TextFormat::simple(FontId::monospace(FS_TINY), c_text_muted()),
     );
     job
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(name: &str, args: &str, output: &str) -> String {
+        let args = args.to_string();
+        let s = tool_summary(name, Some(&args), output, None, Some(false), false);
+        format!("{} | {}", s.action, s.detail)
+    }
+
+    #[test]
+    fn summaries_name_the_action_once() {
+        assert_eq!(
+            summary(
+                "read",
+                r#"{"path":"src/stats.py"}"#,
+                "File: /x/src/stats.py\nLines 1-22\n---\n1\tfoo"
+            ),
+            "Read | src/stats.py · lines 1–22"
+        );
+        assert_eq!(
+            summary("bash", r#"{"command":"cargo test"}"#, "ok\nok"),
+            "Ran | cargo test · 2 lines"
+        );
+        assert_eq!(
+            summary("mcp_github_search", r#"{"q":"oxi"}"#, ""),
+            "MCP github search | oxi"
+        );
+        let running = tool_summary("edit", None, "", None, None, true);
+        assert_eq!(running.action, "Editing");
+    }
 }
