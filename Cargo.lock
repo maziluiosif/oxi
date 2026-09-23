@@ -3983,7 +3983,7 @@ dependencies = [
 
 [[package]]
 name = "oxi"
-version = "0.26.1"
+version = "1.0.0"
 dependencies = [
  "apple-native-keyring-store",
  "arboard",
