@@ -50,7 +50,7 @@ git2 = { version = "0.21", features = ["https", "ssh", "vendored-libgit2"] }
 walkdir = "2"
 fontdb = "0.24"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-dirs = "6"
+dirs = "7"
 sha2 = "0.11"
 rand = "0.10"
 webbrowser = "1"
