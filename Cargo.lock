@@ -3975,6 +3975,7 @@ dependencies = [
  "image",
  "keyring-core",
  "libc",
+ "memchr",
  "portable-pty",
  "pulldown-cmark",
  "rand 0.10.2",

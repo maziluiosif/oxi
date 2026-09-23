@@ -1,6 +1,8 @@
 //! Incremental Tree-sitter parsing and query-based highlighting for the workspace editor.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use eframe::egui::{self, FontId};
 use tree_sitter::{InputEdit, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
@@ -16,7 +18,38 @@ pub struct EditorSyntaxState {
     job: egui::text::LayoutJob,
     palette: SyntaxPalette,
     parser: Parser,
-    query: Query,
+    query: Arc<Query>,
+}
+
+/// Compiled highlight queries, one per language. Compiling Rust's query alone takes ~20 ms,
+/// and it never changes, so every document of a language shares one.
+fn highlight_query(language: &str) -> Option<Arc<Query>> {
+    static QUERIES: OnceLock<Mutex<HashMap<String, Arc<Query>>>> = OnceLock::new();
+    let queries = QUERIES.get_or_init(Default::default);
+    if let Some(query) = queries.lock().ok()?.get(language) {
+        return Some(Arc::clone(query));
+    }
+    // Compile outside the lock; a rare duplicate compile beats blocking other languages.
+    let (ts_language, query_source) = language_config(language)?;
+    let query = Arc::new(Query::new(&ts_language, &query_source).ok()?);
+    queries
+        .lock()
+        .ok()?
+        .entry(language.to_owned())
+        .or_insert(query)
+        .clone()
+        .into()
+}
+
+/// Compile the queries for common languages and load the fallback syntax set off the UI
+/// thread, so opening the first file of each kind does not stall a frame.
+pub fn prewarm_editor_highlighting() {
+    std::thread::spawn(|| {
+        for language in ["rs", "toml", "json", "ts", "js", "py"] {
+            let _ = highlight_query(language);
+        }
+        super::syntax::prewarm_syntax_set();
+    });
 }
 
 #[cfg(test)]
@@ -36,7 +69,7 @@ pub fn highlight_editor_code_with_revision(
     font_id: FontId,
     content_revision: Option<u64>,
 ) -> Option<egui::text::LayoutJob> {
-    let (ts_language, query_source) = language_config(language)?;
+    let (ts_language, _) = language_config(language)?;
     let palette = active_palette().syntax;
     if let Some(current) = state.as_ref()
         && current.language == language
@@ -66,7 +99,7 @@ pub fn highlight_editor_code_with_revision(
 
     let mut parser = Parser::new();
     parser.set_language(&ts_language).ok()?;
-    let query = Query::new(&ts_language, &query_source).ok()?;
+    let query = highlight_query(language)?;
     let tree = parser.parse(content, None)?;
     let job = layout_job(content, &tree, &query, palette, font_id);
     *state = Some(EditorSyntaxState {
@@ -190,11 +223,18 @@ fn layout_job(
         text: content.to_owned(),
         ..Default::default()
     };
+    // Whitespace is invisible, so it joins whichever run it touches. Otherwise every space
+    // between two tokens of the same color splits the run, and text layout cost grows with
+    // the number of sections.
+    let bytes = content.as_bytes();
     let mut start = 0;
     while start < content.len() {
-        let color = colors[start];
+        let color = bytes[start..]
+            .iter()
+            .position(|b| !b.is_ascii_whitespace())
+            .map_or(palette.foreground, |offset| colors[start + offset]);
         let mut end = start + 1;
-        while end < content.len() && colors[end] == color {
+        while end < content.len() && (colors[end] == color || bytes[end].is_ascii_whitespace()) {
             end += 1;
         }
         while end < content.len() && !content.is_char_boundary(end) {
