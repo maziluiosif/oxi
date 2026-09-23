@@ -14,7 +14,7 @@
 
 ![oxi demo](assets/demo/demo.gif)
 
-![oxi chat UI](assets/screenshots/chat.png)
+![oxi running tests, reading a file and showing its edit as a diff](assets/screenshots/agent-run.png)
 
 ## Install
 
@@ -114,17 +114,15 @@ If you previously installed the old formula, migrate once with `brew uninstall -
 
 ## Screenshots
 
-| Git and terminal | Diff view |
+| Review in the editor | Guided local models |
 |---|---|
-| ![oxi git and terminal](assets/screenshots/scr1.png) | ![oxi diff view](assets/screenshots/scr2.png) |
+| ![oxi editor with changed lines highlighted next to the Git panel](assets/screenshots/editor-git.png) | ![oxi Local HF setup with the runtime installed and a model running](assets/screenshots/local-models.png) |
 
-| Coding flow | Provider settings |
+| Remote compute over SSH | Dark theme |
 |---|---|
-| ![oxi screenshot 3](assets/screenshots/scr3.png) | ![oxi provider settings](assets/screenshots/set1.png) |
+| ![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png) | ![oxi Dark theme](assets/screenshots/theme-dark.png) |
 
-| Editable system prompt | Tools/settings |
-|---|---|
-| ![oxi editable system prompt](assets/screenshots/set2.png) | ![oxi settings](assets/screenshots/set3.png) |
+The demo and these screenshots are rendered from the real UI by `scripts/render-demo.sh`.
 
 ## Main capabilities
 
