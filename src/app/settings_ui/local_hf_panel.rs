@@ -187,6 +187,7 @@ impl OxiApp {
                                 .truncate(),
                             );
                             if running {
+                                ui.add_space(6.0);
                                 active_pill(ui, "Running");
                             }
                         });

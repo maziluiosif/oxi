@@ -114,6 +114,7 @@ impl OxiApp {
             );
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
                 if crate::ui::chrome::ghost_button(ui, "Copy diagnostics", false).clicked() {
                     let report = format!(
                         "oxi {}\nOS: {} {}\nConfig: {}\nWorkspace: {}\nProvider: {}\nModel: {}\nGit repository: {}",
@@ -142,11 +143,18 @@ impl OxiApp {
             ui.add_space(10.0);
             hairline(ui);
             ui.add_space(8.0);
+            settings_caption(ui, "Keyboard shortcuts");
+            ui.add_space(6.0);
+            render_shortcuts(ui);
+
+            ui.add_space(10.0);
+            hairline(ui);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if crate::ui::chrome::ghost_button(ui, "GitHub", false).clicked() {
                     let _ = webbrowser::open(crate::update::REPO_URL);
                 }
-                ui.add_space(4.0);
+                ui.add_space(2.0);
                 if crate::ui::chrome::ghost_button(ui, "Changelog", false).clicked() {
                     let _ = webbrowser::open(&format!(
                         "{}/blob/master/CHANGELOG.md",
@@ -156,4 +164,44 @@ impl OxiApp {
             });
         });
     }
+}
+
+/// Two-column reference of the app's keyboard shortcuts (see `handle_global_shortcuts`).
+fn render_shortcuts(ui: &mut Ui) {
+    let cmd = if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl+"
+    };
+    let shortcuts: [(String, &str); 14] = [
+        (format!("{cmd}N"), "New chat"),
+        (format!("{cmd}."), "Stop the running reply"),
+        ("Enter".into(), "Send message"),
+        ("Shift+Enter".into(), "New line in the message"),
+        ("↑ / ↓".into(), "Previous / next sent message"),
+        ("Hold Space".into(), "Dictate (when voice is on)"),
+        (format!("{cmd}B"), "Show or hide chats"),
+        (format!("{cmd}E"), "Show or hide the file explorer"),
+        (format!("{cmd}Shift+B"), "Show or hide source control"),
+        (format!("{cmd}`"), "Show or hide the terminal"),
+        (format!("{cmd}P"), "Open a file in the workspace"),
+        (format!("{cmd}S"), "Save the open file"),
+        (format!("{cmd}F / {cmd}H"), "Find / find and replace"),
+        ("F12".into(), "Go to definition (Rust)"),
+    ];
+    egui::Grid::new("about_shortcuts")
+        .num_columns(2)
+        .spacing(egui::vec2(18.0, 6.0))
+        .show(ui, |ui| {
+            for (keys, action) in shortcuts {
+                ui.label(
+                    RichText::new(keys)
+                        .size(FS_TINY)
+                        .monospace()
+                        .color(c_text()),
+                );
+                ui.label(RichText::new(action).size(FS_TINY).color(c_text_muted()));
+                ui.end_row();
+            }
+        });
 }

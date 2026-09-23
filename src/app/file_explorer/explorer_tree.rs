@@ -1,6 +1,9 @@
 //! Workspace explorer tree rendering, Git decorations, and context menus.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align, Layout, RichText, ScrollArea, Ui};
 
@@ -11,12 +14,110 @@ use super::super::{OxiApp, state::FileOperation};
 use super::support::{file_icon, is_gitignored, load_gitignore_patterns};
 
 const ALWAYS_SKIPPED_DIRS: &[&str] = &[".git"];
+/// How long a directory listing is reused before the explorer reads the folder again. Changes
+/// made through the explorer itself invalidate the cache immediately.
+const EXPLORER_CACHE_TTL: Duration = Duration::from_secs(2);
+
+/// Directory listings behind the explorer tree. Rendering used to call `read_dir`, sort, and
+/// match every entry against every `.gitignore` glob (compiling each glob anew) for every
+/// expanded folder on every frame.
+#[derive(Default)]
+pub(crate) struct ExplorerCache {
+    dirs: HashMap<PathBuf, CachedDir>,
+    gitignore: Option<(PathBuf, Instant, Rc<[String]>)>,
+}
+
+struct CachedDir {
+    at: Instant,
+    listing: Result<Rc<[ExplorerEntry]>, String>,
+}
+
+struct ExplorerEntry {
+    path: PathBuf,
+    name: String,
+    is_dir: bool,
+    git_ignored: bool,
+}
+
+impl ExplorerCache {
+    /// Forget everything, so the next frame reads the tree from disk.
+    pub(crate) fn invalidate(&mut self) {
+        self.dirs.clear();
+        self.gitignore = None;
+    }
+
+    fn gitignore(&mut self, root: &Path) -> Rc<[String]> {
+        if let Some((cached_root, at, patterns)) = &self.gitignore
+            && cached_root == root
+            && at.elapsed() < EXPLORER_CACHE_TTL
+        {
+            return patterns.clone();
+        }
+        let patterns: Rc<[String]> = load_gitignore_patterns(root).into();
+        self.gitignore = Some((root.to_path_buf(), Instant::now(), patterns.clone()));
+        patterns
+    }
+
+    fn listing(
+        &mut self,
+        root: &Path,
+        directory: &Path,
+        ignored: &[String],
+    ) -> Result<Rc<[ExplorerEntry]>, String> {
+        if let Some(cached) = self.dirs.get(directory)
+            && cached.at.elapsed() < EXPLORER_CACHE_TTL
+        {
+            return cached.listing.clone();
+        }
+        let listing = read_explorer_directory(root, directory, ignored);
+        self.dirs.insert(
+            directory.to_path_buf(),
+            CachedDir {
+                at: Instant::now(),
+                listing: listing.clone(),
+            },
+        );
+        listing
+    }
+}
+
+/// Sorted (folders first, then case-insensitive name) entries of one explorer folder.
+fn read_explorer_directory(
+    root: &Path,
+    directory: &Path,
+    ignored: &[String],
+) -> Result<Rc<[ExplorerEntry]>, String> {
+    let mut entries: Vec<ExplorerEntry> = std::fs::read_dir(directory)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let kind = entry.file_type().ok()?;
+            if !kind.is_dir() && !kind.is_file() {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if kind.is_dir() && ALWAYS_SKIPPED_DIRS.contains(&name.as_str()) {
+                return None;
+            }
+            let path = entry.path();
+            let git_ignored = is_gitignored(root, &path, kind.is_dir(), ignored);
+            Some(ExplorerEntry {
+                path,
+                name,
+                is_dir: kind.is_dir(),
+                git_ignored,
+            })
+        })
+        .collect();
+    entries.sort_by_cached_key(|entry| (!entry.is_dir, entry.name.to_lowercase()));
+    Ok(entries.into())
+}
 
 impl OxiApp {
     pub(crate) fn render_file_explorer(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
         let root = PathBuf::from(&self.active_workspace().root_path);
-        let ignored = load_gitignore_patterns(&root);
+        let ignored = self.conv.explorer_cache.gitignore(&root);
         // Explorer decorations share the existing async Git worker with the source-control panel.
         let git_was_uninitialized = self.conv.git_rx.is_none();
         self.ensure_git_channels();
@@ -47,6 +148,7 @@ impl OxiApp {
                     .clicked()
                 {
                     self.check_external_file_changes();
+                    self.conv.explorer_cache.invalidate();
                     let _ = self
                         .conv
                         .git_tx
@@ -194,36 +296,36 @@ impl OxiApp {
         ignored: &[String],
         depth: usize,
     ) {
-        let mut entries = match std::fs::read_dir(directory) {
-            Ok(entries) => entries.filter_map(Result::ok).collect::<Vec<_>>(),
+        let entries = match self.conv.explorer_cache.listing(root, directory, ignored) {
+            Ok(entries) => entries,
             Err(error) => {
                 ui.label(RichText::new(format!("Cannot read folder: {error}")).size(FS_TINY));
                 return;
             }
         };
-        entries.sort_by_key(|entry| {
-            let is_file = entry.file_type().map(|kind| kind.is_file()).unwrap_or(true);
-            (is_file, entry.file_name().to_string_lossy().to_lowercase())
-        });
 
-        for entry in entries {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            if kind.is_dir() && ALWAYS_SKIPPED_DIRS.contains(&name.as_str()) {
-                continue;
-            }
-            let git_ignored = is_gitignored(root, &path, kind.is_dir(), ignored);
+        for entry in entries.iter() {
+            let path = entry.path.clone();
+            let name = &entry.name;
+            let git_ignored = entry.git_ignored;
             let indent = depth as f32 * 14.0;
-            if kind.is_dir() {
+            if entry.is_dir {
                 let expanded = self.conv.explorer_expanded.contains(&path);
                 let git_status = self.git_status_for_directory(root, &path);
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 22.0),
                     egui::Sense::click(),
                 );
+                if !ui.is_rect_visible(rect) {
+                    // Scrolled out of view: keep the row's space, skip its layout. Consume the
+                    // auto id its label scope would have taken, so later rows keep their ids
+                    // (and an open context menu stays open) as rows scroll in and out.
+                    ui.skip_ahead_auto_ids(1);
+                    if expanded {
+                        self.render_explorer_directory(ui, root, &path, ignored, depth + 1);
+                    }
+                    continue;
+                }
                 paint_explorer_row(ui, rect, response.hovered(), false);
                 ui.scope_builder(
                     egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(4.0, 0.0))),
@@ -248,7 +350,7 @@ impl OxiApp {
                             ));
                             ui.label(crate::ui::chrome::icon_label_job(
                                 folder,
-                                &name,
+                                name,
                                 FS_SMALL,
                                 explorer_entry_color(c_text(), git_ignored),
                             ));
@@ -280,7 +382,7 @@ impl OxiApp {
                 if expanded {
                     self.render_explorer_directory(ui, root, &path, ignored, depth + 1);
                 }
-            } else if kind.is_file() {
+            } else {
                 // Ctrl/Cmd+P temporarily changes the active editor tab while previewing.
                 // Keep the Explorer selection on the previously committed tab until the
                 // picker result is accepted.
@@ -292,11 +394,15 @@ impl OxiApp {
                 let selected = selected_index
                     .and_then(|index| self.conv.editor.documents.get(index))
                     .is_some_and(|document| document.path == path);
-                let git_status = self.git_status_for_path(root, &path);
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 22.0),
                     egui::Sense::click(),
                 );
+                if !ui.is_rect_visible(rect) {
+                    ui.skip_ahead_auto_ids(1);
+                    continue;
+                }
+                let git_status = self.git_status_for_path(root, &path);
                 paint_explorer_row(ui, rect, response.hovered(), selected);
                 let (icon, color) = file_icon(&path);
                 ui.scope_builder(
@@ -307,7 +413,7 @@ impl OxiApp {
                             ui.add_space(indent + 14.0);
                             ui.label(crate::ui::chrome::icon_label_job(
                                 icon,
-                                &name,
+                                name,
                                 FS_SMALL,
                                 explorer_entry_color(
                                     if selected {

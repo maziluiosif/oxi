@@ -249,6 +249,7 @@ impl OxiApp {
             // Folding hides the normal chat list. The chat currently open in the main view,
             // in-progress chats, and chats that need attention remain visible.
             let mut visible_sessions = 0usize;
+            let mut row_advance: Option<f32> = None;
             for si in 0..n_sessions {
                 if sidebar_changed {
                     return;
@@ -267,34 +268,39 @@ impl OxiApp {
                         continue;
                     }
                 }
-                let Some(session) = self.conv.workspaces[wi].sessions.get(si) else {
+                if self.conv.workspaces[wi].sessions.get(si).is_none() {
                     return;
-                };
-                if !q.is_empty() {
-                    let title_hit = session.title.to_lowercase().contains(&q);
-                    let msg_hit = session.messages.iter().any(|m| {
-                        m.text.to_lowercase().contains(&q)
-                            || m.blocks.iter().any(|b| match b {
-                                crate::model::AssistantBlock::Answer(t)
-                                | crate::model::AssistantBlock::Thinking(t) => {
-                                    t.to_lowercase().contains(&q)
-                                }
-                                crate::model::AssistantBlock::Tool { output, .. } => {
-                                    output.to_lowercase().contains(&q)
-                                }
-                            })
-                    });
-                    if !title_hit && !msg_hit {
-                        continue;
-                    }
+                }
+                if !q.is_empty() && !self.session_matches_search(wi, si, &q) {
+                    continue;
                 }
                 visible_sessions += 1;
+                // Rows are all the same height: once one has been measured, a row scrolled out
+                // of view only reserves its space. Long histories otherwise cost a full layout
+                // of every row on every frame (~1.5 ms at 400 chats).
+                if let Some(advance) = row_advance
+                    && self.conv.renaming_session != Some((wi, si))
+                    && !ui.is_rect_visible(egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(ui.available_width(), advance),
+                    ))
+                {
+                    ui.add_space(advance);
+                    continue;
+                }
+                let row_top = ui.cursor().min.y;
+                let session = &self.conv.workspaces[wi].sessions[si];
                 let row_title = sidebar_session_title_display(&session.title);
                 ui.horizontal(|ui| {
                     ui.add_space(7.0);
                     ui.vertical(|ui| {
                         let row_w = ui.available_width();
-                        ui.push_id((wi, si), |ui| {
+                        // Explicit id: rows scrolled out of view are skipped, and a
+                        // `push_id` child's widget ids would shift with every skipped row
+                        // (egui salts them with the parent's child count), dropping the
+                        // rename field's focus or an open context menu while scrolling.
+                        let row_id = egui::Id::new(("sidebar_session_row", wi, si));
+                        ui.scope_builder(egui::UiBuilder::new().id(row_id), |ui| {
                             let selected = wi == self.conv.active_workspace && si == active_si;
                             let running = self.session_row_is_running(wi, si);
                             let has_error = !running && self.session_row_has_error(wi, si);
@@ -322,9 +328,18 @@ impl OxiApp {
                             if hovered {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
-                            let attention_pulse = if needs_attention {
+                            // Only a pending approval pulses (it blocks the run); an unseen
+                            // completion keeps a static highlight. Animate only in a focused
+                            // window, and ask for frames only while a pulse is on screen.
+                            let attention_pulse = if needs_approval
+                                && ui.input(|input| input.focused)
+                            {
+                                ui.ctx()
+                                    .request_repaint_after(std::time::Duration::from_millis(50));
                                 let time = ui.input(|input| input.time);
                                 (0.5 + 0.5 * (time * 3.6).sin()) as f32
+                            } else if needs_attention {
+                                0.6
                             } else {
                                 0.0
                             };
@@ -473,6 +488,7 @@ impl OxiApp {
                         });
                     });
                 });
+                row_advance.get_or_insert(ui.cursor().min.y - row_top);
                 if sidebar_changed {
                     return;
                 }
@@ -630,6 +646,56 @@ impl OxiApp {
                 );
             }
         });
+    }
+
+    /// Whether a chat's title or loaded messages contain `query` (already lowercased). The
+    /// answer is cached per chat until the query or the chat changes: lowercasing every
+    /// message of every loaded chat on each frame made typing in the search box crawl once a
+    /// long conversation was open.
+    fn session_matches_search(&mut self, wi: usize, si: usize, query: &str) -> bool {
+        let session = &self.conv.workspaces[wi].sessions[si];
+        let stamp = (
+            session.messages.len(),
+            session.messages.last().map_or(0, |m| {
+                m.text.len()
+                    + m.blocks
+                        .iter()
+                        .map(|b| match b {
+                            crate::model::AssistantBlock::Answer(t)
+                            | crate::model::AssistantBlock::Thinking(t) => t.len(),
+                            crate::model::AssistantBlock::Tool { output, .. } => output.len(),
+                        })
+                        .sum::<usize>()
+            }),
+        );
+        if let Some(cached) = self.conv.sidebar_search_cache.get(&(wi, si))
+            && cached.query == query
+            && cached.title == session.title
+            && cached.stamp == stamp
+        {
+            return cached.hit;
+        }
+        let contains = |text: &str| text.to_lowercase().contains(query);
+        let hit = contains(&session.title)
+            || session.messages.iter().any(|m| {
+                contains(&m.text)
+                    || m.blocks.iter().any(|b| match b {
+                        crate::model::AssistantBlock::Answer(t)
+                        | crate::model::AssistantBlock::Thinking(t) => contains(t),
+                        crate::model::AssistantBlock::Tool { output, .. } => contains(output),
+                    })
+            });
+        let title = session.title.clone();
+        self.conv.sidebar_search_cache.insert(
+            (wi, si),
+            super::state::SidebarSearchHit {
+                query: query.to_owned(),
+                title,
+                stamp,
+                hit,
+            },
+        );
+        hit
     }
 
     /// Central region manual split: sidebar | chat.

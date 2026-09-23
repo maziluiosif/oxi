@@ -75,10 +75,8 @@ fn delete_session_file_from_disk(path: &Path) -> Result<(), String> {
 
 impl OxiApp {
     pub(crate) fn new_chat(&mut self) {
-        let title = {
-            let w = self.active_workspace();
-            format!("Chat {}", w.sessions.len() + 1)
-        };
+        // Replaced by the first prompt once the user sends it.
+        let title = "New chat".to_string();
 
         // The composer is app-level UI state while drafts belong to sessions. Stash the
         // current draft before changing the active index; otherwise the new blank chat shows

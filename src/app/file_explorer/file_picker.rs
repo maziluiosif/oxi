@@ -173,9 +173,30 @@ impl OxiApp {
         // Shrink for short result lists, but cap the picker so longer lists remain scrollable.
         let available = ctx.content_rect().size();
         let max_picker_height = 440.0_f32.min((available.y - 104.0).max(120.0));
-        let row_height = 27.0; // 24 px row + the theme's 3 px item spacing.
-        let picker_height =
-            (88.0 + matches.len() as f32 * row_height).clamp(120.0, max_picker_height);
+        // Measure rows from the real font instead of assuming 24 px: with the default text size
+        // a row is taller than that, and a short list ended with its last row cut in half.
+        let style = ctx.global_style();
+        let text_h =
+            ctx.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Button.resolve(&style)));
+        let (interact_h, pad_y, gap_y) = (
+            style.spacing.interact_size.y,
+            style.spacing.button_padding.y,
+            style.spacing.item_spacing.y,
+        );
+        let row_height = interact_h.max(text_h + 2.0 * pad_y) + gap_y;
+        let query_height = interact_h.max(text_h + 8.0);
+        let title_height =
+            ctx.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Heading.resolve(&style)));
+        // Whatever the list still overflowed by last frame (window chrome we can't predict).
+        let overflow_id = egui::Id::new("workspace_file_picker_overflow");
+        let overflow = ctx.data(|d| d.get_temp::<f32>(overflow_id)).unwrap_or(0.0);
+        let picker_height = (title_height
+            + 24.0
+            + query_height
+            + 8.0
+            + matches.len() as f32 * row_height
+            + overflow)
+            .clamp(120.0, max_picker_height);
         let picker_size = egui::vec2(
             560.0_f32.min((available.x - 32.0).max(280.0)),
             picker_height,
@@ -200,7 +221,7 @@ impl OxiApp {
                 ui.add_space(6.0);
                 // Fill the remaining window height even when every match fits. Otherwise the
                 // scroll area's clip edge can land on the final row as selection repaints.
-                ScrollArea::vertical()
+                let list = ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .animated(false)
                     .show(ui, |ui| {
@@ -237,6 +258,13 @@ impl OxiApp {
                         }
                         ui.add_space(2.0);
                     });
+                // A list longer than the cap scrolls by design; only correct a short list.
+                let missing = (list.content_size.y - list.inner_rect.height())
+                    .min(max_picker_height - picker_height);
+                ctx.data_mut(|d| {
+                    let total = d.get_temp::<f32>(overflow_id).unwrap_or(0.0);
+                    d.insert_temp(overflow_id, (total + missing).clamp(0.0, 200.0));
+                });
             });
         if let Some(path) = selected {
             // Enter/click promotes the temporary preview to a regular editor tab.

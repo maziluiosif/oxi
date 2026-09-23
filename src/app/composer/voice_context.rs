@@ -235,24 +235,56 @@ impl OxiApp {
     /// Estimated size (chars) of what a run for `key` sends: system prompt + tool definitions
     /// + all persisted messages. Excludes unsent composer input.
     pub(crate) fn estimated_session_context_chars(&self, key: SessionKey) -> usize {
-        let root = std::path::Path::new(self.conv.workspaces[key.workspace_idx].root_path.as_str());
-        let system_chars =
-            crate::agent::prompt::build_system_prompt_for_workspace(&self.conv.settings, root)
-                .len();
         let messages_chars = self
             .session_by_key(key)
             .messages
             .iter()
             .map(estimate_message_chars)
             .sum::<usize>();
+        self.context_overhead_chars(key.workspace_idx) + messages_chars
+    }
+
+    /// System prompt + tool definitions, in chars. Building the prompt reads AGENTS.md and the
+    /// rules folders from disk and the tool list is serialized to JSON, so the result is cached:
+    /// recomputed when a setting that shapes it changes, or after a few seconds so edits to
+    /// AGENTS.md / rules still show up.
+    fn context_overhead_chars(&self, workspace_idx: usize) -> usize {
+        const TTL: std::time::Duration = std::time::Duration::from_secs(5);
+        let settings = &self.conv.settings;
+        let root = self.conv.workspaces[workspace_idx].root_path.as_str();
+        let mut hasher = DefaultHasher::new();
+        root.hash(&mut hasher);
+        settings.system_prompt.hash(&mut hasher);
+        settings.tools_enabled.hash(&mut hasher);
+        settings.include_agents_md.hash(&mut hasher);
+        settings.include_oxi_rules.hash(&mut hasher);
+        settings.bash_timeout_cap_secs.hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some(cached) = self.context_overhead_cache.borrow().as_ref()
+            && cached.key == key
+            && cached.at.elapsed() < TTL
+        {
+            return cached.chars;
+        }
+        let system_chars = crate::agent::prompt::build_system_prompt_for_workspace(
+            settings,
+            std::path::Path::new(root),
+        )
+        .len();
         let tools_chars = crate::agent::tools::tool_definitions_json(
-            &self.conv.settings.tools_enabled,
-            self.conv.settings.bash_timeout_cap_secs,
+            &settings.tools_enabled,
+            settings.bash_timeout_cap_secs,
         )
         .iter()
         .map(|v| v.to_string().len())
         .sum::<usize>();
-        system_chars + messages_chars + tools_chars
+        let chars = system_chars + tools_chars;
+        *self.context_overhead_cache.borrow_mut() = Some(ContextOverhead {
+            key,
+            at: std::time::Instant::now(),
+            chars,
+        });
+        chars
     }
 
     /// Estimated tokens currently in a session's context, using the calibrated ratio.

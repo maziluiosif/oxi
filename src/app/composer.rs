@@ -97,6 +97,14 @@ fn quiet_combo_style(ui: &mut Ui) {
     widgets.open.corner_radius = CornerRadius::same(255);
 }
 
+/// Cached size of the fixed request overhead (system prompt + tool definitions).
+pub(crate) struct ContextOverhead {
+    /// Hash of the workspace root and the settings that shape the overhead.
+    key: u64,
+    at: std::time::Instant,
+    chars: usize,
+}
+
 /// How long a composer notice stays visible.
 const COMPOSER_NOTICE_SECS: f32 = 5.0;
 
@@ -380,16 +388,16 @@ impl OxiApp {
                 self.render_tokens_per_sec(ui);
             }
 
-            // Keep the primary keyboard action discoverable while the composer has focus.
+            // Keep the primary keyboard action discoverable in a fresh chat. Once a conversation
+            // is under way the user has already sent a message, so the hint would only be noise.
             // On smaller windows the compact version retains the information without pushing
             // controls out of the row.
+            let show_hint = composer_focused && self.active_session().messages.is_empty();
             if !narrow {
                 ui.add_space(8.0);
-                let hint_t = ui.ctx().animate_bool_with_time(
-                    Id::new("composer_hint_anim"),
-                    composer_focused,
-                    0.15,
-                );
+                let hint_t =
+                    ui.ctx()
+                        .animate_bool_with_time(Id::new("composer_hint_anim"), show_hint, 0.15);
                 if hint_t > 0.0 {
                     ui.add_space(8.0);
                     ui.label(
@@ -398,7 +406,7 @@ impl OxiApp {
                             .color(c_text_faint().gamma_multiply(hint_t)),
                     );
                 }
-            } else if composer_focused && !compact {
+            } else if show_hint && !compact {
                 ui.label(
                     RichText::new("Enter sends")
                         .size(FS_TINY)
@@ -413,8 +421,6 @@ impl OxiApp {
     /// config. Widths stay fixed so switching providers/models doesn't shove the
     /// attach/send controls around; labels are short/parsed to fit.
     fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool, compact: bool) {
-        let oauth = crate::oauth::load_oauth_store();
-        let configured = self.conv.settings.configured_provider_kinds(&oauth);
         let active_provider = self.conv.settings.active_provider;
         // Independent fixed widths — shared dynamic widths made the bar look jumpy
         // when labels swung from "Ollama" to "Claude Code (ACP)" / long model ids.
@@ -436,6 +442,10 @@ impl OxiApp {
                 .width(provider_w)
                 .height(300.0)
                 .show_ui(ui, |ui| {
+                    // Only while the popup is open: this clones the secrets blob and probes a
+                    // legacy file, far too much work for every frame.
+                    let oauth = crate::oauth::load_oauth_store();
+                    let configured = self.conv.settings.configured_provider_kinds(&oauth);
                     for kind in &configured {
                         let selected = active_provider == *kind;
                         if ui

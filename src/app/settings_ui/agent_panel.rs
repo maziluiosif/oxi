@@ -64,6 +64,7 @@ impl OxiApp {
                     );
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
                     if ghost_button(ui, "Disable all", false).clicked() {
                         self.conv.settings.tools_enabled.fill(false);
                     }
