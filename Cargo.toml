@@ -87,4 +87,5 @@ zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] 
 winresource = "0.1"
 
 [dev-dependencies]
+egui_kittest = { version = "0.35", features = ["eframe", "wgpu"] }
 wiremock = "0.6"

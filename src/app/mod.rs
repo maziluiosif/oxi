@@ -15,6 +15,8 @@ mod composer_helpers;
 mod confirm;
 mod connection;
 mod conversation;
+#[cfg(test)]
+mod demo_recording;
 mod eframe_app;
 mod file_explorer;
 mod git_panel;

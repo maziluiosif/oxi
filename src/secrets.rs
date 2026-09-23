@@ -45,6 +45,17 @@ fn ensure_default_store() {
     });
 }
 
+/// Keep this process's secrets in an in-memory mock store, so it neither reads nor writes the
+/// real OS keychain. Must run before any other secrets call. Used by the demo recorder, whose
+/// throwaway settings would otherwise clear the user's saved API keys on save.
+#[cfg(test)]
+pub(crate) fn use_mock_store() {
+    INIT_STORE.call_once(|| match keyring_core::mock::Store::new() {
+        Ok(store) => keyring_core::set_default_store(store),
+        Err(e) => panic!("mock credential store: {e}"),
+    });
+}
+
 /// account -> last value this process wrote, so re-saving unrelated settings fields
 /// (which re-touches every profile) doesn't re-hit the OS keychain for secrets that
 /// haven't actually changed.
