@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-23
+
+### Added
+- UI gallery and frame profiler for performance testing
+- Tool calls now display concise format (e.g., 'Ran cargo test · 2 lines')
+- Side-by-side diff view in chat with line numbers and row tints
+- Empty chat now explains when provider has no API key with 'Set up model' button
+- Run errors show hints for common causes (bad key, rate limit, server issues, etc.)
+- Dismissible callout for app errors
+- Approval card with Allow, Allow for this turn, and Deny options
+- Settings cards now span full width and fit narrow windows
+- Slider with visible rail in settings
+- Numbers display with thousands separators
+- About panel lists keyboard shortcuts
+- Live timers count whole seconds
+- MCP tools labeled as MCP
+- Manual version pinning for release pipeline via `Release-As` trailer
+
+### Changed
+- Chat transcript culling improved: units near viewport stay rendered (300-turn chat: ~0.25 ms/frame, was ~27-38 ms)
+- Transcript units and sidebar rows use explicit widget IDs for better text selection
+- Editor tree-sitter highlighting only colors visible lines; minimap re-colors after typing pauses (20k-line file: ~32 ms/keystroke, was ~275 ms)
+- Explorer caches directory listings and .gitignore patterns; skips off-screen row layout
+- Sidebar skips layout of off-screen chats (400 chats: 1.5 ms → 0.3 ms/frame) and caches search results
+- Composer no longer reads AGENTS.md, rules folders, or secrets store every frame
+- Eliminated idle repaints: removed pulsing unseen-completion row; editor polls external changes only when window has focus
+- New chats named 'New chat' instead of 'Untitled'
+- Demo video and screenshots refreshed for 1.0 release
+
+### Fixed
+- Switching theme with open file left editor text invisible
+- Markdown tables lost header row
+- Inline links left stray space
+- Sidebar toggle showed barcode icon; other icons were wrong glyphs
+- Cmd+P file picker cut off last files in short lists
+- Git-changed line tint stopped at longest line instead of editor edge
+
+
 ## [0.26.1] - 2026-09-23
 
 ### Changed
@@ -675,7 +713,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v0.26.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/maziluiosif/oxi/compare/v0.26.1...v1.0.0
 [0.26.1]: https://github.com/maziluiosif/oxi/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/maziluiosif/oxi/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/maziluiosif/oxi/compare/v0.24.0...v0.25.0
