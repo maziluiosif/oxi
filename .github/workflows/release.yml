@@ -5,6 +5,11 @@ on:
     branches: [master]
   # Allows retrying the pipeline from the Actions UI without manufacturing a commit.
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release exactly this version (X.Y.Z, e.g. 1.0.0) instead of the computed bump"
+        required: false
+        default: ""
 
 permissions:
   actions: write
@@ -46,6 +51,9 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: anthropic/claude-haiku-4.5
+          # Empty on push; a manual run can pin the version (a `Release-As: X.Y.Z` commit
+          # trailer does the same from a normal merge).
+          RELEASE_VERSION: ${{ github.event.inputs.version }}
         run: python .github/scripts/release_changelog.py
 
       - name: Upload generated release metadata

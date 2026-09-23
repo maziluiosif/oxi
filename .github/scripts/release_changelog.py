@@ -71,6 +71,27 @@ def collect_commits(tag: str | None) -> tuple[str, list[str]]:
     return log.strip(), file_list
 
 
+def requested_version(prev: str, commits: str) -> str | None:
+    """An explicit release version, if one was asked for.
+
+    `RELEASE_VERSION` (the release workflow's manual `version` input) wins; otherwise the
+    last `Release-As: X.Y.Z` trailer among the commits since the previous tag. Either must
+    be newer than `prev`, so a stale trailer can never move the version backwards.
+    """
+    wanted = os.environ.get("RELEASE_VERSION", "").strip().lstrip("v")
+    if not wanted:
+        found = re.findall(r"(?mi)^\s*Release-As:\s*v?(\d+\.\d+\.\d+)\s*$", commits)
+        wanted = found[0] if found else ""
+    if not wanted:
+        return None
+    if not re.fullmatch(r"\d+\.\d+\.\d+", wanted):
+        sys.exit(f"requested release version {wanted!r} is not X.Y.Z")
+    as_tuple = lambda v: tuple(int(x) for x in v.split("."))
+    if as_tuple(wanted) <= as_tuple(prev):
+        sys.exit(f"requested release version {wanted} is not newer than {prev}")
+    return wanted
+
+
 def bump_version(version: str, bump: str) -> str:
     major, minor, patch = (int(x) for x in version.split("."))
     if bump == "major":
@@ -310,7 +331,7 @@ def main() -> None:
         print(f"::warning::LLM changelog generation failed; using deterministic fallback: {exc}")
         result = fallback_notes(commits)
 
-    version = bump_version(prev, result["bump"])
+    version = requested_version(prev, commits) or bump_version(prev, result["bump"])
     section = render_section(version, result["sections"])
     body = update_changelog(version, tag.lstrip("v") if tag else None, section)
     update_cargo(prev, version)
