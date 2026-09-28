@@ -236,7 +236,7 @@ fn layout_job(
     cursor.set_byte_range(range.clone());
     let mut captures = cursor.captures(query, tree.root_node(), content.as_bytes());
     while let Some((matched, capture_index)) = captures.next() {
-        let capture = matched.captures[*capture_index];
+        let capture = matched.captures()[*capture_index];
         let color = capture_colors[capture.index as usize];
         let node = capture.node.byte_range();
         // Prefer the more specific (shorter) capture when query patterns overlap. This keeps
@@ -403,6 +403,10 @@ mod tests {
 
     #[test]
     fn range_highlight_matches_the_full_job() {
+        // Both jobs must see the same palette; another test briefly switches it to light.
+        let _guard = super::super::palette::PALETTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let source = "fn one() { let a = \"x\"; }\nfn two() { let b = 2; }\nfn three() {}\n";
         let font = FontId::monospace(12.0);
         let mut full_state = None;
