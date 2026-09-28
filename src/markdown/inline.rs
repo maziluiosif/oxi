@@ -5,8 +5,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use base64::Engine as _;
-use eframe::egui::text::{LayoutJob, TextFormat};
 use eframe::egui::load::BytesPoll;
+use eframe::egui::text::{LayoutJob, TextFormat};
 use eframe::egui::{
     Align, CornerRadius, CursorIcon, FontId, Hyperlink, Image, RichText, Sense, Stroke, Ui,
 };
