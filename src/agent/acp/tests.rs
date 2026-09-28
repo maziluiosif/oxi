@@ -140,6 +140,7 @@ fn acp_end_to_end_applies_model() {
         effort: "low".to_string(),
         text: "Reply with ONLY one word naming your model family: Opus, Sonnet, or Haiku."
             .to_string(),
+        history: String::new(),
         images: Vec::new(),
         event_tx: ev_tx,
         approval_rx: appr_rx,
@@ -203,4 +204,49 @@ fn build_prompt_blocks_includes_text_and_image() {
     assert_eq!(arr[0]["text"], "hello");
     assert_eq!(arr[1]["type"], "image");
     assert_eq!(arr[1]["mimeType"], "image/png");
+}
+
+#[test]
+fn generated_image_becomes_inline_markdown_image() {
+    let dir = std::env::temp_dir().join("oxi acp image test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = dir.join("ig_1.png");
+    std::fs::write(&saved, [0x89, b'P', b'N', b'G']).unwrap();
+    let (tx, rx) = channel();
+    emit_update(
+        &json!({
+            "sessionUpdate":"tool_call_update",
+            "toolCallId":"ig_1",
+            "status":"completed",
+            "content":[
+                {"type":"content","content":{"type":"text","text":"Revised prompt: a cat"}},
+                {"type":"content","content":{
+                    "type":"image","mimeType":"image/png","data":"iVBORw==",
+                    "uri": saved.to_string_lossy()
+                }}
+            ]
+        }),
+        &tx,
+    );
+    let evs = drain(&rx);
+    assert!(
+        matches!(&evs[0], AgentEvent::ToolOutput { text, .. } if text == "Revised prompt: a cat")
+    );
+    let AgentEvent::TextDelta(md) = &evs[1] else {
+        panic!("expected image markdown");
+    };
+    let dest = pulldown_cmark::Parser::new(md)
+        .find_map(|ev| match ev {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::Image { dest_url, .. }) => {
+                Some(dest_url.to_string())
+            }
+            _ => None,
+        })
+        .expect("markdown image");
+    assert_eq!(
+        std::path::PathBuf::from(dest.strip_prefix("file://").unwrap()),
+        saved
+    );
+    assert!(matches!(&evs[2], AgentEvent::ToolEnd { .. }));
+    let _ = std::fs::remove_dir_all(&dir);
 }

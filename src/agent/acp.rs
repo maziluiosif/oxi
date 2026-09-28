@@ -40,6 +40,9 @@ use client_fs::{fs_read_text, fs_write_text};
 #[path = "acp/install.rs"]
 mod install;
 
+#[path = "acp/sessions.rs"]
+mod sessions;
+
 #[path = "acp/update_events.rs"]
 mod update_events;
 use update_events::emit_update;
@@ -69,6 +72,9 @@ pub struct AcpPrompt {
     pub effort: String,
     /// The latest user message text.
     pub text: String,
+    /// Transcript of the chat before the latest message. Sent ahead of the prompt only when the
+    /// agent had to start a fresh session (no resumable one), so it still knows the conversation.
+    pub history: String,
     /// Image attachments on the latest user message (`mime`, bytes).
     pub images: Vec<(String, Vec<u8>)>,
     /// Where translated agent events are delivered.
@@ -177,6 +183,7 @@ impl AcpManager {
                         AcpCommand::Close { session_key } => {
                             // Dropping the Conn kills the subprocess (kill_on_drop).
                             conns.lock().await.remove(&session_key);
+                            sessions::forget(&session_key);
                         }
                     }
                 }
@@ -251,6 +258,9 @@ struct ConnHandles {
     session_id: String,
     /// Model ids the agent advertised for this session (from the `session/new` response).
     available_models: Vec<String>,
+    /// Set when the session was created blank rather than resumed; the first prompt then carries
+    /// oxi's transcript of the chat so far.
+    needs_history: Arc<AtomicBool>,
 }
 
 /// The event/approval context for the in-flight prompt, shared with the reader task so it can
@@ -290,7 +300,7 @@ async fn ensure_conn(
     }
     // A new subprocess (or one whose launch command / model changed): spawn it and replace any
     // previous entry, whose Conn is dropped here and killed (kill_on_drop).
-    let conn = spawn_conn(command_line, cwd, env, model, effort).await?;
+    let conn = spawn_conn(session_key, command_line, cwd, env, model, effort).await?;
     let handles = conn.handles.clone();
     conns.lock().await.insert(session_key.to_string(), conn);
     Ok(handles)
@@ -328,6 +338,7 @@ fn launch_error(command_line: &str, error: &std::io::Error) -> String {
 }
 
 async fn spawn_conn(
+    session_key: &str,
     command_line: &str,
     cwd: &std::path::Path,
     env: &[(String, String)],
@@ -393,7 +404,7 @@ async fn spawn_conn(
             "terminal": false
         }
     });
-    tokio::time::timeout(
+    let init = tokio::time::timeout(
         Duration::from_secs(30),
         request(&stdin, &next_id, &pending, "initialize", init_params),
     )
@@ -405,23 +416,21 @@ async fn spawn_conn(
     })?
     .map_err(|e| format!("ACP initialize failed for `{command_line}`: {e}"))?;
 
-    // session/new
-    let new_params = json!({
-        "cwd": cwd.to_string_lossy(),
-        "mcpServers": []
-    });
-    let res = tokio::time::timeout(
-        Duration::from_secs(30),
-        request(&stdin, &next_id, &pending, "session/new", new_params),
-    )
-    .await
-    .map_err(|_| "ACP session setup timed out after 30 seconds".to_string())?
-    .map_err(|e| format!("ACP session/new failed: {e}"))?;
-    let session_id = res
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .ok_or("ACP session/new returned no sessionId")?
-        .to_string();
+    let caps = &init["agentCapabilities"];
+    let resumed = match sessions::lookup(session_key, command_line, cwd) {
+        Some(id) => resume_session(&stdin, &next_id, &pending, caps, cwd, &id)
+            .await
+            .map(|res| (id, res)),
+        None => None,
+    };
+    let (session_id, res, needs_history) = match resumed {
+        Some((id, res)) => (id, res, false),
+        None => {
+            let (id, res) = new_session(&stdin, &next_id, &pending, cwd).await?;
+            (id, res, true)
+        }
+    };
+    sessions::remember(session_key, command_line, cwd, &session_id);
     let available_models = parse_available_models(&res);
     let mut config_options = res.get("configOptions").cloned().unwrap_or(Value::Null);
     config_options = set_matching_config_option(
@@ -451,6 +460,7 @@ async fn spawn_conn(
         prompt_ctx,
         session_id,
         available_models,
+        needs_history: Arc::new(AtomicBool::new(needs_history)),
     };
     Ok(Conn {
         command_line: command_line.to_string(),
@@ -462,6 +472,71 @@ async fn spawn_conn(
         _read_task: read_task,
         _stderr_task: stderr_task,
     })
+}
+
+/// Create a blank agent session, returning its id and the raw `session/new` response.
+async fn new_session(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    next_id: &Arc<AtomicI64>,
+    pending: &Pending,
+    cwd: &std::path::Path,
+) -> Result<(String, Value), String> {
+    let params = json!({
+        "cwd": cwd.to_string_lossy(),
+        "mcpServers": []
+    });
+    let res = tokio::time::timeout(
+        Duration::from_secs(30),
+        request(stdin, next_id, pending, "session/new", params),
+    )
+    .await
+    .map_err(|_| "ACP session setup timed out after 30 seconds".to_string())?
+    .map_err(|e| format!("ACP session/new failed: {e}"))?;
+    let session_id = res
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or("ACP session/new returned no sessionId")?
+        .to_string();
+    Ok((session_id, res))
+}
+
+/// Reattach to a previous agent session so it keeps its conversation context: `session/resume`
+/// when advertised (no history replay), else `session/load` (the agent replays the history as
+/// `session/update` notifications, which are dropped because no prompt is in flight). Returns
+/// `None` when the agent supports neither or the session can no longer be restored.
+async fn resume_session(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    next_id: &Arc<AtomicI64>,
+    pending: &Pending,
+    caps: &Value,
+    cwd: &std::path::Path,
+    session_id: &str,
+) -> Option<Value> {
+    let params = json!({
+        "sessionId": session_id,
+        "cwd": cwd.to_string_lossy(),
+        "mcpServers": []
+    });
+    let mut methods = Vec::new();
+    if caps["sessionCapabilities"]["resume"].is_object() {
+        methods.push("session/resume");
+    }
+    if caps["loadSession"].as_bool() == Some(true) {
+        methods.push("session/load");
+    }
+    for method in methods {
+        let res = tokio::time::timeout(
+            Duration::from_secs(60),
+            request(stdin, next_id, pending, method, params.clone()),
+        )
+        .await;
+        match res {
+            Ok(Ok(res)) => return Some(res),
+            Ok(Err(e)) => eprintln!("[acp] {method} {session_id} failed: {e}"),
+            Err(_) => eprintln!("[acp] {method} {session_id} timed out"),
+        }
+    }
+    None
 }
 
 /// Extract the selectable model ids from a `session/new` response, supporting both adapter
@@ -599,6 +674,7 @@ async fn run_prompt(
     // params would make this future `!Send` and unspawnable.
     let AcpPrompt {
         text,
+        history,
         images,
         event_tx,
         mut approval_rx,
@@ -614,6 +690,11 @@ async fn run_prompt(
     });
     let _ = event_tx.send(AgentEvent::AgentStart);
 
+    let text = if handles.needs_history.swap(false, Ordering::SeqCst) {
+        with_history(&history, &text)
+    } else {
+        text
+    };
     let prompt_params = json!({
         "sessionId": handles.session_id,
         "prompt": build_prompt_blocks(&text, &images),
@@ -778,6 +859,18 @@ fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
         other => other.to_string(),
     };
     (name, tool.get("rawInput").cloned())
+}
+
+/// Prefix the user's message with the earlier conversation, for a blank session standing in for
+/// one the agent could not resume.
+fn with_history(history: &str, text: &str) -> String {
+    if history.trim().is_empty() {
+        return text.to_string();
+    }
+    format!(
+        "<conversation_history>\nThis conversation started earlier; the agent session was restarted, so here is the transcript so far. Treat it as context you already have: continue from it and do not redo earlier work unless asked.\n\n{}\n</conversation_history>\n\n{text}",
+        history.trim()
+    )
 }
 
 /// Build the ACP prompt content blocks for a user turn.
