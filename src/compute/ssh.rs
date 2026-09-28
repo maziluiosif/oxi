@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use russh::ChannelMsg;
 use russh::client::{self, AuthResult};
-use russh::keys::{HashAlg, PublicKey};
+use russh::keys::{HashAlg, PublicKeyOrCertificate};
 
 use crate::settings::SshConfig;
 
@@ -29,9 +29,13 @@ impl client::Handler for HostKeyVerifier {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+        // A host certificate is pinned by the host key it carries; its CA is not trusted.
+        let fp = server_public_key
+            .public_key()
+            .fingerprint(HashAlg::Sha256)
+            .to_string();
         if let Ok(mut slot) = self.observed.lock() {
             *slot = Some(fp.clone());
         }
