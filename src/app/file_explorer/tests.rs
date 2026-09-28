@@ -17,6 +17,7 @@ fn document(path: PathBuf) -> EditorDocument {
         minimap_cache: None,
         viewport_width_bits: None,
         viewport_anchor_line: 0,
+        media: None,
     }
 }
 
