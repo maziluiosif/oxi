@@ -5,8 +5,11 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use base64::Engine as _;
+use eframe::egui::load::BytesPoll;
 use eframe::egui::text::{LayoutJob, TextFormat};
-use eframe::egui::{Align, CornerRadius, FontId, Hyperlink, Image, RichText, Stroke, Ui};
+use eframe::egui::{
+    Align, CornerRadius, CursorIcon, FontId, Hyperlink, Image, RichText, Sense, Stroke, Ui,
+};
 use pulldown_cmark::{Event, Tag, TagEnd};
 
 use crate::theme::*;
@@ -120,14 +123,23 @@ pub(super) fn render_markdown_inline_image(
         ui.add_space(4.0);
         return;
     };
-    let mut img = img
-        .max_width(max_w)
+    // Native size capped to the column: the default `Fraction` fit scales to the remaining
+    // space of the wrapped row, which is only a line tall, so images rendered as tiny thumbs.
+    let max_h = if compact { 120.0 } else { 480.0 };
+    let img = img
+        .fit_to_original_size(1.0)
+        .max_size(eframe::egui::vec2(max_w, max_h))
         .corner_radius(CornerRadius::same(crate::theme::RADIUS_BUTTON))
-        .show_loading_spinner(true);
-    if compact {
-        img = img.max_height(120.0);
+        .show_loading_spinner(true)
+        .sense(Sense::click());
+    let uri = img.source(ui.ctx()).uri().map(str::to_owned);
+    let resp = ui.add(img).on_hover_cursor(CursorIcon::ZoomIn);
+    if resp.clicked()
+        && let Some(uri) = uri
+        && let Ok(BytesPoll::Ready { bytes, .. }) = ui.ctx().try_load_bytes(&uri)
+    {
+        crate::ui::image_viewer::open(ui.ctx(), &bytes);
     }
-    let resp = ui.add(img);
     if !alt.is_empty() {
         if dest_url.starts_with("http://") || dest_url.starts_with("https://") {
             resp.on_hover_text(format!("{alt}\n\n{dest_url}"));
