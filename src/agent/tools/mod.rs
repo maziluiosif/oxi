@@ -51,6 +51,7 @@ mod diff;
 mod file_ops;
 mod paths;
 mod shell_search;
+pub(crate) use shell_search::{isolate_process_group, terminate_child_tree};
 mod undo;
 mod web;
 

@@ -307,6 +307,12 @@ async fn ensure_conn(
     Ok(handles)
 }
 
+/// `PATH` for tool subprocesses launched from a GUI session (login-shell `PATH` merged with
+/// oxi's own). Shared with MCP stdio servers, which need `npx`/`uvx` just like ACP agents.
+pub(crate) async fn subprocess_path() -> Option<String> {
+    install::shell_path().await
+}
+
 fn build_command(command_line: &str) -> Command {
     #[cfg(windows)]
     {
@@ -933,7 +939,11 @@ async fn request(
 
 async fn write_line(stdin: &Arc<AsyncMutex<ChildStdin>>, msg: &Value) -> Result<(), String> {
     if activity_log::is_enabled() {
-        activity_log::log_json(ActivityKind::Acp, format!("→ {}", rpc_title(msg)), msg);
+        activity_log::log_json(
+            ActivityKind::Acp,
+            format!("→ {}", activity_log::rpc_title(msg)),
+            msg,
+        );
     }
     let mut line = serde_json::to_string(msg).map_err(|e| e.to_string())?;
     line.push('\n');
@@ -988,7 +998,7 @@ async fn read_loop(
                 match serde_json::from_str::<Value>(&line) {
                     Ok(v) => activity_log::log_json(
                         ActivityKind::Acp,
-                        format!("← {}", rpc_title(&v)),
+                        format!("← {}", activity_log::rpc_title(&v)),
                         &v,
                     ),
                     Err(_) => activity_log::log(ActivityKind::Acp, "← (unparsed line)", &line),
@@ -1002,16 +1012,6 @@ async fn read_loop(
     let mut p = pending.lock().await;
     for (_, tx) in p.drain() {
         let _ = tx.send(Err("ACP agent closed the connection".to_string()));
-    }
-}
-
-/// Activity-log title for a JSON-RPC message: the method, or which request a response answers.
-fn rpc_title(msg: &Value) -> String {
-    match (msg.get("method").and_then(|m| m.as_str()), msg.get("id")) {
-        (Some(method), _) => method.to_string(),
-        (None, Some(id)) if msg.get("error").is_some() => format!("error for #{id}"),
-        (None, Some(id)) => format!("response #{id}"),
-        _ => "message".to_string(),
     }
 }
 

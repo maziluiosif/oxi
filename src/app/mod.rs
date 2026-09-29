@@ -53,6 +53,8 @@ pub struct OxiApp {
     /// Persistent Claude Code (ACP) agent subprocesses, one per session. Cheap to clone; the
     /// subprocesses live on a dedicated background thread/runtime started once here.
     pub acp: crate::agent::acp::AcpManager,
+    /// MCP server connections shared by every agent run (see [`crate::agent::mcp`]).
+    pub mcp: crate::agent::mcp::McpManager,
     /// Local voice dictation engine (mic capture + lazy-loaded whisper model). Cheap to
     /// clone; lives on a dedicated background thread started once here. See
     /// [`crate::voice_engine`].
@@ -240,6 +242,7 @@ impl OxiApp {
                 .expect("failed to initialize shared agent runtime"),
             tunnels: crate::compute::TunnelManager::spawn(),
             acp: crate::agent::acp::AcpManager::spawn(),
+            mcp: crate::agent::mcp::McpManager::new(),
             voice,
             clipboard_image_paste_key_down: false,
             context_overhead_cache: Default::default(),

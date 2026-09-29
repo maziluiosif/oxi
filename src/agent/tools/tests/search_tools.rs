@@ -8,7 +8,7 @@ const PWD_CMD: &str = "cd";
 
 fn sleep_cmd(secs: u32) -> String {
     if cfg!(windows) {
-        format!("ping -n {} 127.0.0.1 >nul", secs + 1)
+        format!("powershell -NoProfile -Command Start-Sleep -Seconds {secs}")
     } else {
         format!("sleep {secs}")
     }
@@ -77,7 +77,7 @@ fn tool_bash_timeout() {
         &all_enabled(),
     );
     assert!(!res.is_error);
-    assert!(res.output.contains("timeout"));
+    assert!(res.output.contains("timeout"), "{}", res.output);
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn tool_bash_timeout_cap_clamps_requested_timeout() {
         &env,
     );
     assert!(!res.is_error);
-    assert!(res.output.contains("timeout"));
+    assert!(res.output.contains("timeout"), "{}", res.output);
     assert!(start.elapsed() < std::time::Duration::from_secs(3));
 }
 
@@ -107,7 +107,7 @@ fn tool_bash_default_timeout_respects_low_cap() {
     // No explicit timeout: default 15s would exceed the 1s cap, so it clamps to 1s.
     let res = run_tool(&cwd, "bash", &json!({"command": sleep_cmd(30)}), &env);
     assert!(!res.is_error);
-    assert!(res.output.contains("timeout"));
+    assert!(res.output.contains("timeout"), "{}", res.output);
     assert!(start.elapsed() < std::time::Duration::from_secs(3));
 }
 

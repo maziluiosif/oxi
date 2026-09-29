@@ -511,6 +511,7 @@ impl OxiApp {
             settings,
             tunnels: self.tunnels.clone(),
             acp: self.acp.clone(),
+            mcp: self.mcp.clone(),
             acp_session_key,
             cwd,
             chat_for_history: chat,

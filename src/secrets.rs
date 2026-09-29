@@ -141,6 +141,17 @@ pub struct UnifiedSecrets {
     /// GitHub personal access token used by the native Git HTTPS transport.
     #[serde(default)]
     pub github_token: String,
+    /// Per MCP server (by name): bearer token and `KEY=VALUE` environment lines.
+    #[serde(default)]
+    pub mcp: HashMap<String, McpSecrets>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct McpSecrets {
+    #[serde(default)]
+    pub bearer_token: String,
+    #[serde(default)]
+    pub env: String,
 }
 
 const UNIFIED_ACCOUNT: &str = "oxi-secrets";

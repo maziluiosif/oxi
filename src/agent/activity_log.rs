@@ -176,6 +176,16 @@ impl StreamCapture {
     }
 }
 
+/// Activity-log title for a JSON-RPC message: the method, or which request a response answers.
+pub fn rpc_title(msg: &Value) -> String {
+    match (msg.get("method").and_then(|m| m.as_str()), msg.get("id")) {
+        (Some(method), _) => method.to_string(),
+        (None, Some(id)) if msg.get("error").is_some() => format!("error for #{id}"),
+        (None, Some(id)) => format!("response #{id}"),
+        _ => "message".to_string(),
+    }
+}
+
 /// Short `…/path` form of a URL for entry titles, without query strings (which may carry keys).
 pub fn url_title(method: &str, url: &str) -> String {
     let clean = url.split(['?', '#']).next().unwrap_or(url);

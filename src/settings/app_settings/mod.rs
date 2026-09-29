@@ -294,7 +294,8 @@ mod query;
 mod types;
 
 pub use types::{
-    DictationSettings, LocalHfSettings, McpServerConfig, WindowsTerminal, WorkspaceEntry,
+    DEFAULT_MCP_TIMEOUT_SECS, DictationSettings, LocalHfSettings, McpServerConfig, McpTransport,
+    WindowsTerminal, WorkspaceEntry,
 };
 
 #[cfg(test)]

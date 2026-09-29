@@ -75,6 +75,8 @@ pub struct AgentRunRequest {
     pub settings: AppSettings,
     pub tunnels: crate::compute::TunnelManager,
     pub acp: crate::agent::acp::AcpManager,
+    /// App-wide MCP connections, reused across runs.
+    pub mcp: crate::agent::mcp::McpManager,
     pub acp_session_key: String,
     pub cwd: PathBuf,
     pub chat_for_history: Vec<ChatMessage>,
@@ -119,6 +121,7 @@ pub fn spawn_agent_run(
             settings,
             tunnels,
             acp,
+            mcp,
             acp_session_key,
             cwd,
             chat_for_history,
@@ -169,8 +172,13 @@ pub fn spawn_agent_run(
         let max_rounds = settings.max_tool_rounds;
         let mut tools =
             tool_definitions_json(&settings.tools_enabled, settings.bash_timeout_cap_secs);
-        let mcp = crate::agent::mcp::McpManager::new();
-        mcp.sync_servers(&settings.mcp_servers);
+        // Connects new/changed servers and restarts dead ones; a no-op when everything is up.
+        // Blocking (process spawns, HTTP handshakes), so keep it off the async workers.
+        {
+            let mcp = mcp.clone();
+            let servers = settings.mcp_servers.clone();
+            let _ = tokio::task::spawn_blocking(move || mcp.sync_servers(&servers)).await;
+        }
         tools.extend(mcp.tool_definitions());
         // The tool definitions ride along in every request, so count them as fixed overhead when
         // deciding how much history fits under the trim ceiling.

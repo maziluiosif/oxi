@@ -59,7 +59,14 @@ impl AppSettings {
         };
         settings.normalize();
         settings.migrate_secrets_to_keychain();
-        settings.github_token = crate::secrets::load_unified().github_token;
+        let unified = crate::secrets::load_unified();
+        settings.github_token = unified.github_token.clone();
+        for server in &mut settings.mcp_servers {
+            if let Some(secret) = unified.mcp.get(&server.name) {
+                server.bearer_token = secret.bearer_token.clone();
+                server.env = secret.env.clone();
+            }
+        }
         if migrated {
             Self::migrate_ssh_credentials(&ssh_renames);
             // Rewrite settings.json in the new shape right away so the migration runs
@@ -115,6 +122,24 @@ impl AppSettings {
         }
         if unified.github_token != self.github_token {
             unified.github_token = self.github_token.clone();
+            changed = true;
+        }
+        let mcp: std::collections::HashMap<String, crate::secrets::McpSecrets> = self
+            .mcp_servers
+            .iter()
+            .filter(|s| !s.bearer_token.is_empty() || !s.env.is_empty())
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    crate::secrets::McpSecrets {
+                        bearer_token: s.bearer_token.clone(),
+                        env: s.env.clone(),
+                    },
+                )
+            })
+            .collect();
+        if unified.mcp != mcp {
+            unified.mcp = mcp;
             changed = true;
         }
         if changed {

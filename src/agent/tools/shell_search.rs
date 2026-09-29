@@ -198,7 +198,29 @@ fn spawn_pipe_reader<R: Read + Send + 'static>(
     })
 }
 
-fn terminate_child_tree(child: &mut Child) {
+/// Start the child in its own process group so [`terminate_child_tree`] can kill everything it
+/// spawns. No-op on Windows, where `taskkill /T` walks the tree instead.
+pub(crate) fn isolate_process_group(c: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setpgid(0, 0) only changes the soon-to-exec child's process group and does
+        // not access parent memory. It enables reliable whole-tree termination on timeout.
+        unsafe {
+            c.pre_exec(|| {
+                if libc::setpgid(0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = c;
+}
+
+/// Kill `child` and everything it spawned (see [`isolate_process_group`]), then reap it.
+pub(crate) fn terminate_child_tree(child: &mut Child) {
     #[cfg(unix)]
     {
         // The shell is placed in its own process group before exec. A negative pid targets the
@@ -251,8 +273,6 @@ pub(crate) fn tool_bash_streaming(
     // therefore break Windows builds even though that branch could never execute there.
     #[cfg(unix)]
     let mut child = {
-        use std::os::unix::process::CommandExt;
-
         let mut c = Command::new("/bin/sh");
         c.arg("-c")
             .arg(cmd)
@@ -260,16 +280,7 @@ pub(crate) fn tool_bash_streaming(
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         sanitize_bash_env(&mut c);
-        // SAFETY: setpgid(0, 0) only changes the soon-to-exec child's process group and does
-        // not access parent memory. It enables reliable whole-tree termination on timeout.
-        unsafe {
-            c.pre_exec(|| {
-                if libc::setpgid(0, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        isolate_process_group(&mut c);
         c.spawn().map_err(|e| e.to_string())?
     };
     #[cfg(windows)]
