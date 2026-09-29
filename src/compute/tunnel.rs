@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use russh::client::{self, AuthResult};
-use russh::keys::{HashAlg, PublicKey};
+use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
@@ -65,9 +65,13 @@ impl client::Handler for HostKeyVerifier {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let fp = server_public_key.fingerprint(HashAlg::Sha256).to_string();
+        // A host certificate is pinned by the host key it carries; its CA is not trusted.
+        let fp = server_public_key
+            .public_key()
+            .fingerprint(HashAlg::Sha256)
+            .to_string();
         if let Ok(mut slot) = self.observed.lock() {
             *slot = Some(fp.clone());
         }
@@ -330,7 +334,10 @@ mod tests {
             pinned,
             observed: observed.clone(),
         };
-        let accepted = v.check_server_key(&sample_key()).await.unwrap();
+        let accepted = v
+            .check_server_key(&PublicKeyOrCertificate::from(sample_key()))
+            .await
+            .unwrap();
         let recorded = observed.lock().unwrap_or_else(|e| e.into_inner()).clone();
         (accepted, recorded)
     }

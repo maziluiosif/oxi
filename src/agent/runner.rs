@@ -593,10 +593,11 @@ async fn run_acp_turn(
     approval_policy: ApprovalPolicy,
     cancel: &Arc<AtomicBool>,
 ) {
-    let last_user = chat_for_history
+    let last_user_idx = chat_for_history
         .iter()
-        .rev()
-        .find(|m| m.role == crate::model::MsgRole::User);
+        .rposition(|m| m.role == crate::model::MsgRole::User);
+    let last_user = last_user_idx.map(|i| &chat_for_history[i]);
+    let history = acp_history_transcript(&chat_for_history[..last_user_idx.unwrap_or(0)]);
     let text = last_user.map(|m| m.text.clone()).unwrap_or_default();
     let images: Vec<(String, Vec<u8>)> = last_user
         .map(|m| {
@@ -621,6 +622,7 @@ async fn run_acp_turn(
         model: cfg.model_id.clone(),
         effort: cfg.effort.clone(),
         text,
+        history,
         images,
         event_tx: tx.clone(),
         approval_rx,
@@ -635,6 +637,61 @@ async fn run_acp_turn(
         Ok(()) => AgentOutcome::Success { wire_cache: None },
     };
     let _ = tx.send(AgentEvent::Finished(outcome));
+}
+
+/// Upper bound on the replayed transcript; older turns are dropped first.
+const ACP_HISTORY_MAX_CHARS: usize = 120_000;
+
+/// Plain-text transcript of earlier turns, handed to an ACP agent that had to start a blank
+/// session (it could not resume its own) so it still knows the conversation. Keeps user text,
+/// compaction summaries, answers, and one line per tool call; drops thinking and tool output.
+fn acp_history_transcript(chat: &[ChatMessage]) -> String {
+    use crate::model::{AssistantBlock, MsgRole};
+    let mut turns: Vec<String> = Vec::new();
+    for m in chat {
+        match m.role {
+            MsgRole::User if m.is_summary => {
+                turns.push(format!(
+                    "[Summary of earlier conversation]\n{}",
+                    m.text.trim()
+                ));
+            }
+            MsgRole::User => {
+                let mut t = format!("User: {}", m.text.trim());
+                if !m.attachments.is_empty() {
+                    t.push_str(&format!("\n[{} image(s) attached]", m.attachments.len()));
+                }
+                turns.push(t);
+            }
+            MsgRole::Assistant => {
+                let mut parts = Vec::new();
+                for b in &m.blocks {
+                    match b {
+                        AssistantBlock::Answer(a) if !a.trim().is_empty() => {
+                            parts.push(a.trim().to_string())
+                        }
+                        AssistantBlock::Tool {
+                            name, args_summary, ..
+                        } => parts.push(match args_summary {
+                            Some(args) => format!("[tool {name}: {args}]"),
+                            None => format!("[tool {name}]"),
+                        }),
+                        _ => {}
+                    }
+                }
+                if !parts.is_empty() {
+                    turns.push(format!("Assistant: {}", parts.join("\n")));
+                }
+            }
+        }
+    }
+    let mut total = 0;
+    let mut start = turns.len();
+    while start > 0 && total + turns[start - 1].len() <= ACP_HISTORY_MAX_CHARS {
+        start -= 1;
+        total += turns[start].len() + 2;
+    }
+    turns[start..].join("\n\n")
 }
 
 #[cfg(test)]

@@ -157,7 +157,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
         .map_err(|e| format!("No usable microphone input config: {e}"))?;
     let sample_format = supported.sample_format();
     let channels = supported.channels() as usize;
-    let sample_rate = supported.sample_rate().0;
+    let sample_rate = supported.sample_rate();
     let config: cpal::StreamConfig = supported.into();
 
     let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
@@ -167,7 +167,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
         let samples = samples.clone();
         match sample_format {
             cpal::SampleFormat::F32 => device.build_input_stream(
-                &config,
+                config,
                 move |data: &[f32], _| {
                     if let Ok(mut buf) = samples.lock() {
                         buf.extend_from_slice(data);
@@ -177,7 +177,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
                 None,
             ),
             cpal::SampleFormat::I16 => device.build_input_stream(
-                &config,
+                config,
                 move |data: &[i16], _| {
                     if let Ok(mut buf) = samples.lock() {
                         buf.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
@@ -187,7 +187,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
                 None,
             ),
             cpal::SampleFormat::U16 => device.build_input_stream(
-                &config,
+                config,
                 move |data: &[u16], _| {
                     if let Ok(mut buf) = samples.lock() {
                         buf.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
