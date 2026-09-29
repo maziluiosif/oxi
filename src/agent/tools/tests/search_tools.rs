@@ -8,7 +8,9 @@ const PWD_CMD: &str = "cd";
 
 fn sleep_cmd(secs: u32) -> String {
     if cfg!(windows) {
-        format!("powershell -NoProfile -Command Start-Sleep -Seconds {secs}")
+        // Reuse the Python runtime required by the MCP fixtures instead of depending on
+        // Windows PowerShell being installed or available on PATH.
+        format!("python -c \"import time; time.sleep({secs})\"")
     } else {
         format!("sleep {secs}")
     }
