@@ -124,6 +124,7 @@ impl eframe::App for OxiApp {
         // Shared destructive-action confirmation modal, on top of everything.
         self.render_confirm_prompt(ui.ctx());
         self.render_editor_prompt(ui.ctx());
+        crate::ui::image_viewer::show(ui.ctx());
     }
 }
 

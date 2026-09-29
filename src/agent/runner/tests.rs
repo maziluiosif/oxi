@@ -101,3 +101,51 @@ fn configured_key_trims_whitespace() {
         "sk-padded"
     );
 }
+
+fn chat_msg(
+    role: crate::model::MsgRole,
+    text: &str,
+    blocks: Vec<crate::model::AssistantBlock>,
+) -> ChatMessage {
+    ChatMessage {
+        role,
+        text: text.to_string(),
+        is_summary: false,
+        attachments: vec![],
+        blocks,
+        streaming: false,
+        started_at: None,
+        worked_duration: None,
+    }
+}
+
+#[test]
+fn acp_history_transcript_keeps_turns_and_skips_thinking() {
+    use crate::model::{AssistantBlock, MsgRole};
+    let chat = vec![
+        chat_msg(MsgRole::User, "fix the bug", vec![]),
+        chat_msg(
+            MsgRole::Assistant,
+            "",
+            vec![
+                AssistantBlock::Thinking("secret".into()),
+                AssistantBlock::Answer("Done.".into()),
+            ],
+        ),
+    ];
+    let t = acp_history_transcript(&chat);
+    assert_eq!(t, "User: fix the bug\n\nAssistant: Done.");
+}
+
+#[test]
+fn acp_history_transcript_drops_oldest_turns_over_budget() {
+    use crate::model::MsgRole;
+    let big = "x".repeat(ACP_HISTORY_MAX_CHARS - 10);
+    let chat = vec![
+        chat_msg(MsgRole::User, "old", vec![]),
+        chat_msg(MsgRole::User, &big, vec![]),
+    ];
+    let t = acp_history_transcript(&chat);
+    assert!(!t.contains("old"));
+    assert!(t.starts_with("User: xxx"));
+}

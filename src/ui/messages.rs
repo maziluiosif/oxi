@@ -48,13 +48,14 @@ fn user_image_texture(
         return Some(tex.clone());
     }
     let dyn_img = image::load_from_memory(data).ok()?;
-    let rgba = dyn_img.thumbnail(160, 160).to_rgba8();
+    // Decoded at 2x the display size so the thumbnail stays crisp on HiDPI screens.
+    let rgba = dyn_img.thumbnail(640, 640).to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
     let color_image = eframe::egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
     let tex = ui.ctx().load_texture(
         format!("user_att_{msg_idx}_{i}_{h:016x}"),
         color_image,
-        TextureOptions::default(),
+        TextureOptions::LINEAR,
     );
     ui.ctx()
         .data_mut(|d| d.insert_persisted(cache_id, tex.clone()));
@@ -234,6 +235,9 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
                                         .line_height(Some(FS_BODY * 1.35))
                                         .color(c_text()),
                                 )
+                                // The bubble is right-anchored (`Align::Max`), but its wrapped
+                                // lines should read left-aligned rather than hug the right edge.
+                                .halign(egui::Align::Min)
                                 .wrap()
                                 .selectable(true),
                             );
@@ -271,9 +275,9 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
             match att {
                 UserAttachment::Image { mime, data } => {
                     if let Some(tex) = user_image_texture(ui, msg_idx, i, data) {
-                        // Larger thumbnail: max 200px, maintain aspect ratio
+                        // Thumbnail: max 320px, maintain aspect ratio
                         let mut sz = tex.size_vec2();
-                        let max = 200.0;
+                        let max = 320.0;
                         let m = sz.x.max(sz.y);
                         if m > max {
                             sz *= max / m;
@@ -283,7 +287,12 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                             .corner_radius(CornerRadius::same(RADIUS_CHIP))
                             .stroke(Stroke::new(1.0, c_border()))
                             .show(ui, |ui| {
-                                ui.add(Image::new((tex.id(), sz)));
+                                let resp = ui
+                                    .add(Image::new((tex.id(), sz)).sense(egui::Sense::click()))
+                                    .on_hover_cursor(egui::CursorIcon::ZoomIn);
+                                if resp.clicked() {
+                                    crate::ui::image_viewer::open(ui.ctx(), data);
+                                }
                             });
                     } else {
                         // Fallback badge when texture loading fails
