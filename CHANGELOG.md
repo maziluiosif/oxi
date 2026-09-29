@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-29
+
+### Added
+- Preview images, video, audio and binary files in editor tabs with zoomable/pannable image viewer
+- Show agent-generated images in chat and open them in a full-size modal viewer
+- Keep conversation context across app restarts by persisting ACP session IDs
+- Automatically install and update npm ACP adapters in the background
+
+### Changed
+- Markdown images now render at native size capped to column width instead of line height
+- User attachment thumbnails are larger and sharper
+- Wrapped lines in user chat bubble are left-aligned
+- Agent subprocesses now inherit login-shell PATH for better CLI tool discovery
+
+### Fixed
+- Adapt microphone capture to cpal 0.18 API changes
+- Adapt SSH host key pinning to russh 0.63 with PublicKeyOrCertificate handling
+- Adapt to tree-sitter 0.27 QueryMatch::captures() accessor changes
+- Fix intermittent highlight job disagreement in palette tests
+
+
 ## [1.0.0] - 2026-09-23
 
 ### Added
@@ -713,7 +734,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/maziluiosif/oxi/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/maziluiosif/oxi/compare/v0.26.1...v1.0.0
 [0.26.1]: https://github.com/maziluiosif/oxi/compare/v0.26.0...v0.26.1
 [0.26.0]: https://github.com/maziluiosif/oxi/compare/v0.25.0...v0.26.0
