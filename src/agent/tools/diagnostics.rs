@@ -167,7 +167,12 @@ static LOCATION_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid diagnostics regex")
 });
 
+static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").expect("valid ANSI control sequence regex")
+});
+
 fn summarize(command: &str, status: Option<i32>, body: &str) -> String {
+    let body = ANSI_RE.replace_all(body, "");
     let mut seen = std::collections::HashSet::new();
     let locations: Vec<String> = body
         .lines()
@@ -255,6 +260,25 @@ mod tests {
         );
         let out = summarize("python3 -m compileall -q .", Some(1), "SyntaxError: bad\n");
         assert!(out.contains("output tail:\nSyntaxError: bad"), "{out}");
+    }
+
+    #[test]
+    fn colored_output_preserves_locations_and_severity_counts() {
+        let out = summarize(
+            "cargo check",
+            Some(101),
+            "\x1b[1msrc/main.rs:2:18:\x1b[0m \x1b[1m\x1b[91merror[E0308]\x1b[0m: mismatched types\n\
+             src/lib.rs:1:1: \x1b[93mwarning\x1b[0m: unused import\n",
+        );
+        assert!(
+            out.contains("2 location(s), 1 error(s), 1 warning(s)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("src/main.rs:2:18: error[E0308]: mismatched types"),
+            "{out}"
+        );
+        assert!(!out.contains('\x1b'), "{out}");
     }
 
     #[test]

@@ -63,6 +63,21 @@ fn diagnostics_reports_cargo_errors_with_locations() {
         "fn main() {\n    let x: u32 = \"text\";\n}\n",
     )
     .unwrap();
+    #[cfg(windows)]
+    {
+        // Cargo can expand the test process's PATH beyond cmd's 8191-character limit.
+        // Give this fixture a short path to the same toolchain while running the real checker.
+        let cargo = std::path::Path::new(env!("CARGO"));
+        fs::write(
+            cwd.join("cargo.cmd"),
+            format!(
+                "@echo off\r\nset \"PATH={};%SystemRoot%\\System32\"\r\n\"{}\" %*\r\n",
+                cargo.parent().unwrap().display(),
+                cargo.display()
+            ),
+        )
+        .unwrap();
+    }
     let res = run_tool(&cwd, "diagnostics", &json!({}), &all_enabled());
     assert!(!res.is_error, "{}", res.output);
     assert!(
