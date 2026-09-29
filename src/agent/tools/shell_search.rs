@@ -210,6 +210,20 @@ fn terminate_child_tree(child: &mut Child) {
             libc::kill(pgid, libc::SIGKILL);
         }
     }
+    #[cfg(windows)]
+    {
+        // Killing `cmd` alone leaves its children running, and they keep the output pipes open,
+        // so the reader threads (and the whole tool call) would wait for them to finish anyway.
+        // `taskkill /T` walks and kills the complete process tree.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
     let _ = child.kill();
     let _ = child.wait();
 }

@@ -136,8 +136,25 @@ fn content_block_image_markdown(block: &Value) -> Option<String> {
 
 /// `uri` as an existing local file (plain path or `file://` URI).
 fn local_image_path(uri: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(uri.strip_prefix("file://").unwrap_or(uri));
+    let path = file_uri_to_path(uri);
     (path.is_absolute() && path.is_file()).then_some(path)
+}
+
+/// Path for a plain path or a `file://` URI. On Windows `file:///C:/x` carries a slash before
+/// the drive letter that must go, or the result is not an absolute path.
+pub(super) fn file_uri_to_path(uri: &str) -> PathBuf {
+    let rest = uri.strip_prefix("file://").unwrap_or(uri);
+    if cfg!(windows) {
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b':'
+        {
+            return PathBuf::from(&rest[1..]);
+        }
+    }
+    PathBuf::from(rest)
 }
 
 fn image_extension(path: &Path) -> Option<&'static str> {

@@ -169,7 +169,11 @@ fn tool_bash_drains_output_larger_than_os_pipe() {
         &cwd,
         "bash",
         &serde_json::json!({
-            "command": "i=0; while [ $i -lt 20000 ]; do echo 'large output line'; i=$((i+1)); done",
+            "command": if cfg!(windows) {
+                "for /L %i in (1,1,20000) do @echo large output line"
+            } else {
+                "i=0; while [ $i -lt 20000 ]; do echo 'large output line'; i=$((i+1)); done"
+            },
             "timeout": 5
         }),
         &all_enabled(),
