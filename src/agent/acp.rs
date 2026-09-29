@@ -309,8 +309,13 @@ async fn ensure_conn(
 fn build_command(command_line: &str) -> Command {
     #[cfg(windows)]
     {
+        // cmd.exe doesn't follow the MSVCRT quoting rules `Command::arg` escapes for, so a quoted
+        // path (like the managed adapter's) would reach it as `\"C:\...\"` and fail to launch.
+        // Pass the line verbatim; `/S` strips exactly the outer quotes added here.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let mut c = Command::new("cmd");
-        c.arg("/C").arg(command_line);
+        c.raw_arg(format!("/D /S /C \"{command_line}\""))
+            .creation_flags(CREATE_NO_WINDOW);
         c
     }
     #[cfg(not(windows))]
@@ -387,7 +392,8 @@ async fn spawn_conn(
     let next_id = Arc::new(AtomicI64::new(1));
     let alive = Arc::new(AtomicBool::new(true));
 
-    let stderr_task = tokio::spawn(drain_stderr(stderr));
+    let stderr_tail = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+    let stderr_task = tokio::spawn(drain_stderr(stderr, stderr_tail.clone()));
     let read_task = tokio::spawn(read_loop(
         stdout,
         pending.clone(),
@@ -414,7 +420,20 @@ async fn spawn_conn(
             "ACP agent `{command_line}` did not initialize within 30 seconds. Check that it is installed and can start from a terminal."
         )
     })?
-    .map_err(|e| format!("ACP initialize failed for `{command_line}`: {e}"))?;
+    .map_err(|e| format!("ACP initialize failed for `{command_line}`: {e}"));
+    let init = match init {
+        Ok(init) => init,
+        Err(e) => {
+            // The agent usually explains why it exited on stderr; give it a moment to flush.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let tail = stderr_tail.lock().unwrap_or_else(|e| e.into_inner());
+            if tail.is_empty() {
+                return Err(e);
+            }
+            let tail: Vec<&str> = tail.iter().map(String::as_str).collect();
+            return Err(format!("{e}\n{}", tail.join("\n")));
+        }
+    };
 
     let caps = &init["agentCapabilities"];
     let resumed = match sessions::lookup(session_key, command_line, cwd) {
@@ -1044,11 +1063,22 @@ async fn reply_err(stdin: &Arc<AsyncMutex<ChildStdin>>, id: Value, code: i64, me
     .await;
 }
 
-async fn drain_stderr(stderr: tokio::process::ChildStderr) {
+/// Lines of agent stderr kept for error messages.
+const STDERR_TAIL_LINES: usize = 12;
+
+async fn drain_stderr(
+    stderr: tokio::process::ChildStderr,
+    tail: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         if !line.trim().is_empty() {
             eprintln!("[acp] {line}");
+            let mut tail = tail.lock().unwrap_or_else(|e| e.into_inner());
+            if tail.len() == STDERR_TAIL_LINES {
+                tail.pop_front();
+            }
+            tail.push_back(line);
         }
     }
 }
