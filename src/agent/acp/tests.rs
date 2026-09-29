@@ -243,9 +243,10 @@ fn generated_image_becomes_inline_markdown_image() {
             _ => None,
         })
         .expect("markdown image");
+    assert!(dest.starts_with("file://"));
     assert_eq!(
-        std::path::PathBuf::from(dest.strip_prefix("file://").unwrap()),
-        saved
+        super::update_events::file_uri_to_path(&dest),
+        std::path::PathBuf::from(saved.to_string_lossy().replace('\\', "/"))
     );
     assert!(matches!(&evs[2], AgentEvent::ToolEnd { .. }));
     let _ = std::fs::remove_dir_all(&dir);

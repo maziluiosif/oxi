@@ -59,6 +59,23 @@ impl OxiApp {
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let activity_on = super::activity_window::activity_window_open(ui.ctx());
+                        let recording = self.conv.settings.activity_log_enabled;
+                        if crate::ui::chrome::icon_button_plain(
+                            ui,
+                            ICON_ACTIVITY,
+                            20.0,
+                            activity_on || recording,
+                        )
+                        .on_hover_text(if recording {
+                            "Activity log (recording)"
+                        } else {
+                            "Activity log: inspect raw requests, responses and tool calls"
+                        })
+                        .clicked()
+                        {
+                            super::activity_window::toggle_activity_window(ui.ctx());
+                        }
                         let term_on = self.conv.terminal_open;
                         if crate::ui::chrome::icon_button_plain(ui, ICON_TERMINAL, 20.0, term_on)
                             .on_hover_text("Toggle terminal panel (Cmd/Ctrl+`)")

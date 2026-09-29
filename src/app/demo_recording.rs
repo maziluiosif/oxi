@@ -159,6 +159,25 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.still("empty-chat-setup");
         rec.app().conv.settings.active_provider = LlmProviderKind::LocalHf;
         use super::state::SettingsTab;
+        {
+            let app = rec.app();
+            app.conv.settings.mcp_servers = vec![
+                crate::settings::McpServerConfig {
+                    name: "github".into(),
+                    command: "npx".into(),
+                    args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
+                    ..Default::default()
+                },
+                crate::settings::McpServerConfig {
+                    name: "docs".into(),
+                    transport: crate::settings::McpTransport::Http,
+                    url: "http://127.0.0.1:9/mcp".into(),
+                    ..Default::default()
+                },
+            ];
+            let servers = app.conv.settings.mcp_servers[1..].to_vec();
+            app.mcp.sync_servers(&servers);
+        }
         rec.app().open_settings_page();
         for (tab, name) in [
             (SettingsTab::Agent, "settings-agent"),
@@ -172,8 +191,18 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             rec.app().conv.settings_tab = tab;
             rec.harness.run_steps(3);
             rec.still(name);
+            if tab == SettingsTab::Agent {
+                rec.scroll_by(-700.0);
+                rec.still("settings-agent-mcp");
+            }
         }
+        rec.app()
+            .conv
+            .settings
+            .provider_mut(LlmProviderKind::LlamaCpp)
+            .base_url = "http://localhost:8080".into();
         for provider in [
+            LlmProviderKind::LlamaCpp,
             LlmProviderKind::OpenAi,
             LlmProviderKind::ClaudeCodeAcp,
             LlmProviderKind::Ollama,
@@ -284,6 +313,42 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     rec.hold(2.2);
     rec.still("chat");
     if gallery {
+        {
+            use crate::agent::activity_log::{self as activity, ActivityKind};
+            activity::set_enabled(true);
+            activity::log_json(
+                ActivityKind::Request,
+                "POST http://localhost:8080/v1/chat/completions",
+                &serde_json::json!({
+                    "model": "qwen2.5-coder-7b",
+                    "stream": true,
+                    "messages": [{ "role": "user", "content": "Run the tests and fix the failing one" }],
+                }),
+            );
+            activity::log(
+                ActivityKind::Retry,
+                "Attempt 1/5 failed · POST http://localhost:8080/v1/chat/completions",
+                "HTTP 503: loading model",
+            );
+            activity::log(
+                ActivityKind::Response,
+                "HTTP 200 OK · http://localhost:8080/v1/chat/completions · round 1",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Running\"}}]}\n\ndata: [DONE]\n",
+            );
+            activity::log(
+                ActivityKind::Tool,
+                "bash",
+                "Arguments:\n{ \"command\": \"python -m pytest -q\" }\n\nResult:\n5 passed",
+            );
+            let app = rec.app();
+            app.conv.settings.activity_log_enabled = true;
+            super::activity_window::toggle_activity_window(&rec.harness.ctx);
+        }
+        rec.harness.run_steps(3);
+        rec.still("activity-log");
+        super::activity_window::toggle_activity_window(&rec.harness.ctx);
+        rec.app().conv.settings.activity_log_enabled = false;
+        crate::agent::activity_log::set_enabled(false);
         {
             let app = rec.app();
             let key = app.active_session_key();
@@ -756,6 +821,22 @@ impl Recorder<'_> {
                 },
             ]
         });
+    }
+
+    /// Wheel-scroll whatever is under the middle of the window (negative = down).
+    fn scroll_by(&mut self, dy: f32) {
+        for _ in 0..10 {
+            self.harness
+                .event(Event::PointerMoved(egui::pos2(700.0, 400.0)));
+            self.harness.event(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, dy / 10.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            self.harness.run_steps(1);
+        }
+        self.harness.run_steps(20);
     }
 
     fn hold(&mut self, seconds: f32) {

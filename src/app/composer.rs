@@ -69,6 +69,7 @@ fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static s
         GptCodex => "GPT Codex",
         OpenCodeGo => "OpenCode",
         LmStudio => "LM Studio",
+        LlamaCpp => "llama.cpp",
         Ollama => "Ollama",
         LocalHf => "Local HF",
         RemoteHf => "Remote HF",

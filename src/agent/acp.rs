@@ -30,6 +30,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
+use super::activity_log::{self, ActivityKind};
 use super::approval::{ApprovalDecision, ApprovalPolicy};
 use super::events::AgentEvent;
 
@@ -304,6 +305,12 @@ async fn ensure_conn(
     let handles = conn.handles.clone();
     conns.lock().await.insert(session_key.to_string(), conn);
     Ok(handles)
+}
+
+/// `PATH` for tool subprocesses launched from a GUI session (login-shell `PATH` merged with
+/// oxi's own). Shared with MCP stdio servers, which need `npx`/`uvx` just like ACP agents.
+pub(crate) async fn subprocess_path() -> Option<String> {
+    install::shell_path().await
 }
 
 fn build_command(command_line: &str) -> Command {
@@ -931,6 +938,13 @@ async fn request(
 }
 
 async fn write_line(stdin: &Arc<AsyncMutex<ChildStdin>>, msg: &Value) -> Result<(), String> {
+    if activity_log::is_enabled() {
+        activity_log::log_json(
+            ActivityKind::Acp,
+            format!("→ {}", activity_log::rpc_title(msg)),
+            msg,
+        );
+    }
     let mut line = serde_json::to_string(msg).map_err(|e| e.to_string())?;
     line.push('\n');
     let mut guard = stdin.lock().await;
@@ -955,17 +969,56 @@ async fn read_loop(
     alive: Arc<AtomicBool>,
 ) {
     let mut lines = BufReader::new(stdout).lines();
+    // Streaming text arrives as one `session/update` per token chunk; logging each would push
+    // everything else out of the activity log, so consecutive chunks become one entry.
+    let mut chunks = String::new();
+    let mut chunk_count = 0usize;
+    let flush_chunks = |chunks: &mut String, count: &mut usize| {
+        if *count > 0 {
+            activity_log::log(
+                ActivityKind::Acp,
+                format!("← session/update · {count} streamed chunks"),
+                &*chunks,
+            );
+            chunks.clear();
+            *count = 0;
+        }
+    };
     while let Ok(Some(line)) = lines.next_line().await {
         if line.trim().is_empty() {
             continue;
         }
+        if activity_log::is_enabled() {
+            if is_streamed_chunk(&line) {
+                chunks.push_str(&line);
+                chunks.push('\n');
+                chunk_count += 1;
+            } else {
+                flush_chunks(&mut chunks, &mut chunk_count);
+                match serde_json::from_str::<Value>(&line) {
+                    Ok(v) => activity_log::log_json(
+                        ActivityKind::Acp,
+                        format!("← {}", activity_log::rpc_title(&v)),
+                        &v,
+                    ),
+                    Err(_) => activity_log::log(ActivityKind::Acp, "← (unparsed line)", &line),
+                }
+            }
+        }
         dispatch(&line, &pending, &prompt_ctx, &stdin).await;
     }
+    flush_chunks(&mut chunks, &mut chunk_count);
     alive.store(false, Ordering::SeqCst);
     let mut p = pending.lock().await;
     for (_, tx) in p.drain() {
         let _ = tx.send(Err("ACP agent closed the connection".to_string()));
     }
+}
+
+/// Cheap pre-parse check for streamed message/thought chunks (the bulk of ACP traffic).
+fn is_streamed_chunk(line: &str) -> bool {
+    line.contains("\"session/update\"")
+        && (line.contains("\"agent_message_chunk\"") || line.contains("\"agent_thought_chunk\""))
 }
 
 async fn dispatch(
@@ -1074,6 +1127,7 @@ async fn drain_stderr(
     while let Ok(Some(line)) = lines.next_line().await {
         if !line.trim().is_empty() {
             eprintln!("[acp] {line}");
+            activity_log::log(ActivityKind::Acp, "stderr", &line);
             let mut tail = tail.lock().unwrap_or_else(|e| e.into_inner());
             if tail.len() == STDERR_TAIL_LINES {
                 tail.pop_front();

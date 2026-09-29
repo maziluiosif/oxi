@@ -61,6 +61,7 @@ impl AppSettings {
             |kind: LlmProviderKind| !self.provider(kind).api_key.trim().is_empty();
         match kind {
             LlmProviderKind::LmStudio
+            | LlmProviderKind::LlamaCpp
             | LlmProviderKind::Ollama
             | LlmProviderKind::LocalHf
             | LlmProviderKind::RemoteHf => true,

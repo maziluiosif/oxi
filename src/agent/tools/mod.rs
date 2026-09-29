@@ -51,6 +51,7 @@ mod diff;
 mod file_ops;
 mod paths;
 mod shell_search;
+pub(crate) use shell_search::{isolate_process_group, terminate_child_tree};
 mod undo;
 mod web;
 
@@ -90,6 +91,29 @@ pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResu
 /// Run a tool and optionally publish cumulative live output. Currently bash is the only built-in
 /// tool that emits incremental snapshots; all tools still return the same final [`ToolResult`].
 pub fn run_tool_with_output(
+    cwd: &Path,
+    name: &str,
+    args: &Value,
+    env: &ToolEnv,
+    on_output: Option<ToolOutputCallback>,
+) -> ToolResult {
+    let result = run_tool_inner(cwd, name, args, env, on_output);
+    if crate::agent::activity_log::is_enabled() {
+        let status = if result.is_error { " · error" } else { "" };
+        crate::agent::activity_log::log(
+            crate::agent::activity_log::ActivityKind::Tool,
+            format!("{name}{status}"),
+            format!(
+                "Arguments:\n{}\n\nResult:\n{}",
+                serde_json::to_string_pretty(args).unwrap_or_default(),
+                result.output
+            ),
+        );
+    }
+    result
+}
+
+fn run_tool_inner(
     cwd: &Path,
     name: &str,
     args: &Value,

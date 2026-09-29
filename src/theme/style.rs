@@ -127,6 +127,8 @@ pub const ICON_PLAY: &str = "\u{f04b}";
 pub const ICON_HEART: &str = "\u{f004}";
 /// Magnifying glass — search fields (`nf-fa-search`).
 pub const ICON_SEARCH: &str = "\u{f002}";
+/// Activity log (status bar) — nf-md-pulse.
+pub const ICON_ACTIVITY: &str = "\u{f0430}";
 
 /// Small loading indicator (avoids default large `interact_size` spinners).
 pub fn small_spinner(ui: &mut egui::Ui) {

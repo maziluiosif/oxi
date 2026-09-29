@@ -105,6 +105,9 @@ pub(super) async fn send_with_retry(
     builder: reqwest::RequestBuilder,
     cancel: &Arc<AtomicBool>,
 ) -> Result<reqwest::Response, String> {
+    use super::activity_log::{self as activity, ActivityKind};
+
+    let title = log_request(&builder);
     let mut attempt = 0u32;
     loop {
         attempt += 1;
@@ -125,19 +128,54 @@ pub(super) async fn send_with_retry(
             Ok(res) => {
                 let status = res.status();
                 let body = res.text().await.unwrap_or_default();
+                activity::log(
+                    ActivityKind::Error,
+                    format!("HTTP {status} · {title}"),
+                    &body,
+                );
                 return Err(format_http_error(status, &body));
             }
             Err(e) => (e.to_string(), None),
         };
         if attempt >= MAX_SEND_ATTEMPTS {
+            activity::log(ActivityKind::Error, format!("Gave up · {title}"), &err);
             return Err(err);
         }
+        activity::log(
+            ActivityKind::Retry,
+            format!("Attempt {attempt}/{MAX_SEND_ATTEMPTS} failed · {title}"),
+            &err,
+        );
         eprintln!("[oxi] request failed (attempt {attempt}/{MAX_SEND_ATTEMPTS}), retrying: {err}");
         let delay = wait.unwrap_or_else(|| backoff_delay(attempt));
         if !sleep_cancellable(delay, cancel).await {
             return Err("Cancelled".into());
         }
     }
+}
+
+/// Record an outgoing request in the activity log (body only: headers carry credentials) and
+/// return the entry title so follow-up entries (retries, errors) can reference it.
+fn log_request(builder: &reqwest::RequestBuilder) -> String {
+    use super::activity_log::{self as activity, ActivityKind};
+
+    if !activity::is_enabled() {
+        return String::new();
+    }
+    let Some(req) = builder.try_clone().and_then(|b| b.build().ok()) else {
+        return String::new();
+    };
+    let title = activity::url_title(req.method().as_str(), req.url().as_str());
+    let body = req.body().and_then(|b| b.as_bytes()).unwrap_or_default();
+    match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(json) => activity::log_json(ActivityKind::Request, title.clone(), &json),
+        Err(_) => activity::log(
+            ActivityKind::Request,
+            title.clone(),
+            String::from_utf8_lossy(body),
+        ),
+    }
+    title
 }
 
 #[cfg(test)]

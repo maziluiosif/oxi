@@ -1,0 +1,192 @@
+//! Provider dispatch: resolve a provider's endpoint and credentials, then drive the matching
+//! streaming loop (OpenAI Chat Completions, Azure, Anthropic Messages, Codex Responses).
+//!
+//! Shared by the main agent run ([`crate::agent::runner`]), one-shot completions
+//! ([`crate::agent::complete`]) and sub-agents ([`crate::agent::subagent`]), so provider quirks
+//! (OpenCode Go's two protocols, Codex OAuth, SSH tunnels) live in exactly one place.
+
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Sender;
+
+use serde_json::Value;
+
+use super::anthropic::run_anthropic_loop;
+use super::approval::ApprovalGate;
+use super::codex_responses::run_codex_responses_loop;
+use super::events::AgentEvent;
+use super::loop_ctx::LoopCtx;
+use super::openai::{run_azure_chat_loop, run_chat_loop};
+use super::runner::{
+    azure_openai_api_version, configured_azure_openai_key, configured_custom_anthropic_key,
+    configured_lmstudio_key, configured_ollama_key, configured_openai_key,
+    configured_opencode_go_key, configured_openrouter_key, opencode_go_model_uses_anthropic,
+    openrouter_extra_headers,
+};
+use super::tools::ToolEnv;
+use crate::oauth::{ensure_codex_access_token, load_oauth_store};
+use crate::settings::{LlmProviderKind, ProviderConfig};
+
+pub(crate) struct DispatchParams<'a> {
+    pub cfg: &'a ProviderConfig,
+    pub client: &'a reqwest::Client,
+    /// SSH tunnels for remote runtimes. `None` uses the configured base URL as-is.
+    pub tunnels: Option<&'a crate::compute::TunnelManager>,
+    pub cwd: &'a Path,
+    pub env: &'a ToolEnv,
+    pub tx: &'a Sender<AgentEvent>,
+    pub cancel: &'a Arc<AtomicBool>,
+    pub gate: &'a mut ApprovalGate,
+    pub max_rounds: u32,
+    pub effort_override: Option<&'a str>,
+    pub context_char_budget: usize,
+    pub tools_chars: usize,
+}
+
+/// HTTP client tuned for streaming: bound connect time and idle time between chunks rather than
+/// the whole request (which would cut long turns off mid-stream), keep NAT/proxy paths alive.
+pub(crate) fn streaming_client(
+    cfg: &ProviderConfig,
+    read_timeout_secs: u64,
+) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(read_timeout_secs))
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .tls_danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// Run the provider loop for `p.cfg` over `messages` until the model stops calling tools (or
+/// `max_rounds` is reached). `messages` accumulates the provider-native history.
+pub(crate) async fn run_provider_loop(
+    p: DispatchParams<'_>,
+    messages: &mut Vec<Value>,
+    tools: &[Value],
+) -> Result<(), String> {
+    let DispatchParams {
+        cfg,
+        client,
+        tunnels,
+        cwd,
+        env,
+        tx,
+        cancel,
+        gate,
+        max_rounds,
+        effort_override,
+        context_char_budget,
+        tools_chars,
+    } = p;
+    let model = cfg.model_id.clone();
+    let local_base = async || match tunnels {
+        Some(t) => crate::compute::resolve_base_url(cfg, t).await,
+        None => Ok(cfg.effective_base_url()),
+    };
+    macro_rules! ctx {
+        ($base:expr, $model:expr) => {
+            &mut LoopCtx {
+                client,
+                base_url: $base,
+                model: $model,
+                cwd,
+                env,
+                tx,
+                cancel,
+                gate,
+                max_rounds,
+                effort_override,
+                context_char_budget,
+                tools_chars,
+            }
+        };
+    }
+
+    match cfg.provider {
+        LlmProviderKind::GptCodex => {
+            let mut oauth = load_oauth_store();
+            if oauth.openai_codex.is_some() {
+                let creds = ensure_codex_access_token(client, &mut oauth).await?;
+                let base = if cfg.base_url.trim().is_empty() {
+                    "https://chatgpt.com/backend-api".to_string()
+                } else {
+                    cfg.effective_base_url()
+                };
+                run_codex_responses_loop(ctx!(&base, &model), &creds.0, &creds.1, messages, tools)
+                    .await
+            } else {
+                let key = configured_openai_key(cfg)?;
+                let base = cfg.effective_base_url();
+                run_chat_loop(ctx!(&base, &model), &key, &[], messages, tools).await
+            }
+        }
+        LlmProviderKind::OpenAi => {
+            let key = configured_openai_key(cfg)?;
+            let base = cfg.effective_base_url();
+            run_chat_loop(ctx!(&base, &model), &key, &[], messages, tools).await
+        }
+        LlmProviderKind::OpenRouter => {
+            let key = configured_openrouter_key(cfg)?;
+            let base = cfg.effective_base_url();
+            let headers = openrouter_extra_headers(cfg);
+            run_chat_loop(ctx!(&base, &model), &key, &headers, messages, tools).await
+        }
+        LlmProviderKind::AzureOpenAi => {
+            let key = configured_azure_openai_key(cfg)?;
+            let base = cfg.effective_base_url();
+            let api_version = azure_openai_api_version();
+            run_azure_chat_loop(ctx!(&base, &model), &key, &api_version, messages, tools).await
+        }
+        LlmProviderKind::CustomAnthropic => {
+            let key = configured_custom_anthropic_key(cfg)?;
+            let base = cfg.effective_base_url();
+            run_anthropic_loop(ctx!(&base, &model), &key, &[], messages, tools).await
+        }
+        LlmProviderKind::LmStudio
+        | LlmProviderKind::LlamaCpp
+        | LlmProviderKind::LocalHf
+        | LlmProviderKind::RemoteHf => {
+            let key = configured_lmstudio_key(cfg);
+            let base = local_base().await?;
+            run_chat_loop(ctx!(&base, &model), &key, &[], messages, tools).await
+        }
+        LlmProviderKind::Ollama => {
+            let key = configured_ollama_key(cfg);
+            let base = local_base().await?;
+            run_chat_loop(ctx!(&base, &model), &key, &[], messages, tools).await
+        }
+        LlmProviderKind::OpenCodeGo => {
+            let key = configured_opencode_go_key(cfg)?;
+            let base = cfg.effective_base_url();
+            let model = model
+                .strip_prefix("opencode-go/")
+                .unwrap_or(&model)
+                .to_string();
+            if opencode_go_model_uses_anthropic(&model) {
+                // OpenCode Go exposes Anthropic-compatible models at
+                // https://opencode.ai/zen/go/v1/messages. `run_anthropic_loop`
+                // appends `/v1/messages`, so pass the base without `/v1`.
+                let anthropic_base = base.trim_end_matches("/v1").to_string();
+                run_anthropic_loop(ctx!(&anthropic_base, &model), &key, &[], messages, tools).await
+            } else {
+                // OpenCode Go exposes OpenAI-compatible models at
+                // https://opencode.ai/zen/go/v1/chat/completions. `run_chat_loop`
+                // appends `/chat/completions`, so include `/v1` in the base.
+                let chat_base = if base.trim_end_matches('/').ends_with("/v1") {
+                    base
+                } else {
+                    format!("{}/v1", base.trim_end_matches('/'))
+                };
+                run_chat_loop(ctx!(&chat_base, &model), &key, &[], messages, tools).await
+            }
+        }
+        LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => {
+            Err(
+                "ACP agents run their own agent loop; oxi cannot drive them as a plain model."
+                    .to_string(),
+            )
+        }
+    }
+}

@@ -8,6 +8,7 @@ use crate::model::{MsgRole, Session, SessionConfig};
 use crate::session_store;
 use crate::settings::AppSettings;
 
+mod activity_window;
 mod agent_handlers;
 mod compaction;
 mod composer;
@@ -52,6 +53,8 @@ pub struct OxiApp {
     /// Persistent Claude Code (ACP) agent subprocesses, one per session. Cheap to clone; the
     /// subprocesses live on a dedicated background thread/runtime started once here.
     pub acp: crate::agent::acp::AcpManager,
+    /// MCP server connections shared by every agent run (see [`crate::agent::mcp`]).
+    pub mcp: crate::agent::mcp::McpManager,
     /// Local voice dictation engine (mic capture + lazy-loaded whisper model). Cheap to
     /// clone; lives on a dedicated background thread started once here. See
     /// [`crate::voice_engine`].
@@ -93,6 +96,7 @@ impl OxiApp {
         let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
         let root_path = cwd.to_string_lossy().to_string();
         let settings = AppSettings::load();
+        crate::agent::activity_log::set_enabled(settings.activity_log_enabled);
         let git_open = settings.git_open;
         let git_width = settings.git_width;
         let last_active_workspace_root_path = settings.last_active_workspace_root_path.clone();
@@ -238,6 +242,7 @@ impl OxiApp {
                 .expect("failed to initialize shared agent runtime"),
             tunnels: crate::compute::TunnelManager::spawn(),
             acp: crate::agent::acp::AcpManager::spawn(),
+            mcp: crate::agent::mcp::McpManager::new(),
             voice,
             clipboard_image_paste_key_down: false,
             context_overhead_cache: Default::default(),
