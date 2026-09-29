@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use super::super::{EditorDocument, OxiApp};
-use super::EditorLayoutCache;
+use super::{EditorLayoutCache, MediaKind};
 
-const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
+pub(super) const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 fn scratchpad_path() -> PathBuf {
     crate::settings::AppSettings::config_path()
@@ -51,6 +51,7 @@ impl OxiApp {
             minimap_cache: None,
             viewport_width_bits: None,
             viewport_anchor_line: 0,
+            media: None,
         });
         self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
         self.conv.editor.hidden_active = None;
@@ -153,17 +154,26 @@ impl OxiApp {
             return;
         }
         let metadata = match std::fs::metadata(&safe_path) {
-            Ok(metadata) if metadata.len() <= MAX_TEXT_FILE_BYTES => metadata,
-            Ok(_) => {
-                self.conv.editor.error = Some("File is larger than the 2 MB editor limit.".into());
-                return;
-            }
+            Ok(metadata) => metadata,
             Err(error) => {
                 self.conv.editor.error = Some(format!("Could not inspect file: {error}"));
                 return;
             }
         };
-        match std::fs::read_to_string(&safe_path) {
+        // Media and oversized/binary files open as a read-only preview tab.
+        let media = MediaKind::from_path(&safe_path)
+            .or((metadata.len() > MAX_TEXT_FILE_BYTES).then_some(MediaKind::Binary));
+        let content = match media {
+            Some(_) => Ok(String::new()),
+            None => std::fs::read_to_string(&safe_path),
+        };
+        let (content, media) = match content {
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                (Ok(String::new()), Some(MediaKind::Binary))
+            }
+            other => (other, media),
+        };
+        match content {
             Ok(content) => {
                 self.conv.editor.documents.push(EditorDocument {
                     path: safe_path.clone(),
@@ -179,6 +189,7 @@ impl OxiApp {
                     minimap_cache: None,
                     viewport_width_bits: None,
                     viewport_anchor_line: 0,
+                    media,
                 });
                 self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
                 self.conv.editor.error = None;
@@ -201,6 +212,9 @@ impl OxiApp {
         };
         if self.conv.editor.documents[index].is_scratchpad {
             self.autosave_scratchpad(index);
+            return;
+        }
+        if self.conv.editor.documents[index].media.is_some() {
             return;
         }
         let path = self.conv.editor.documents[index].path.clone();

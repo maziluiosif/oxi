@@ -183,6 +183,8 @@ pub struct EditorDocument {
     pub viewport_width_bits: Option<u32>,
     /// First logical source line visible in the editor viewport on the previous frame.
     pub viewport_anchor_line: usize,
+    /// Set for images, video, audio and binaries: the tab shows a preview instead of the editor.
+    pub media: Option<super::file_explorer::MediaKind>,
 }
 
 impl EditorDocument {
