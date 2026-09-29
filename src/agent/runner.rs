@@ -422,6 +422,7 @@ pub fn spawn_agent_run(
                 .await
             }
             LlmProviderKind::LmStudio
+            | LlmProviderKind::LlamaCpp
             | LlmProviderKind::LocalHf
             | LlmProviderKind::RemoteHf => {
                 let key = configured_lmstudio_key(&cfg);

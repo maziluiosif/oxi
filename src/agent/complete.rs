@@ -223,7 +223,10 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
             )
             .await
         }
-        LlmProviderKind::LmStudio | LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf => {
+        LlmProviderKind::LmStudio
+        | LlmProviderKind::LlamaCpp
+        | LlmProviderKind::LocalHf
+        | LlmProviderKind::RemoteHf => {
             let key = configured_lmstudio_key(&cfg);
             let base = cfg.effective_base_url();
             run_chat_loop(
