@@ -6,18 +6,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 
-use crate::agent::anthropic::run_anthropic_loop;
 use crate::agent::approval::{ApprovalDecision, ApprovalGate, ApprovalPolicy};
-use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::{AgentEvent, AgentOutcome};
 use crate::agent::history::{
     build_openai_messages, trim_wire_history_to_budget, user_content_to_openai,
 };
-use crate::agent::loop_ctx::LoopCtx;
-use crate::agent::openai::{run_azure_chat_loop, run_chat_loop};
 use crate::agent::tools::{ToolEnv, tool_definitions_json};
 use crate::model::{ChatMessage, WireCache};
-use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{AppSettings, LlmProviderKind, ProviderConfig};
 
 const WIRE_CACHE_SCHEMA_VERSION: u8 = 1;
@@ -209,25 +204,17 @@ pub fn spawn_agent_run(
             mcp: Some(mcp),
             undo_journal: Some(undo_journal),
         };
-        let model = cfg.model_id.clone();
+
         let effort_override = (!cfg.effort.trim().is_empty()).then_some(cfg.effort.trim());
-        // No total request timeout: it would also cover the streamed body and kill
-        // long turns mid-stream. Instead bound connect time and idle time between
-        // chunks, and keep the TCP connection alive through NATs/proxies.
-        let client = match reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .read_timeout(std::time::Duration::from_secs(180))
-            .tcp_keepalive(std::time::Duration::from_secs(60))
-            .tls_danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
-            .build()
-        {
+        // No total request timeout: it would also cover the streamed body and kill long turns
+        // mid-stream (see `streaming_client`).
+        let client = match crate::agent::dispatch::streaming_client(&cfg, 180) {
             Ok(c) => c,
             Err(e) => {
-                finish_with_error(&tx, e.to_string());
+                finish_with_error(&tx, e);
                 return;
             }
         };
-        let mut oauth = load_oauth_store();
         let mut gate = ApprovalGate::new(
             ApprovalPolicy {
                 write_edit: settings.require_write_edit_approval,
@@ -236,341 +223,25 @@ pub fn spawn_agent_run(
             approval_rx,
         );
 
-        let r = match cfg.provider {
-            LlmProviderKind::GptCodex => {
-                if oauth.openai_codex.is_some() {
-                    let creds = match ensure_codex_access_token(&client, &mut oauth).await {
-                        Ok(x) => x,
-                        Err(e) => {
-                            finish_with_error(&tx, e);
-                            return;
-                        }
-                    };
-                    let base = if cfg.base_url.trim().is_empty() {
-                        "https://chatgpt.com/backend-api".to_string()
-                    } else {
-                        cfg.effective_base_url()
-                    };
-                    run_codex_responses_loop(
-                        &mut LoopCtx {
-                            client: &client,
-                            base_url: &base,
-                            model: &model,
-                            cwd: cwd_ref,
-                            env: &tool_env,
-                            tx: &tx,
-                            cancel: &cancel,
-                            gate: &mut gate,
-                            max_rounds,
-                            effort_override,
-                            context_char_budget: context_budget,
-                            tools_chars,
-                        },
-                        &creds.0,
-                        &creds.1,
-                        &mut messages,
-                        &tools,
-                    )
-                    .await
-                } else {
-                    let key = match configured_openai_key(&cfg) {
-                        Ok(k) => k,
-                        Err(e) => {
-                            finish_with_error(&tx, e);
-                            return;
-                        }
-                    };
-                    let base = cfg.effective_base_url();
-                    run_chat_loop(
-                        &mut LoopCtx {
-                            client: &client,
-                            base_url: &base,
-                            model: &model,
-                            cwd: cwd_ref,
-                            env: &tool_env,
-                            tx: &tx,
-                            cancel: &cancel,
-                            gate: &mut gate,
-                            max_rounds,
-                            effort_override,
-                            context_char_budget: context_budget,
-                            tools_chars,
-                        },
-                        &key,
-                        &[],
-                        &mut messages,
-                        &tools,
-                    )
-                    .await
-                }
-            }
-            LlmProviderKind::OpenAi => {
-                let key = match configured_openai_key(&cfg) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        finish_with_error(&tx, e);
-                        return;
-                    }
-                };
-                let base = cfg.effective_base_url();
-                run_chat_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &base,
-                        model: &model,
-                        cwd: cwd_ref,
-                        env: &tool_env,
-                        tx: &tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override,
-                        context_char_budget: context_budget,
-                        tools_chars,
-                    },
-                    &key,
-                    &[],
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            }
-            LlmProviderKind::OpenRouter => {
-                let key = match configured_openrouter_key(&cfg) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        finish_with_error(&tx, e);
-                        return;
-                    }
-                };
-                let base = cfg.effective_base_url();
-                run_chat_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &base,
-                        model: &model,
-                        cwd: cwd_ref,
-                        env: &tool_env,
-                        tx: &tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override,
-                        context_char_budget: context_budget,
-                        tools_chars,
-                    },
-                    &key,
-                    &openrouter_extra_headers(&cfg),
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            }
-            LlmProviderKind::AzureOpenAi => {
-                let key = match configured_azure_openai_key(&cfg) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        finish_with_error(&tx, e);
-                        return;
-                    }
-                };
-                let base = cfg.effective_base_url();
-                let api_version = azure_openai_api_version();
-                run_azure_chat_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &base,
-                        model: &model,
-                        cwd: cwd_ref,
-                        env: &tool_env,
-                        tx: &tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override,
-                        context_char_budget: context_budget,
-                        tools_chars,
-                    },
-                    &key,
-                    &api_version,
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            }
-            LlmProviderKind::CustomAnthropic => {
-                let key = match configured_custom_anthropic_key(&cfg) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        finish_with_error(&tx, e);
-                        return;
-                    }
-                };
-                let base = cfg.effective_base_url();
-                run_anthropic_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &base,
-                        model: &model,
-                        cwd: cwd_ref,
-                        env: &tool_env,
-                        tx: &tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override,
-                        context_char_budget: context_budget,
-                        tools_chars,
-                    },
-                    &key,
-                    &[],
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            }
-            LlmProviderKind::LmStudio
-            | LlmProviderKind::LlamaCpp
-            | LlmProviderKind::LocalHf
-            | LlmProviderKind::RemoteHf => {
-                let key = configured_lmstudio_key(&cfg);
-                let base = match crate::compute::resolve_base_url(&cfg, &tunnels).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        finish_with_error(&tx, e);
-                        return;
-                    }
-                };
-                run_chat_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &base,
-                        model: &model,
-                        cwd: cwd_ref,
-                        env: &tool_env,
-                        tx: &tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override,
-                        context_char_budget: context_budget,
-                        tools_chars,
-                    },
-                    &key,
-                    &[],
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            }
-            LlmProviderKind::Ollama => {
-                let key = configured_ollama_key(&cfg);
-                let base = match crate::compute::resolve_base_url(&cfg, &tunnels).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        finish_with_error(&tx, e);
-                        return;
-                    }
-                };
-                run_chat_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &base,
-                        model: &model,
-                        cwd: cwd_ref,
-                        env: &tool_env,
-                        tx: &tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override,
-                        context_char_budget: context_budget,
-                        tools_chars,
-                    },
-                    &key,
-                    &[],
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            }
-            LlmProviderKind::OpenCodeGo => {
-                let key = match configured_opencode_go_key(&cfg) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        finish_with_error(&tx, e);
-                        return;
-                    }
-                };
-                let base = cfg.effective_base_url();
-                let model = model
-                    .strip_prefix("opencode-go/")
-                    .unwrap_or(&model)
-                    .to_string();
-                if opencode_go_model_uses_anthropic(&model) {
-                    // OpenCode Go exposes Anthropic-compatible models at
-                    // https://opencode.ai/zen/go/v1/messages. `run_anthropic_loop`
-                    // appends `/v1/messages`, so pass the base without `/v1`.
-                    let anthropic_base = base.trim_end_matches("/v1").to_string();
-                    run_anthropic_loop(
-                        &mut LoopCtx {
-                            client: &client,
-                            base_url: &anthropic_base,
-                            model: &model,
-                            cwd: cwd_ref,
-                            env: &tool_env,
-                            tx: &tx,
-                            cancel: &cancel,
-                            gate: &mut gate,
-                            max_rounds,
-                            effort_override,
-                            context_char_budget: context_budget,
-                            tools_chars,
-                        },
-                        &key,
-                        &[],
-                        &mut messages,
-                        &tools,
-                    )
-                    .await
-                } else {
-                    // OpenCode Go exposes OpenAI-compatible models at
-                    // https://opencode.ai/zen/go/v1/chat/completions. `run_chat_loop`
-                    // appends `/chat/completions`, so include `/v1` in the base.
-                    let chat_base = if base.trim_end_matches('/').ends_with("/v1") {
-                        base
-                    } else {
-                        format!("{}/v1", base.trim_end_matches('/'))
-                    };
-                    run_chat_loop(
-                        &mut LoopCtx {
-                            client: &client,
-                            base_url: &chat_base,
-                            model: &model,
-                            cwd: cwd_ref,
-                            env: &tool_env,
-                            tx: &tx,
-                            cancel: &cancel,
-                            gate: &mut gate,
-                            max_rounds,
-                            effort_override,
-                            context_char_budget: context_budget,
-                            tools_chars,
-                        },
-                        &key,
-                        &[],
-                        &mut messages,
-                        &tools,
-                    )
-                    .await
-                }
-            }
-            LlmProviderKind::ClaudeCodeAcp
-            | LlmProviderKind::CursorAcp
-            | LlmProviderKind::CodexAcp => {
-                unreachable!("ACP is handled before the provider match")
-            }
-        };
+        let r = crate::agent::dispatch::run_provider_loop(
+            crate::agent::dispatch::DispatchParams {
+                cfg: &cfg,
+                client: &client,
+                tunnels: Some(&tunnels),
+                cwd: cwd_ref,
+                env: &tool_env,
+                tx: &tx,
+                cancel: &cancel,
+                gate: &mut gate,
+                max_rounds,
+                effort_override,
+                context_char_budget: context_budget,
+                tools_chars,
+            },
+            &mut messages,
+            &tools,
+        )
+        .await;
         let outcome = match r {
             Err(_) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
             Err(error) => AgentOutcome::Failed { error },

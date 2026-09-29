@@ -6,6 +6,7 @@ mod anthropic;
 mod approval;
 mod codex_responses;
 pub mod complete;
+mod dispatch;
 pub mod events;
 mod history;
 mod loop_ctx;

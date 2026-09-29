@@ -1,7 +1,7 @@
 //! One-shot LLM text completion (no tools) used for the "generate commit message" button.
 //!
-//! Reuses the streaming chat/Anthropic/Codex loop implementations, but with no tool
-//! definitions and a single round, so the model just returns plain text. Deltas are
+//! Reuses the provider dispatch of normal agent runs, but with no tool definitions and a single
+//! round, so the model just returns plain text. Deltas are
 //! streamed back over the channel, followed by a terminal [`CompleteEvent::Done`].
 
 use std::sync::Arc;
@@ -11,20 +11,9 @@ use std::thread::JoinHandle;
 
 use serde_json::{Value, json};
 
-use crate::agent::anthropic::run_anthropic_loop;
 use crate::agent::approval::ApprovalGate;
-use crate::agent::codex_responses::run_codex_responses_loop;
 use crate::agent::events::AgentEvent;
-use crate::agent::loop_ctx::LoopCtx;
-use crate::agent::openai::{run_azure_chat_loop, run_chat_loop};
-use crate::agent::runner::{
-    azure_openai_api_version, configured_azure_openai_key, configured_custom_anthropic_key,
-    configured_lmstudio_key, configured_ollama_key, configured_openai_key,
-    configured_opencode_go_key, configured_openrouter_key, opencode_go_model_uses_anthropic,
-    openrouter_extra_headers,
-};
-use crate::oauth::{ensure_codex_access_token, load_oauth_store};
-use crate::settings::{LlmProviderKind, ProviderConfig, WebSearchBackend};
+use crate::settings::{ProviderConfig, WebSearchBackend};
 
 /// One streaming event from a completion run.
 #[derive(Debug)]
@@ -78,19 +67,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         effort_override,
     } = req;
 
-    let model = cfg.model_id.clone();
-    // Bound connect + idle-between-chunks time rather than the whole request, so a
-    // slow but progressing stream is not cut off.
-    let client = match reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .read_timeout(std::time::Duration::from_secs(60))
-        .tcp_keepalive(std::time::Duration::from_secs(60))
-        .tls_danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return Err(e.to_string()),
-    };
+    let client = crate::agent::dispatch::streaming_client(&cfg, 60)?;
 
     // No tools, no approval, single round.
     let tools: Vec<Value> = Vec::new();
@@ -121,283 +98,32 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         undo_journal: None,
     };
 
-    let r = match cfg.provider {
-        LlmProviderKind::OpenAi => {
-            let key = configured_openai_key(&cfg)?;
-            let base = cfg.effective_base_url();
-            run_chat_loop(
-                &mut LoopCtx {
-                    client: &client,
-                    base_url: &base,
-                    model: &model,
-                    cwd,
-                    env: &tool_env,
-                    tx: &agent_tx,
-                    cancel: &cancel,
-                    gate: &mut gate,
-                    max_rounds,
-                    effort_override: effort_override.as_deref(),
-                    context_char_budget: usize::MAX,
-                    tools_chars: 0,
-                },
-                &key,
-                &[],
-                &mut messages,
-                &tools,
-            )
-            .await
-        }
-        LlmProviderKind::OpenRouter => {
-            let key = configured_openrouter_key(&cfg)?;
-            let base = cfg.effective_base_url();
-            run_chat_loop(
-                &mut LoopCtx {
-                    client: &client,
-                    base_url: &base,
-                    model: &model,
-                    cwd,
-                    env: &tool_env,
-                    tx: &agent_tx,
-                    cancel: &cancel,
-                    gate: &mut gate,
-                    max_rounds,
-                    effort_override: effort_override.as_deref(),
-                    context_char_budget: usize::MAX,
-                    tools_chars: 0,
-                },
-                &key,
-                &openrouter_extra_headers(&cfg),
-                &mut messages,
-                &tools,
-            )
-            .await
-        }
-        LlmProviderKind::AzureOpenAi => {
-            let key = configured_azure_openai_key(&cfg)?;
-            let base = cfg.effective_base_url();
-            let api_version = azure_openai_api_version();
-            run_azure_chat_loop(
-                &mut LoopCtx {
-                    client: &client,
-                    base_url: &base,
-                    model: &model,
-                    cwd,
-                    env: &tool_env,
-                    tx: &agent_tx,
-                    cancel: &cancel,
-                    gate: &mut gate,
-                    max_rounds,
-                    effort_override: effort_override.as_deref(),
-                    context_char_budget: usize::MAX,
-                    tools_chars: 0,
-                },
-                &key,
-                &api_version,
-                &mut messages,
-                &tools,
-            )
-            .await
-        }
-        LlmProviderKind::CustomAnthropic => {
-            let key = configured_custom_anthropic_key(&cfg)?;
-            let base = cfg.effective_base_url();
-            run_anthropic_loop(
-                &mut LoopCtx {
-                    client: &client,
-                    base_url: &base,
-                    model: &model,
-                    cwd,
-                    env: &tool_env,
-                    tx: &agent_tx,
-                    cancel: &cancel,
-                    gate: &mut gate,
-                    max_rounds,
-                    effort_override: effort_override.as_deref(),
-                    context_char_budget: usize::MAX,
-                    tools_chars: 0,
-                },
-                &key,
-                &[],
-                &mut messages,
-                &tools,
-            )
-            .await
-        }
-        LlmProviderKind::LmStudio
-        | LlmProviderKind::LlamaCpp
-        | LlmProviderKind::LocalHf
-        | LlmProviderKind::RemoteHf => {
-            let key = configured_lmstudio_key(&cfg);
-            let base = cfg.effective_base_url();
-            run_chat_loop(
-                &mut LoopCtx {
-                    client: &client,
-                    base_url: &base,
-                    model: &model,
-                    cwd,
-                    env: &tool_env,
-                    tx: &agent_tx,
-                    cancel: &cancel,
-                    gate: &mut gate,
-                    max_rounds,
-                    effort_override: effort_override.as_deref(),
-                    context_char_budget: usize::MAX,
-                    tools_chars: 0,
-                },
-                &key,
-                &[],
-                &mut messages,
-                &tools,
-            )
-            .await
-        }
-        LlmProviderKind::Ollama => {
-            let key = configured_ollama_key(&cfg);
-            let base = cfg.effective_base_url();
-            run_chat_loop(
-                &mut LoopCtx {
-                    client: &client,
-                    base_url: &base,
-                    model: &model,
-                    cwd,
-                    env: &tool_env,
-                    tx: &agent_tx,
-                    cancel: &cancel,
-                    gate: &mut gate,
-                    max_rounds,
-                    effort_override: effort_override.as_deref(),
-                    context_char_budget: usize::MAX,
-                    tools_chars: 0,
-                },
-                &key,
-                &[],
-                &mut messages,
-                &tools,
-            )
-            .await
-        }
-        LlmProviderKind::GptCodex => {
-            let mut oauth = load_oauth_store();
-            if oauth.openai_codex.is_some() {
-                let creds = ensure_codex_access_token(&client, &mut oauth).await?;
-                let base = if cfg.base_url.trim().is_empty() {
-                    "https://chatgpt.com/backend-api".to_string()
-                } else {
-                    cfg.effective_base_url()
-                };
-                run_codex_responses_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &base,
-                        model: &model,
-                        cwd,
-                        env: &tool_env,
-                        tx: &agent_tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override: effort_override.as_deref(),
-                        context_char_budget: usize::MAX,
-                        tools_chars: 0,
-                    },
-                    &creds.0,
-                    &creds.1,
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            } else {
-                let key = configured_openai_key(&cfg)?;
-                let base = cfg.effective_base_url();
-                run_chat_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &base,
-                        model: &model,
-                        cwd,
-                        env: &tool_env,
-                        tx: &agent_tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override: effort_override.as_deref(),
-                        context_char_budget: usize::MAX,
-                        tools_chars: 0,
-                    },
-                    &key,
-                    &[],
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            }
-        }
-        LlmProviderKind::OpenCodeGo => {
-            let key = configured_opencode_go_key(&cfg)?;
-            let base = cfg.effective_base_url();
-            let model = model
-                .strip_prefix("opencode-go/")
-                .unwrap_or(&model)
-                .to_string();
-            if opencode_go_model_uses_anthropic(&model) {
-                let anthropic_base = base.trim_end_matches("/v1").to_string();
-                run_anthropic_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &anthropic_base,
-                        model: &model,
-                        cwd,
-                        env: &tool_env,
-                        tx: &agent_tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override: effort_override.as_deref(),
-                        context_char_budget: usize::MAX,
-                        tools_chars: 0,
-                    },
-                    &key,
-                    &[],
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            } else {
-                let chat_base = if base.trim_end_matches('/').ends_with("/v1") {
-                    base
-                } else {
-                    format!("{}/v1", base.trim_end_matches('/'))
-                };
-                run_chat_loop(
-                    &mut LoopCtx {
-                        client: &client,
-                        base_url: &chat_base,
-                        model: &model,
-                        cwd,
-                        env: &tool_env,
-                        tx: &agent_tx,
-                        cancel: &cancel,
-                        gate: &mut gate,
-                        max_rounds,
-                        effort_override: effort_override.as_deref(),
-                        context_char_budget: usize::MAX,
-                        tools_chars: 0,
-                    },
-                    &key,
-                    &[],
-                    &mut messages,
-                    &tools,
-                )
-                .await
-            }
-        }
-        LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => {
-            // ACP drives a full interactive agent session; it has no cheap one-shot
-            // text-completion path for helpers like commit-message generation.
-            Err("ACP agents do not support one-shot completion. \
-                 Pick another provider for commit-message generation."
-                .to_string())
-        }
+    let r = if cfg.is_acp() {
+        // ACP drives a full interactive agent session; it has no cheap one-shot
+        // text-completion path for helpers like commit-message generation.
+        Err("ACP agents do not support one-shot completion. \
+             Pick another provider for commit-message generation."
+            .to_string())
+    } else {
+        crate::agent::dispatch::run_provider_loop(
+            crate::agent::dispatch::DispatchParams {
+                cfg: &cfg,
+                client: &client,
+                tunnels: None,
+                cwd,
+                env: &tool_env,
+                tx: &agent_tx,
+                cancel: &cancel,
+                gate: &mut gate,
+                max_rounds,
+                effort_override: effort_override.as_deref(),
+                context_char_budget: usize::MAX,
+                tools_chars: 0,
+            },
+            &mut messages,
+            &tools,
+        )
+        .await
     };
 
     // The agent producer side is done; drop the sender so the collector finishes.
