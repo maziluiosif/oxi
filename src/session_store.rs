@@ -1,5 +1,7 @@
 mod dedupe;
 mod format;
+#[cfg(test)]
+pub(crate) use format::chat_message_to_json_entries;
 mod io;
 mod paths;
 
@@ -166,6 +168,7 @@ mod tests {
                     is_error: Some(false),
                     full_output_path: Some("/tmp/out.txt".into()),
                     output_truncated: false,
+                    metadata: None,
                 },
                 AssistantBlock::Answer("done".into()),
             ],
@@ -357,6 +360,7 @@ mod tests {
                             is_error: Some(false),
                             full_output_path: Some("/tmp/tool-output.txt".into()),
                             output_truncated: true,
+                            metadata: None,
                         },
                         AssistantBlock::Answer("done".into()),
                     ],

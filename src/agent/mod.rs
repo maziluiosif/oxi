@@ -16,6 +16,7 @@ mod net;
 mod openai;
 pub mod prompt;
 pub mod runner;
+pub mod subagent;
 pub mod tools;
 
 /// Resolve the fixture interpreter before invoking cmd, which discards inherited environment

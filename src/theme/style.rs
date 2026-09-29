@@ -129,6 +129,13 @@ pub const ICON_HEART: &str = "\u{f004}";
 pub const ICON_SEARCH: &str = "\u{f002}";
 /// Activity log (status bar) — nf-md-pulse.
 pub const ICON_ACTIVITY: &str = "\u{f0430}";
+/// Plan mode toggle — nf-md-map_outline.
+pub const ICON_PLAN: &str = "\u{f0982}";
+/// Agent checklist (`todo_write`) — nf-md-format_list_checks.
+pub const ICON_TASKS: &str = "\u{f0756}";
+/// Checklist item states — nf-fa-circle_o / nf-fa-dot_circle_o.
+pub const ICON_CIRCLE: &str = "\u{f10c}";
+pub const ICON_DOT_CIRCLE: &str = "\u{f192}";
 
 /// Small loading indicator (avoids default large `interact_size` spinners).
 pub fn small_spinner(ui: &mut egui::Ui) {

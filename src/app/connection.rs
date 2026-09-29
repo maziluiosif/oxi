@@ -34,7 +34,10 @@ impl OxiApp {
         }
 
         self.flow.sessions.retain(|_, state| {
-            state.agent_rx.is_some() || state.waiting_response || state.stream_error.is_some()
+            state.agent_rx.is_some()
+                || state.waiting_response
+                || state.stream_error.is_some()
+                || state.keeps_chat_modes()
         });
     }
 }

@@ -170,10 +170,13 @@ fn assistant_blocks_from_content(m: &Value) -> Vec<AssistantBlock> {
                     .and_then(|x| x.as_str())
                     .unwrap_or("tool")
                     .to_string();
-                let args_summary = p.get("arguments").map(|a| {
-                    let s = a.to_string();
-                    s.chars().take(800).collect::<String>()
-                });
+                let mut metadata: Option<Box<crate::model::ToolMetadata>> = p
+                    .get("oxiTool")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                if let Some(meta) = metadata.as_mut() {
+                    meta.interrupt_if_unfinished();
+                }
+                let args_summary = p.get("arguments").map(Value::to_string);
                 blocks.push(AssistantBlock::Tool {
                     tool_call_id: id,
                     name,
@@ -183,6 +186,7 @@ fn assistant_blocks_from_content(m: &Value) -> Vec<AssistantBlock> {
                     is_error: None,
                     full_output_path: None,
                     output_truncated: false,
+                    metadata,
                 });
             }
             _ => {}
@@ -249,6 +253,7 @@ fn merge_tool_result(out: &mut Vec<ChatMessage>, m: &Value) {
             is_error,
             full_output_path,
             output_truncated,
+            metadata: None,
         }],
         streaming: false,
         started_at: None,

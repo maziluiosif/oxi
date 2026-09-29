@@ -68,6 +68,7 @@ fn assistant_blocks_equal(left: &[AssistantBlock], right: &[AssistantBlock]) -> 
                         is_error: left_is_error,
                         full_output_path: left_full_output_path,
                         output_truncated: left_output_truncated,
+                        metadata: left_metadata,
                     },
                     AssistantBlock::Tool {
                         tool_call_id: right_tool_call_id,
@@ -78,9 +79,11 @@ fn assistant_blocks_equal(left: &[AssistantBlock], right: &[AssistantBlock]) -> 
                         is_error: right_is_error,
                         full_output_path: right_full_output_path,
                         output_truncated: right_output_truncated,
+                        metadata: right_metadata,
                     },
                 ) => {
-                    left_tool_call_id == right_tool_call_id
+                    left_metadata == right_metadata
+                        && left_tool_call_id == right_tool_call_id
                         && left_name == right_name
                         && left_args_summary == right_args_summary
                         && left_output == right_output

@@ -22,7 +22,8 @@ const TOOL_GROUPS: &[(&str, &[&str])] = &[
         "Change files",
         &["write", "edit", "delete", "move", "mkdir"],
     ),
-    ("Run commands", &["bash"]),
+    ("Run commands", &["bash", "diagnostics"]),
+    ("Plan & delegate", &["todo_write", "task"]),
     ("Git", &["git_status", "git_diff"]),
     ("Web", &["web_search", "web_fetch"]),
 ];
@@ -251,7 +252,7 @@ impl OxiApp {
                     RichText::new("Ask before bash").size(FS_SMALL).color(c_text()),
                 )
                 .on_hover_text(
-                    "When on, the agent pauses for your approval before each bash tool call.",
+                    "When on, the agent pauses for your approval before each bash or diagnostics call (diagnostics runs the project's build tooling).",
                 )
                 .changed()
             {

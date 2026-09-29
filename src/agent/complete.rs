@@ -96,6 +96,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         bash_timeout_cap_secs: 300,
         mcp: None,
         undo_journal: None,
+        subagent: None,
     };
 
     let r = if cfg.is_acp() {

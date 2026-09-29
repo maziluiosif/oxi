@@ -1,3 +1,5 @@
+#[path = "composer/plan_tasks.rs"]
+mod plan_tasks;
 #[path = "composer/text_menu.rs"]
 mod text_menu;
 #[path = "composer/voice_context.rs"]
@@ -153,6 +155,7 @@ impl OxiApp {
         let focus_t =
             ui.ctx()
                 .animate_bool_with_time(Id::new("composer_focus_anim"), composer_focused, 0.12);
+        let plan_mode = self.plan_mode_on();
         let card_border = blend_color(c_border(), c_composer_focus_border(), focus_t);
 
         // Top-align the row so a parent `bottom_up` layout cannot vertically stretch/center the
@@ -170,6 +173,9 @@ impl OxiApp {
                     .corner_radius(crate::theme::RADIUS_PANEL)
                     .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN as i8))
                     .show(ui, |ui| {
+                        // === Agent checklist and plan hand-off ===
+                        self.render_task_panel(ui);
+                        self.render_plan_ready_bar(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
                         if self.conv.editing_last_prompt.is_some() {
@@ -198,9 +204,13 @@ impl OxiApp {
                         let mut te_output = TextEdit::multiline(&mut self.conv.input)
                             .id(input_id)
                             .hint_text(
-                                RichText::new("Message oxi…")
-                                    .size(FS_BODY)
-                                    .color(c_text_faint()),
+                                RichText::new(if plan_mode {
+                                    "Describe what to plan…"
+                                } else {
+                                    "Message oxi…"
+                                })
+                                .size(FS_BODY)
+                                .color(c_text_faint()),
                             )
                             .desired_width(f32::INFINITY)
                             .desired_rows(1)
@@ -326,6 +336,7 @@ impl OxiApp {
         // ── Left: provider + model (compact widths when the chat column is squeezed) ──
         self.render_model_selector(ui, narrow, compact);
         self.render_effort_selector(ui, compact);
+        self.render_plan_toggle(ui, narrow);
 
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -48,10 +48,20 @@ impl ApprovalPolicy {
     }
 }
 
+/// Tool result for anything that could change the workspace while plan mode is on.
+pub const PLAN_MODE_REFUSAL: &str = "Plan mode is on: only read-only tools may run. Finish investigating and present the plan; the user will switch to implementation when they approve it.";
+
+/// Whether plan mode lets `name` run: read-only tools only (MCP tools have unknown effects).
+pub fn allowed_in_plan_mode(name: &str) -> bool {
+    crate::agent::tools::tool_side_effect(name) == crate::agent::tools::ToolSideEffect::ReadOnly
+}
+
 /// Mediates user approval for mutating tool calls within a single agent run.
 pub struct ApprovalGate {
     policy: ApprovalPolicy,
     auto_approve: bool,
+    /// Refuse every non-read-only tool without asking (see [`PLAN_MODE_REFUSAL`]).
+    plan_mode: bool,
     rx: Receiver<ApprovalDecision>,
 }
 
@@ -60,8 +70,14 @@ impl ApprovalGate {
         Self {
             policy,
             auto_approve: false,
+            plan_mode: false,
             rx,
         }
+    }
+
+    pub fn with_plan_mode(mut self, plan_mode: bool) -> Self {
+        self.plan_mode = plan_mode;
+        self
     }
 
     /// Block until the user decides. Returns `Ok(())` to proceed or `Err(reason)` to refuse,
@@ -74,6 +90,9 @@ impl ApprovalGate {
         name: &str,
         args: &Value,
     ) -> Result<(), String> {
+        if self.plan_mode && !allowed_in_plan_mode(name) {
+            return Err(PLAN_MODE_REFUSAL.to_string());
+        }
         if self.auto_approve || !self.policy.requires_approval(name) {
             return Ok(());
         }
@@ -200,6 +219,24 @@ mod tests {
         let (etx, cancel, args) = ctx();
         dtx.send(ApprovalDecision::Deny).unwrap();
         assert!(gate.request(&etx, &cancel, "bash", &args).is_err());
+    }
+
+    #[test]
+    fn plan_mode_refuses_mutations_without_asking() {
+        let (_dtx, drx) = channel();
+        // Approval switched off entirely: plan mode must still refuse.
+        let mut gate = ApprovalGate::new(ApprovalPolicy::disabled(), drx).with_plan_mode(true);
+        let (etx, cancel, args) = ctx();
+        for tool in ["write", "edit", "bash", "diagnostics", "mcp_x_y"] {
+            assert_eq!(
+                gate.request(&etx, &cancel, tool, &args),
+                Err(PLAN_MODE_REFUSAL.to_string()),
+                "{tool}"
+            );
+        }
+        for tool in ["read", "grep", "todo_write", "task"] {
+            assert!(gate.request(&etx, &cancel, tool, &args).is_ok(), "{tool}");
+        }
     }
 
     #[test]

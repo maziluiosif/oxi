@@ -85,3 +85,10 @@ fn truncate_out_multibyte_does_not_panic() {
     assert!(truncated.contains("[output truncated"));
     assert!(truncated.starts_with(&"x".repeat(MAX_TOOL_OUTPUT_CHARS - 1)));
 }
+
+#[test]
+fn unified_diff_caps_a_single_large_unicode_hunk() {
+    let diff = make_unified_diff("large.txt", "", &"🦀".repeat(20000));
+    assert!(diff.len() < 8_100);
+    assert!(diff.contains("[diff truncated]"));
+}

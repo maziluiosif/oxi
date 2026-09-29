@@ -158,6 +158,16 @@ fn render_unified_diff(path: &str, ops: &[(char, &str)]) -> String {
         ));
         for (kind, line) in &ops[start..end] {
             out.push(*kind);
+            let remaining = 8_000usize.saturating_sub(out.len());
+            if line.len() > remaining {
+                let mut end = remaining;
+                while !line.is_char_boundary(end) {
+                    end -= 1;
+                }
+                out.push_str(&line[..end]);
+                out.push_str("\n[diff truncated]\n");
+                return out;
+            }
             out.push_str(line);
             out.push('\n');
         }
