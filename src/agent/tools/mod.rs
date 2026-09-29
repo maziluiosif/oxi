@@ -96,6 +96,29 @@ pub fn run_tool_with_output(
     env: &ToolEnv,
     on_output: Option<ToolOutputCallback>,
 ) -> ToolResult {
+    let result = run_tool_inner(cwd, name, args, env, on_output);
+    if crate::agent::activity_log::is_enabled() {
+        let status = if result.is_error { " · error" } else { "" };
+        crate::agent::activity_log::log(
+            crate::agent::activity_log::ActivityKind::Tool,
+            format!("{name}{status}"),
+            format!(
+                "Arguments:\n{}\n\nResult:\n{}",
+                serde_json::to_string_pretty(args).unwrap_or_default(),
+                result.output
+            ),
+        );
+    }
+    result
+}
+
+fn run_tool_inner(
+    cwd: &Path,
+    name: &str,
+    args: &Value,
+    env: &ToolEnv,
+    on_output: Option<ToolOutputCallback>,
+) -> ToolResult {
     if crate::agent::mcp::McpManager::is_mcp_tool(name) {
         if let Some(journal) = &env.undo_journal {
             journal.lock().unwrap_or_else(|e| e.into_inner()).mark_non_reversible(

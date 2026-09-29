@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
+use super::activity_log::{self, ActivityKind, StreamCapture};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
@@ -139,6 +140,8 @@ async fn run_chat_loop_at(
             headers.insert(name, val);
         }
         let res = send_with_retry(client.post(url).headers(headers).json(&body), cancel).await?;
+        let mut capture = StreamCapture::new();
+        let capture_title = format!("HTTP {} · {} · round {round}", res.status(), url);
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
         let mut assistant_text = String::new();
@@ -165,6 +168,7 @@ async fn run_chat_loop_at(
                 }
             };
             let s = String::from_utf8_lossy(&chunk);
+            capture.push(&s);
             buffer.push_str(&s);
             while let Some(pos) = buffer.find('\n') {
                 let line = buffer[..pos].trim_end_matches('\r').to_string();
@@ -192,6 +196,10 @@ async fn run_chat_loop_at(
                     tx,
                 );
             }
+        }
+        capture.finish(capture_title);
+        if let Some(err) = &stream_error {
+            activity_log::log(ActivityKind::Error, "Response stream failed", err);
         }
         // The stream died (dropped connection or in-band error event) before the round
         // completed. No tool has been executed yet, so re-sending the round is safe.
