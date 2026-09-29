@@ -175,7 +175,10 @@ The agent can call these tools when enabled in Settings:
 | `git_diff` | Show staged/unstaged or revision-based Git diffs |
 | `web_search` | Search the web through Bing RSS, DuckDuckGo, or a configured SearXNG instance, with no API key |
 | `web_fetch` | Fetch a URL and return readable text |
-| `mcp_<server>_<tool>` | Call tools exposed by enabled stdio MCP servers |
+| `diagnostics` | Run workspace checks and summarize file/line diagnostics |
+| `todo_write` | Update the task checklist shown above the composer |
+| `task` | Delegate a read-only investigation to an agent on the same provider/model |
+| `mcp_<server>_<tool>` | Call tools exposed by enabled stdio or Streamable HTTP MCP servers |
 
 Tool behavior:
 
@@ -194,6 +197,18 @@ Tool behavior:
 - `write` and `edit` generate unified diffs for the UI
 - `bash` has a configurable timeout cap, defaulting to 300 seconds
 - `bash` includes a small deny-list for obviously risky command substrings, but this is not a sandbox; the approval prompt is the real safety boundary
+
+### Planning and task tracking
+
+Select **Plan** in the composer to investigate before implementing. Built-in Plan mode permits read-only tools and blocks filesystem mutations, shell/diagnostics commands and MCP calls. ACP runs also receive the planning instructions, and direct client file writes are refused. When the plan is ready, **Implement plan** starts implementation with the plan still in the conversation; **Keep planning** continues the investigation. The handoff is hidden while editing a previous prompt.
+
+The agent can maintain a checklist with `todo_write`; progress appears above the composer and is preserved in the saved chat. HTTP-provider agents can use `task` for read-only investigations with separate contexts. Delegated token usage is included in the parent conversation totals.
+
+### MCP connections and Activity log
+
+Configure MCP servers in Settings with either a stdio command or a Streamable HTTP URL. Connections persist across agent runs, support paginated tools and resources, and reconnect after a server exits or expires its HTTP session. Environment secrets and bearer tokens use the OS credential store.
+
+Open **Activity** from the status bar and enable recording to inspect provider requests/responses, retries, tool results, and ACP/MCP traffic. Recording is off by default; credentials are redacted, entries are bounded, and the log stays in memory.
 
 ### Streaming coding UI
 
@@ -272,6 +287,7 @@ Supported provider kinds:
 | OpenCode Go | OpenCode Go subscription endpoint; backend shape depends on model family |
 | Custom Anthropic | User-configured Anthropic Messages-compatible endpoint |
 | LM Studio | Local/LAN OpenAI-compatible server |
+| llama.cpp / local server | A separately managed OpenAI-compatible local server |
 | Ollama | Local/LAN OpenAI-compatible server at `/v1` |
 | Local HF | oxi-managed GGUF model + local `llama-server` runtime |
 | Remote HF | oxi-managed GGUF model + `llama-server` runtime on an SSH-tunneled host |
@@ -290,6 +306,7 @@ Supported provider kinds:
 | OpenCode Go | `https://opencode.ai/zen/go` | `kimi-k2.7-code` |
 | Custom Anthropic | `http://localhost:8000` | `claude-sonnet-4-5` |
 | LM Studio | `http://localhost:1234/v1` | `local-model` |
+| llama.cpp / local server | `http://localhost:8080/v1` | `local-model` |
 | Ollama | `http://localhost:11434/v1` | `qwen2.5-coder:7b` |
 | Local HF | `http://127.0.0.1:18080/v1` | `local-hf-model` |
 | Remote HF | `http://127.0.0.1:18080/v1` (via SSH tunnel) | `local-hf-model` |
@@ -310,17 +327,18 @@ Supported provider kinds:
 | OpenCode Go auth | `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY` |
 | Custom Anthropic auth | `CUSTOM_ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEY` |
 | LM Studio auth, optional | `LMSTUDIO_API_KEY` |
+| llama.cpp auth, optional | `LLAMA_API_KEY` |
 | Ollama auth, optional | `OLLAMA_API_KEY` |
 
 API keys saved through the UI are stored in the OS credential store, not in `settings.json`.
 
 ## Local and remote models
 
-### LM Studio and Ollama
+### LM Studio, llama.cpp and Ollama
 
-Create an LM Studio or Ollama provider config, point the base URL at your runtime, and use **Load available models** in the UI to choose a model that is actually loaded/pulled.
+Create an LM Studio, **llama.cpp / local server**, or Ollama provider config, point the base URL at your runtime, and use **Load available models** in the UI to choose a model that is actually loaded/pulled. The llama.cpp profile defaults to `http://localhost:8080/v1`; Settings highlights missing URL schemes, missing `/v1` prefixes and accidentally pasted `/chat/completions` suffixes.
 
-LM Studio and Ollama API keys are optional because local servers usually ignore bearer tokens. oxi will use the profile value, then the relevant environment variable, then an empty key.
+LM Studio, llama.cpp and Ollama API keys are optional because local servers usually ignore bearer tokens. oxi will use the profile value, then the relevant environment variable, then an empty key.
 
 ### Local HF and Remote HF
 
