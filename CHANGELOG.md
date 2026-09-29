@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-29
+
+### Fixed
+- Agent launch on Windows now correctly handles paths with spaces by using raw arguments with cmd.exe
+- Initialize errors now include agent stderr output for better debugging
+
+
 ## [1.1.0] - 2026-09-29
 
 ### Added
@@ -734,7 +741,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/maziluiosif/oxi/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/maziluiosif/oxi/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/maziluiosif/oxi/compare/v0.26.1...v1.0.0
 [0.26.1]: https://github.com/maziluiosif/oxi/compare/v0.26.0...v0.26.1
