@@ -8,9 +8,11 @@ const PWD_CMD: &str = "cd";
 
 fn sleep_cmd(secs: u32) -> String {
     if cfg!(windows) {
-        // Reuse the Python runtime required by the MCP fixtures instead of depending on
-        // Windows PowerShell being installed or available on PATH.
-        format!("python -c \"import time; time.sleep({secs})\"")
+        let python = crate::agent::test_python_executable();
+        format!(
+            "\"{}\" -c \"import time; time.sleep({secs})\"",
+            python.display()
+        )
     } else {
         format!("sleep {secs}")
     }
@@ -30,6 +32,25 @@ fn tool_bash_echo() {
     assert!(!res.is_error);
     assert!(res.output.contains("hello"));
     assert!(res.output.contains("exit code: 0"));
+}
+
+#[cfg(windows)]
+#[test]
+fn tool_bash_quoted_executable_and_arguments() {
+    let cwd = temp_workspace("bash-quoted-command");
+    let dir = cwd.join("with spaces");
+    fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("echo.cmd");
+    fs::write(&script, "@echo off\r\necho %~1\r\n").unwrap();
+    let res = run_tool(
+        &cwd,
+        "bash",
+        &json!({"command": format!("\"{}\" \"hello world\"", script.display())}),
+        &all_enabled(),
+    );
+    assert!(!res.is_error);
+    assert!(res.output.contains("exit code: 0"), "{}", res.output);
+    assert!(res.output.contains("hello world"), "{}", res.output);
 }
 
 #[test]
