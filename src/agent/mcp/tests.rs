@@ -99,10 +99,6 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "nope"}})
 "#;
 
-fn python() -> &'static str {
-    if cfg!(windows) { "python" } else { "python3" }
-}
-
 fn fake_stdio_server(tag: &str) -> McpServerConfig {
     let dir = std::env::temp_dir().join(format!("oxi-mcp-test-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -111,7 +107,9 @@ fn fake_stdio_server(tag: &str) -> McpServerConfig {
     McpServerConfig {
         name: "fake".into(),
         transport: McpTransport::Stdio,
-        command: python().into(),
+        command: crate::agent::test_python_executable()
+            .to_string_lossy()
+            .into_owned(),
         args: vec![script.to_string_lossy().into_owned()],
         timeout_secs: Some(1),
         ..Default::default()

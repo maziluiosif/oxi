@@ -288,7 +288,9 @@ pub(crate) fn tool_bash_streaming(
         use std::os::windows::process::CommandExt;
 
         let mut c = Command::new("cmd");
-        c.args(["/C", cmd])
+        // cmd parses the command string itself; Rust's regular argument escaping is intended
+        // for C-runtime argv and would corrupt quotes around executable paths and arguments.
+        c.raw_arg(format!("/D /S /C \"{cmd}\""))
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
