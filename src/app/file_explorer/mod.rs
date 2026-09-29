@@ -14,6 +14,7 @@ mod file_operations;
 mod file_picker;
 mod find_replace;
 mod layout_cache;
+mod media_view;
 mod minimap;
 mod navigation_diff;
 mod safety;
@@ -28,6 +29,7 @@ pub(crate) use support::find_match_ranges;
 
 pub(crate) use explorer_tree::ExplorerCache;
 pub(crate) use layout_cache::EditorLayoutCache;
+pub(crate) use media_view::MediaKind;
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
@@ -47,7 +49,11 @@ impl OxiApp {
             self.render_editor_git_diff(ui);
             return;
         }
-        if self.conv.editor.active_document().is_none() {
+        let Some(document) = self.conv.editor.active_document() else {
+            return;
+        };
+        if let Some(kind) = document.media {
+            self.render_media_view(ui, kind);
             return;
         }
 
