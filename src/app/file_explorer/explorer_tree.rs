@@ -586,16 +586,16 @@ fn explorer_entry_color(color: egui::Color32, git_ignored: bool) -> egui::Color3
 }
 
 #[cfg(target_os = "macos")]
-fn reveal_label() -> &'static str {
+pub(super) fn reveal_label() -> &'static str {
     "Reveal in Finder"
 }
 
 #[cfg(not(target_os = "macos"))]
-fn reveal_label() -> &'static str {
+pub(super) fn reveal_label() -> &'static str {
     "Reveal in File Manager"
 }
 
-fn reveal_path_in_file_manager(path: &Path) {
+pub(super) fn reveal_path_in_file_manager(path: &Path) {
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = std::process::Command::new("open");
