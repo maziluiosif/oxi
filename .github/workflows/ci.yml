@@ -121,6 +121,12 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
 
+      # The MCP stdio and shell timeout fixtures launch Python subprocesses.
+      - name: Install Python for integration tests
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
