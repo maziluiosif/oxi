@@ -705,6 +705,7 @@ mod integration_tests {
             bash_timeout_cap_secs: 300,
             mcp: None,
             undo_journal: None,
+            subagent: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -799,6 +800,7 @@ mod integration_tests {
             bash_timeout_cap_secs: 300,
             mcp: None,
             undo_journal: None,
+            subagent: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -838,5 +840,65 @@ mod integration_tests {
             .and_then(Value::as_str)
             .unwrap_or_default();
         assert!(content.contains("denied"), "unexpected content: {content}");
+    }
+
+    #[tokio::test]
+    async fn full_loop_plan_mode_refuses_writes_even_without_approval() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_matcher("/chat/completions"))
+            .respond_with(RoundResponder {
+                call_count: AtomicUsize::new(0),
+            })
+            .mount(&server)
+            .await;
+
+        let cwd = temp_workspace("full-loop-plan-mode");
+        let client = reqwest::Client::new();
+        let (tx, _rx) = mpsc::channel::<AgentEvent>();
+        let (_approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        // Approvals are off: only plan mode stands between the model and the write.
+        let mut gate =
+            ApprovalGate::new(ApprovalPolicy::disabled(), approval_rx).with_plan_mode(true);
+        let env = ToolEnv {
+            enabled: vec![true; ALL_TOOL_NAMES.len()],
+            web_search_url: String::new(),
+            web_search_backend: WebSearchBackend::default(),
+            bash_timeout_cap_secs: 300,
+            mcp: None,
+            undo_journal: None,
+            subagent: None,
+        };
+        let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
+        let tools = vec![json!({
+            "type": "function",
+            "function": {"name": "write", "description": "write a file",
+                          "parameters": {"type": "object", "properties": {}}}
+        })];
+        let base_url = server.uri();
+        let mut ctx = LoopCtx {
+            client: &client,
+            base_url: &base_url,
+            model: "test-model",
+            cwd: &cwd,
+            env: &env,
+            tx: &tx,
+            cancel: &cancel,
+            gate: &mut gate,
+            max_rounds: 10,
+            effort_override: None,
+            context_char_budget: usize::MAX,
+            tools_chars: 0,
+        };
+        let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
+        assert!(result.is_ok(), "agent loop failed: {result:?}");
+        assert!(!cwd.join("hello.txt").exists());
+        let content = messages
+            .iter()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("tool"))
+            .and_then(|m| m.get("content").and_then(Value::as_str))
+            .unwrap_or_default();
+        assert_eq!(content, crate::agent::approval::PLAN_MODE_REFUSAL);
     }
 }

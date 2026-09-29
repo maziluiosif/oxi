@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Event};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
 use super::OxiApp;
@@ -146,6 +147,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             bash_timeout_cap_secs: 60,
             mcp: None,
             undo_journal: None,
+            subagent: None,
         },
     };
 
@@ -525,6 +527,75 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         }
         rec.harness.run_steps(3);
         rec.still("chat-light");
+
+        // Plan mode: a planning turn with a live checklist, then the hand-off bar.
+        crate::theme::apply_theme(&rec.harness.ctx, "dark");
+        rec.app().new_chat();
+        let key = rec.app().active_session_key();
+        rec.app().run_state_mut(key).plan_mode = true;
+        rec.harness.run_steps(3);
+        rec.still("plan-mode-empty");
+        rec.app().run_state_mut(key).last_turn_planned = true;
+        rec.begin_turn("Add CSV export to the stats report");
+        rec.app().active_session_mut().chars_per_token = Some(3.25);
+        rec.send(AgentEvent::SubagentUsage(TokenUsage {
+            input_tokens: 1200,
+            output_tokens: 24,
+            cache_read_input_tokens: 300,
+            ..Default::default()
+        }));
+        rec.harness.run_steps(3);
+        let run = rec.app().run_state(key).unwrap();
+        assert_eq!(run.turn_usage.total_input(), 1500);
+        assert_eq!(run.turn_usage.output_tokens, 24);
+        assert_eq!(run.session_usage.total_input(), 1500);
+        assert_eq!(rec.app().active_session().chars_per_token, Some(3.25));
+        rec.tool(
+            "todo1",
+            "todo_write",
+            json!({"todos": [
+                {"content": "Map how reports are rendered", "status": "completed"},
+                {"content": "Find where output formats are chosen", "status": "in_progress"},
+                {"content": "Draft the CSV writer and CLI flag", "status": "pending"},
+                {"content": "List tests to add", "status": "pending"}
+            ]}),
+            0.2,
+        );
+        rec.harness.run_steps(3);
+        rec.still("tasks-panel");
+        rec.tool(
+            "todo2",
+            "todo_write",
+            json!({"todos": [
+                {"content": "Map how reports are rendered", "status": "completed"},
+                {"content": "Find where output formats are chosen", "status": "completed"},
+                {"content": "Draft the CSV writer and CLI flag", "status": "completed"},
+                {"content": "List tests to add", "status": "completed"}
+            ]}),
+            0.2,
+        );
+        rec.stream_text(
+            "## Plan\n\n1. Add `write_csv(report, path)` in `stats/report.py` next to \
+             `write_markdown`.\n2. Add `--format csv` to the CLI in `stats/cli.py`.\n3. Tests: \
+             round-trip a small report through `csv.reader`.\n",
+        );
+        rec.finish_turn();
+        rec.hold(1.0);
+        rec.still("plan-ready");
+        assert!(rec.harness.query_by_label("Implement plan").is_some());
+        let message_count = rec.app().active_session().messages.len();
+        rec.app().conv.editing_last_prompt = Some(super::state::PromptEditState {
+            previous_input: String::new(),
+            previous_images: Vec::new(),
+        });
+        rec.app().conv.input = "Revise the CSV plan".into();
+        rec.harness.run_steps(3);
+        assert!(rec.harness.query_by_label("Implement plan").is_none());
+        rec.still("plan-editing");
+        rec.app().cancel_edit_last_prompt();
+        rec.harness.run_steps(3);
+        assert!(rec.harness.query_by_label("Implement plan").is_some());
+        assert_eq!(rec.app().active_session().messages.len(), message_count);
     }
 }
 
@@ -651,7 +722,6 @@ impl Recorder<'_> {
     /// it, and report whether the transcript then holds a selection. With `streaming` the last
     /// reply keeps growing (and the view stuck to the bottom) while the pointer moves.
     fn drag_select_label(&mut self, text: &str, streaming: bool) -> bool {
-        use egui_kittest::kittest::Queryable;
         if streaming {
             let app = self.app();
             let mut reply = message(
@@ -967,6 +1037,7 @@ fn heavy_transcript(turns: usize) -> Vec<ChatMessage> {
                     is_error: Some(false),
                     full_output_path: None,
                     output_truncated: false,
+                    metadata: None,
                 },
                 AssistantBlock::Answer(answer),
             ],

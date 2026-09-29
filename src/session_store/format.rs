@@ -102,6 +102,7 @@ fn assistant_message_to_json_entries(blocks: &[AssistantBlock]) -> Vec<Value> {
                 is_error,
                 full_output_path,
                 output_truncated,
+                metadata,
             } => {
                 assistant_content.push(json!({
                     "type": "toolCall",
@@ -112,6 +113,10 @@ fn assistant_message_to_json_entries(blocks: &[AssistantBlock]) -> Vec<Value> {
                         .and_then(|s| serde_json::from_str::<Value>(s).ok())
                         .unwrap_or_else(|| Value::String(args_summary.clone().unwrap_or_default())),
                 }));
+
+                if let Some(metadata) = metadata {
+                    assistant_content.last_mut().unwrap()["oxiTool"] = json!(metadata);
+                }
 
                 if !output.trim().is_empty()
                     || diff.as_deref().is_some_and(|d| !d.trim().is_empty())
@@ -307,6 +312,7 @@ mod tests {
                 is_error: Some(false),
                 full_output_path: None,
                 output_truncated: false,
+                metadata: None,
             }],
             streaming: false,
             started_at: None,
@@ -335,6 +341,7 @@ mod tests {
                 is_error: None,
                 full_output_path: Some("/tmp/out.txt".into()),
                 output_truncated: true,
+                metadata: None,
             }],
             streaming: false,
             started_at: None,

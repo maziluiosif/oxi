@@ -374,7 +374,11 @@ impl OxiApp {
             // Edit/write arguments are also the live diff preview. Keep enough of them for the
             // UI to parse the replacement while the filesystem operation runs; other tools only
             // need a compact one-line summary.
-            let limit = if name.eq_ignore_ascii_case("edit") || name.eq_ignore_ascii_case("write") {
+            // The checklist panel rebuilds `todo_write` lists from here, so keep them whole too.
+            let limit = if name.eq_ignore_ascii_case("edit")
+                || name.eq_ignore_ascii_case("write")
+                || name == "todo_write"
+            {
                 crate::agent::tools::MAX_TOOL_OUTPUT_CHARS
             } else {
                 800
@@ -422,6 +426,7 @@ impl OxiApp {
             is_error: None,
             full_output_path: None,
             output_truncated: false,
+            metadata: None,
         });
     }
 
@@ -507,6 +512,8 @@ impl OxiApp {
             crate::agent::tools::TurnUndoJournal::default(),
         ));
         self.run_state_mut(key).undo_journal = Some(undo_journal.clone());
+        let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
+        self.run_state_mut(key).last_turn_planned = plan_mode;
         let request = AgentRunRequest {
             settings,
             tunnels: self.tunnels.clone(),
@@ -519,6 +526,7 @@ impl OxiApp {
             cancel: cancel.clone(),
             wire_candidate,
             chars_per_token,
+            plan_mode,
             undo_journal,
         };
         let _join = spawn_agent_run(&self.agent_executor, request, tx);

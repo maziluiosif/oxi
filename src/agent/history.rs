@@ -380,6 +380,7 @@ mod tests {
                 is_error: None,
                 full_output_path: None,
                 output_truncated: false,
+                metadata: None,
             }],
             streaming: false,
             started_at: None,

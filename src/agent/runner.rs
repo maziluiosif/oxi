@@ -79,6 +79,8 @@ pub struct AgentRunRequest {
     pub cancel: Arc<AtomicBool>,
     pub wire_candidate: Option<WireCache>,
     pub chars_per_token: f32,
+    /// Plan mode: read-only tools only, and the model is asked for a plan instead of changes.
+    pub plan_mode: bool,
     pub undo_journal: Arc<std::sync::Mutex<crate::agent::tools::TurnUndoJournal>>,
 }
 
@@ -124,6 +126,7 @@ pub fn spawn_agent_run(
             cancel,
             wire_candidate,
             chars_per_token,
+            plan_mode,
             undo_journal,
         } = request;
         let cwd_ref = cwd.as_path();
@@ -152,21 +155,28 @@ pub fn spawn_agent_run(
                     bash: settings.require_bash_approval,
                 },
                 &cancel,
+                plan_mode,
             )
             .await;
             return;
         }
 
-        let system =
+        let mut system =
             crate::agent::prompt::build_system_prompt_for_workspace(&settings, cwd_ref);
+        let mut enabled = settings.tools_enabled.clone();
+        if plan_mode {
+            system.push_str(crate::agent::prompt::PLAN_MODE_PROMPT);
+            for (on, name) in enabled.iter_mut().zip(crate::settings::ALL_TOOL_NAMES) {
+                *on &= crate::agent::approval::allowed_in_plan_mode(name);
+            }
+        }
         let context_tokens = cfg.effective_context_window(settings.context_window_default);
         let context_budget = crate::agent::history::context_char_budget_from_tokens(
             context_tokens,
             chars_per_token,
         );
         let max_rounds = settings.max_tool_rounds;
-        let mut tools =
-            tool_definitions_json(&settings.tools_enabled, settings.bash_timeout_cap_secs);
+        let mut tools = tool_definitions_json(&enabled, settings.bash_timeout_cap_secs);
         // Connects new/changed servers and restarts dead ones; a no-op when everything is up.
         // Blocking (process spawns, HTTP handshakes), so keep it off the async workers.
         {
@@ -174,7 +184,10 @@ pub fn spawn_agent_run(
             let servers = settings.mcp_servers.clone();
             let _ = tokio::task::spawn_blocking(move || mcp.sync_servers(&servers)).await;
         }
-        tools.extend(mcp.tool_definitions());
+        // MCP tools have unknown side effects, so plan mode leaves them out.
+        if !plan_mode {
+            tools.extend(mcp.tool_definitions());
+        }
         // The tool definitions ride along in every request, so count them as fixed overhead when
         // deciding how much history fits under the trim ceiling.
         let tools_chars: usize = tools.iter().map(|v| v.to_string().len()).sum();
@@ -196,14 +209,27 @@ pub fn spawn_agent_run(
         } else {
             build_openai_messages(&system, &chat_for_history, tools_chars, context_budget)
         };
-        let tool_env = ToolEnv {
-            enabled: settings.tools_enabled.clone(),
+        let mut tool_env = ToolEnv {
+            enabled,
             web_search_url: settings.effective_web_search_url(),
             web_search_backend: settings.web_search_backend,
             bash_timeout_cap_secs: settings.bash_timeout_cap_secs,
-            mcp: Some(mcp),
+            mcp: (!plan_mode).then_some(mcp),
             undo_journal: Some(undo_journal),
+            subagent: None,
         };
+        tool_env.subagent = Some(Arc::new(
+            crate::agent::subagent::SubagentRunner::new(
+                cfg.clone(),
+                tunnels.clone(),
+                cwd.clone(),
+                &tool_env,
+                tokio::runtime::Handle::current(),
+                cancel.clone(),
+                context_budget,
+            )
+            .with_usage_sender(tx.clone()),
+        ));
 
         let effort_override = (!cfg.effort.trim().is_empty()).then_some(cfg.effort.trim());
         // No total request timeout: it would also cover the streamed body and kill long turns
@@ -221,7 +247,8 @@ pub fn spawn_agent_run(
                 bash: settings.require_bash_approval,
             },
             approval_rx,
-        );
+        )
+        .with_plan_mode(plan_mode);
 
         let r = crate::agent::dispatch::run_provider_loop(
             crate::agent::dispatch::DispatchParams {
@@ -272,6 +299,7 @@ async fn run_acp_turn(
     approval_rx: Receiver<ApprovalDecision>,
     approval_policy: ApprovalPolicy,
     cancel: &Arc<AtomicBool>,
+    plan_mode: bool,
 ) {
     let last_user_idx = chat_for_history
         .iter()
@@ -308,6 +336,7 @@ async fn run_acp_turn(
         approval_rx,
         approval_policy,
         cancel: cancel.clone(),
+        plan_mode,
     };
 
     let outcome = match acp.prompt(req).await {

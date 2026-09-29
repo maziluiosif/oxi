@@ -292,9 +292,18 @@ pub struct SessionRunState {
     /// Unexpanded text entered by the user for the most recent turn (the transcript may contain
     /// expanded @mentions). Kept in memory alongside the undo journal for Edit & retry.
     pub last_user_prompt: Option<String>,
+    /// Composer "Plan" toggle for this chat: the next turns only investigate and propose a plan.
+    pub plan_mode: bool,
+    /// The most recent turn ran in plan mode, so the chat can offer "Implement the plan".
+    pub last_turn_planned: bool,
 }
 
 impl SessionRunState {
+    /// Per-chat composer modes that must survive idle-state pruning.
+    pub fn keeps_chat_modes(&self) -> bool {
+        self.plan_mode || self.last_turn_planned
+    }
+
     pub fn clear_agent(&mut self) {
         if let Some(c) = self.cancel_agent.take() {
             c.store(true, Ordering::SeqCst);

@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod tool;
+pub use tool::{ToolLocation, ToolMetadata, ToolStatus, ToolUpdate, apply_tool_update};
+
 use crate::settings::{AppSettings, LlmProviderKind, ProviderConfig};
 
 /// Provider/model choices that belong to one chat rather than to the application globally.
@@ -74,6 +77,7 @@ pub enum AssistantBlock {
         is_error: Option<bool>,
         full_output_path: Option<String>,
         output_truncated: bool,
+        metadata: Option<Box<ToolMetadata>>,
     },
 }
 
@@ -107,6 +111,15 @@ impl ChatMessage {
     /// from [`ChatMessage::started_at`] (a no-op if already frozen).
     pub fn finish_streaming(&mut self) {
         self.streaming = false;
+        for block in &mut self.blocks {
+            if let AssistantBlock::Tool {
+                metadata: Some(meta),
+                ..
+            } = block
+            {
+                meta.interrupt_if_unfinished();
+            }
+        }
         if self.worked_duration.is_none() {
             self.worked_duration = Some(self.started_at.map(|t| t.elapsed()).unwrap_or_default());
         }
@@ -161,8 +174,14 @@ pub fn assistant_is_effectively_empty(blocks: &[AssistantBlock], streaming: bool
     }
     blocks.iter().all(|b| match b {
         AssistantBlock::Thinking(s) | AssistantBlock::Answer(s) => s.trim().is_empty(),
-        AssistantBlock::Tool { output, diff, .. } => {
-            output.trim().is_empty()
+        AssistantBlock::Tool {
+            output,
+            diff,
+            metadata,
+            ..
+        } => {
+            metadata.is_none()
+                && output.trim().is_empty()
                 && diff
                     .as_deref()
                     .is_none_or(|diff_text| diff_text.trim().is_empty())
@@ -293,11 +312,12 @@ pub fn set_tool_output_on_blocks(
             }
         }
     }
-    if let Some(AssistantBlock::Tool {
-        output,
-        output_truncated,
-        ..
-    }) = blocks.last_mut()
+    if tool_call_id.is_none_or(str::is_empty)
+        && let Some(AssistantBlock::Tool {
+            output,
+            output_truncated,
+            ..
+        }) = blocks.last_mut()
     {
         *output = text.to_string();
         *output_truncated = truncated;
@@ -312,6 +332,7 @@ pub fn set_tool_output_on_blocks(
         is_error: None,
         full_output_path: None,
         output_truncated: truncated,
+        metadata: None,
     });
 }
 
@@ -329,6 +350,7 @@ mod tests {
             is_error: None,
             full_output_path: None,
             output_truncated: false,
+            metadata: None,
         }
     }
 
@@ -407,6 +429,17 @@ mod tests {
             AssistantBlock::Tool { output, .. } => assert_eq!(output, "out"),
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn unknown_output_id_does_not_overwrite_another_tool() {
+        let mut blocks = vec![tool("a", "read")];
+        set_tool_output_on_blocks(&mut blocks, Some("b"), "second", false);
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], AssistantBlock::Tool { output, .. } if output.is_empty()));
+        assert!(
+            matches!(&blocks[1], AssistantBlock::Tool { tool_call_id, output, .. } if tool_call_id == "b" && output == "second")
+        );
     }
 
     #[test]
@@ -489,6 +522,7 @@ mod tests {
             is_error: None,
             full_output_path: None,
             output_truncated: false,
+            metadata: None,
         };
         assert!(tool_breaks_explore_cluster(&edit));
     }

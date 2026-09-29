@@ -214,12 +214,25 @@ fn chat_diff_column_job(rows: &[ChatDiffRow], left: bool, digits: usize) -> Layo
 
 fn split_chat_diff_rows(text: &str) -> Vec<ChatDiffRow> {
     let lines: Vec<&str> = text.lines().collect();
+    let multiple_files = lines.iter().filter(|line| line.starts_with("+++ ")).count() > 1;
     let mut rows = Vec::new();
     let (mut old_line, mut new_line) = (1usize, 1usize);
     let mut index = 0usize;
     while index < lines.len() {
         let line = lines[index];
         if line.starts_with("--- ") || line.starts_with("+++ ") {
+            if multiple_files && let Some(path) = line.strip_prefix("+++ ") {
+                rows.push(ChatDiffRow {
+                    left: path.to_owned(),
+                    right: path.to_owned(),
+                    left_no: None,
+                    right_no: None,
+                    left_kind: ChatDiffLineKind::Header,
+                    right_kind: ChatDiffLineKind::Header,
+                });
+            }
+            old_line = 1;
+            new_line = 1;
             index += 1;
             continue;
         }
@@ -332,6 +345,18 @@ fn hunk_starts(line: &str) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multi_file_diff_keeps_paths_and_restarts_line_numbers() {
+        let rows = split_chat_diff_rows(
+            "--- a/one\n+++ b/one\n@@ -5 +5 @@\n-old\n+new\n--- a/two\n+++ b/two\n@@ -1 +1 @@\n-a\n+b\n",
+        );
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].right, "b/one");
+        assert_eq!(rows[1].right_no, Some(5));
+        assert_eq!(rows[2].right, "b/two");
+        assert_eq!(rows[3].right_no, Some(1));
+    }
 
     #[test]
     fn split_chat_diff_pairs_rows_and_aligns_line_numbers() {

@@ -101,6 +101,7 @@ impl OxiApp {
                 || !state.turn_usage.is_zero()
                 || !state.last_turn_usage.is_zero()
                 || !state.session_usage.is_zero()
+                || state.keeps_chat_modes()
         });
 
         if repainted {
@@ -206,6 +207,18 @@ impl OxiApp {
             AgentEvent::ThinkingDelta(d) => {
                 self.append_thinking_delta(key, &d);
             }
+            AgentEvent::ToolUpdate(update) => {
+                let finished = matches!(
+                    update.metadata.status,
+                    crate::model::ToolStatus::Completed | crate::model::ToolStatus::Failed
+                );
+                if let Some(message) = self.last_assistant_mut(key) {
+                    crate::model::apply_tool_update(&mut message.blocks, *update);
+                }
+                if finished {
+                    self.conv.explorer_cache.invalidate();
+                }
+            }
             AgentEvent::ToolStart {
                 name,
                 tool_call_id,
@@ -256,6 +269,11 @@ impl OxiApp {
                 self.reset_streaming_tail(key);
             }
             AgentEvent::AssistantMessageDone => {}
+            AgentEvent::SubagentUsage(usage) => {
+                let run = self.run_state_mut(key);
+                run.turn_usage.add(&usage);
+                run.session_usage.add(&usage);
+            }
             AgentEvent::Usage(usage) => {
                 {
                     let run = self.run_state_mut(key);

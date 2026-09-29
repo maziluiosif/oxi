@@ -35,9 +35,10 @@ pub enum ToolSideEffect {
 pub fn tool_side_effect(name: &str) -> ToolSideEffect {
     match name {
         "read" | "grep" | "find" | "ls" | "codebase_search" | "git_status" | "git_diff"
-        | "web_search" | "web_fetch" => ToolSideEffect::ReadOnly,
+        | "web_search" | "web_fetch" | "todo_write" | "task" => ToolSideEffect::ReadOnly,
         "write" | "edit" | "delete" | "move" | "mkdir" => ToolSideEffect::WorkspaceMutation,
-        "bash" => ToolSideEffect::Shell,
+        // Type-checkers run project build scripts (build.rs, npx), so treat them like bash.
+        "bash" | "diagnostics" => ToolSideEffect::Shell,
         _ => ToolSideEffect::UnknownExternal,
     }
 }
@@ -47,13 +48,16 @@ pub fn tool_is_parallel_safe(name: &str) -> bool {
 }
 
 mod definitions;
+mod diagnostics;
 mod diff;
 mod file_ops;
 mod paths;
 mod shell_search;
 pub(crate) use shell_search::{isolate_process_group, terminate_child_tree};
+mod todo;
 mod undo;
 mod web;
+pub use todo::{TodoItem, TodoStatus, parse_todos};
 
 #[cfg(test)]
 mod tests;
@@ -78,6 +82,9 @@ pub struct ToolEnv {
     pub bash_timeout_cap_secs: u32,
     /// Optional MCP manager for `mcp_*` tools.
     pub mcp: Option<crate::agent::mcp::McpManager>,
+    /// Runs `task` sub-agents; `None` where sub-agents are unavailable (ACP, completions,
+    /// inside a sub-agent).
+    pub subagent: Option<Arc<crate::agent::subagent::SubagentRunner>>,
     /// Per-turn rollback journal. Built-in filesystem mutations are tracked; MCP calls mark it
     /// non-reversible because their side effects cannot be observed reliably. Bash is restricted
     /// by the system prompt to non-mutating verification commands.
@@ -197,6 +204,14 @@ fn run_tool_inner(
                     web::tool_web_search(&env.web_search_url, env.web_search_backend, args)
                 }
                 "web_fetch" => web::tool_web_fetch(args),
+                "todo_write" => todo::tool_todo_write(args),
+                "diagnostics" => {
+                    diagnostics::tool_diagnostics(cwd, args, env.bash_timeout_cap_secs)
+                }
+                "task" => match env.subagent.as_ref() {
+                    Some(runner) => runner.run(args),
+                    None => Err("Sub-agents are not available in this context.".to_string()),
+                },
                 _ => Err(paths::err("unknown tool")),
             };
             match result {

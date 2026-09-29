@@ -27,6 +27,28 @@ pub fn is_legacy_default_system_prompt(prompt: &str) -> bool {
 
 const AGENTS_MD_MAX_BYTES: usize = 64 * 1024;
 
+/// Appended to the system prompt for plan-mode turns (see `AgentRunRequest::plan_mode`).
+pub const PLAN_MODE_PROMPT: &str = "\n\n# Plan mode is ON\nThe user wants a plan before any change is made. Only read-only tools are available; anything that would modify files or run commands is refused.\n- Investigate first: read the relevant code, search for every affected place, check how the project builds and tests.\n- Then reply with a concrete, numbered implementation plan: the files and functions to change and how, new files, edge cases and risks, and how you will verify the result (which tests or checks to run).\n- Ask a question only if the answer changes the plan; otherwise state your assumption.\n- Do not claim anything was changed. End with the plan; the user will approve it and switch to implementation.";
+
+/// Usage guidance for optional tools, appended only when the tool is enabled.
+fn tool_guidance(enabled: &[&str]) -> String {
+    let mut out = String::new();
+    if enabled.contains(&"todo_write") {
+        out.push_str("\n- Task tracking: for work with three or more steps, keep a checklist with `todo_write` (full list up front, exactly one item in_progress, mark items completed as you finish them). Skip it for simple requests.");
+    }
+    if enabled.contains(&"diagnostics") {
+        out.push_str("\n- Verification: after editing code, run `diagnostics` (cargo check / tsc / go vet / ruff, picked from the project) and fix what it reports before finishing. Use bash for tests.");
+    }
+    if enabled.contains(&"task") {
+        out.push_str("\n- Delegation: use `task` to hand a self-contained, read-only investigation to a sub-agent with fresh context (e.g. mapping how a feature is wired across many files). Launch several at once for independent questions. Sub-agents cannot edit files and do not see this conversation, so give complete instructions, then verify key claims yourself before editing.");
+    }
+    if out.is_empty() {
+        out
+    } else {
+        format!("\n\nTool usage:{out}")
+    }
+}
+
 pub fn build_system_prompt_for_workspace(settings: &AppSettings, workspace_root: &Path) -> String {
     let agents_md = if settings.include_agents_md {
         read_agents_md(workspace_root)
@@ -70,6 +92,7 @@ fn build_system_prompt_with_project_instructions(
     };
 
     let mut body = template.replace("{tools_list}", &tools_list);
+    body.push_str(&tool_guidance(&tools));
     body.push_str(
         "\n\nWorkspace mutation policy:\n- Create, modify, delete, move, or rename workspace paths only with the built-in `write`, `edit`, `delete`, `move`, and `mkdir` tools.\n- Normally, never use `bash`, scripts, formatters, generators, package installers, or MCP tools to mutate workspace files; use `bash` only for non-mutating commands. This restriction lets Oxi restore a turn before the user edits and retries its prompt.\n- Exception: if the user explicitly asks you to perform an otherwise prohibited operation, that request overrides this policy. You may use the necessary tool, but keep the action narrowly scoped, state any important side effects, and honor all approval prompts and hard tool safety checks.",
     );
@@ -166,6 +189,23 @@ mod tests {
         assert!(prompt.contains("if the user explicitly asks you"));
         assert!(prompt.contains("overrides this policy"));
         assert!(prompt.contains("hard tool safety checks"));
+    }
+
+    #[test]
+    fn guidance_follows_enabled_tools() {
+        let mut settings = AppSettings::default();
+        let prompt =
+            build_system_prompt_with_project_instructions(&settings, "/tmp/workspace", None, None);
+        assert!(prompt.contains("`todo_write`"));
+        assert!(prompt.contains("run `diagnostics`"));
+        assert!(prompt.contains("use `task`"));
+
+        for (on, name) in settings.tools_enabled.iter_mut().zip(ALL_TOOL_NAMES) {
+            *on = !matches!(name, "todo_write" | "diagnostics" | "task");
+        }
+        let prompt =
+            build_system_prompt_with_project_instructions(&settings, "/tmp/workspace", None, None);
+        assert!(!prompt.contains("Tool usage:"));
     }
 
     #[test]

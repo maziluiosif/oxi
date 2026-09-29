@@ -16,7 +16,7 @@ use crate::ui::preview_expand::{
 use super::thinking::{render_thinking_group_block, thinking_group_is_live};
 use crate::ui::diff::{diff_layout_job, show_split_chat_diff};
 
-use super::tool_format::{diff_counts, mono_output_job, tool_icon, tool_summary};
+use super::tool_format::{diff_counts, mono_output_job, tool_display_summary, tool_icon};
 use super::{is_edit_like_tool, selectable_layout_job};
 
 const BLOCK_PREVIEW_LINES: usize = 10;
@@ -44,6 +44,8 @@ fn render_static_preview_job_panel(
             if !overflows || is_expanded(ui, persist_id) {
                 selectable_layout_job(ui, full_job(inner), allow_select);
             } else {
+                let mut preview_job = preview_job;
+                preview_job.wrap.max_width = inner;
                 selectable_layout_job(ui, preview_job, allow_select);
             }
         });
@@ -72,6 +74,7 @@ pub(super) fn render_tool_pill(
         diff,
         full_output_path,
         output_truncated,
+        metadata,
     } = block
     else {
         return;
@@ -82,7 +85,13 @@ pub(super) fn render_tool_pill(
     // Finalization—not whether the first output chunk arrived—controls the running state. This is
     // especially important for bash, whose output is updated incrementally while it is in flight.
     // Only the last pill in the visual run gets the spinner.
-    let tool_in_flight = streaming && is_error.is_none();
+    let tool_in_flight = streaming
+        && metadata.as_ref().map_or(is_error.is_none(), |m| {
+            matches!(
+                m.status,
+                crate::model::ToolStatus::Pending | crate::model::ToolStatus::InProgress
+            )
+        });
     let running = tool_in_flight && is_last_in_run;
 
     let pill_bg = if has_error {
@@ -116,14 +125,7 @@ pub(super) fn render_tool_pill(
     };
 
     let icon = tool_icon(name);
-    let summary = tool_summary(
-        name,
-        args_summary.as_ref(),
-        output,
-        diff.as_ref(),
-        *is_error,
-        running,
-    );
+    let summary = tool_display_summary(block, running);
     let diff_stats = diff
         .as_deref()
         .filter(|d| !d.trim().is_empty())
@@ -156,14 +158,6 @@ pub(super) fn render_tool_pill(
                         .font(FontId::new(FS_SMALL + 0.5, icon_font()))
                         .color(icon_color),
                 );
-                ui.add(
-                    Label::new(
-                        RichText::new(summary.action.as_str())
-                            .size(FS_SMALL)
-                            .color(name_color),
-                    )
-                    .selectable(false),
-                );
                 // Right-side status first so the (truncated) detail takes whatever is left.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if can_expand {
@@ -191,17 +185,7 @@ pub(super) fn render_tool_pill(
                         diff_stat_labels(ui, added, removed);
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        if !summary.detail.is_empty() {
-                            ui.add(
-                                Label::new(
-                                    RichText::new(summary.detail.as_str())
-                                        .size(FS_SMALL)
-                                        .color(summary_color)
-                                        .monospace(),
-                                )
-                                .truncate(),
-                            );
-                        }
+                        render_summary_text(ui, &summary, name_color, summary_color);
                     });
                 });
             });
@@ -259,6 +243,49 @@ pub(super) fn render_tool_pill(
         }
     }
     ui.add_space(3.0);
+}
+
+/// Both labels share the space left after reserving the icon and trailing controls.
+/// Bound the title as well as the detail: ACP titles and native/MCP names can be arbitrary text.
+fn render_summary_text(
+    ui: &mut Ui,
+    summary: &super::tool_format::ToolSummary,
+    action_color: Color32,
+    detail_color: Color32,
+) {
+    let available = ui.available_width().max(0.0);
+    let has_detail = !summary.detail.is_empty();
+    let title = summary.action.replace(['\n', '\r'], " ");
+    let natural_width = ui
+        .painter()
+        .layout_no_wrap(title.clone(), FontId::proportional(FS_SMALL), action_color)
+        .size()
+        .x
+        .ceil();
+    let title_width = natural_width.min(if has_detail {
+        available * 0.6
+    } else {
+        available
+    });
+    ui.add_sized(
+        egui::vec2(title_width, ui.spacing().interact_size.y),
+        Label::new(RichText::new(title).size(FS_SMALL).color(action_color))
+            .truncate()
+            .selectable(false),
+    )
+    .on_hover_text(&summary.action);
+    if has_detail && ui.available_width() > 0.0 {
+        ui.add(
+            Label::new(
+                RichText::new(&summary.detail)
+                    .size(FS_SMALL)
+                    .color(detail_color)
+                    .monospace(),
+            )
+            .truncate(),
+        )
+        .on_hover_text(&summary.detail);
+    }
 }
 
 /// Colored `+N -M` line counts, laid out for a right-to-left row (removed is added first so it
@@ -385,7 +412,10 @@ fn render_edit_tool_block(
         name,
         args_summary,
         diff,
-        output: _,
+        output,
+        metadata,
+        output_truncated,
+        full_output_path,
         is_error,
         ..
     } = block
@@ -393,7 +423,9 @@ fn render_edit_tool_block(
         return;
     };
 
-    let args_preview = if name.eq_ignore_ascii_case("write") {
+    let args_preview = if metadata.is_some() {
+        None
+    } else if name.eq_ignore_ascii_case("write") {
         write_content_from_args(args_summary.as_ref())
             .map(|content| pseudo_diff_from_write_content(&content))
             .filter(|text| !text.trim().is_empty())
@@ -414,7 +446,13 @@ fn render_edit_tool_block(
         .is_some_and(|t| !t.trim().is_empty());
     // Argument-derived previews are visible before execution finishes, so finalization—not the
     // presence of a preview—controls the running state.
-    let running = streaming && is_error.is_none();
+    let running = streaming
+        && metadata.as_ref().map_or(is_error.is_none(), |m| {
+            matches!(
+                m.status,
+                crate::model::ToolStatus::Pending | crate::model::ToolStatus::InProgress
+            )
+        });
 
     // Diff stats badge
     let (added, removed) = rendered_diff
@@ -493,24 +531,12 @@ fn render_edit_tool_block(
                                 }),
                         );
 
-                        let summary = tool_summary(
-                            name,
-                            args_summary.as_ref(),
-                            "",
-                            rendered_diff.as_ref(),
-                            *is_error,
-                            running,
-                        );
+                        let summary = tool_display_summary(block, running);
                         let fg = if has_error {
                             crate::theme::c_tool_error_fg()
                         } else {
                             c_text()
                         };
-                        ui.add(
-                            Label::new(RichText::new(summary.action).size(FS_SMALL).color(fg))
-                                .selectable(false),
-                        );
-
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.add(
                                 Label::new(
@@ -537,17 +563,7 @@ fn render_edit_tool_block(
                             ui.with_layout(
                                 egui::Layout::left_to_right(egui::Align::Center),
                                 |ui| {
-                                    if !summary.detail.is_empty() {
-                                        ui.add(
-                                            Label::new(
-                                                RichText::new(summary.detail)
-                                                    .size(FS_SMALL)
-                                                    .color(fg)
-                                                    .monospace(),
-                                            )
-                                            .truncate(),
-                                        );
-                                    }
+                                    render_summary_text(ui, &summary, fg, fg);
                                 },
                             );
                         });
@@ -556,7 +572,7 @@ fn render_edit_tool_block(
                 .response;
 
             // The whole header toggles the diff (not just the chevron).
-            if has_diff {
+            if has_diff || !output.is_empty() || args_summary.is_some() {
                 let rect = header_resp.rect;
                 let pointer_inside = ui
                     .ctx()
@@ -606,6 +622,37 @@ fn render_edit_tool_block(
                             clickable_expand_overlay(ui, frame.response.rect, persist_id);
                         }
                     });
+            }
+            if is_open {
+                let detail = if !output.is_empty() {
+                    output.as_str()
+                } else if !has_diff {
+                    args_summary
+                        .as_deref()
+                        .unwrap_or("No diff or output provided by the agent.")
+                } else {
+                    ""
+                };
+                if !detail.is_empty() {
+                    let overflow =
+                        detail.lines().count() > BLOCK_PREVIEW_LINES || detail.len() > 2000;
+                    let preview = truncate_lines_preview(detail, BLOCK_PREVIEW_LINES);
+                    render_static_preview_job_panel(
+                        ui,
+                        diff_bg,
+                        mono_output_job(&preview, ui.available_width()),
+                        |width| mono_output_job(detail, width),
+                        open_id.with("output"),
+                        overflow,
+                    );
+                }
+                if *output_truncated || full_output_path.is_some() {
+                    ui.label(
+                        RichText::new("Output truncated")
+                            .size(FS_TINY)
+                            .color(c_text_faint()),
+                    );
+                }
             }
         });
 
