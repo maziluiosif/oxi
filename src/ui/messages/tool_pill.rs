@@ -274,8 +274,7 @@ fn render_summary_text(
         Label::new(RichText::new(title).size(FS_SMALL).color(action_color))
             .truncate()
             .selectable(false),
-    )
-    .on_hover_text(&summary.action);
+    );
     if has_detail && ui.available_width() > 0.0 {
         ui.add(
             Label::new(
@@ -285,8 +284,7 @@ fn render_summary_text(
                     .monospace(),
             )
             .truncate(),
-        )
-        .on_hover_text(&summary.detail);
+        );
     }
 }
 
