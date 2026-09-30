@@ -333,9 +333,9 @@ fn effective_web_search_url_searxng_empty_returns_empty_for_tool_error() {
 }
 
 #[test]
-fn normalize_migrates_nonempty_url_to_searxng_backend() {
-    // Older settings.json: explicit `web_search_backend: "duckduckgo"` (the old default)
-    // and a non-empty searxng_url. normalize() should migrate to SearXng.
+fn normalize_keeps_explicit_duckduckgo_with_searxng_url() {
+    // DuckDuckGo is the default now, so an explicit `"duckduckgo"` next to a leftover
+    // searxng_url is a real choice and must not be flipped to SearXNG.
     let json = r#"{
             "active_provider": "openai",
             "providers": {"openai": {"model_id":"gpt-4o-mini","base_url":""}},
@@ -346,8 +346,8 @@ fn normalize_migrates_nonempty_url_to_searxng_backend() {
         }"#;
     let mut s: AppSettings = serde_json::from_str(json).unwrap();
     s.normalize();
-    assert_eq!(s.web_search_backend, WebSearchBackend::SearXng);
-    assert_eq!(s.effective_web_search_url(), "https://searxng.example.com");
+    assert_eq!(s.web_search_backend, WebSearchBackend::DuckDuckGo);
+    assert_eq!(s.effective_web_search_url(), "");
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn normalize_upgrades_legacy_default_prompt_but_keeps_custom() {
 #[test]
 fn normalize_keeps_default_when_no_url() {
     // Older settings.json: no `web_search_backend` field and empty searxng_url.
-    // Deserializes to Bing (current default) and stays on Bing.
+    // Deserializes to DuckDuckGo (current default) and stays there.
     let json = r#"{
             "active_provider": "openai",
             "providers": {"openai": {"model_id":"gpt-4o-mini","base_url":""}},
@@ -385,6 +385,6 @@ fn normalize_keeps_default_when_no_url() {
         }"#;
     let mut s: AppSettings = serde_json::from_str(json).unwrap();
     s.normalize();
-    assert_eq!(s.web_search_backend, WebSearchBackend::Bing);
+    assert_eq!(s.web_search_backend, WebSearchBackend::DuckDuckGo);
     assert_eq!(s.effective_web_search_url(), "");
 }

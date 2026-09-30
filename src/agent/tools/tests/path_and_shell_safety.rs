@@ -45,6 +45,40 @@ fn resolve_under_cwd_rejects_dotdot_escape() {
     assert!(res.is_err());
 }
 
+// ─── resolve_under_cwd_for_create ────────────────────────────────────
+
+#[test]
+fn resolve_for_create_rejects_dotdot_through_missing_dir() {
+    let cwd = temp_workspace("create-dotdot-missing");
+    let res = resolve_under_cwd_for_create(&cwd, "newdir/../../escaped/x.txt");
+    assert!(res.is_err(), "{res:?}");
+}
+
+#[test]
+fn resolve_for_create_collapses_dotdot_inside_workspace() {
+    let cwd = temp_workspace("create-dotdot-inside");
+    let res = resolve_under_cwd_for_create(&cwd, "a/b/../c.txt").unwrap();
+    assert_eq!(res, cwd.canonicalize().unwrap().join("a").join("c.txt"));
+}
+
+#[test]
+fn write_tool_cannot_escape_via_missing_dir() {
+    let cwd = temp_workspace("write-dotdot-missing");
+    let name = format!("escaped-{}", cwd.file_name().unwrap().to_string_lossy());
+    let result = run_tool(
+        &cwd,
+        "write",
+        &json!({
+            "path": format!("newdir/../../{name}/x.txt"),
+            "content": "hi",
+        }),
+        &all_enabled(),
+    );
+    assert!(result.is_error, "{}", result.output);
+    assert!(!cwd.parent().unwrap().join(&name).exists());
+    assert!(!cwd.join("newdir").exists());
+}
+
 // ─── validate_bash_command ───────────────────────────────────────────
 
 #[test]

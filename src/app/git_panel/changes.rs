@@ -211,11 +211,13 @@ impl OxiApp {
 
         if let Some(err) = self.conv.commit_gen_error.clone() {
             ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!("Generate failed: {err}"))
-                    .size(FS_TINY)
-                    .color(crate::theme::c_error_fg()),
-            );
+            if crate::ui::chrome::dismissible_notice(
+                ui,
+                "commit_gen_error",
+                &format!("Generate failed: {err}"),
+            ) {
+                self.conv.commit_gen_error = None;
+            }
         }
 
         ui.add_space(8.0);

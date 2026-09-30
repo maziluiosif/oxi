@@ -29,8 +29,8 @@ const DEFAULT_USER_AGENT: &str = "oxi/0.6";
 const DDG_HTML_URL: &str = "https://html.duckduckgo.com/html/";
 /// Bing offers a stable, zero-config RSS feed of its search results at `?format=rss`. It is
 /// plain XML (title/link/description per item), tolerant of any User-Agent, and not gated by a
-/// bot-challenge page like DuckDuckGo's HTML endpoint, so it is the preferred zero-config
-/// backend. Bing caps the feed at ~10 items regardless of a `count=` parameter; we just trim.
+/// bot-challenge page like DuckDuckGo's HTML endpoint, so it is the fallback when DuckDuckGo
+/// rate-limits. Bing caps the feed at ~10 items regardless of a `count=` parameter; we just trim.
 const BING_RSS_URL: &str = "https://www.bing.com/search";
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
      AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
@@ -166,11 +166,10 @@ pub(crate) fn tool_web_search(
     Ok(truncate(out, MAX_TOOL_OUTPUT_CHARS))
 }
 
-/// Zero-config search with no API key or setup: use exactly the backend the user picked.
-/// Bing is preferred because it serves plain XML with no bot-challenge page; DuckDuckGo's
-/// HTML endpoint is currently blocked by an anomaly challenge. Whatever the selection, its
-/// error is returned directly so the user sees what failed rather than another backend's
-/// results masking the problem.
+/// Zero-config search with no API key or setup. DuckDuckGo (the default) falls back to Bing
+/// only when it serves its anomaly challenge — it rate-limits bursts of requests, which is
+/// exactly how an agent searches. Other DuckDuckGo errors (network, HTTP status) and Bing's
+/// own errors are returned directly so the user sees what failed.
 fn zero_config_search(
     query: &str,
     count: usize,
@@ -179,7 +178,11 @@ fn zero_config_search(
     use crate::settings::WebSearchBackend;
     match backend {
         WebSearchBackend::Bing => bing_search(query, count),
-        WebSearchBackend::DuckDuckGo => ddg_search(query, count),
+        WebSearchBackend::DuckDuckGo => match ddg_search(query, count) {
+            Err(e) if e == DDG_CHALLENGE_ERR => bing_search(query, count)
+                .map(|out| format!("(DuckDuckGo rate-limited; results from Bing)\n{out}")),
+            other => other,
+        },
         WebSearchBackend::SearXng => Err(err(
             "SearXNG backend selected but no SearXNG URL is configured in Settings → Tools → Web search",
         )),
@@ -262,6 +265,9 @@ fn extract_tag_text<'a>(html: &'a str, lower: &'a str, tag: &str) -> Option<&'a 
     Some(&html[start..end])
 }
 
+const DDG_CHALLENGE_ERR: &str =
+    "DuckDuckGo rate-limited this request — retry shortly, or configure a SearXNG URL in Settings";
+
 /// Search DuckDuckGo's HTML endpoint and format the results like the SearXNG path.
 fn ddg_search(query: &str, count: usize) -> Result<String, String> {
     let resp = http_get(
@@ -278,10 +284,7 @@ fn ddg_search(query: &str, count: usize) -> Result<String, String> {
     let results = parse_ddg_results(&resp.body, count);
     if results.is_empty() {
         if resp.body.contains("anomaly") || resp.body.contains("challenge") {
-            return Err(
-                "DuckDuckGo rate-limited this request — retry shortly, or configure a SearXNG URL in Settings"
-                    .to_string(),
-            );
+            return Err(DDG_CHALLENGE_ERR.to_string());
         }
         return Ok(format!("No results for: {query}"));
     }

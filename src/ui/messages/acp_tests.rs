@@ -120,7 +120,7 @@ fn render_acp_tool_gallery() {
                 });
                 ui.add_space(12.0);
                 for (index, block) in state.0.iter().enumerate() {
-                    tool_pill::render_single_tool_block(ui, 0, index, block, state.1, true);
+                    tool_pill::render_single_tool_block(ui, 0, index, block, state.1, true, true);
                 }
             },
             (fixture_blocks(), true),
@@ -232,7 +232,7 @@ fn tool_cards_stay_inside_narrow_chat_with_long_acp_and_native_content() {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             for (index, block) in blocks.iter().enumerate() {
                                 let available = ui.available_width();
-                                let response = ui.scope(|ui| tool_pill::render_single_tool_block(ui, 0, index, block, streaming, true));
+                                let response = ui.scope(|ui| tool_pill::render_single_tool_block(ui, 0, index, block, streaming, true, true));
                                 assert!(response.response.rect.width() <= available + 0.5,
                                     "acp={acp}, streaming={streaming}, width={width}, block={index}: {} > {available}", response.response.rect.width());
                             }

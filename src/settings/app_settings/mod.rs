@@ -67,6 +67,10 @@ pub struct AppSettings {
     /// Require explicit user approval before each `bash` tool call.
     #[serde(default = "default_require_approval")]
     pub require_bash_approval: bool,
+    /// `bash` command prefixes (`cargo test`, `git status`) that run without the approval
+    /// prompt. Only simple commands match; see [`crate::agent::approval::bash_command_allowlisted`].
+    #[serde(default)]
+    pub bash_allowlist: Vec<String>,
     /// Legacy single approval switch. Migrated in [`AppSettings::normalize`] and no longer saved.
     #[serde(default, skip_serializing)]
     pub require_approval: Option<bool>,
@@ -259,6 +263,7 @@ impl Default for AppSettings {
             searxng_url: default_searxng_url(),
             require_write_edit_approval: default_require_approval(),
             require_bash_approval: default_require_approval(),
+            bash_allowlist: Vec::new(),
             require_approval: None,
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),

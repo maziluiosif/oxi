@@ -486,24 +486,24 @@ impl From<ProviderProfile> for ProviderConfig {
     }
 }
 
-/// Which web search backend the `web_search` tool uses. Bing is the zero-config default:
-/// it serves a stable RSS feed of results with no API key and no bot-challenge page.
-/// DuckDuckGo's HTML endpoint is available as an explicit selection, but is currently
-/// blocked by an anomaly challenge. SearXNG routes through a user-configured instance
+/// Which web search backend the `web_search` tool uses. DuckDuckGo is the zero-config
+/// default; its HTML endpoint rate-limits bursts of requests with an anomaly challenge, in
+/// which case the search falls back to Bing's RSS feed (also zero-config). Bing can be picked
+/// explicitly to skip DuckDuckGo entirely. SearXNG routes through a user-configured instance
 /// (see `searxng_url`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum WebSearchBackend {
     #[default]
-    Bing,
     DuckDuckGo,
+    Bing,
     SearXng,
 }
 
 impl WebSearchBackend {
     pub const ALL: [WebSearchBackend; 3] = [
-        WebSearchBackend::Bing,
         WebSearchBackend::DuckDuckGo,
+        WebSearchBackend::Bing,
         WebSearchBackend::SearXng,
     ];
 

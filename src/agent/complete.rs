@@ -45,10 +45,10 @@ pub fn spawn_completion(req: CompleteRequest) -> (Receiver<CompleteEvent>, JoinH
 }
 
 fn run(req: CompleteRequest, tx: Sender<CompleteEvent>) {
-    let rt = match tokio::runtime::Runtime::new() {
+    let rt = match crate::runtime::runtime() {
         Ok(r) => r,
         Err(e) => {
-            let _ = tx.send(CompleteEvent::Done(Err(format!("tokio: {e}"))));
+            let _ = tx.send(CompleteEvent::Done(Err(e)));
             return;
         }
     };
@@ -85,7 +85,10 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
 
     // Bridge agent events into completion deltas.
     let (agent_tx, agent_rx) = mpsc::channel::<AgentEvent>();
-    let collector = tokio::spawn(collect_deltas(agent_rx, tx.clone(), max_chars));
+    // `collect_deltas` blocks on a std channel, so it must not occupy a runtime worker.
+    let delta_tx = tx.clone();
+    let collector =
+        tokio::task::spawn_blocking(move || collect_deltas(agent_rx, delta_tx, max_chars));
 
     let cwd = std::path::Path::new(".");
     let tool_env = crate::agent::tools::ToolEnv {
@@ -144,7 +147,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
 
 /// Consume [`AgentEvent`]s and forward text deltas to the completion channel,
 /// accumulating the full text. Honors an optional character cap by stopping early.
-async fn collect_deltas(
+fn collect_deltas(
     rx: mpsc::Receiver<AgentEvent>,
     tx: Sender<CompleteEvent>,
     max_chars: Option<usize>,

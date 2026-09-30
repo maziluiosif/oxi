@@ -16,6 +16,10 @@ use super::*;
 const LOCAL_COMMANDS: &[(&str, &str)] = &[
     ("new", "Start a new chat"),
     ("compact", "Summarize older messages to free up context"),
+    (
+        "plan",
+        "Toggle plan mode (read-only investigation, then a plan); /plan <task> plans it",
+    ),
 ];
 
 const ROW_H: f32 = 26.0;
@@ -56,20 +60,28 @@ fn filter_commands(all: Vec<AcpSlashCommand>, query: &str) -> Vec<AcpSlashComman
     prefix
 }
 
-/// oxi's commands followed by the agent's. `/new` always stays oxi's; an agent `/compact`
-/// replaces oxi's, which can't shrink the context an ACP agent keeps itself.
+/// Local commands an agent's command of the same name can't replace.
+const ALWAYS_LOCAL: &[&str] = &["new", "plan"];
+
+/// oxi's commands followed by the agent's. `/new` and `/plan` always stay oxi's; an agent
+/// `/compact` replaces oxi's, which can't shrink the context an ACP agent keeps itself.
 fn merge_commands(agent: &[AcpSlashCommand]) -> Vec<AcpSlashCommand> {
     let agent_has = |name: &str| agent.iter().any(|c| c.name == name);
     let mut all: Vec<AcpSlashCommand> = LOCAL_COMMANDS
         .iter()
-        .filter(|(name, _)| *name == "new" || !agent_has(name))
+        .filter(|(name, _)| ALWAYS_LOCAL.contains(name) || !agent_has(name))
         .map(|(name, description)| AcpSlashCommand {
             name: (*name).to_string(),
             description: (*description).to_string(),
             hint: None,
         })
         .collect();
-    all.extend(agent.iter().filter(|c| c.name != "new").cloned());
+    all.extend(
+        agent
+            .iter()
+            .filter(|c| !ALWAYS_LOCAL.contains(&c.name.as_str()))
+            .cloned(),
+    );
     all
 }
 
@@ -306,11 +318,12 @@ mod tests {
     }
 
     #[test]
-    fn agent_compact_replaces_local_but_new_stays_local() {
-        let merged = merge_commands(&[cmd("compact"), cmd("init"), cmd("new")]);
-        assert_eq!(names(&merged), ["new", "compact", "init"]);
-        assert_eq!(merged[1].description, "");
+    fn agent_compact_replaces_local_but_new_and_plan_stay_local() {
+        let merged = merge_commands(&[cmd("compact"), cmd("init"), cmd("new"), cmd("plan")]);
+        assert_eq!(names(&merged), ["new", "plan", "compact", "init"]);
+        assert_eq!(merged[2].description, "");
+        assert!(!merged[1].description.is_empty());
         let local_only = merge_commands(&[]);
-        assert_eq!(names(&local_only), ["new", "compact"]);
+        assert_eq!(names(&local_only), ["new", "compact", "plan"]);
     }
 }

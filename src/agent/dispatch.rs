@@ -25,7 +25,7 @@ use super::runner::{
     openrouter_extra_headers,
 };
 use super::tools::{
-    MAX_TOOL_OUTPUT_CHARS, ToolEnv, ToolOutputCallback, ToolResult, run_tool_with_output,
+    MAX_TOOL_OUTPUT_CHARS, ToolEnv, ToolOutputCallback, ToolResult, run_tool, run_tool_with_output,
 };
 use crate::oauth::{ensure_codex_access_token, load_oauth_store};
 use crate::settings::{LlmProviderKind, ProviderConfig};
@@ -197,6 +197,44 @@ pub(crate) async fn run_provider_loop(
 /// output and end the moment it finishes, so a slow `task` sub-agent does not hold back the pills
 /// of faster siblings; sub-agents also stream their progress into the pill while they work.
 /// The caller still appends the results to the conversation in call order.
+/// Ask for approval, then run a mutating tool in place (in call order). Both steps block —
+/// the approval wait on the user, `bash` for up to its timeout — so they run under
+/// [`crate::runtime::block_in_place`] instead of stalling a runtime worker.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_gated_tool(
+    gate: &mut ApprovalGate,
+    tx: &Sender<AgentEvent>,
+    cancel: &Arc<AtomicBool>,
+    cwd: &Path,
+    id: &str,
+    name: &str,
+    args: &Value,
+    env: &ToolEnv,
+) -> ToolResult {
+    crate::runtime::block_in_place(|| match gate.request(tx, cancel, name, args) {
+        Ok(()) if name.eq_ignore_ascii_case("bash") => {
+            let event_tx = tx.clone();
+            let id = id.to_string();
+            let callback: ToolOutputCallback = Arc::new(move |text| {
+                let truncated = text.chars().count() >= MAX_TOOL_OUTPUT_CHARS;
+                let _ = event_tx.send(AgentEvent::ToolOutput {
+                    tool_call_id: id.clone(),
+                    text,
+                    truncated,
+                });
+            });
+            run_tool_with_output(cwd, name, args, env, Some(callback))
+        }
+        Ok(()) => run_tool(cwd, name, args, env),
+        Err(reason) => ToolResult {
+            output: reason,
+            is_error: true,
+            diff: None,
+            full_output_path: None,
+        },
+    })
+}
+
 pub(crate) fn spawn_readonly_tool(
     cwd: &Path,
     id: &str,
