@@ -43,6 +43,7 @@ impl OxiApp {
     /// Tell the git worker the active workspace changed, so it re-roots and
     /// refreshes. Called from `select_workspace` / new-workspace flows.
     pub(crate) fn refresh_git_cwd(&mut self) {
+        self.conv.git_last_auto_refresh = None;
         if self.conv.git_rx.is_none() {
             return;
         }
@@ -69,6 +70,27 @@ impl OxiApp {
         }
     }
 
+    pub(crate) fn poll_git_changes(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.focused)
+            || self.conv.git_rx.is_none()
+            || self.conv.git.busy
+            || self.conv.git_auto_refresh_pending
+            || self.conv.commit_gen_pending
+            || self
+                .conv
+                .git_last_auto_refresh
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2))
+        {
+            return;
+        }
+        if let Some(tx) = &self.conv.git_tx
+            && tx.send(GitOp::AutoRefresh).is_ok()
+        {
+            self.conv.git_auto_refresh_pending = true;
+            self.conv.git_last_auto_refresh = Some(std::time::Instant::now());
+        }
+    }
+
     pub(crate) fn drain_git(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.conv.git_rx.as_ref() else {
             return;
@@ -79,7 +101,13 @@ impl OxiApp {
         let mut collected_diff: Option<String> = None;
         let mut saw_final_snapshot = false;
         while let Ok(mut state) = rx.try_recv() {
-            if !state.busy {
+            if state.last_op.as_deref() == Some("auto refresh") {
+                self.conv.git_auto_refresh_pending = false;
+                if state.error.is_none() {
+                    state.error = latest.as_ref().unwrap_or(&self.conv.git).error.clone();
+                }
+            }
+            if !state.busy && state.last_op.as_deref() == Some("collect commit diff") {
                 saw_final_snapshot = true;
             }
             if state.busy {
@@ -88,7 +116,7 @@ impl OxiApp {
                 // the busy marker; otherwise the diff view (and sidebar lists) briefly
                 // disappear until the final snapshot arrives, which looks like flicker
                 // when switching between files/commits.
-                let previous = &self.conv.git;
+                let previous = latest.as_ref().unwrap_or(&self.conv.git);
                 state.repo = previous.repo;
                 state.branch = previous.branch.clone();
                 state.branches = previous.branches.clone();
@@ -96,6 +124,7 @@ impl OxiApp {
                 state.behind = previous.behind;
                 state.staged = previous.staged.clone();
                 state.unstaged = previous.unstaged.clone();
+                state.line_changes = previous.line_changes.clone();
                 state.log = previous.log.clone();
                 state.diff = previous.diff.clone();
                 state.error = previous.error.clone();

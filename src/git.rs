@@ -12,6 +12,10 @@ use std::thread;
 mod network;
 use network::{fetch, pull, push};
 
+#[cfg(test)]
+#[path = "git/tests.rs"]
+mod tests;
+
 use git2::{
     BranchType, Diff, DiffFormat, DiffOptions, IndexAddOption, ObjectType, Oid, Repository, Sort,
     Status, StatusOptions, build::CheckoutBuilder,
@@ -72,6 +76,7 @@ pub struct GitState {
 #[derive(Debug, Clone)]
 pub enum GitOp {
     Refresh,
+    AutoRefresh,
     Stage(Vec<String>),
     Unstage(Vec<String>),
     Discard(Vec<String>),
@@ -109,6 +114,7 @@ impl GitChannels {
 
 fn git_worker(cwd: String, rx: Receiver<GitOp>, tx: Sender<GitState>, ctx: egui::Context) {
     let mut cwd = cwd;
+    let mut diff_view: Option<GitOp> = None;
     let _ = tx.send(GitState {
         busy: true,
         last_op: Some("refresh".into()),
@@ -117,23 +123,43 @@ fn git_worker(cwd: String, rx: Receiver<GitOp>, tx: Sender<GitState>, ctx: egui:
     for op in rx {
         if let GitOp::SetCwd(path) = op {
             cwd = path;
+            diff_view = None;
             let _ = tx.send(handle_op(&cwd, GitOp::Refresh));
             ctx.request_repaint();
             continue;
         }
-        let _ = tx.send(GitState {
-            busy: true,
-            last_op: Some(label_op(&op).into()),
-            ..Default::default()
-        });
-        let _ = tx.send(handle_op(&cwd, op));
+        if matches!(op, GitOp::AutoRefresh) {
+            let _ = tx.send(auto_refresh(&cwd, diff_view.as_ref()));
+        } else {
+            let _ = tx.send(GitState {
+                busy: true,
+                last_op: Some(label_op(&op).into()),
+                ..Default::default()
+            });
+            diff_view = match &op {
+                GitOp::ShowDiff { .. } | GitOp::ShowCommit(_) => Some(op.clone()),
+                _ => None,
+            };
+            let collecting_diff = matches!(op, GitOp::CollectCommitDiff);
+            let mut state = handle_op(&cwd, op);
+            if collecting_diff {
+                state.last_op = Some("collect commit diff".into());
+            }
+            let _ = tx.send(state);
+        }
         ctx.request_repaint();
     }
 }
 
+fn auto_refresh(cwd: &str, diff_view: Option<&GitOp>) -> GitState {
+    let mut state = handle_op(cwd, diff_view.cloned().unwrap_or(GitOp::Refresh));
+    state.last_op = Some("auto refresh".into());
+    state
+}
+
 fn label_op(op: &GitOp) -> &'static str {
     match op {
-        GitOp::Refresh => "refresh",
+        GitOp::Refresh | GitOp::AutoRefresh => "refresh",
         GitOp::Stage(_) => "stage",
         GitOp::Unstage(_) => "unstage",
         GitOp::Discard(_) => "discard",
@@ -444,7 +470,7 @@ fn handle_op(cwd: &str, op: GitOp) -> GitState {
     };
     let result: Result<Option<GitState>, String> = (|| {
         match op {
-            GitOp::Refresh => {}
+            GitOp::Refresh | GitOp::AutoRefresh => {}
             GitOp::Stage(paths) => stage(&repo, &paths)?,
             GitOp::Unstage(paths) => unstage(&repo, &paths)?,
             GitOp::Discard(paths) => discard(&repo, &paths)?,

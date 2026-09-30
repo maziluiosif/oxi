@@ -173,7 +173,7 @@ fn render_shortcuts(ui: &mut Ui) {
     } else {
         "Ctrl+"
     };
-    let shortcuts: [(String, &str); 14] = [
+    let shortcuts: [(String, &str); 15] = [
         (format!("{cmd}N"), "New chat"),
         (format!("{cmd}."), "Stop the running reply"),
         ("Enter".into(), "Send message"),
@@ -185,6 +185,7 @@ fn render_shortcuts(ui: &mut Ui) {
         (format!("{cmd}Shift+B"), "Show or hide source control"),
         (format!("{cmd}`"), "Show or hide the terminal"),
         (format!("{cmd}P"), "Open a file in the workspace"),
+        (format!("{cmd}Shift+N"), "Open global scratchpad"),
         (format!("{cmd}S"), "Save the open file"),
         (format!("{cmd}F / {cmd}H"), "Find / find and replace"),
         ("F12".into(), "Go to definition (Rust)"),

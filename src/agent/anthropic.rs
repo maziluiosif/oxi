@@ -1,6 +1,6 @@
 //! Anthropic Messages API streaming (used by OpenCode Go's Anthropic-compatible models).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
@@ -54,7 +54,13 @@ fn to_anthropic_tools(openai_tools: &[Value]) -> Vec<Value> {
 }
 
 /// Convert OpenAI-format `messages` to Anthropic `messages` (system stripped — pass separately).
-fn to_anthropic_messages(openai: &[Value], cache_control: Option<Value>) -> (String, Vec<Value>) {
+/// `thinking` maps an assistant turn's first tool call id to the thinking blocks the model
+/// produced before it; they are replayed unchanged so tool rounds keep the model's reasoning.
+fn to_anthropic_messages(
+    openai: &[Value],
+    thinking: &HashMap<String, Vec<Value>>,
+    cache_control: Option<Value>,
+) -> (String, Vec<Value>) {
     let mut system = String::new();
     let mut msgs = Vec::new();
     for m in openai {
@@ -82,7 +88,13 @@ fn to_anthropic_messages(openai: &[Value], cache_control: Option<Value>) -> (Str
         }
         if role == "assistant" {
             if let Some(tcs) = m.get("tool_calls").and_then(|x| x.as_array()) {
-                let mut blocks = Vec::new();
+                let mut blocks: Vec<Value> = tcs
+                    .first()
+                    .and_then(|tc| tc.get("id"))
+                    .and_then(|x| x.as_str())
+                    .and_then(|id| thinking.get(id))
+                    .cloned()
+                    .unwrap_or_default();
                 if let Some(tx) = m.get("content").and_then(|x| x.as_str())
                     && !tx.is_empty()
                 {
@@ -257,6 +269,7 @@ pub async fn run_anthropic_loop(
     let anthropic_tools = to_anthropic_tools(tools_openai);
     let cache_control = Some(json!({ "type": "ephemeral" }));
     let thinking = thinking_config(model);
+    let mut thinking_by_call: HashMap<String, Vec<Value>> = HashMap::new();
     let mut round = 0u32;
     let mut stream_retries = 0u32;
     loop {
@@ -269,12 +282,19 @@ pub async fn run_anthropic_loop(
         }
         // Trim the canonical history under the context ceiling before translating it, so a long
         // multi-round run can't overflow the window mid-flight. A no-op until it's needed.
+        let len_before = openai_messages.len();
         crate::agent::history::trim_wire_history_to_budget(
             openai_messages,
             tools_chars,
             context_char_budget,
         );
-        let (system, anth_msgs) = to_anthropic_messages(openai_messages, cache_control.clone());
+        // A thinking block's signature covers the conversation before it, so once older turns
+        // are dropped the saved blocks no longer verify; send the history without them.
+        if openai_messages.len() != len_before {
+            thinking_by_call.clear();
+        }
+        let (system, anth_msgs) =
+            to_anthropic_messages(openai_messages, &thinking_by_call, cache_control.clone());
         let _ = tx.send(AgentEvent::AgentStart);
         let mut body = json!({
             "model": model,
@@ -322,6 +342,7 @@ pub async fn run_anthropic_loop(
         let mut buf = String::new();
         let mut text_out = String::new();
         let mut tool_uses: HashMap<u64, ToolUseAccum> = HashMap::new();
+        let mut thinking_blocks: BTreeMap<u64, Value> = BTreeMap::new();
         let mut stop_reason: Option<String> = None;
         let mut stream_error: Option<String> = None;
         let mut round_usage = TokenUsage::default();
@@ -353,6 +374,7 @@ pub async fn run_anthropic_loop(
                     &event_block,
                     &mut text_out,
                     &mut tool_uses,
+                    &mut thinking_blocks,
                     &mut stop_reason,
                     &mut stream_error,
                     &mut round_usage,
@@ -367,6 +389,7 @@ pub async fn run_anthropic_loop(
                         block,
                         &mut text_out,
                         &mut tool_uses,
+                        &mut thinking_blocks,
                         &mut stop_reason,
                         &mut stream_error,
                         &mut round_usage,
@@ -410,6 +433,11 @@ pub async fn run_anthropic_loop(
         let mut tus: Vec<(u64, ToolUseAccum)> = tool_uses.into_iter().collect();
         tus.sort_by_key(|(i, _)| *i);
         let tool_list: Vec<ToolUseAccum> = tus.into_iter().map(|(_, v)| v).collect();
+        if let Some(first) = tool_list.first()
+            && !thinking_blocks.is_empty()
+        {
+            thinking_by_call.insert(first.id.clone(), thinking_blocks.into_values().collect());
+        }
         let sr = stop_reason.as_deref().unwrap_or("");
         if sr == "tool_use" || !tool_list.is_empty() {
             let mut asst = json!({ "role": "assistant", "content": text_out });
@@ -567,10 +595,25 @@ pub async fn run_anthropic_loop(
     Ok(())
 }
 
+/// Append streamed text to a string field of a collected thinking block.
+fn append_block_str(blocks: &mut BTreeMap<u64, Value>, idx: u64, key: &str, text: &str) {
+    let Some(obj) = blocks.get_mut(&idx).and_then(|b| b.as_object_mut()) else {
+        return;
+    };
+    match obj.get_mut(key) {
+        Some(Value::String(cur)) => cur.push_str(text),
+        _ => {
+            obj.insert(key.to_string(), Value::String(text.to_string()));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn parse_anthropic_event(
     block: &str,
     text_out: &mut String,
     tool_uses: &mut HashMap<u64, ToolUseAccum>,
+    thinking_blocks: &mut BTreeMap<u64, Value>,
     stop_reason: &mut Option<String>,
     stream_error: &mut Option<String>,
     usage: &mut TokenUsage,
@@ -604,9 +647,15 @@ fn parse_anthropic_event(
         "content_block_delta" => {
             if let Some(delta) = v.get("delta") {
                 let delta_type = delta.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                let idx = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0);
                 if delta_type == "thinking_delta" {
                     if let Some(t) = delta.get("thinking").and_then(|x| x.as_str()) {
+                        append_block_str(thinking_blocks, idx, "thinking", t);
                         let _ = tx.send(AgentEvent::ThinkingDelta(t.to_string()));
+                    }
+                } else if delta_type == "signature_delta" {
+                    if let Some(sig) = delta.get("signature").and_then(|x| x.as_str()) {
+                        append_block_str(thinking_blocks, idx, "signature", sig);
                     }
                 } else if let Some(t) = delta.get("text").and_then(|x| x.as_str()) {
                     text_out.push_str(t);
@@ -619,8 +668,18 @@ fn parse_anthropic_event(
             }
         }
         "content_block_start" => {
+            let block_type = v
+                .pointer("/content_block/type")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            if matches!(block_type, "thinking" | "redacted_thinking")
+                && let Some(cb) = v.get("content_block")
+            {
+                let idx = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0);
+                thinking_blocks.insert(idx, cb.clone());
+            }
             if let Some(cb) = v.get("content_block")
-                && cb.get("type").and_then(|x| x.as_str()) == Some("tool_use")
+                && block_type == "tool_use"
             {
                 let idx = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0);
                 let entry = tool_uses.entry(idx).or_default();
@@ -688,6 +747,62 @@ fn parse_anthropic_event(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn thinking_blocks_are_collected_and_replayed_before_tool_use() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut tool_uses = HashMap::new();
+        let mut thinking = BTreeMap::new();
+        let (mut stop, mut err, mut usage, mut text) =
+            (None, None, TokenUsage::default(), String::new());
+        for block in [
+            r#"event: content_block_start
+data: {"index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
+            r#"event: content_block_delta
+data: {"index":0,"delta":{"type":"thinking_delta","thinking":"plan "}}"#,
+            r#"event: content_block_delta
+data: {"index":0,"delta":{"type":"thinking_delta","thinking":"it"}}"#,
+            r#"event: content_block_delta
+data: {"index":0,"delta":{"type":"signature_delta","signature":"sig"}}"#,
+            r#"event: content_block_start
+data: {"index":1,"content_block":{"type":"redacted_thinking","data":"blob"}}"#,
+        ] {
+            parse_anthropic_event(
+                block,
+                &mut text,
+                &mut tool_uses,
+                &mut thinking,
+                &mut stop,
+                &mut err,
+                &mut usage,
+                &tx,
+            );
+        }
+        let blocks: Vec<Value> = thinking.into_values().collect();
+        assert_eq!(
+            blocks[0],
+            json!({"type": "thinking", "thinking": "plan it", "signature": "sig"})
+        );
+        assert_eq!(blocks[1]["type"], "redacted_thinking");
+
+        let messages = vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "hi"}),
+            json!({"role": "assistant", "content": "ok", "tool_calls": [
+                {"id": "tu_1", "type": "function", "function": {"name": "ls", "arguments": "{}"}}
+            ]}),
+            json!({"role": "tool", "tool_call_id": "tu_1", "content": "a.rs"}),
+        ];
+        let map = HashMap::from([("tu_1".to_string(), blocks)]);
+        let (_, msgs) = to_anthropic_messages(&messages, &map, None);
+        let types: Vec<&str> = msgs[1]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(types, ["thinking", "redacted_thinking", "text", "tool_use"]);
+    }
 
     #[test]
     fn thinking_budgeted_for_known_older_models() {

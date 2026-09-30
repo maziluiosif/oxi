@@ -11,6 +11,7 @@ mod markdown;
 mod model;
 mod oauth;
 mod rust_goto;
+mod scratchpad;
 mod secrets;
 mod session_store;
 mod settings;

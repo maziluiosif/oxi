@@ -1,5 +1,6 @@
 //! OpenAI Codex ChatGPT backend (`/codex/responses` SSE) — OAuth access token + `chatgpt-account-id`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
@@ -8,6 +9,7 @@ use std::time::Instant;
 use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
 use super::events::{AgentEvent, TokenUsage};
@@ -28,6 +30,8 @@ struct ToolCallAccum {
 #[derive(Default)]
 struct CodexStreamState {
     got_thinking_delta: bool,
+    /// Completed reasoning items (with `encrypted_content`) to replay in the next round's input.
+    reasoning_items: Vec<Value>,
 }
 
 /// Find first SSE record boundary (`\r\n\r\n` or `\n\n`).
@@ -166,7 +170,36 @@ fn split_system(messages: &[Value]) -> (String, Vec<Value>) {
     (String::new(), rest)
 }
 
-fn chat_to_input(messages: &[Value]) -> Result<Vec<Value>, String> {
+/// Reasoning items for replay. With `store: false` the server cannot resolve item ids, so the id
+/// is dropped and the item travels by its `encrypted_content`.
+fn replayable_reasoning(item: &Value) -> Option<Value> {
+    item.get("encrypted_content")?.as_str()?;
+    let mut item = item.clone();
+    item.as_object_mut()?.remove("id");
+    Some(item)
+}
+
+/// Stable per-conversation cache key: the Codex backend routes prompt caching by it, so every
+/// round (and every later turn) of one chat should send the same value.
+fn prompt_cache_key(instructions: &str, input: &[Value]) -> String {
+    let first_user = input
+        .iter()
+        .find(|v| v.get("role").and_then(|r| r.as_str()) == Some("user"));
+    let mut hasher = Sha256::new();
+    hasher.update(instructions.as_bytes());
+    hasher.update(first_user.map(|v| v.to_string()).unwrap_or_default());
+    hasher.finalize()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// `reasoning` maps an assistant turn's first tool call id to the reasoning items the model
+/// produced before it, so tool rounds keep the model's chain of thought instead of re-deriving it.
+fn chat_to_input(
+    messages: &[Value],
+    reasoning: &HashMap<String, Vec<Value>>,
+) -> Result<Vec<Value>, String> {
     let mut input = Vec::new();
     for m in messages {
         let role = m.get("role").and_then(|x| x.as_str()).unwrap_or("");
@@ -179,6 +212,14 @@ fn chat_to_input(messages: &[Value]) -> Result<Vec<Value>, String> {
         }
         if role == "assistant" {
             if let Some(tcs) = m.get("tool_calls").and_then(|x| x.as_array()) {
+                if let Some(items) = tcs
+                    .first()
+                    .and_then(|tc| tc.get("id"))
+                    .and_then(|x| x.as_str())
+                    .and_then(|id| reasoning.get(id))
+                {
+                    input.extend(items.iter().cloned());
+                }
                 if let Some(content) = m.get("content").and_then(|c| c.as_str())
                     && !content.is_empty()
                 {
@@ -367,12 +408,14 @@ fn process_responses_event(
         "response.output_item.done" => {
             if let Some(item) = v.get("item") {
                 match item.get("type").and_then(|x| x.as_str()) {
-                    Some("reasoning") if !state.got_thinking_delta => {
-                        if let Some(text) = reasoning_item_summary_joined(item)
+                    Some("reasoning") => {
+                        if !state.got_thinking_delta
+                            && let Some(text) = reasoning_item_summary_joined(item)
                             && !text.is_empty()
                         {
                             let _ = tx.send(AgentEvent::ThinkingDelta(text));
                         }
+                        state.reasoning_items.extend(replayable_reasoning(item));
                     }
                     Some("function_call") => {
                         let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
@@ -459,6 +502,7 @@ pub async fn run_codex_responses_loop(
     let tools_chars = ctx.tools_chars;
     let url = resolve_codex_post_url(base_url);
     let rtools = responses_tools(tools);
+    let mut reasoning_by_call: HashMap<String, Vec<Value>> = HashMap::new();
     let mut round = 0u32;
     let mut stream_retries = 0u32;
     loop {
@@ -477,7 +521,8 @@ pub async fn run_codex_responses_loop(
             context_char_budget,
         );
         let (instructions, rest) = split_system(messages);
-        let input = chat_to_input(&rest)?;
+        let input = chat_to_input(&rest, &reasoning_by_call)?;
+        let cache_key = prompt_cache_key(&instructions, &input);
         let reasoning_effort = effort_override
             .filter(|e| crate::agent::openai::is_valid_reasoning_effort(e))
             .unwrap_or("medium");
@@ -492,7 +537,8 @@ pub async fn run_codex_responses_loop(
             "parallel_tool_calls": true,
             "text": { "verbosity": "medium" },
             "reasoning": { "effort": reasoning_effort, "summary": "auto" },
-            "include": ["reasoning.encrypted_content"]
+            "include": ["reasoning.encrypted_content"],
+            "prompt_cache_key": cache_key,
         });
         let _ = tx.send(AgentEvent::AgentStart);
         let mut headers = HeaderMap::new();
@@ -608,6 +654,11 @@ pub async fn run_codex_responses_loop(
         let _ = tx.send(AgentEvent::AssistantMessageDone);
 
         let tool_calls = pending_tools;
+        if let Some(first) = tool_calls.first()
+            && !sse_state.reasoning_items.is_empty()
+        {
+            reasoning_by_call.insert(first.id.clone(), sse_state.reasoning_items);
+        }
 
         if !tool_calls.is_empty() {
             let mut msg = json!({ "role": "assistant", "content": assistant_text });
@@ -758,4 +809,61 @@ pub async fn run_codex_responses_loop(
         break;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_is_replayed_before_its_tool_calls_without_id() {
+        let item = json!({
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "opaque",
+        });
+        let replay = replayable_reasoning(&item).unwrap();
+        assert!(replay.get("id").is_none());
+        assert!(replayable_reasoning(&json!({"type": "reasoning", "id": "rs_2"})).is_none());
+
+        let messages = vec![
+            json!({"role": "user", "content": "hi"}),
+            json!({"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "ls", "arguments": "{}"}}
+            ]}),
+            json!({"role": "tool", "tool_call_id": "call_1", "content": "a.rs"}),
+        ];
+        let reasoning = HashMap::from([("call_1".to_string(), vec![replay])]);
+        let input = chat_to_input(&messages, &reasoning).unwrap();
+        let types: Vec<&str> = input
+            .iter()
+            .map(|v| v.get("type").and_then(|t| t.as_str()).unwrap_or("message"))
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "message",
+                "reasoning",
+                "function_call",
+                "function_call_output"
+            ]
+        );
+    }
+
+    #[test]
+    fn prompt_cache_key_is_stable_across_rounds() {
+        let first =
+            vec![json!({"role": "user", "content": [{"type": "input_text", "text": "hi"}]})];
+        let mut later = first.clone();
+        later.push(json!({"type": "function_call_output", "call_id": "c", "output": "x"}));
+        assert_eq!(
+            prompt_cache_key("sys", &first),
+            prompt_cache_key("sys", &later)
+        );
+        assert_ne!(
+            prompt_cache_key("sys", &first),
+            prompt_cache_key("other", &first)
+        );
+    }
 }

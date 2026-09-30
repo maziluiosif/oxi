@@ -580,6 +580,8 @@ pub struct ConversationState {
     pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
     /// egui context used for the git worker so it can request repaints.
     pub git_ctx: eframe::egui::Context,
+    pub git_last_auto_refresh: Option<Instant>,
+    pub git_auto_refresh_pending: bool,
     /// Background model-list fetch results keyed by provider kind.
     pub fetched_models: std::collections::HashMap<LlmProviderKind, FetchedModels>,
     /// Channels for in-flight model-list fetch results (drained each frame).

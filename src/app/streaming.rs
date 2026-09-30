@@ -370,6 +370,10 @@ impl OxiApp {
         };
         let id = tool_call_id.unwrap_or("").to_string();
         let args_summary = args.map(|a| {
+            // The scratchpad pill needs only the mode, not the potentially large global notes.
+            if name == "scratchpad" {
+                return serde_json::json!({"mode": a.get("mode")}).to_string();
+            }
             let s = a.to_string();
             // Edit/write arguments are also the live diff preview. Keep enough of them for the
             // UI to parse the replacement while the filesystem operation runs; other tools only

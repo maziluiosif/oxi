@@ -64,6 +64,15 @@ impl eframe::App for OxiApp {
         self.drain_git(ctx);
         self.drain_commit_gen(ctx);
         self.drain_compaction(ctx);
+        self.check_external_file_changes();
+        self.poll_git_changes(ctx);
+
+        // A focus event runs these checks again when returning to an idle background window.
+        if ctx.input(|i| i.focused)
+            && (!self.conv.editor.documents.is_empty() || self.conv.git_rx.is_some())
+        {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
 
         // Returning to the actual chat transcript acknowledges a background completion. Tool
         // approvals remain attention-worthy until the user explicitly responds to them.
@@ -231,7 +240,7 @@ impl OxiApp {
 
     /// Global shortcuts that work outside the composer TextEdit.
     /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B chats sidebar,
-    /// Cmd/Ctrl+E workspace explorer,
+    /// Cmd/Ctrl+E workspace explorer, Cmd/Ctrl+Shift+N opens the scratchpad,
     /// Cmd/Ctrl+Shift+B git changes panel, Cmd/Ctrl+P opens any workspace file,
     /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds and F12 navigates
     /// to a Rust definition in an open editor, Cmd/Ctrl+. stops a run.
@@ -248,6 +257,7 @@ impl OxiApp {
             toggle_explorer,
             toggle_git,
             open_file,
+            open_scratchpad,
             save_file,
             find_file,
             find_replace,
@@ -262,6 +272,7 @@ impl OxiApp {
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::E),
                 i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::B),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::P),
+                i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::N),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::H),
@@ -288,6 +299,9 @@ impl OxiApp {
         }
         if open_file && !self.conv.settings_open && !self.conv.editor.file_picker_open {
             self.open_file_picker();
+        }
+        if open_scratchpad && !self.conv.settings_open && !self.conv.editor.file_picker_open {
+            self.open_scratchpad();
         }
         if save_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {
             self.save_editor_file();
