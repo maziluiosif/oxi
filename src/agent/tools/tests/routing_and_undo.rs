@@ -20,6 +20,29 @@ fn run_tool_disabled_tool() {
     assert!(res.output.contains("disabled"));
 }
 
+#[test]
+fn scratchpad_is_a_sequential_approval_gated_mutation() {
+    use crate::agent::tools::{ToolSideEffect, tool_is_parallel_safe, tool_side_effect};
+    assert_eq!(
+        tool_side_effect("scratchpad"),
+        ToolSideEffect::WorkspaceMutation
+    );
+    assert!(!tool_is_parallel_safe("scratchpad"));
+    let mut env = all_enabled();
+    let index = ALL_TOOL_NAMES
+        .iter()
+        .position(|name| *name == "scratchpad")
+        .unwrap();
+    env.enabled[index] = false;
+    let result = run_tool(
+        &temp_workspace("scratchpad-disabled"),
+        "scratchpad",
+        &json!({}),
+        &env,
+    );
+    assert!(result.is_error && result.output.contains("disabled"));
+}
+
 // ─── per-turn undo journal ─────────────────────────────────────────
 
 #[test]

@@ -235,9 +235,12 @@ fn tools_enabled_default_all_true() {
 
 #[test]
 fn all_tool_names_has_expected_tools() {
-    assert_eq!(ALL_TOOL_NAMES.len(), 18);
+    assert_eq!(ALL_TOOL_NAMES.len(), 19);
     // Positional flags: new tools are appended after the original ones.
-    assert_eq!(&ALL_TOOL_NAMES[15..], ["todo_write", "diagnostics", "task"]);
+    assert_eq!(
+        &ALL_TOOL_NAMES[15..],
+        ["todo_write", "diagnostics", "task", "scratchpad"]
+    );
     assert!(ALL_TOOL_NAMES.contains(&"bash"));
     assert!(ALL_TOOL_NAMES.contains(&"codebase_search"));
     assert!(ALL_TOOL_NAMES.contains(&"git_status"));
@@ -291,6 +294,7 @@ fn normalize_pads_short_tools_enabled() {
     // Newly-added tools default to enabled.
     assert!(s.tools_enabled[7]);
     assert!(s.tools_enabled[8]);
+    assert!(s.tools_enabled[18]);
     // Missing searxng_url falls back to the default.
     assert_eq!(s.searxng_url, default_searxng_url());
 }

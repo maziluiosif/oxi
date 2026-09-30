@@ -17,6 +17,7 @@ fn approval_summary(name: &str, args: &Option<Value>) -> String {
         "bash" => "command",
         "write" | "edit" | "delete" | "mkdir" => "path",
         "move" => "from",
+        "scratchpad" => "mode",
         _ => "",
     };
     args.get(field)
@@ -261,6 +262,7 @@ impl OxiApp {
                 self.finalize_tool_run(key, id, is_error, full_output_path, diff);
                 // The tool may have created, moved or deleted files: show them right away.
                 self.conv.explorer_cache.invalidate();
+                self.refresh_scratchpad();
             }
             AgentEvent::StreamRetry { attempt, reason } => {
                 eprintln!("[oxi] stream retry (attempt {attempt}): {reason}");

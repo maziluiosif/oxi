@@ -138,7 +138,11 @@ impl OxiApp {
             ui.set_height(24.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if crate::ui::chrome::icon_button_plain(ui, ICON_PROMPTS, 20.0, false)
-                    .on_hover_text("Open global scratchpad")
+                    .on_hover_text(if cfg!(target_os = "macos") {
+                        "Open global scratchpad (⌘⇧N)"
+                    } else {
+                        "Open global scratchpad (Ctrl+Shift+N)"
+                    })
                     .clicked()
                 {
                     self.open_scratchpad();

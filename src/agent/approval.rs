@@ -154,6 +154,7 @@ mod tests {
             "delete",
             "move",
             "mkdir",
+            "scratchpad",
             "mcp_github_create_issue",
         ] {
             assert!(
@@ -227,7 +228,14 @@ mod tests {
         // Approval switched off entirely: plan mode must still refuse.
         let mut gate = ApprovalGate::new(ApprovalPolicy::disabled(), drx).with_plan_mode(true);
         let (etx, cancel, args) = ctx();
-        for tool in ["write", "edit", "bash", "diagnostics", "mcp_x_y"] {
+        for tool in [
+            "write",
+            "edit",
+            "scratchpad",
+            "bash",
+            "diagnostics",
+            "mcp_x_y",
+        ] {
             assert_eq!(
                 gate.request(&etx, &cancel, tool, &args),
                 Err(PLAN_MODE_REFUSAL.to_string()),

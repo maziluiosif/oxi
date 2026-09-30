@@ -18,6 +18,10 @@ impl OxiApp {
         self.conv.terminal_open = !self.conv.terminal_open;
         self.conv.settings.terminal_open = self.conv.terminal_open;
         if self.conv.terminal_open {
+            self.conv.focus_chat_input_next_frame = false;
+            self.conv.editor.focus_editor_next_frame = false;
+            self.conv.editor.focus_find_next_frame = false;
+            self.conv.editor.find_focus_editor_pending = false;
             self.conv.focus_terminal_next_frame = true;
         } else {
             self.conv.focus_terminal_next_frame = false;
@@ -44,7 +48,9 @@ impl OxiApp {
             .show(ui, |ui| {
                 self.render_terminal_resize_handle(ui);
                 self.render_terminal_header(ui);
-                self.render_terminal_body(ui);
+                if self.conv.terminal_open {
+                    self.render_terminal_body(ui);
+                }
             });
     }
 
@@ -109,6 +115,7 @@ impl OxiApp {
                         .clicked()
                     {
                         self.terminal = None;
+                        self.conv.focus_terminal_next_frame = true;
                     }
                 });
             },

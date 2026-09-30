@@ -27,6 +27,21 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                     }
                 }
             }),
+            "scratchpad" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "scratchpad",
+                    "description": "Update the user's global autosaved scratchpad, shared across workspaces. Use only when requested by the user. append concatenates content exactly (include any needed newlines); rewrite replaces all text (empty content clears it). This tool is the authorized way to update the scratchpad outside the workspace. Changes are not reverted by Regenerate.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "mode": { "type": "string", "enum": ["append", "rewrite"] },
+                            "content": { "type": "string" }
+                        },
+                        "required": ["mode", "content"]
+                    }
+                }
+            }),
             "write" => serde_json::json!({
                 "type": "function",
                 "function": {

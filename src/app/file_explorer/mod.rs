@@ -33,14 +33,6 @@ pub(crate) use media_view::MediaKind;
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
-        // Keep polling for external file changes while the editor is visible. Only while the
-        // window has focus: regaining focus delivers an event (and so a frame) that runs the
-        // check anyway, and an idle background window should cost nothing.
-        if ui.ctx().input(|i| i.focused) {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(1500));
-        }
-        self.check_external_file_changes();
         self.render_editor_tabs(ui);
         if self.conv.editor.diff_tab_active
             && self.conv.diff_view_open

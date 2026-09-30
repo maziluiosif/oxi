@@ -36,7 +36,9 @@ pub fn tool_side_effect(name: &str) -> ToolSideEffect {
     match name {
         "read" | "grep" | "find" | "ls" | "codebase_search" | "git_status" | "git_diff"
         | "web_search" | "web_fetch" | "todo_write" | "task" => ToolSideEffect::ReadOnly,
-        "write" | "edit" | "delete" | "move" | "mkdir" => ToolSideEffect::WorkspaceMutation,
+        "write" | "edit" | "delete" | "move" | "mkdir" | "scratchpad" => {
+            ToolSideEffect::WorkspaceMutation
+        }
         // Type-checkers run project build scripts (build.rs, npx), so treat them like bash.
         "bash" | "diagnostics" => ToolSideEffect::Shell,
         _ => ToolSideEffect::UnknownExternal,
@@ -52,6 +54,7 @@ mod diagnostics;
 mod diff;
 mod file_ops;
 mod paths;
+mod scratchpad;
 mod shell_search;
 pub(crate) use shell_search::{isolate_process_group, terminate_child_tree};
 mod todo;
@@ -177,6 +180,7 @@ fn run_tool_inner(
         };
     }
     match name {
+        "scratchpad" => scratchpad::tool_scratchpad(args, env),
         "write" => file_ops::tool_write(cwd, args, env.undo_journal.as_ref()),
         "edit" => file_ops::tool_edit(cwd, args, env.undo_journal.as_ref()),
         "delete" => file_ops::tool_delete(cwd, args, env.undo_journal.as_ref()),

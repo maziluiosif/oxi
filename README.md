@@ -177,12 +177,16 @@ The agent can call these tools when enabled in Settings:
 | `web_fetch` | Fetch a URL and return readable text |
 | `diagnostics` | Run workspace checks and summarize file/line diagnostics |
 | `todo_write` | Update the task checklist shown above the composer |
+| `scratchpad` | Append to or rewrite the global autosaved scratchpad |
 | `task` | Delegate a read-only investigation to an agent on the same provider/model |
 | `mcp_<server>_<tool>` | Call tools exposed by enabled stdio or Streamable HTTP MCP servers |
 
 Tool behavior:
 
 - path-based tools reject paths that escape the workspace root
+- `scratchpad` accepts `mode: "append" | "rewrite"` and `content`; append concatenates exactly, including supplied newlines, while an empty rewrite clears the notes
+- scratchpad changes sync with the editor, use the file-mutation approval setting, and are blocked in Plan mode; they are global and are not restored by **Edit & retry** or **Regenerate**
+- built-in tools are available to HTTP providers (including GPT Codex); ACP adapters manage their own tool sets
 - `write` can create new files under the workspace
 - `edit` requires each `oldText` to match exactly once unless `replaceAll` is set
 - `delete` is non-recursive, while `move` refuses to overwrite destinations and `mkdir` creates one level at a time

@@ -87,6 +87,10 @@ async fn run_chat_loop_at(
     let context_char_budget = ctx.context_char_budget;
     let tools_chars = ctx.tools_chars;
     let gate = &mut *ctx.gate;
+    // Reasoning the model streamed before each tool round, keyed by the round's first tool call
+    // id: `(field it arrived in, text)`. Replayed only within this run, so the persisted wire
+    // history stays plain Chat Completions.
+    let mut reasoning_by_call: HashMap<String, (&'static str, String)> = HashMap::new();
     let mut round = 0u32;
     let mut stream_retries = 0u32;
     loop {
@@ -107,7 +111,7 @@ async fn run_chat_loop_at(
         let _ = tx.send(AgentEvent::AgentStart);
         let mut body = json!({
             "model": model,
-            "messages": messages,
+            "messages": with_replayed_reasoning(messages, &reasoning_by_call),
             "tools": tools,
             "tool_choice": "auto",
             "stream": true,
@@ -149,6 +153,7 @@ async fn run_chat_loop_at(
         let mut finish_reason: Option<String> = None;
         let mut stream_error: Option<String> = None;
         let mut round_usage = TokenUsage::default();
+        let mut reasoning: Option<(&'static str, String)> = None;
         // Output throughput is measured from the first streamed chunk to the end of the
         // stream, so request setup, tool runs and approvals never count against it.
         let mut first_chunk_at: Option<Instant> = None;
@@ -177,6 +182,7 @@ async fn run_chat_loop_at(
                     &line,
                     &mut assistant_text,
                     &mut tool_map,
+                    &mut reasoning,
                     &mut finish_reason,
                     &mut stream_error,
                     &mut round_usage,
@@ -190,6 +196,7 @@ async fn run_chat_loop_at(
                     line.trim(),
                     &mut assistant_text,
                     &mut tool_map,
+                    &mut reasoning,
                     &mut finish_reason,
                     &mut stream_error,
                     &mut round_usage,
@@ -232,6 +239,9 @@ async fn run_chat_loop_at(
         let mut pairs: Vec<(u64, ToolCallAccum)> = tool_map.into_iter().collect();
         pairs.sort_by_key(|(i, _)| *i);
         let tool_calls: Vec<ToolCallAccum> = pairs.into_iter().map(|(_, v)| v).collect();
+        if let (Some(first), Some(r)) = (tool_calls.first(), reasoning) {
+            reasoning_by_call.insert(first.id.clone(), r);
+        }
         let fr = finish_reason.as_deref().unwrap_or("stop");
         if fr == "tool_calls" && tool_calls.is_empty() {
             return Err("Model requested tool_calls but no tool calls were parsed".into());
@@ -396,10 +406,38 @@ async fn run_chat_loop_at(
     Ok(())
 }
 
+/// `messages` with in-run reasoning re-attached to the assistant tool-call turns that produced
+/// it. Reasoning models served over Chat Completions (DeepSeek, Kimi, GLM, Qwen, …) expect their
+/// reasoning back during a tool loop; without it they re-derive the plan every round.
+fn with_replayed_reasoning(
+    messages: &[Value],
+    reasoning: &HashMap<String, (&'static str, String)>,
+) -> Vec<Value> {
+    let mut out = messages.to_vec();
+    if reasoning.is_empty() {
+        return out;
+    }
+    for m in &mut out {
+        let Some((key, text)) = m
+            .pointer("/tool_calls/0/id")
+            .and_then(|x| x.as_str())
+            .and_then(|id| reasoning.get(id))
+        else {
+            continue;
+        };
+        if let Some(obj) = m.as_object_mut() {
+            obj.insert((*key).to_string(), Value::String(text.clone()));
+        }
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
 fn process_sse_line(
     line: &str,
     assistant_text: &mut String,
     tool_map: &mut HashMap<u64, ToolCallAccum>,
+    reasoning_out: &mut Option<(&'static str, String)>,
     finish_reason: &mut Option<String>,
     stream_error: &mut Option<String>,
     usage: &mut TokenUsage,
@@ -499,12 +537,16 @@ fn process_sse_line(
             let _ = tx.send(AgentEvent::TextDelta(content.to_string()));
         }
         // Extended thinking / reasoning (OpenAI o-series models send `reasoning_content`)
-        if let Some(reasoning) = d
-            .get("reasoning_content")
-            .or_else(|| d.get("reasoning"))
-            .and_then(|x| x.as_str())
+        let field = ["reasoning_content", "reasoning"]
+            .into_iter()
+            .find_map(|k| Some((k, d.get(k)?.as_str()?)));
+        if let Some((key, reasoning)) = field
             && !reasoning.is_empty()
         {
+            reasoning_out
+                .get_or_insert_with(|| (key, String::new()))
+                .1
+                .push_str(reasoning);
             let _ = tx.send(AgentEvent::ThinkingDelta(reasoning.to_string()));
         }
     }
@@ -551,6 +593,7 @@ mod early_tool_start_tests {
             ),
             &mut assistant_text,
             &mut tool_map,
+            &mut None,
             &mut finish_reason,
             &mut stream_error,
             &mut usage,
@@ -579,6 +622,7 @@ mod early_tool_start_tests {
             ),
             &mut assistant_text,
             &mut tool_map,
+            &mut None,
             &mut finish_reason,
             &mut stream_error,
             &mut usage,
@@ -590,6 +634,40 @@ mod early_tool_start_tests {
         );
         assert_eq!(tool_map[&0].arguments, "{\"query\":\"rust\"}");
         assert!(tool_map[&0].started);
+    }
+
+    #[test]
+    fn reasoning_is_collected_and_replayed_under_its_own_field() {
+        let (tx, _rx) = mpsc::channel::<AgentEvent>();
+        let mut reasoning = None;
+        for chunk in ["look ", "first"] {
+            process_sse_line(
+                &format!(
+                    "data: {}",
+                    json!({"choices": [{"index": 0, "delta": {"reasoning_content": chunk}}]})
+                ),
+                &mut String::new(),
+                &mut HashMap::new(),
+                &mut reasoning,
+                &mut None,
+                &mut None,
+                &mut TokenUsage::default(),
+                &tx,
+            );
+        }
+        let (key, text) = reasoning.unwrap();
+        assert_eq!((key, text.as_str()), ("reasoning_content", "look first"));
+
+        let messages = vec![
+            json!({"role": "user", "content": "hi"}),
+            json!({"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "ls", "arguments": "{}"}}
+            ]}),
+        ];
+        let map = HashMap::from([("call_1".to_string(), (key, text))]);
+        let sent = with_replayed_reasoning(&messages, &map);
+        assert_eq!(sent[1]["reasoning_content"], "look first");
+        assert!(messages[1].get("reasoning_content").is_none());
     }
 }
 

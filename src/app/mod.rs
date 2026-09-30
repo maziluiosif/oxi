@@ -72,6 +72,11 @@ impl OxiApp {
     /// document tab is active, the chat composer otherwise. Use this instead of setting
     /// `focus_chat_input_next_frame` directly so focus never lands on a hidden widget.
     pub(crate) fn focus_active_view_next_frame(&mut self) {
+        self.conv.focus_terminal_next_frame = false;
+        self.conv.focus_chat_input_next_frame = false;
+        self.conv.editor.focus_editor_next_frame = false;
+        self.conv.editor.focus_find_next_frame = false;
+        self.conv.editor.find_focus_editor_pending = false;
         match self.conv.editor.focus_target() {
             state::EditorFocusTarget::Editor => self.conv.editor.focus_editor_next_frame = true,
             state::EditorFocusTarget::ChatInput => self.conv.focus_chat_input_next_frame = true,
@@ -208,6 +213,8 @@ impl OxiApp {
                 git_tx: None,
                 git_rx: None,
                 git_ctx: eframe::egui::Context::default(),
+                git_last_auto_refresh: None,
+                git_auto_refresh_pending: false,
                 fetched_models: std::collections::HashMap::new(),
                 model_rxs: Vec::new(),
                 local_models: crate::app::state::LocalModelsUiState {

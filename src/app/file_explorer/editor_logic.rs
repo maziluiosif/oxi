@@ -83,6 +83,17 @@ pub(super) fn char_index_to_byte(content: &str, char_index: usize) -> usize {
         .unwrap_or(content.len())
 }
 
+pub(super) fn clamp_byte_range(
+    content: &str,
+    range: &std::ops::Range<usize>,
+) -> std::ops::Range<usize> {
+    let start = content.floor_char_boundary(range.start.min(content.len()));
+    let end = content
+        .floor_char_boundary(range.end.min(content.len()))
+        .max(start);
+    start..end
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +106,15 @@ mod tests {
         assert_eq!(char_index_to_byte(content, 2), 3);
         assert_eq!(char_index_to_byte(content, 3), content.len());
         assert_eq!(char_index_to_byte(content, usize::MAX), content.len());
+    }
+
+    #[test]
+    fn stale_navigation_ranges_are_clamped_to_utf8_boundaries() {
+        assert_eq!(clamp_byte_range("short", &(100..200)), 5..5);
+        assert_eq!(clamp_byte_range("aé🦀", &(2..5)), 1..3);
+        assert_eq!(clamp_byte_range("", &(10..10)), 0..0);
+        let reversed = std::ops::Range { start: 2, end: 1 };
+        assert_eq!(clamp_byte_range("abc", &reversed), 2..2);
     }
 
     #[test]

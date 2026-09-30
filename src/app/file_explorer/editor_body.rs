@@ -319,6 +319,9 @@ impl OxiApp {
                             // silently degrades to whole-file work per frame (a select-all in a
                             // few-thousand-line file drops to ~12 fps otherwise).
                             let viewport_clip = ui.clip_rect().intersect(output.text_clip_rect);
+                            let navigation_range = navigation_range.as_ref().map(|range| {
+                                super::editor_logic::clamp_byte_range(&document.content, range)
+                            });
                             let selection_target = navigation_range.as_ref();
                             let find_caret_target = select_find_match
                                 .then(|| &find_ranges[active_find_match.unwrap_or(0)]);
