@@ -35,6 +35,13 @@ impl OxiApp {
         } else {
             (c_bg_input(), c_border_subtle(), c_text_muted(), "Dictate")
         };
+        let hover = self
+            .conv
+            .voice_ui
+            .error
+            .as_ref()
+            .map(|err| format!("Dictation: {err}"))
+            .unwrap_or_else(|| hover.to_string());
         let mic = crate::ui::chrome::icon_button_core_with_hover(
             ui,
             ICON_MIC,
@@ -54,14 +61,6 @@ impl OxiApp {
         .on_hover_text(hover);
         if mic.clicked() {
             self.toggle_dictation();
-        }
-        if let Some(err) = self.conv.voice_ui.error.as_ref() {
-            ui.label(
-                RichText::new(format!("Dictation: {err}"))
-                    .size(FS_TINY)
-                    .color(c_danger()),
-            )
-            .on_hover_text(err);
         }
     }
 
@@ -198,15 +197,15 @@ impl OxiApp {
         else {
             return;
         };
-        ui.label(
-            RichText::new(format_tokens_per_sec(rate))
-                .size(FS_TINY)
-                .color(c_text_faint()),
-        )
-        .on_hover_text(
-            "Output speed of the latest response, measured while the model streams \
+        let text = format_tokens_per_sec(rate);
+        if !composer_text_fits(ui, &text, 0.0) {
+            return;
+        }
+        ui.label(RichText::new(text).size(FS_TINY).color(c_text_faint()))
+            .on_hover_text(
+                "Output speed of the latest response, measured while the model streams \
              (tool runs and approvals excluded)",
-        );
+            );
     }
 
     fn estimated_active_context_chars(&self) -> usize {

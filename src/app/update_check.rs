@@ -35,7 +35,7 @@ impl OxiApp {
             },
             move |rt| {
                 let r = rt.block_on(async {
-                    let client = reqwest::Client::new();
+                    let client = crate::runtime::http_client();
                     fetch_latest_release(&client).await
                 });
                 let _ = tx.send(UpdateMsg(r));

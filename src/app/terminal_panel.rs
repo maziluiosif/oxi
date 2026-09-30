@@ -18,12 +18,32 @@ impl OxiApp {
         self.conv.terminal_open = !self.conv.terminal_open;
         self.conv.settings.terminal_open = self.conv.terminal_open;
         if self.conv.terminal_open {
+            self.conv.focus_chat_input_next_frame = false;
+            self.conv.editor.focus_editor_next_frame = false;
+            self.conv.editor.focus_find_next_frame = false;
+            self.conv.editor.find_focus_editor_pending = false;
             self.conv.focus_terminal_next_frame = true;
         } else {
             self.conv.focus_terminal_next_frame = false;
             self.focus_active_view_next_frame();
         }
         self.save_settings_quietly();
+    }
+
+    /// Hand the terminal over after a workspace switch. The old shell is parked if a command is
+    /// still running in it (a dev server or build must survive the switch) and dropped otherwise;
+    /// the new workspace gets its parked shell back, or a fresh one spawned lazily in its root.
+    pub(crate) fn swap_workspace_terminal(&mut self, old_root: &str) {
+        if let Some(term) = self.terminal.take()
+            && term.has_foreground_job()
+        {
+            self.parked_terminals.insert(old_root.to_string(), term);
+        }
+        let new_root = self.active_workspace().root_path.clone();
+        self.terminal = self
+            .parked_terminals
+            .remove(&new_root)
+            .filter(|term| term.is_alive());
     }
 
     /// Render the bottom terminal panel (call before the `CentralPanel`).
@@ -44,7 +64,9 @@ impl OxiApp {
             .show(ui, |ui| {
                 self.render_terminal_resize_handle(ui);
                 self.render_terminal_header(ui);
-                self.render_terminal_body(ui);
+                if self.conv.terminal_open {
+                    self.render_terminal_body(ui);
+                }
             });
     }
 
@@ -109,6 +131,7 @@ impl OxiApp {
                         .clicked()
                     {
                         self.terminal = None;
+                        self.conv.focus_terminal_next_frame = true;
                     }
                 });
             },

@@ -138,3 +138,163 @@ fn failed_write_preserves_the_unsaved_buffer() {
     assert_eq!(doc.saved_content, "original");
     assert_eq!(doc.content, "my edits");
 }
+
+fn clean_document(path: PathBuf) -> EditorDocument {
+    let mut doc = document(path);
+    doc.content.clone_from(&doc.saved_content);
+    doc.dirty = false;
+    doc
+}
+
+#[test]
+fn scratchpad_reloads_same_size_changes_even_with_preserved_mtime() {
+    let file = TestFile::new();
+    let mut doc = clean_document(file.0.clone());
+    doc.is_scratchpad = true;
+    doc.reload_from_disk().unwrap();
+    let modified = doc.disk_modified.unwrap();
+    crate::scratchpad::update(&file.0, "rewrite", "new text").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file.0)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "new text");
+    assert_eq!(doc.content_revision, 1);
+    assert!(!doc.is_dirty());
+}
+
+#[test]
+fn scratchpad_sync_preserves_unsaved_manual_edits() {
+    let file = TestFile::new();
+    let mut doc = document(file.0.clone());
+    doc.is_scratchpad = true;
+    crate::scratchpad::update(&file.0, "append", " agent notes").unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "my edits");
+    assert_eq!(doc.saved_content, "original");
+    assert!(doc.is_dirty() && doc.externally_modified);
+    assert!(crate::scratchpad::save(&file.0, &doc.saved_content, &doc.content).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&file.0).unwrap(),
+        "original agent notes"
+    );
+}
+
+#[test]
+fn external_changes_reload_clean_documents() {
+    let file = TestFile::new();
+    let mut doc = clean_document(file.0.clone());
+    std::fs::write(&file.0, "external edits").unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "external edits");
+    assert_eq!(doc.saved_content, doc.content);
+    assert_eq!(doc.content_revision, 1);
+    assert!(!doc.dirty && !doc.externally_modified);
+    doc.sync_from_disk();
+    assert_eq!(doc.content_revision, 1);
+}
+
+#[test]
+fn external_changes_preserve_dirty_documents() {
+    let file = TestFile::new();
+    let mut doc = document(file.0.clone());
+    std::fs::write(&file.0, "external edits").unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "my edits");
+    assert_eq!(doc.saved_content, "original");
+    assert_eq!(doc.content_revision, 0);
+    assert!(doc.dirty && doc.externally_modified);
+}
+
+#[test]
+fn external_reload_updates_inactive_tabs_without_changing_selection() {
+    let first = TestFile::new();
+    let second = TestFile::new();
+    let mut editor = EditorState {
+        documents: vec![
+            clean_document(first.0.clone()),
+            clean_document(second.0.clone()),
+        ],
+        active: Some(0),
+        ..Default::default()
+    };
+    std::fs::write(&second.0, "updated inactive tab").unwrap();
+    for doc in &mut editor.documents {
+        doc.sync_from_disk();
+    }
+    assert_eq!(editor.active, Some(0));
+    assert_eq!(editor.documents[0].content, "original");
+    assert_eq!(editor.documents[1].content, "updated inactive tab");
+}
+
+#[test]
+fn same_content_reload_does_not_invalidate_the_revision() {
+    let file = TestFile::new();
+    let mut doc = clean_document(file.0.clone());
+    doc.sync_from_disk();
+    assert_eq!(doc.content_revision, 0);
+    assert!(doc.disk_modified.is_some());
+    assert!(!doc.externally_modified);
+}
+
+#[test]
+fn deleted_file_keeps_its_clean_buffer_until_it_reappears() {
+    let file = TestFile::new();
+    let mut doc = clean_document(file.0.clone());
+    doc.sync_from_disk();
+    std::fs::remove_file(&file.0).unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "original");
+    assert!(!doc.dirty && doc.externally_modified);
+    std::fs::write(&file.0, "restored").unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "restored");
+    assert!(!doc.externally_modified);
+}
+
+#[test]
+fn binary_replacement_preserves_the_text_buffer() {
+    let file = TestFile::new();
+    let mut doc = clean_document(file.0.clone());
+    std::fs::write(&file.0, [0xff, 0xfe]).unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "original");
+    assert!(doc.externally_modified);
+    assert!(!doc.dirty);
+}
+
+#[test]
+fn oversized_replacement_preserves_the_text_buffer() {
+    let file = TestFile::new();
+    let mut doc = clean_document(file.0.clone());
+    std::fs::write(
+        &file.0,
+        vec![b'x'; super::documents::MAX_TEXT_FILE_BYTES as usize + 1],
+    )
+    .unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "original");
+    assert!(doc.externally_modified);
+    assert!(!doc.dirty);
+}
+
+#[test]
+fn changed_size_is_detected_even_when_the_mtime_is_preserved() {
+    let file = TestFile::new();
+    let mut doc = clean_document(file.0.clone());
+    doc.sync_from_disk();
+    let modified = doc.disk_modified.unwrap();
+    std::fs::write(&file.0, "longer external content").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file.0)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    doc.sync_from_disk();
+    assert_eq!(doc.content, "longer external content");
+    assert!(!doc.externally_modified);
+}

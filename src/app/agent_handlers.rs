@@ -17,6 +17,7 @@ fn approval_summary(name: &str, args: &Option<Value>) -> String {
         "bash" => "command",
         "write" | "edit" | "delete" | "mkdir" => "path",
         "move" => "from",
+        "scratchpad" => "mode",
         _ => "",
     };
     args.get(field)
@@ -233,7 +234,14 @@ impl OxiApp {
             }
             AgentEvent::ApprovalRequest { name, args } => {
                 let summary = approval_summary(&name, &args);
-                self.run_state_mut(key).pending_approval = Some(PendingApproval { name, summary });
+                let allow_prefix = (name == "bash")
+                    .then(|| crate::agent::suggest_bash_allow_prefix(&summary))
+                    .flatten();
+                self.run_state_mut(key).pending_approval = Some(PendingApproval {
+                    name,
+                    summary,
+                    allow_prefix,
+                });
             }
             AgentEvent::ToolOutput {
                 tool_call_id,
@@ -261,6 +269,7 @@ impl OxiApp {
                 self.finalize_tool_run(key, id, is_error, full_output_path, diff);
                 // The tool may have created, moved or deleted files: show them right away.
                 self.conv.explorer_cache.invalidate();
+                self.refresh_scratchpad();
             }
             AgentEvent::StreamRetry { attempt, reason } => {
                 eprintln!("[oxi] stream retry (attempt {attempt}): {reason}");

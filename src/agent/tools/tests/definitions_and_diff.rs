@@ -15,6 +15,18 @@ fn tool_definitions_all_enabled() {
     assert!(names.contains(&"read"));
     assert!(names.contains(&"bash"));
     assert!(names.contains(&"ls"));
+    let scratchpad = defs
+        .iter()
+        .find(|def| def["function"]["name"] == "scratchpad")
+        .unwrap();
+    assert_eq!(
+        scratchpad["function"]["parameters"]["required"],
+        json!(["mode", "content"])
+    );
+    assert_eq!(
+        scratchpad["function"]["parameters"]["properties"]["mode"]["enum"],
+        json!(["append", "rewrite"])
+    );
 }
 
 #[test]

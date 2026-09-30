@@ -553,7 +553,8 @@ impl OxiApp {
             }
         }
 
-        self.conv.workspaces.remove(wi);
+        let removed = self.conv.workspaces.remove(wi);
+        self.parked_terminals.remove(&removed.root_path);
 
         self.flow.sessions = std::mem::take(&mut self.flow.sessions)
             .into_iter()

@@ -1,3 +1,5 @@
+use super::client_fs::fs_read_text;
+use super::permissions::{permission_name_args, pick_option};
 use super::*;
 use std::sync::mpsc::channel;
 
@@ -167,6 +169,7 @@ fn acp_end_to_end_applies_model() {
         event_tx: ev_tx,
         approval_rx: appr_rx,
         approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
         cancel,
         plan_mode: false,
     };

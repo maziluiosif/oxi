@@ -1,3 +1,7 @@
+# Normalize every text file to LF in the repository and the working tree. The repo used to mix
+# CRLF and LF, which turned small edits into whole-file diffs. Git detects binaries itself.
+* text=auto eol=lf
+
 # Shell scripts must use Unix line endings. CRLF makes Bash parse options such as
 # `set -o pipefail` as `pipefail\r`, which breaks macOS/Linux packaging jobs.
 *.sh text eol=lf

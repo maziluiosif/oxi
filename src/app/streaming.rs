@@ -116,20 +116,57 @@ impl OxiApp {
             return;
         }
 
-        // Slash commands: only an exact, argument-free `/new` or `/compact` with no images.
-        if !has_images && let Some(cmd) = super::compaction::parse_slash_command(&text) {
-            self.push_input_history(&text);
-            self.conv.input_history_index = None;
-            self.conv.input_history_draft.clear();
-            self.conv.input.clear();
-            match cmd {
-                super::compaction::SlashCommand::New => self.new_chat(),
-                super::compaction::SlashCommand::Compact => {
-                    let key = self.active_session_key();
-                    self.start_compaction(key, None);
+        // Slash commands: `/new` and `/compact` only exact, argument-free and with no images.
+        // An ACP agent's own command of the same name wins (except `/new` and `/plan`): oxi's
+        // compaction can't shrink the context the agent keeps in its subprocess.
+        let mut text = text;
+        match super::compaction::parse_slash_command(&text) {
+            Some(super::compaction::SlashCommand::Plan(task)) => {
+                let key = self.active_session_key();
+                let run = self.run_state_mut(key);
+                match task {
+                    // `/plan <task>`: plan mode on, then send the task as a normal message.
+                    Some(task) => {
+                        run.plan_mode = true;
+                        text = task;
+                    }
+                    None if !has_images => {
+                        run.plan_mode = !run.plan_mode;
+                        self.push_input_history(&text);
+                        self.conv.input_history_index = None;
+                        self.conv.input_history_draft.clear();
+                        self.conv.input.clear();
+                        return;
+                    }
+                    // Bare `/plan` with images: plan them.
+                    None => {
+                        run.plan_mode = true;
+                        text.clear();
+                    }
                 }
             }
-            return;
+            Some(cmd)
+                if !has_images
+                    && (cmd == super::compaction::SlashCommand::New
+                        || !self
+                            .active_acp_commands()
+                            .iter()
+                            .any(|c| c.name == "compact")) =>
+            {
+                self.push_input_history(&text);
+                self.conv.input_history_index = None;
+                self.conv.input_history_draft.clear();
+                self.conv.input.clear();
+                match cmd {
+                    super::compaction::SlashCommand::Compact => {
+                        let key = self.active_session_key();
+                        self.start_compaction(key, None);
+                    }
+                    _ => self.new_chat(),
+                }
+                return;
+            }
+            _ => {}
         }
 
         let key = self.active_session_key();
@@ -370,6 +407,10 @@ impl OxiApp {
         };
         let id = tool_call_id.unwrap_or("").to_string();
         let args_summary = args.map(|a| {
+            // The scratchpad pill needs only the mode, not the potentially large global notes.
+            if name == "scratchpad" {
+                return serde_json::json!({"mode": a.get("mode")}).to_string();
+            }
             let s = a.to_string();
             // Edit/write arguments are also the live diff preview. Keep enough of them for the
             // UI to parse the replacement while the filesystem operation runs; other tools only

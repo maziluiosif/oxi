@@ -1,7 +1,7 @@
 //! Workspace file explorer and multi-tab text editor.
 
 use super::OxiApp;
-use crate::theme::{FS_SMALL, c_error_fg, c_warning_fg};
+use crate::theme::c_warning_fg;
 use eframe::egui::{self, RichText, Ui};
 
 mod documents;
@@ -33,14 +33,6 @@ pub(crate) use media_view::MediaKind;
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
-        // Keep polling for external file changes while the editor is visible. Only while the
-        // window has focus: regaining focus delivers an event (and so a frame) that runs the
-        // check anyway, and an idle background window should cost nothing.
-        if ui.ctx().input(|i| i.focused) {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(1500));
-        }
-        self.check_external_file_changes();
         self.render_editor_tabs(ui);
         if self.conv.editor.diff_tab_active
             && self.conv.diff_view_open
@@ -70,8 +62,10 @@ impl OxiApp {
                 }
             });
         }
-        if let Some(error) = self.conv.editor.error.clone() {
-            ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
+        if let Some(error) = self.conv.editor.error.clone()
+            && crate::ui::chrome::dismissible_notice(ui, "editor_error", &error)
+        {
+            self.conv.editor.error = None;
         }
 
         if self.conv.editor.find_open {

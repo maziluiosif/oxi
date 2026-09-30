@@ -80,7 +80,9 @@ impl OxiApp {
                 }
 
                 if let Some(err) = self.conv.git.error.clone() {
-                    crate::ui::chrome::alert_banner(ui, &err, true);
+                    if crate::ui::chrome::dismissible_notice(ui, "git_error", &err) {
+                        self.conv.git.error = None;
+                    }
                     ui.add_space(6.0);
                 }
 

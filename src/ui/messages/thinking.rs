@@ -110,6 +110,7 @@ fn render_thinking_text_panel(
     ui: &mut Ui,
     max_preview_lines: usize,
     persist_id: Id,
+    tail_scroll_id: Id,
     content_overflows: bool,
     text: &str,
     tail: bool,
@@ -132,7 +133,7 @@ fn render_thinking_text_panel(
             // preview limit. This avoids the flicker where the block would grow past the cap
             // (~2x) while wrapping settled and then snap back to the truncated view. Wheel
             // scrolling is disabled so events still reach the outer transcript ScrollArea.
-            if tail {
+            if tail || (content_overflows && !expanded) {
                 let line_h = FS_SMALL * 1.45;
                 let max_h = max_preview_lines as f32 * line_h;
                 // Size the box to the actual content (1 row while there's only one line),
@@ -156,7 +157,7 @@ fn render_thinking_text_panel(
                 );
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ScrollArea::vertical()
-                        .id_salt((persist_id, "thinking_live_tail"))
+                        .id_salt(tail_scroll_id)
                         .auto_shrink([false, false])
                         .max_height(max_h)
                         // egui defaults `min_scrolled_height` to 64.0 (~3.5 rows at this font
@@ -180,17 +181,13 @@ fn render_thinking_text_panel(
 
             // Done (not streaming). A short body (under the preview limit) renders inline,
             // and so does an *unfolded* overflowing one — expanding a thinking block reveals
-            // the FULL reasoning, not a capped scroll window. The folded overflowing state
-            // (caption-only) never reaches here: the caller skips this panel entirely.
-            if !content_overflows || expanded {
-                selectable_layout_job(
-                    ui,
-                    thinking_wrapped_job(text.to_string(), inner),
-                    allow_select,
-                );
-            }
-            // Done + overflowing + folded: guard — render nothing. Unreachable via the
-            // caller's `show_body` gate, kept for safety if the panel is ever called directly.
+            // the FULL reasoning, not a capped scroll window. A folded overflowing one keeps
+            // the tail window above, at the same height it had while live.
+            selectable_layout_job(
+                ui,
+                thinking_wrapped_job(text.to_string(), inner),
+                allow_select,
+            );
         });
     let r = frame.response.rect;
     ui.painter().vline(
@@ -203,25 +200,16 @@ fn render_thinking_text_panel(
     }
 }
 
+/// One thinking group inside the expanded activity list: a caption row ("Thinking for…" while
+/// live, "Thought for…" once done) above the reasoning body. The caption row and the folded body
+/// keep the same height across the live→done transition, so the transcript does not reflow (and
+/// visibly jump under stick-to-bottom) every time reasoning hands over to a tool call.
 pub(super) fn render_thinking_group_block(
     ui: &mut Ui,
     msg_idx: usize,
     salt: usize,
     combined: String,
     live: bool,
-) {
-    render_thinking_group_block_opts(ui, msg_idx, salt, combined, live, false);
-}
-
-/// `nested_in_activity`: when true (expanded "Worked for…" summary), skip the extra
-/// "Thought for…" caption and show the body directly — one less collapsible layer.
-pub(super) fn render_thinking_group_block_opts(
-    ui: &mut Ui,
-    msg_idx: usize,
-    salt: usize,
-    combined: String,
-    live: bool,
-    nested_in_activity: bool,
 ) {
     let bubble_w = content_wrap_width(ui);
     ui.set_width(bubble_w);
@@ -246,78 +234,83 @@ pub(super) fn render_thinking_group_block_opts(
     // Per-group wall-clock timer (ms/s/min). While live it ticks from the first frame we
     // saw the group streaming; once thinking ends it freezes once into "Thought for Xs".
     // The caption id (`persist_id`) switches with the live/done tag, so the expand state
-    // resets to collapsed at the live→done transition — i.e. the block auto-folds when
-    // thinking finishes, matching the "Worked for X" summary behavior.
+    // resets to folded at the live→done transition.
     let elapsed = thinking_elapsed(ui, msg_idx, salt, live);
-    if nested_in_activity && !live {
-        // Nested under an expanded activity summary: show body only (no second caption).
-        render_thinking_text_panel(
-            ui,
-            THINKING_PREVIEW_LINES,
-            persist_id,
-            overflow,
-            combined.as_str(),
-            false,
-        );
-        ui.add_space(6.0);
-        return;
-    }
 
-    if live {
-        ui.horizontal(|ui| {
+    // Reserve the caption row up front at a fixed height (like the activity-summary row) so the
+    // live label and the done caption occupy exactly the same space, and hover can tint the
+    // chevron before it is painted.
+    const CAPTION_H: f32 = 18.0;
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CAPTION_H),
+        egui::Sense::hover(),
+    );
+    // Short reasoning is shown whole below, so only an overflowing done block can unfold.
+    let foldable = !live && overflow;
+    let hovered = foldable && {
+        let click = ui.interact(rect, persist_id.with("caption"), egui::Sense::click());
+        if click.clicked() {
+            set_expanded(ui, persist_id, !expanded);
+        }
+        if click.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        click.hovered()
+    };
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            animated_status_label(ui, "Thinking", FS_TINY);
-            if let Some(d) = elapsed {
-                ui.label(
-                    RichText::new(format!(" for {}", format_stream_elapsed(d)))
-                        .size(FS_TINY)
-                        .color(c_text_muted()),
+            if live {
+                animated_status_label(ui, "Thinking", FS_TINY);
+                if let Some(d) = elapsed {
+                    ui.label(
+                        RichText::new(format!(" for {}", format_stream_elapsed(d)))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                }
+                return;
+            }
+            let caption = match elapsed {
+                Some(d) => format!("Thought for {}", format_stream_elapsed(d)),
+                None => "Thought".to_string(),
+            };
+            ui.add(
+                egui::Label::new(RichText::new(caption).size(FS_TINY).color(c_text_faint()))
+                    .selectable(false),
+            );
+            if foldable {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(if expanded {
+                            ICON_ANGLE_UP
+                        } else {
+                            ICON_ANGLE_DOWN
+                        })
+                        .font(egui::FontId::new(FS_TINY, icon_font()))
+                        .color(if hovered {
+                            c_accent()
+                        } else {
+                            c_text_faint()
+                        }),
+                    )
+                    .selectable(false),
                 );
             }
         });
-    } else {
-        // Quiet caption; always clickable (with a chevron) — done thinking blocks are
-        // folded by default regardless of length, so the chevron is the only way to reveal
-        // even a short block's body.
-        let caption = match elapsed {
-            Some(d) => format!("Thought for {}", format_stream_elapsed(d)),
-            None => "Thought".to_string(),
-        };
-        let chevron = if expanded {
-            ICON_ANGLE_UP
-        } else {
-            ICON_ANGLE_DOWN
-        };
-        if crate::ui::chrome::flat_button_icon(
-            ui,
-            chevron,
-            &caption,
-            FS_TINY,
-            egui::vec2(0.0, 18.0),
-            c_text_faint(),
-        )
-        .clicked()
-        {
-            set_expanded(ui, persist_id, !expanded);
-        }
-    }
+    });
     ui.add_space(4.0);
-
-    // While the model is actively streaming reasoning, keep the collapsed view pinned to
-    // the newest text (tail) so you can follow along instead of seeing a frozen first page.
-    // Once done, every thinking block hides its body entirely — only the "Thought for Xs"
-    // caption remains — until the user unfolds it, regardless of how short it is.
-    let show_body = live || expanded;
-    if show_body {
-        render_thinking_text_panel(
-            ui,
-            THINKING_PREVIEW_LINES,
-            persist_id,
-            overflow,
-            combined.as_str(),
-            live,
-        );
-    }
+    render_thinking_text_panel(
+        ui,
+        THINKING_PREVIEW_LINES,
+        persist_id,
+        // Independent of the live/done tag so the window keeps its bottom-stuck offset when
+        // thinking ends instead of restarting at the top for a frame.
+        Id::new((msg_idx, salt, "thinking_tail")),
+        overflow,
+        combined.as_str(),
+        live,
+    );
     ui.add_space(8.0);
 }
 

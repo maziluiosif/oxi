@@ -269,6 +269,79 @@ pub fn alert_banner(ui: &mut Ui, text: &str, error: bool) {
         });
 }
 
+/// How long a transient notice stays up before dismissing itself (paused while hovered).
+const NOTICE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Transient error notice with a close button that also auto-dismisses after
+/// [`NOTICE_TIMEOUT`]. The countdown restarts whenever the text changes or the notice reappears
+/// after not being drawn, and is held while the pointer is over it, so it can be read at leisure. Returns true when the caller should
+/// clear the underlying error.
+pub fn dismissible_notice(ui: &mut Ui, id_salt: &str, text: &str) -> bool {
+    let id = ui.id().with(("dismissible_notice", id_salt));
+    let text_hash = egui::util::hash(text);
+    let now = ui.input(|i| i.time);
+    let pass = ui.ctx().cumulative_pass_nr();
+    // (text hash, shown since, last pass drawn)
+    let shown_since = ui.data_mut(|d| {
+        let entry = d.get_temp_mut_or_insert_with(id, || (text_hash, now, pass));
+        if entry.0 != text_hash || entry.2 + 1 < pass {
+            *entry = (text_hash, now, pass);
+        }
+        entry.2 = pass;
+        entry.1
+    });
+
+    let mut dismissed = false;
+    let response = Frame::new()
+        .fill(c_error_bg())
+        .stroke(Stroke::new(1.0, c_error_stroke()))
+        .corner_radius(CornerRadius::same(RADIUS_BUTTON))
+        .inner_margin(Margin {
+            left: 8,
+            right: 4,
+            top: 4,
+            bottom: 4,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                    if icon_button_plain(ui, ICON_CLOSE, 18.0, false)
+                        .on_hover_text("Dismiss")
+                        .clicked()
+                    {
+                        dismissed = true;
+                    }
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        ui.add_space(2.0);
+                        ui.add(
+                            Label::new(RichText::new(text).size(FS_TINY).color(c_error_fg()))
+                                .wrap(),
+                        );
+                    });
+                });
+            });
+        })
+        .response;
+
+    if response.contains_pointer() {
+        ui.data_mut(|d| d.insert_temp(id, (text_hash, now, pass)));
+    } else {
+        let remaining = NOTICE_TIMEOUT.as_secs_f64() - (now - shown_since);
+        if remaining <= 0.0 {
+            dismissed = true;
+        } else {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+        }
+    }
+    if dismissed {
+        ui.data_mut(|d| d.remove::<(u64, f64, u64)>(id));
+    }
+    dismissed
+}
+
 /// Render `icon` (Nerd-Font glyph) as a leading span followed by `label` text, each laid out with
 /// its own font family (icon family + proportional), sharing `color`/`size`. Returned as a layout
 /// job so it can be passed straight to [`egui::Button::new`] / [`egui::Label`].

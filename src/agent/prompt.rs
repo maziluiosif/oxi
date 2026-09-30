@@ -39,6 +39,9 @@ fn tool_guidance(enabled: &[&str]) -> String {
     if enabled.contains(&"diagnostics") {
         out.push_str("\n- Verification: after editing code, run `diagnostics` (cargo check / tsc / go vet / ruff, picked from the project) and fix what it reports before finishing. Use bash for tests.");
     }
+    if enabled.contains(&"scratchpad") {
+        out.push_str("\n- Scratchpad: when the user asks to update their global notes, use `scratchpad` with mode `append` or `rewrite`. It targets only the shared scratchpad, not workspace files; do not use bash or filesystem tools to access its config-directory path. Append is exact concatenation, so include needed newlines. These changes are not reverted by Regenerate.");
+    }
     if enabled.contains(&"task") {
         out.push_str("\n- Delegation: use `task` to hand a self-contained, read-only investigation to a sub-agent with fresh context (e.g. mapping how a feature is wired across many files). Launch several at once for independent questions. Sub-agents cannot edit files and do not see this conversation, so give complete instructions, then verify key claims yourself before editing.");
     }
@@ -199,9 +202,10 @@ mod tests {
         assert!(prompt.contains("`todo_write`"));
         assert!(prompt.contains("run `diagnostics`"));
         assert!(prompt.contains("use `task`"));
+        assert!(prompt.contains("use `scratchpad`"));
 
         for (on, name) in settings.tools_enabled.iter_mut().zip(ALL_TOOL_NAMES) {
-            *on = !matches!(name, "todo_write" | "diagnostics" | "task");
+            *on = !matches!(name, "todo_write" | "diagnostics" | "task" | "scratchpad");
         }
         let prompt =
             build_system_prompt_with_project_instructions(&settings, "/tmp/workspace", None, None);

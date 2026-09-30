@@ -89,14 +89,9 @@ impl OxiApp {
         ui.add_space(8.0);
 
         if let Some(notice) = self.conv.sidebar_notice.clone() {
-            Frame::new()
-                .fill(c_error_bg())
-                .stroke(Stroke::new(1.0, c_error_fg().gamma_multiply(0.45)))
-                .corner_radius(CornerRadius::same(RADIUS_ROW))
-                .inner_margin(Margin::symmetric(8, 6))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(notice).size(FS_TINY).color(c_error_fg()));
-                });
+            if crate::ui::chrome::dismissible_notice(ui, "sidebar_notice", &notice) {
+                self.conv.sidebar_notice = None;
+            }
             ui.add_space(8.0);
         }
 

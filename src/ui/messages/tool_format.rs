@@ -87,6 +87,7 @@ fn tool_action_label(name: &str) -> String {
         "web_search" => "Searched the web",
         "web_fetch" => "Fetched",
         "todo_write" => "Updated tasks",
+        "scratchpad" => "Updated scratchpad",
         "diagnostics" => "Checked",
         "task" => "Sub-agent",
         _ => return other_tool_label(name),
@@ -122,6 +123,7 @@ fn tool_running_label(name: &str) -> String {
         "web_search" => "Searching the web",
         "web_fetch" => "Fetching",
         "todo_write" => "Updating tasks",
+        "scratchpad" => "Updating scratchpad",
         "diagnostics" => "Checking",
         "task" => "Sub-agent working",
         _ => return other_tool_label(name),
@@ -288,6 +290,7 @@ fn tool_target(name: &str, args_summary: Option<&String>) -> Option<String> {
         "web_search" => command_preview(str_arg("query")?, 60),
         "web_fetch" => short_url(str_arg("url")?, 56),
         "task" => command_preview(str_arg("description").or_else(|| str_arg("prompt"))?, 60),
+        "scratchpad" => str_arg("mode").unwrap_or("notes").to_string(),
         "todo_write" => {
             let todos = crate::agent::tools::parse_todos(&v)?;
             let done = todos
@@ -318,6 +321,7 @@ pub(super) fn tool_icon(name: &str) -> &'static str {
         "web_search" => crate::theme::ICON_WEB_SEARCH,
         "web_fetch" => crate::theme::ICON_GLOBE,
         "todo_write" => crate::theme::ICON_TASKS,
+        "scratchpad" => crate::theme::ICON_PROMPTS,
         "diagnostics" => "\u{f04d9}", // nf-md-stethoscope
         "task" => "\u{f167a}",        // nf-md-robot_outline
         _ => "\u{f0214}",             // nf-md-file

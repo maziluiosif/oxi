@@ -25,7 +25,7 @@ impl OxiApp {
                 err_ctx.request_repaint();
             },
             move |rt| {
-                let client = reqwest::Client::new();
+                let client = crate::runtime::http_client();
                 let r = rt.block_on(local_models::install_llama_server(&client, tx.clone()));
                 let _ = tx.send(LocalModelMsg::RuntimeInstallDone(r));
                 work_ctx.request_repaint();
@@ -90,7 +90,7 @@ impl OxiApp {
                 err_ctx.request_repaint();
             },
             move |rt| {
-                let client = reqwest::Client::new();
+                let client = crate::runtime::http_client();
                 let r = rt.block_on(local_models::search_hf_models(&client, &query));
                 let _ = tx.send(LocalModelMsg::Search(r));
                 work_ctx.request_repaint();
@@ -120,7 +120,7 @@ impl OxiApp {
                 err_ctx.request_repaint();
             },
             move |rt| {
-                let client = reqwest::Client::new();
+                let client = crate::runtime::http_client();
                 let r = rt.block_on(local_models::list_gguf_files(&client, &repo));
                 let _ = tx.send(LocalModelMsg::Files { repo, result: r });
                 work_ctx.request_repaint();
@@ -295,7 +295,7 @@ impl OxiApp {
                 err_ctx.request_repaint();
             },
             move |rt| {
-                let client = reqwest::Client::new();
+                let client = crate::runtime::http_client();
                 let r = rt.block_on(local_models::download_gguf(
                     &client,
                     &repo,

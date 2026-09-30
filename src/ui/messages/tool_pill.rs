@@ -63,7 +63,7 @@ pub(super) fn render_tool_pill(
     block: &AssistantBlock,
     streaming: bool,
     is_last_in_run: bool,
-    expandable: bool,
+    is_newest_tool: bool,
 ) {
     let AssistantBlock::Tool {
         tool_call_id,
@@ -84,7 +84,10 @@ pub(super) fn render_tool_pill(
     let has_output = !output.trim().is_empty();
     // Finalization—not whether the first output chunk arrived—controls the running state. This is
     // especially important for bash, whose output is updated incrementally while it is in flight.
-    // Only the last pill in the visual run gets the spinner.
+    // Only the last pill in the visual run gets the spinner, except sub-agents: parallel `task`
+    // calls genuinely run side by side and each reports its own end.
+    let is_bash = name.eq_ignore_ascii_case("bash");
+    let is_task = name == "task";
     let tool_in_flight = streaming
         && metadata.as_ref().map_or(is_error.is_none(), |m| {
             matches!(
@@ -92,7 +95,7 @@ pub(super) fn render_tool_pill(
                 crate::model::ToolStatus::Pending | crate::model::ToolStatus::InProgress
             )
         });
-    let running = tool_in_flight && is_last_in_run;
+    let running = tool_in_flight && (is_last_in_run || is_task);
 
     let pill_bg = if has_error {
         crate::theme::c_tool_error_bg()
@@ -138,11 +141,14 @@ pub(super) fn render_tool_pill(
     } else {
         Id::new(("tool_pill", tool_call_id.as_str()))
     });
-    let is_bash = name.eq_ignore_ascii_case("bash");
     // Every visible tool keeps an unfold affordance, even before it has output or after an empty
-    // result. Bash is forced open while running, then remains user-foldable after completion.
-    let can_expand = expandable;
-    let expanded = can_expand && ((is_bash && running) || is_expanded(ui, persist_id));
+    // result. Bash and sub-agents are forced open while running so their live progress is
+    // visible, and stay open while they are still the newest tool of the live turn: folding the
+    // moment they finish shrank the tail by the whole output panel, and with stick-to-bottom the
+    // entire transcript jumped down on every command of a tool-heavy run. They fold once the next
+    // tool starts (when the transcript is changing anyway), then remain user-foldable.
+    let live = (is_bash || is_task) && (running || (streaming && is_newest_tool));
+    let expanded = live || is_expanded(ui, persist_id);
 
     let frame = Frame::new()
         .fill(pill_bg)
@@ -160,21 +166,19 @@ pub(super) fn render_tool_pill(
                 );
                 // Right-side status first so the (truncated) detail takes whatever is left.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if can_expand {
-                        ui.add(
-                            Label::new(
-                                RichText::new(if expanded {
-                                    ICON_ANGLE_UP
-                                } else {
-                                    ICON_ANGLE_DOWN
-                                })
-                                .font(FontId::new(FS_TINY, icon_font()))
-                                .color(c_text_faint()),
-                            )
-                            .selectable(false),
-                        );
-                        ui.add_space(2.0);
-                    }
+                    ui.add(
+                        Label::new(
+                            RichText::new(if expanded {
+                                ICON_ANGLE_UP
+                            } else {
+                                ICON_ANGLE_DOWN
+                            })
+                            .font(FontId::new(FS_TINY, icon_font()))
+                            .color(c_text_faint()),
+                        )
+                        .selectable(false),
+                    );
+                    ui.add_space(2.0);
                     if running {
                         ui.add(
                             eframe::egui::Spinner::new()
@@ -190,9 +194,7 @@ pub(super) fn render_tool_pill(
                 });
             });
         });
-    if can_expand {
-        clickable_expand_overlay(ui, frame.response.rect, persist_id);
-    }
+    clickable_expand_overlay(ui, frame.response.rect, persist_id);
 
     // Folded, the pill is the whole tool-call bubble (keeps the transcript compact); a click
     // unfolds the raw output / diff below it, and the next click folds it back.
@@ -218,8 +220,8 @@ pub(super) fn render_tool_pill(
                 args_summary.as_deref().unwrap_or("Waiting for output…")
             };
             let overflow = text.lines().count() > BLOCK_PREVIEW_LINES || text.len() > 2000;
-            let preview = if is_bash && running {
-                // Live commands stay at the compact default height and show the newest output.
+            let preview = if live {
+                // Live commands and sub-agents stay at the compact default height and show the newest output.
                 let lines: Vec<&str> = text.lines().collect();
                 lines[lines.len().saturating_sub(BLOCK_PREVIEW_LINES)..].join("\n")
             } else {
@@ -390,13 +392,17 @@ pub(super) fn render_single_tool_block(
     block: &AssistantBlock,
     streaming: bool,
     is_last_streaming_edit: bool,
+    is_newest_tool: bool,
 ) {
     if is_edit_like_tool(block) {
         render_edit_tool_block(ui, msg_idx, bi, block, streaming, is_last_streaming_edit);
         return;
     }
 
-    render_tool_pill(ui, msg_idx, bi, block, streaming, streaming, true);
+    render_tool_pill(ui, msg_idx, bi, block, streaming, streaming, is_newest_tool);
+    // Same gap as between pills of an explore cluster, so a run of tools does not shift when the
+    // third explore call regroups the earlier ones into a cluster.
+    ui.add_space(TOOL_PILL_GAP);
 }
 
 fn render_edit_tool_block(
@@ -668,11 +674,13 @@ fn render_explored_tool_pill_run(
     blocks: &[AssistantBlock],
     tool_run: &[usize],
     last_tool_idx: Option<usize>,
+    newest_tool_idx: Option<usize>,
     streaming: bool,
 ) {
     for &ti in tool_run {
         let is_last = Some(ti) == last_tool_idx;
-        render_tool_pill(ui, msg_idx, ti, &blocks[ti], streaming, is_last, true);
+        let is_newest = Some(ti) == newest_tool_idx;
+        render_tool_pill(ui, msg_idx, ti, &blocks[ti], streaming, is_last, is_newest);
         ui.add_space(TOOL_PILL_GAP);
     }
 }
@@ -691,6 +699,9 @@ fn render_explored_tool_list(
         .rev()
         .find(|(_, b)| matches!(b, AssistantBlock::Tool { .. }))
         .map(|(j, _)| start + j);
+    let newest_tool_idx = blocks
+        .iter()
+        .rposition(|b| matches!(b, AssistantBlock::Tool { .. }));
 
     let mut i = start;
 
@@ -733,6 +744,7 @@ fn render_explored_tool_list(
                     blocks,
                     &tool_run,
                     last_tool_idx,
+                    newest_tool_idx,
                     streaming,
                 );
             }
@@ -759,5 +771,4 @@ pub(super) fn render_explored_cluster(ui: &mut Ui, ctx: ExploredClusterCtx<'_>) 
     } = ctx;
 
     render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming);
-    ui.add_space(4.0);
 }

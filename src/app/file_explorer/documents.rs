@@ -7,18 +7,10 @@ use super::{EditorLayoutCache, MediaKind};
 
 pub(super) const MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
-fn scratchpad_path() -> PathBuf {
-    crate::settings::AppSettings::config_path()
-        .parent()
-        .map_or_else(
-            || PathBuf::from("scratchpad.md"),
-            |dir| dir.join("scratchpad.md"),
-        )
-}
-
 impl OxiApp {
     pub(crate) fn open_scratchpad(&mut self) {
-        let path = scratchpad_path();
+        let path = crate::scratchpad::path();
+        let _guard = crate::scratchpad::lock();
         if let Some(index) = self
             .conv
             .editor
@@ -68,15 +60,8 @@ impl OxiApp {
         if !document.is_scratchpad || !document.is_dirty() {
             return;
         }
-        let result = document
-            .path
-            .parent()
-            .ok_or_else(|| "Scratchpad path has no parent directory.".to_string())
-            .and_then(|parent| std::fs::create_dir_all(parent).map_err(|error| error.to_string()))
-            .and_then(|()| {
-                std::fs::write(&document.path, document.content.as_bytes())
-                    .map_err(|error| error.to_string())
-            });
+        let result =
+            crate::scratchpad::save(&document.path, &document.saved_content, &document.content);
         match result {
             Ok(()) => {
                 document.saved_content.clone_from(&document.content);
@@ -242,7 +227,15 @@ impl OxiApp {
         Ok(())
     }
 
-    pub(super) fn check_external_file_changes(&mut self) {
+    pub(crate) fn refresh_scratchpad(&mut self) {
+        for document in &mut self.conv.editor.documents {
+            if document.is_scratchpad {
+                document.sync_from_disk();
+            }
+        }
+    }
+
+    pub(crate) fn check_external_file_changes(&mut self) {
         if self
             .conv
             .editor
@@ -253,15 +246,7 @@ impl OxiApp {
         }
         self.conv.editor.last_external_check = Some(std::time::Instant::now());
         for document in &mut self.conv.editor.documents {
-            if document.is_scratchpad && document.is_dirty() {
-                continue;
-            }
-            let modified = std::fs::metadata(&document.path)
-                .and_then(|metadata| metadata.modified())
-                .ok();
-            if modified != document.disk_modified {
-                document.externally_modified = true;
-            }
+            document.sync_from_disk();
         }
     }
 
@@ -269,26 +254,70 @@ impl OxiApp {
         let Some(document) = self.conv.editor.active_document_mut() else {
             return;
         };
-        match std::fs::read_to_string(&document.path) {
-            Ok(content) => {
-                document.content = content.clone();
-                document.saved_content = content;
-                document.content_revision = document.content_revision.wrapping_add(1);
-                document.dirty = false;
-                document.layout_cache = EditorLayoutCache::default();
-                document.minimap_cache = None;
-                document.disk_modified = std::fs::metadata(&document.path)
-                    .and_then(|metadata| metadata.modified())
-                    .ok();
-                document.externally_modified = false;
-                self.conv.editor.error = None;
-            }
+        match document.reload_from_disk() {
+            Ok(()) => self.conv.editor.error = None,
             Err(error) => self.conv.editor.error = Some(format!("Could not reload file: {error}")),
         }
     }
 }
 
 impl EditorDocument {
+    pub(super) fn sync_from_disk(&mut self) {
+        if self.is_scratchpad {
+            let _guard = crate::scratchpad::lock();
+            match crate::scratchpad::read(&self.path) {
+                Ok(content) if content == self.saved_content => {}
+                Ok(_) if self.is_dirty() => self.externally_modified = true,
+                Ok(_) => self.externally_modified = self.reload_from_disk().is_err(),
+                Err(_) => self.externally_modified = true,
+            }
+            return;
+        }
+        let metadata = match std::fs::metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                // A scratchpad may not have been saved to disk yet.
+                if !self.is_scratchpad || self.disk_modified.is_some() {
+                    self.externally_modified = true;
+                }
+                return;
+            }
+        };
+        let changed = metadata.modified().ok() != self.disk_modified
+            || (self.media.is_none() && metadata.len() != self.saved_content.len() as u64);
+        if !changed && !self.externally_modified {
+            return;
+        }
+        if self.media.is_some() {
+            // The preview renderer also invalidates egui's image cache.
+            self.externally_modified = true;
+        } else if self.is_dirty() {
+            self.externally_modified = true;
+        } else {
+            self.externally_modified = self.reload_from_disk().is_err();
+        }
+    }
+
+    pub(super) fn reload_from_disk(&mut self) -> Result<(), String> {
+        let metadata = std::fs::metadata(&self.path).map_err(|e| e.to_string())?;
+        if metadata.len() > MAX_TEXT_FILE_BYTES {
+            return Err("The file is too large for the text editor.".into());
+        }
+        let content = std::fs::read_to_string(&self.path).map_err(|e| e.to_string())?;
+        if self.content != content {
+            self.content_revision = self.content_revision.wrapping_add(1);
+            self.layout_cache = EditorLayoutCache::default();
+            self.minimap_cache = None;
+            self.syntax_state = None;
+        }
+        self.content = content.clone();
+        self.saved_content = content;
+        self.dirty = false;
+        self.disk_modified = metadata.modified().ok();
+        self.externally_modified = false;
+        Ok(())
+    }
+
     /// Compare actual bytes, not only mtimes: another tool can preserve the timestamp.
     pub(super) fn save_to_disk(&mut self, overwrite: bool) -> Result<(), String> {
         if !overwrite && !self.is_scratchpad {

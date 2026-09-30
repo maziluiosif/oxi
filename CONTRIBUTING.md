@@ -47,9 +47,13 @@ module map. A few conventions worth knowing before you dive in:
 - Tool implementations live under `src/agent/tools/`; path-based tools must go through
   `paths::resolve_under_cwd`/`resolve_under_cwd_for_create` so they can't escape the
   workspace root — reuse those helpers rather than resolving paths by hand.
-- Mutating tools (`bash`, `write`, `edit`) are gated by `src/agent/approval.rs`'s
-  `ApprovalGate`; if you add a new mutating tool, register it in
-  `tool_requires_approval` rather than assuming it's safe to skip.
+- Mutating tools (`bash`, `write`, `edit`, …) are gated by `src/agent/approval.rs`'s
+  `ApprovalGate`; if you add a new mutating tool, classify it in
+  `tools::tool_side_effect` rather than assuming it's safe to skip. Unknown names are
+  treated as external and always ask.
+- Async work runs on the shared runtime in `src/runtime.rs`; don't build another
+  `tokio::runtime::Runtime`. Blocking calls made from async code (tool runs, approval
+  waits) go through `spawn_blocking` or `runtime::block_in_place`.
 - Secrets (provider API keys, OAuth tokens, SSH passwords) go through `src/secrets.rs`,
   which wraps the OS keychain. Don't add new plaintext-JSON credential storage — follow
   the pattern in `src/oauth/store.rs` or `src/compute/store.rs` instead.

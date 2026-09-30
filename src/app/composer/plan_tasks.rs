@@ -80,11 +80,14 @@ impl OxiApp {
             .is_some_and(|r| r.plan_mode)
     }
 
-    /// Quiet pill next to the model picker. Plan mode keeps the agent read-only and asks for
-    /// a plan; it stays on for the chat until switched off.
+    /// Pill next to the model picker while plan mode is on (`/plan` turns it on). Plan mode
+    /// keeps the agent read-only and asks for a plan; it stays on for the chat until switched
+    /// off, by clicking the pill or with `/plan` again.
     pub(super) fn render_plan_toggle(&mut self, ui: &mut Ui, compact: bool) {
-        let on = self.plan_mode_on();
-        let color = if on { c_accent() } else { c_text_muted() };
+        if !self.plan_mode_on() {
+            return;
+        }
+        let color = c_accent();
         let text = if compact {
             crate::ui::chrome::icon_glyph_rich(ICON_PLAN, FS_SMALL, color).into()
         } else {
@@ -93,28 +96,18 @@ impl OxiApp {
         let resp = ui
             .add(
                 Button::new(text)
-                    .fill(if on {
-                        c_pill_selected_bg()
-                    } else {
-                        Color32::TRANSPARENT
-                    })
-                    .stroke(if on {
-                        Stroke::new(1.0, c_pill_selected_border())
-                    } else {
-                        Stroke::NONE
-                    })
+                    .fill(c_pill_selected_bg())
+                    .stroke(Stroke::new(1.0, c_pill_selected_border()))
                     .corner_radius(CornerRadius::same(255)),
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(if on {
-                "Plan mode is on: the agent only investigates (read-only tools) and proposes a plan. Click to turn it off."
-            } else {
-                "Plan mode: the agent investigates with read-only tools and proposes a plan before changing anything."
-            });
+            .on_hover_text(
+                "Plan mode is on: the agent only investigates (read-only tools) and proposes a plan. Click (or send /plan) to turn it off.",
+            );
         if resp.clicked() {
             let key = self.active_session_key();
             let run = self.run_state_mut(key);
-            run.plan_mode = !run.plan_mode;
+            run.plan_mode = false;
             self.conv.focus_chat_input_next_frame = true;
         }
     }

@@ -1,5 +1,7 @@
 #[path = "composer/plan_tasks.rs"]
 mod plan_tasks;
+#[path = "composer/slash_menu.rs"]
+mod slash_menu;
 #[path = "composer/text_menu.rs"]
 mod text_menu;
 #[path = "composer/voice_context.rs"]
@@ -81,6 +83,22 @@ fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static s
     }
 }
 
+fn composer_provider_groups(
+    configured: &[crate::settings::LlmProviderKind],
+) -> Vec<(&'static str, Vec<crate::settings::LlmProviderKind>)> {
+    super::settings_ui::PROVIDER_GROUPS
+        .iter()
+        .filter_map(|(label, providers)| {
+            let providers: Vec<_> = providers
+                .iter()
+                .copied()
+                .filter(|kind| configured.contains(kind))
+                .collect();
+            (!providers.is_empty()).then_some((*label, providers))
+        })
+        .collect()
+}
+
 /// Quiet pill styling shared by the composer combos (provider + model): transparent at
 /// rest, soft fill + hairline on hover, fully rounded.
 fn quiet_combo_style(ui: &mut Ui) {
@@ -98,6 +116,17 @@ fn quiet_combo_style(ui: &mut Ui) {
     widgets.open.weak_bg_fill = c_row_hover();
     widgets.open.bg_stroke = Stroke::NONE;
     widgets.open.corner_radius = CornerRadius::same(255);
+}
+
+const COMPOSER_STACK_WIDTH: f32 = 660.0;
+
+fn composer_text_fits(ui: &Ui, text: &str, extra_gap: f32) -> bool {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(FS_TINY),
+        c_text_faint(),
+    );
+    galley.size().x + ui.spacing().item_spacing.x + extra_gap <= ui.available_width()
 }
 
 /// Cached size of the fixed request overhead (system prompt + tool definitions).
@@ -199,10 +228,13 @@ impl OxiApp {
                         }
 
                         // === Text area ===
+                        // The `/` menu takes its keys first so they don't reach the TextEdit.
+                        let slash_menu_open = self.slash_menu_keys(ui, input_id, composer_focused);
                         // desired_rows(1) keeps it compact; it grows naturally
                         // as the user types (both newlines and soft-wrap).
                         let mut te_output = TextEdit::multiline(&mut self.conv.input)
                             .id(input_id)
+                            .lock_focus(slash_menu_open)
                             .hint_text(
                                 RichText::new(if plan_mode {
                                     "Describe what to plan…"
@@ -222,6 +254,12 @@ impl OxiApp {
                             &te_output.response,
                             &te_output.galley,
                             te_output.galley_pos,
+                        );
+                        self.render_slash_menu(
+                            ui,
+                            input_id,
+                            te_output.response.rect,
+                            te_output.response.has_focus(),
                         );
                         if self.conv.focus_chat_input_next_frame {
                             // Navigation should put the caret at the end of any existing draft,
@@ -265,9 +303,7 @@ impl OxiApp {
                         ui.add_space(COMPOSER_GAP);
 
                         // === Controls row ===
-                        ui.horizontal(|ui| {
-                            self.render_controls_row(ui, can_send, composer_focused);
-                        });
+                        self.render_controls_row(ui, can_send, composer_focused);
                     });
 
                 // Clicking anywhere inside the composer card should focus the text input, not just
@@ -306,12 +342,34 @@ impl OxiApp {
         }
     }
 
-    /// `[+]  [model ▾]                                  [↑]`
+    /// Move selectors above the action row when the column cannot fit both groups.
     fn render_controls_row(&mut self, ui: &mut Ui, can_send: bool, composer_focused: bool) {
         ui.spacing_mut().item_spacing.x = 6.0;
-        let narrow = ui.available_width() < 520.0;
-        let compact = ui.available_width() < 410.0;
+        let width = ui.available_width();
+        let narrow = width < 520.0;
+        let compact = width < 410.0;
+        let stacked = width < COMPOSER_STACK_WIDTH;
+        if stacked {
+            ui.horizontal_wrapped(|ui| {
+                self.render_model_selector(ui, narrow, compact);
+                self.render_effort_selector(ui, compact);
+            });
+            ui.add_space(COMPOSER_GAP);
+        }
+        ui.horizontal(|ui| {
+            self.render_action_controls(ui, can_send, composer_focused, stacked, narrow, compact);
+        });
+    }
 
+    fn render_action_controls(
+        &mut self,
+        ui: &mut Ui,
+        can_send: bool,
+        composer_focused: bool,
+        stacked: bool,
+        narrow: bool,
+        compact: bool,
+    ) {
         // ── Left: round attach button ──────────────────────────────────────
         let attach = crate::ui::chrome::icon_button_core(
             ui,
@@ -334,9 +392,11 @@ impl OxiApp {
         }
 
         // ── Left: provider + model (compact widths when the chat column is squeezed) ──
-        self.render_model_selector(ui, narrow, compact);
-        self.render_effort_selector(ui, compact);
-        self.render_plan_toggle(ui, narrow);
+        if !stacked {
+            self.render_model_selector(ui, narrow, compact);
+            self.render_effort_selector(ui, compact);
+        }
+        self.render_plan_toggle(ui, compact);
 
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -395,35 +455,27 @@ impl OxiApp {
                 self.render_mic_button(ui);
             }
 
-            self.render_context_indicator(ui);
-            if !compact {
-                self.render_tokens_per_sec(ui);
+            if ui.available_width() >= 32.0 {
+                self.render_context_indicator(ui);
             }
+            self.render_tokens_per_sec(ui);
 
-            // Keep the primary keyboard action discoverable in a fresh chat. Once a conversation
-            // is under way the user has already sent a message, so the hint would only be noise.
-            // On smaller windows the compact version retains the information without pushing
-            // controls out of the row.
             let show_hint = composer_focused && self.active_session().messages.is_empty();
-            if !narrow {
-                ui.add_space(8.0);
-                let hint_t =
-                    ui.ctx()
-                        .animate_bool_with_time(Id::new("composer_hint_anim"), show_hint, 0.15);
-                if hint_t > 0.0 {
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("Enter to send · Shift+Enter for newline")
-                            .size(FS_TINY)
-                            .color(c_text_faint().gamma_multiply(hint_t)),
-                    );
+            let hint_t =
+                ui.ctx()
+                    .animate_bool_with_time(Id::new("composer_hint_anim"), show_hint, 0.15);
+            if hint_t > 0.0 {
+                for hint in ["Enter to send · Shift+Enter for newline", "Enter sends"] {
+                    if composer_text_fits(ui, hint, 8.0) {
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(hint)
+                                .size(FS_TINY)
+                                .color(c_text_faint().gamma_multiply(hint_t)),
+                        );
+                        break;
+                    }
                 }
-            } else if show_hint && !compact {
-                ui.label(
-                    RichText::new("Enter sends")
-                        .size(FS_TINY)
-                        .color(c_text_faint()),
-                );
             }
         });
     }
@@ -452,31 +504,42 @@ impl OxiApp {
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(crate::ui::chrome::combo_chevron_icon)
                 .width(provider_w)
+                .truncate()
                 .height(300.0)
                 .show_ui(ui, |ui| {
                     // Only while the popup is open: this clones the secrets blob and probes a
                     // legacy file, far too much work for every frame.
                     let oauth = crate::oauth::load_oauth_store();
                     let configured = self.conv.settings.configured_provider_kinds(&oauth);
-                    for kind in &configured {
-                        let selected = active_provider == *kind;
-                        if ui
-                            .selectable_label(selected, composer_provider_label(*kind))
-                            .clicked()
-                            && !selected
-                        {
-                            self.set_active_session_provider(*kind);
-                            self.save_settings_quietly();
-                            // Remote/local HF choices come from its downloaded-model list;
-                            // `/v1/models` only reports the one model currently loaded.
-                            if !matches!(
-                                kind,
-                                crate::settings::LlmProviderKind::LocalHf
-                                    | crate::settings::LlmProviderKind::RemoteHf
-                            ) {
-                                self.spawn_model_fetch(ui.ctx(), *kind);
-                            } else {
-                                self.refresh_local_hf_model_choices();
+                    for (index, (group_label, providers)) in composer_provider_groups(&configured)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        if index > 0 {
+                            ui.separator();
+                        }
+                        ui.label(
+                            RichText::new(group_label)
+                                .size(FS_TINY)
+                                .color(c_text_faint())
+                                .strong(),
+                        );
+                        for kind in providers {
+                            let selected = active_provider == kind;
+                            if ui.selectable_label(selected, kind.label()).clicked() && !selected {
+                                self.set_active_session_provider(kind);
+                                self.save_settings_quietly();
+                                // Remote/local HF choices come from its downloaded-model list;
+                                // `/v1/models` only reports the one model currently loaded.
+                                if !matches!(
+                                    kind,
+                                    crate::settings::LlmProviderKind::LocalHf
+                                        | crate::settings::LlmProviderKind::RemoteHf
+                                ) {
+                                    self.spawn_model_fetch(ui.ctx(), kind);
+                                } else {
+                                    self.refresh_local_hf_model_choices();
+                                }
                             }
                         }
                     }
@@ -527,6 +590,7 @@ impl OxiApp {
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(crate::ui::chrome::combo_chevron_icon)
                 .width(model_w)
+                .truncate()
                 .height(300.0)
                 .show_ui(ui, |ui| {
                     for m in &items {
@@ -615,6 +679,7 @@ impl OxiApp {
                 .selected_text(RichText::new(selected).size(FS_SMALL).color(c_text_muted()))
                 .icon(crate::ui::chrome::combo_chevron_icon)
                 .width(72.0)
+                .truncate()
                 .show_ui(ui, |ui| {
                     for (value, label) in values {
                         if ui.selectable_label(current == *value, *label).clicked() {
@@ -701,6 +766,82 @@ impl OxiApp {
         });
         if let Some(i) = remove_idx {
             self.remove_pending_image_at(i);
+        }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn provider_groups_include_every_provider_once() {
+        use crate::settings::LlmProviderKind;
+
+        let groups = composer_provider_groups(&LlmProviderKind::ALL);
+        assert_eq!(groups.len(), 3);
+        let mut grouped: Vec<_> = groups.into_iter().flat_map(|(_, kinds)| kinds).collect();
+        let mut expected = LlmProviderKind::ALL.to_vec();
+        grouped.sort();
+        expected.sort();
+        assert_eq!(grouped, expected);
+    }
+
+    #[test]
+    fn provider_groups_filter_unconfigured_providers_and_empty_categories() {
+        use crate::settings::LlmProviderKind::*;
+
+        assert_eq!(
+            composer_provider_groups(&[CodexAcp, CursorAcp, Ollama]),
+            vec![
+                ("Local / self-hosted", vec![Ollama]),
+                ("External agents (ACP)", vec![CursorAcp, CodexAcp]),
+            ]
+        );
+        assert!(composer_provider_groups(&[]).is_empty());
+    }
+
+    #[test]
+    fn optional_hint_never_expands_the_action_row() {
+        for width in [40.0, 100.0, 180.0, 300.0, 520.0, 660.0, 800.0] {
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(width + 20.0, 100.0))
+                .build_ui_state(
+                    |ui, fits: &mut bool| {
+                        ui.set_width(width);
+                        let row = ui.horizontal(|ui| {
+                            let (left, _) =
+                                ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::hover());
+                            let right = ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let (send, _) = ui.allocate_exact_size(
+                                        egui::vec2(30.0, 30.0),
+                                        Sense::hover(),
+                                    );
+                                    for hint in
+                                        ["Enter to send · Shift+Enter for newline", "Enter sends"]
+                                    {
+                                        if composer_text_fits(ui, hint, 8.0) {
+                                            ui.add_space(8.0);
+                                            let response =
+                                                ui.label(RichText::new(hint).size(FS_TINY));
+                                            assert!(response.rect.right() <= send.left());
+                                            assert!(response.rect.left() >= left.right());
+                                            *fits = true;
+                                            break;
+                                        }
+                                    }
+                                },
+                            );
+                            assert!(right.response.rect.right() <= ui.max_rect().right() + 1.0);
+                        });
+                        assert!(row.response.rect.width() <= width + 1.0);
+                    },
+                    false,
+                );
+            harness.run_steps(3);
+            assert_eq!(*harness.state(), width >= 180.0);
         }
     }
 }

@@ -2,7 +2,8 @@ use super::diff::make_unified_diff;
 use super::file_ops::{floor_char_boundary, truncate_out};
 use super::shell_search::validate_bash_command;
 use super::{
-    MAX_TOOL_OUTPUT_CHARS, ToolEnv, paths::resolve_under_cwd, run_tool, tool_definitions_json,
+    MAX_TOOL_OUTPUT_CHARS, ToolEnv, paths::resolve_under_cwd, paths::resolve_under_cwd_for_create,
+    run_tool, tool_definitions_json,
 };
 use crate::settings::{ALL_TOOL_NAMES, WebSearchBackend};
 use serde_json::json;

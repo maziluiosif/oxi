@@ -1,9 +1,9 @@
-//! Shared provider grouping and presentation metadata used by settings pages.
+//! Shared provider grouping and presentation metadata used by settings and chat.
 
 use crate::settings::LlmProviderKind;
 
 /// Provider groups keep selectors skimmable.
-pub(super) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
+pub(in crate::app) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
     (
         "Local / self-hosted",
         &[

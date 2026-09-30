@@ -24,6 +24,7 @@ const TOOL_GROUPS: &[(&str, &[&str])] = &[
     ),
     ("Run commands", &["bash", "diagnostics"]),
     ("Plan & delegate", &["todo_write", "task"]),
+    ("Notes", &["scratchpad"]),
     ("Git", &["git_status", "git_diff"]),
     ("Web", &["web_search", "web_fetch"]),
 ];
@@ -258,6 +259,28 @@ impl OxiApp {
             {
                 self.conv.settings.require_bash_approval = require_bash_approval;
             }
+            if self.conv.settings.require_bash_approval {
+                field_label(ui, "Always allowed commands");
+                field_hint(
+                    ui,
+                    "Bash commands starting with one of these run without asking, e.g. `cargo test` or `git status`. Commands with pipes, `;`, `&&`, redirection, `$`, quotes or globs always ask.",
+                );
+                let mut remove_idx: Option<usize> = None;
+                for (i, entry) in self.conv.settings.bash_allowlist.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        settings_text_field_width(ui, entry, "cargo test", 240.0);
+                        if ghost_button(ui, "Remove", true).clicked() {
+                            remove_idx = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = remove_idx {
+                    self.conv.settings.bash_allowlist.remove(i);
+                }
+                if ghost_button(ui, "Add command", false).clicked() {
+                    self.conv.settings.bash_allowlist.push(String::new());
+                }
+            }
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
@@ -334,7 +357,7 @@ impl OxiApp {
                 crate::settings::WebSearchBackend::Bing => {
                     ui.label(
                         RichText::new(
-                            "Zero-config. Uses Bing's RSS results feed. No fallback if Bing fails.",
+                            "Zero-config. Uses Bing's RSS results feed only.",
                         )
                         .size(FS_TINY)
                         .color(c_text_muted()),
@@ -343,7 +366,7 @@ impl OxiApp {
                 crate::settings::WebSearchBackend::DuckDuckGo => {
                     ui.label(
                         RichText::new(
-                            "Zero-config. DuckDuckGo HTML endpoint — may serve a bot challenge; Bing is usually more reliable.",
+                            "Zero-config. Falls back to Bing when DuckDuckGo rate-limits.",
                         )
                         .size(FS_TINY)
                         .color(c_text_muted()),

@@ -178,3 +178,25 @@ fn resolve_ddg_href_unwraps_redirect() {
         "https://example.com/page"
     );
 }
+
+#[test]
+#[ignore = "hits the real DuckDuckGo/Bing endpoints"]
+fn web_search_duckduckgo_default_survives_bursts_live() {
+    use crate::settings::WebSearchBackend;
+    // Back-to-back searches trip DuckDuckGo's anomaly challenge; each must still return
+    // results via the Bing fallback.
+    for q in [
+        "rust programming language",
+        "egui text editor",
+        "weather bucharest",
+    ] {
+        let out = tool_web_search(
+            "",
+            WebSearchBackend::default(),
+            &serde_json::json!({"query": q, "count": 5}),
+        )
+        .expect("default web_search failed");
+        println!("{out}");
+        assert!(out.contains("Search results for:"));
+    }
+}

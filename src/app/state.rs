@@ -21,6 +21,8 @@ pub struct PendingApproval {
     pub name: String,
     /// Human-readable summary of what the tool will do (e.g. the bash command or target path).
     pub summary: String,
+    /// For a simple `bash` command, the prefix "Always allow" would add to the allowlist.
+    pub allow_prefix: Option<String>,
 }
 
 /// Active section in the settings window (sidebar).
@@ -580,6 +582,8 @@ pub struct ConversationState {
     pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
     /// egui context used for the git worker so it can request repaints.
     pub git_ctx: eframe::egui::Context,
+    pub git_last_auto_refresh: Option<Instant>,
+    pub git_auto_refresh_pending: bool,
     /// Background model-list fetch results keyed by provider kind.
     pub fetched_models: std::collections::HashMap<LlmProviderKind, FetchedModels>,
     /// Channels for in-flight model-list fetch results (drained each frame).
