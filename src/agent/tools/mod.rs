@@ -213,7 +213,7 @@ fn run_tool_inner(
                     diagnostics::tool_diagnostics(cwd, args, env.bash_timeout_cap_secs)
                 }
                 "task" => match env.subagent.as_ref() {
-                    Some(runner) => runner.run(args),
+                    Some(runner) => runner.run(args, on_output),
                     None => Err("Sub-agents are not available in this context.".to_string()),
                 },
                 _ => Err(paths::err("unknown tool")),

@@ -2,7 +2,10 @@
 
 use eframe::egui::{self, Align, Layout, RichText};
 
-use super::super::{OxiApp, state::EditorPrompt};
+use super::super::{
+    OxiApp,
+    state::{EditorPrompt, SidebarMode},
+};
 use crate::theme::*;
 use crate::ui::chrome::{ghost_button, primary_button};
 
@@ -19,11 +22,18 @@ impl OxiApp {
         }
     }
 
-    /// Drop a tab and keep typing in whichever document becomes visible.
+    /// Drop a tab and focus the remaining document or the chat composer.
     fn close_editor_document(&mut self, index: usize) {
         self.conv.editor.remove_document(index);
         if self.conv.editor.active.is_some() {
             self.conv.editor.focus_editor_next_frame = true;
+        } else if self.conv.editor.documents.is_empty()
+            && !(self.conv.editor.diff_tab_active
+                && self.conv.diff_view_open
+                && self.conv.git.diff.is_some())
+        {
+            self.conv.sidebar_mode = SidebarMode::Chats;
+            self.focus_active_view_next_frame();
         }
     }
 

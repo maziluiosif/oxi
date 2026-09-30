@@ -1,33 +1,48 @@
 //! Cached editor minimap geometry and rendering.
 
+use std::{
+    ops::Range,
+    sync::{Arc, Weak},
+};
+
 use eframe::egui::{self, Ui};
 
 use crate::theme::*;
 
 use super::editor_body::EditorScrollOutput;
 
-/// One horizontal stroke in the minimap silhouette: a tab-expanded column run on a
-/// single line, colored by the syntax section it came from.
-struct MinimapSegment {
-    line: usize,
-    start_col: usize,
-    end_col: usize,
+struct MinimapSection {
+    bytes: Range<usize>,
     color: egui::Color32,
 }
 
-/// Cached minimap silhouette for a document. The strokes and horizontal scale depend
-/// only on the buffer and syntax palette, so they are rebuilt on change instead of
-/// rescanning the whole file every frame; painting then just culls to the visible strip.
-pub(crate) struct MinimapGeometry {
-    palette: crate::theme::SyntaxPalette,
-    pub(super) line_count: usize,
-    max_columns: usize,
-    pub(super) indent_columns: Vec<Option<usize>>,
+/// One horizontal stroke on a visual row, in editor layout coordinates.
+struct MinimapSegment {
+    row: usize,
+    start_x: f32,
+    end_x: f32,
+    color: egui::Color32,
+}
+
+struct MinimapLayout {
+    job: Weak<egui::text::LayoutJob>,
+    row_count: usize,
+    width: f32,
+    line_rows: Vec<usize>,
     segments: Vec<MinimapSegment>,
 }
 
+/// Cached source metadata and silhouette. The silhouette is projected onto the editor's
+/// actual wrapped rows only when its layout or syntax colors change.
+pub(crate) struct MinimapGeometry {
+    palette: crate::theme::SyntaxPalette,
+    pub(super) line_count: usize,
+    pub(super) indent_columns: Vec<Option<usize>>,
+    sections: Vec<MinimapSection>,
+    layout: Option<MinimapLayout>,
+}
+
 const MINIMAP_TAB_WIDTH: usize = 4;
-const MINIMAP_MIN_COLUMNS: usize = 60;
 
 fn advance_columns(mut column: usize, text: &str) -> usize {
     for character in text.chars() {
@@ -47,10 +62,7 @@ fn build_geometry(
     // Build line metadata and indentation guides in one pass. Blank lines inherit the shallower
     // indentation of their nearest non-empty neighbours, matching the previous visual behavior.
     let mut indent_columns = Vec::new();
-    let mut max_columns = MINIMAP_MIN_COLUMNS;
     for line in content.split('\n') {
-        let columns = advance_columns(0, line);
-        max_columns = max_columns.max(columns);
         let indentation = advance_columns(
             0,
             line.get(..line.len() - line.trim_start_matches([' ', '\t']).len())
@@ -76,47 +88,90 @@ fn build_geometry(
         }
     }
 
-    // One stroke per visible run of source, keyed to its logical line. Only section byte
-    // ranges and colors are read, so the minimap reuses the editor's cached highlight.
-    let mut segments = Vec::new();
-    let mut line_index = 0usize;
-    let mut column = 0usize;
+    // Keep just syntax ranges and colors; the editor's galley supplies wrapping and glyph widths.
+    let mut sections = Vec::new();
     for section in &highlight_job.sections {
         let start = section.byte_range.start.0.min(content.len());
         let end = section.byte_range.end.0.min(content.len());
         // Never let stale or malformed byte ranges take down the editor.
-        let Some(section_text) = content.get(start..end) else {
-            continue;
-        };
-        for fragment in section_text.split_inclusive('\n') {
-            let text = fragment.trim_end_matches('\n');
-            let leading_text = &text[..text.len() - text.trim_start().len()];
-            let visible_start = advance_columns(column, leading_text);
-            let visible_end = advance_columns(visible_start, text.trim());
-            if visible_end > visible_start {
-                segments.push(MinimapSegment {
-                    line: line_index,
-                    start_col: visible_start,
-                    end_col: visible_end,
-                    color: section.format.color,
-                });
-            }
-            if fragment.ends_with('\n') {
-                line_index += 1;
-                column = 0;
-            } else {
-                column = advance_columns(column, text);
-            }
+        if start < end && content.get(start..end).is_some() {
+            sections.push(MinimapSection {
+                bytes: start..end,
+                color: section.format.color,
+            });
         }
     }
 
     MinimapGeometry {
         palette,
         line_count,
-        max_columns,
         indent_columns,
-        segments,
+        sections,
+        layout: None,
     }
+}
+
+pub(super) fn ensure_layout(geometry: &mut MinimapGeometry, galley: &Arc<egui::Galley>) {
+    // TextEdit can clone a galley to paint selection visuals without changing its layout job.
+    let weak = Arc::downgrade(&galley.job);
+    if geometry
+        .layout
+        .as_ref()
+        .is_some_and(|layout| layout.job.ptr_eq(&weak))
+    {
+        return;
+    }
+
+    let mut segments: Vec<MinimapSegment> = Vec::new();
+    let mut line_rows = vec![0];
+    let mut byte = 0;
+    let mut section_index = 0;
+    for (row_index, placed) in galley.rows.iter().enumerate() {
+        for glyph in &placed.row.glyphs {
+            while section_index < geometry.sections.len()
+                && geometry.sections[section_index].bytes.end <= byte
+            {
+                section_index += 1;
+            }
+            if !glyph.chr.is_whitespace()
+                && let Some(section) = geometry.sections.get(section_index)
+                && section.bytes.contains(&byte)
+            {
+                let start_x = placed.pos.x + glyph.pos.x;
+                let end_x = placed.pos.x + glyph.max_x();
+                if let Some(last) = segments.last_mut()
+                    && last.row == row_index
+                    && last.color == section.color
+                {
+                    last.end_x = end_x;
+                } else {
+                    segments.push(MinimapSegment {
+                        row: row_index,
+                        start_x,
+                        end_x,
+                        color: section.color,
+                    });
+                }
+            }
+            byte += glyph.chr.len_utf8();
+        }
+        if placed.ends_with_newline {
+            byte += 1;
+            line_rows.push(row_index + 1);
+        }
+    }
+    let width = if galley.job.wrap.max_width.is_finite() {
+        galley.job.wrap.max_width.max(galley.rect.width())
+    } else {
+        galley.rect.width()
+    };
+    geometry.layout = Some(MinimapLayout {
+        job: weak,
+        row_count: galley.rows.len(),
+        width: width.max(1.0),
+        line_rows,
+        segments,
+    });
 }
 
 /// How long the text must stay unchanged before the minimap is re-colored after an edit.
@@ -185,8 +240,8 @@ pub(super) fn refresh(
     }
 }
 
-/// One foreground-colored section over the whole text. [`build_geometry`] reads only section
-/// ranges and colors, so the text itself is not copied.
+/// One foreground-colored section over the whole text. Only section ranges and colors
+/// are cached, so the text itself is not copied.
 fn plain_job(content: &str) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.sections.push(egui::text::LayoutSection {
@@ -241,7 +296,11 @@ pub(super) fn paint(
     // Fixed-scale rows, VS Code style. When the file outgrows the strip, the map scrolls in sync
     // with the editor instead of crushing the complete file into sub-pixel noise.
     const ROW_HEIGHT: f32 = 2.0;
-    let natural_height = geometry.line_count as f32 * ROW_HEIGHT;
+    let layout = geometry
+        .layout
+        .as_ref()
+        .expect("minimap layout was prepared");
+    let natural_height = layout.row_count as f32 * ROW_HEIGHT;
     let max_y = (scroll.content_size.y - scroll.inner_rect.height()).max(0.0);
     let exact_viewport_fraction =
         (scroll.inner_rect.height() / scroll.content_size.y.max(1.0)).clamp(0.0, 1.0);
@@ -254,20 +313,20 @@ pub(super) fn paint(
     let line_top = |line: usize| minimap_rect.top() + line as f32 * ROW_HEIGHT - map_offset;
 
     let map_painter = ui.painter().with_clip_rect(minimap_rect);
-    let scale = minimap_rect.width() / geometry.max_columns as f32;
+    let scale = minimap_rect.width() / layout.width;
     let first_visible_line = ((map_offset - ROW_HEIGHT) / ROW_HEIGHT).floor().max(0.0) as usize;
     let after_visible_line =
         ((map_offset + minimap_rect.height()) / ROW_HEIGHT).ceil() as usize + 1;
-    let first_segment = geometry
+    let first_segment = layout
         .segments
-        .partition_point(|segment| segment.line < first_visible_line);
-    let after_segment = geometry
+        .partition_point(|segment| segment.row < first_visible_line);
+    let after_segment = layout
         .segments
-        .partition_point(|segment| segment.line < after_visible_line);
-    for segment in &geometry.segments[first_segment..after_segment] {
-        let y = line_top(segment.line);
-        let x = minimap_rect.left() + segment.start_col as f32 * scale;
-        let width = ((segment.end_col - segment.start_col) as f32 * scale).max(1.0);
+        .partition_point(|segment| segment.row < after_visible_line);
+    for segment in &layout.segments[first_segment..after_segment] {
+        let y = line_top(segment.row);
+        let x = minimap_rect.left() + segment.start_x * scale;
+        let width = ((segment.end_x - segment.start_x) * scale).max(1.0);
         map_painter.hline(
             x..=(x + width).min(minimap_rect.right()),
             y,
@@ -279,8 +338,18 @@ pub(super) fn paint(
     }
 
     if let Some((start_line, end_line)) = selected_lines {
-        let top = line_top(start_line).max(minimap_rect.top());
-        let bottom = line_top(end_line + 1).min(minimap_rect.bottom());
+        let start_row = layout
+            .line_rows
+            .get(start_line)
+            .copied()
+            .unwrap_or(layout.row_count);
+        let end_row = layout
+            .line_rows
+            .get(end_line + 1)
+            .copied()
+            .unwrap_or(layout.row_count);
+        let top = line_top(start_row).max(minimap_rect.top());
+        let bottom = line_top(end_row).min(minimap_rect.bottom());
         if bottom > minimap_rect.top() && top < minimap_rect.bottom() {
             let selection = active_palette().selection_stroke;
             map_painter.rect_filled(
@@ -349,5 +418,163 @@ pub(super) fn paint(
         (wheel_y != 0.0).then(|| ((scroll.state.offset.y - wheel_y) / max_y).clamp(0.0, 1.0))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout(ctx: &egui::Context, text: &str, width: f32) -> Arc<egui::Galley> {
+        let mut galley = None;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            galley = Some(ui.fonts_mut(|fonts| {
+                fonts.layout_job(egui::text::LayoutJob::simple(
+                    text.to_owned(),
+                    egui::FontId::monospace(FS_SMALL),
+                    egui::Color32::TRANSPARENT,
+                    width,
+                ))
+            }));
+        });
+        galley.unwrap()
+    }
+
+    fn geometry(text: &str) -> MinimapGeometry {
+        build_geometry(text, &plain_job(text), active_palette().syntax)
+    }
+
+    #[test]
+    fn long_lines_use_the_editors_wrapped_rows() {
+        let ctx = egui::Context::default();
+        for first_line in ["word ".repeat(60), "x".repeat(300)] {
+            let text = format!("{first_line}\ntail");
+            let galley = layout(&ctx, &text, 120.0);
+            let mut geometry = geometry(&text);
+            ensure_layout(&mut geometry, &galley);
+            let minimap = geometry.layout.as_ref().unwrap();
+            let tail_row = galley
+                .rows
+                .iter()
+                .position(|row| row.ends_with_newline)
+                .unwrap()
+                + 1;
+
+            assert!(tail_row > 1);
+            assert_eq!(geometry.line_count, 2);
+            assert_eq!(minimap.row_count, galley.rows.len());
+            assert_eq!(minimap.line_rows, vec![0, tail_row]);
+            assert_eq!(minimap.segments.last().unwrap().row, tail_row);
+            for (row, placed) in galley.rows.iter().enumerate() {
+                if placed
+                    .row
+                    .glyphs
+                    .iter()
+                    .any(|glyph| !glyph.chr.is_whitespace())
+                {
+                    assert!(minimap.segments.iter().any(|segment| segment.row == row));
+                }
+            }
+            assert!(
+                minimap
+                    .segments
+                    .iter()
+                    .all(|segment| segment.end_x <= minimap.width)
+            );
+        }
+    }
+
+    #[test]
+    fn syntax_colors_follow_utf8_bytes_across_wrapped_and_blank_rows() {
+        let ctx = egui::Context::default();
+        let first = "\tșir é漢 ".repeat(20);
+        let text = format!("{first}\n\n\tfinal\n");
+        let mut highlight = egui::text::LayoutJob::default();
+        for (bytes, color) in [
+            (0..first.len(), egui::Color32::RED),
+            (first.len()..text.len(), egui::Color32::BLUE),
+        ] {
+            highlight.sections.push(egui::text::LayoutSection {
+                leading_space: 0.0,
+                byte_range: egui::text::ByteIndex(bytes.start)..egui::text::ByteIndex(bytes.end),
+                format: egui::text::TextFormat {
+                    color,
+                    ..Default::default()
+                },
+            });
+        }
+        let mut geometry = build_geometry(&text, &highlight, active_palette().syntax);
+        let galley = layout(&ctx, &text, 120.0);
+        ensure_layout(&mut geometry, &galley);
+        let minimap = geometry.layout.as_ref().unwrap();
+        let final_row = minimap.line_rows[2];
+
+        assert_eq!(minimap.line_rows.len(), 4);
+        assert_eq!(minimap.line_rows[3], minimap.row_count - 1);
+        assert!(
+            minimap
+                .segments
+                .iter()
+                .filter(|segment| segment.row < final_row)
+                .all(|segment| segment.color == egui::Color32::RED)
+        );
+        let final_segment = minimap.segments.last().unwrap();
+        assert_eq!(final_segment.row, final_row);
+        assert_eq!(final_segment.color, egui::Color32::BLUE);
+        let final_glyph = &galley.rows[final_row].row.glyphs[1];
+        assert_eq!(
+            final_segment.start_x,
+            galley.rows[final_row].pos.x + final_glyph.pos.x
+        );
+        assert!(
+            !minimap
+                .segments
+                .iter()
+                .any(|segment| segment.row == minimap.line_rows[1])
+        );
+        assert_eq!(
+            geometry.indent_columns,
+            vec![Some(4), Some(4), Some(4), None]
+        );
+    }
+
+    #[test]
+    fn resizing_rebuilds_rows_but_selection_only_clones_reuse_them() {
+        let ctx = egui::Context::default();
+        let text = format!("{}\ntail", "word ".repeat(60));
+        let mut geometry = geometry(&text);
+        let wide = layout(&ctx, &text, 240.0);
+        ensure_layout(&mut geometry, &wide);
+        let wide_count = geometry.layout.as_ref().unwrap().row_count;
+        let segments = geometry.layout.as_ref().unwrap().segments.as_ptr();
+
+        let selection_clone = Arc::new((*wide).clone());
+        ensure_layout(&mut geometry, &selection_clone);
+        assert_eq!(
+            geometry.layout.as_ref().unwrap().segments.as_ptr(),
+            segments
+        );
+
+        let narrow = layout(&ctx, &text, 80.0);
+        ensure_layout(&mut geometry, &narrow);
+        let minimap = geometry.layout.as_ref().unwrap();
+        assert!(minimap.row_count > wide_count);
+        assert_eq!(minimap.row_count, narrow.rows.len());
+        assert_eq!(minimap.width, 80.0);
+        assert_eq!(minimap.line_rows[1], minimap.row_count - 1);
+    }
+
+    #[test]
+    fn empty_document_has_one_blank_visual_row() {
+        let ctx = egui::Context::default();
+        let mut geometry = geometry("");
+        let galley = layout(&ctx, "", 120.0);
+        ensure_layout(&mut geometry, &galley);
+        let minimap = geometry.layout.as_ref().unwrap();
+
+        assert_eq!(geometry.line_count, 1);
+        assert_eq!(minimap.row_count, 1);
+        assert_eq!(minimap.line_rows, vec![0]);
+        assert!(minimap.segments.is_empty());
     }
 }

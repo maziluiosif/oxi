@@ -82,6 +82,10 @@ impl OxiApp {
         self.request(crate::git::GitOp::ClearDiff);
         self.conv.diff_view_open = false;
         self.conv.editor.diff_tab_active = false;
+        if self.conv.editor.documents.is_empty() {
+            self.conv.sidebar_mode = super::super::state::SidebarMode::Chats;
+            self.focus_active_view_next_frame();
+        }
     }
 
     /// The git diff rendered as an editor tab: files stay open and editable next to it.

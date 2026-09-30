@@ -553,6 +553,13 @@ impl OxiApp {
                                 galley
                             });
                             minimap::refresh(ui.ctx(), document, &extension, full_job.as_ref());
+                            minimap::ensure_layout(
+                                document
+                                    .minimap_cache
+                                    .as_mut()
+                                    .expect("editor geometry was just prepared"),
+                                &output.galley,
+                            );
                             paint_indent_guides(
                                 ui,
                                 &output.galley,

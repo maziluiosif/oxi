@@ -36,7 +36,11 @@ use super::events::AgentEvent;
 
 #[path = "acp/client_fs.rs"]
 mod client_fs;
+
+#[path = "acp/commands.rs"]
+mod commands;
 use client_fs::{fs_read_text, fs_write_text};
+pub use commands::{AcpSlashCommand, available as available_commands};
 
 #[path = "acp/install.rs"]
 mod install;
@@ -440,6 +444,10 @@ async fn spawn_conn(
         prompt_ctx.clone(),
         stdin.clone(),
         alive.clone(),
+        CommandsKey {
+            command_line: command_line.to_string(),
+            cwd: cwd.to_path_buf(),
+        },
     ));
 
     // initialize
@@ -732,6 +740,8 @@ async fn run_prompt(
     // await — an async fn holds all its params for the whole future, so `&Receiver`/`&Sender`
     // params would make this future `!Send` and unspawnable.
     let AcpPrompt {
+        cwd,
+        command_line,
         text,
         history,
         images,
@@ -753,12 +763,16 @@ async fn run_prompt(
     });
     let _ = event_tx.send(AgentEvent::AgentStart);
 
-    let text = if plan_mode {
+    // Agents only run a slash command when the prompt starts with it, so a command goes out
+    // verbatim: plan mode is still enforced through the permission requests, and the replayed
+    // history waits for the next regular message.
+    let slash_command = is_advertised_command(&text, &command_line, &cwd);
+    let text = if plan_mode && !slash_command {
         format!("{ACP_PLAN_MODE_PREFIX}\n\n{text}")
     } else {
         text
     };
-    let text = if handles.needs_history.swap(false, Ordering::SeqCst) {
+    let text = if !slash_command && handles.needs_history.swap(false, Ordering::SeqCst) {
         with_history(&history, &text)
     } else {
         text
@@ -944,6 +958,19 @@ fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
     (name, tool.get("rawInput").cloned())
 }
 
+/// Whether `text` invokes one of the agent's advertised slash commands (`/name` or
+/// `/name input`), as opposed to e.g. a message that merely starts with a path.
+fn is_advertised_command(text: &str, command_line: &str, cwd: &std::path::Path) -> bool {
+    let Some(rest) = text.trim_start().strip_prefix('/') else {
+        return false;
+    };
+    let name = rest.split_whitespace().next().unwrap_or("");
+    !name.is_empty()
+        && commands::available(command_line, cwd)
+            .iter()
+            .any(|c| c.name == name)
+}
+
 /// Prefix the user's message with the earlier conversation, for a blank session standing in for
 /// one the agent could not resume.
 fn with_history(history: &str, text: &str) -> String {
@@ -1024,6 +1051,7 @@ async fn read_loop(
     prompt_ctx: Arc<AsyncMutex<Option<PromptCtx>>>,
     stdin: Arc<AsyncMutex<ChildStdin>>,
     alive: Arc<AtomicBool>,
+    commands_key: CommandsKey,
 ) {
     let mut lines = BufReader::new(stdout).lines();
     // Streaming text arrives as one `session/update` per token chunk; logging each would push
@@ -1062,7 +1090,7 @@ async fn read_loop(
                 }
             }
         }
-        dispatch(&line, &pending, &prompt_ctx, &stdin).await;
+        dispatch(&line, &pending, &prompt_ctx, &stdin, &commands_key).await;
     }
     flush_chunks(&mut chunks, &mut chunk_count);
     alive.store(false, Ordering::SeqCst);
@@ -1078,11 +1106,18 @@ fn is_streamed_chunk(line: &str) -> bool {
         && (line.contains("\"agent_message_chunk\"") || line.contains("\"agent_thought_chunk\""))
 }
 
+/// Where a connection's advertised slash commands are recorded (see [`commands`]).
+struct CommandsKey {
+    command_line: String,
+    cwd: PathBuf,
+}
+
 async fn dispatch(
     line: &str,
     pending: &Pending,
     prompt_ctx: &Arc<AsyncMutex<Option<PromptCtx>>>,
     stdin: &Arc<AsyncMutex<ChildStdin>>,
+    commands_key: &CommandsKey,
 ) {
     let v: Value = match serde_json::from_str(line) {
         Ok(v) => v,
@@ -1093,12 +1128,19 @@ async fn dispatch(
         if let Some(id) = id {
             let params = v.get("params").cloned().unwrap_or(Value::Null);
             handle_agent_request(method, id, params, stdin, prompt_ctx).await;
-        } else if method == "session/update"
-            && let Some(ctx) = prompt_ctx.lock().await.as_mut()
-        {
-            ctx.emit_notification(&v["params"]);
+        } else if method == "session/update" {
+            let update = &v["params"]["update"];
+            // Usually sent right after session setup, before any prompt, so it is handled
+            // regardless of whether a turn is in flight.
+            if update["sessionUpdate"].as_str() == Some("available_commands_update")
+                && let Some(list) = commands::parse_update(update)
+            {
+                commands::store(&commands_key.command_line, &commands_key.cwd, list);
+            } else if let Some(ctx) = prompt_ctx.lock().await.as_mut() {
+                ctx.emit_notification(&v["params"]);
+            }
         }
-        // Other notifications (available_commands_update, current_mode_update, …) are ignored.
+        // Other notifications (current_mode_update, …) are ignored.
     } else if let Some(id) = v.get("id").and_then(|x| x.as_i64()) {
         let waiter = pending.lock().await.remove(&id);
         if let Some(w) = waiter {

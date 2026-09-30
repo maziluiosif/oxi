@@ -84,7 +84,10 @@ pub(super) fn render_tool_pill(
     let has_output = !output.trim().is_empty();
     // Finalization—not whether the first output chunk arrived—controls the running state. This is
     // especially important for bash, whose output is updated incrementally while it is in flight.
-    // Only the last pill in the visual run gets the spinner.
+    // Only the last pill in the visual run gets the spinner, except sub-agents: parallel `task`
+    // calls genuinely run side by side and each reports its own end.
+    let is_bash = name.eq_ignore_ascii_case("bash");
+    let is_task = name == "task";
     let tool_in_flight = streaming
         && metadata.as_ref().map_or(is_error.is_none(), |m| {
             matches!(
@@ -92,7 +95,7 @@ pub(super) fn render_tool_pill(
                 crate::model::ToolStatus::Pending | crate::model::ToolStatus::InProgress
             )
         });
-    let running = tool_in_flight && is_last_in_run;
+    let running = tool_in_flight && (is_last_in_run || is_task);
 
     let pill_bg = if has_error {
         crate::theme::c_tool_error_bg()
@@ -138,11 +141,12 @@ pub(super) fn render_tool_pill(
     } else {
         Id::new(("tool_pill", tool_call_id.as_str()))
     });
-    let is_bash = name.eq_ignore_ascii_case("bash");
     // Every visible tool keeps an unfold affordance, even before it has output or after an empty
-    // result. Bash is forced open while running, then remains user-foldable after completion.
+    // result. Bash and sub-agents are forced open while running so their live progress is
+    // visible, then remain user-foldable after completion.
+    let live = (is_bash || is_task) && running;
     let can_expand = expandable;
-    let expanded = can_expand && ((is_bash && running) || is_expanded(ui, persist_id));
+    let expanded = can_expand && (live || is_expanded(ui, persist_id));
 
     let frame = Frame::new()
         .fill(pill_bg)
@@ -218,8 +222,8 @@ pub(super) fn render_tool_pill(
                 args_summary.as_deref().unwrap_or("Waiting for output…")
             };
             let overflow = text.lines().count() > BLOCK_PREVIEW_LINES || text.len() > 2000;
-            let preview = if is_bash && running {
-                // Live commands stay at the compact default height and show the newest output.
+            let preview = if live {
+                // Live commands and sub-agents stay at the compact default height and show the newest output.
                 let lines: Vec<&str> = text.lines().collect();
                 lines[lines.len().saturating_sub(BLOCK_PREVIEW_LINES)..].join("\n")
             } else {
