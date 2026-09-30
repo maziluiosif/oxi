@@ -14,12 +14,98 @@ pub struct EditorSyntaxState {
     language: String,
     content: String,
     content_revision: Option<u64>,
+    /// Always edited to match `content`, but only a real parse of it when `parsed`. In between,
+    /// the edited tree keeps coloring the unchanged text at its shifted positions.
     tree: Tree,
+    parsed: bool,
     /// The last highlighted byte range and its job, reused while nothing changed.
     job: Option<(std::ops::Range<usize>, egui::text::LayoutJob)>,
     palette: SyntaxPalette,
-    parser: Parser,
+    /// `None` while it is lent to a background reparse.
+    parser: Option<Parser>,
+    /// How long the last reparse took; slow ones move off the UI thread.
+    last_parse: std::time::Duration,
+    background: Option<BackgroundParse>,
     query: Arc<Query>,
+}
+
+/// A reparse running on a worker thread, and the text it is parsing.
+struct BackgroundParse {
+    content: Arc<str>,
+    result: std::sync::mpsc::Receiver<(Parser, Option<Tree>, std::time::Duration)>,
+}
+
+/// Reparses slower than this run on a worker thread. Even incremental reparses are linear in
+/// the number of siblings around the edit, so a flat 40k-line file costs 10-200 ms per keystroke.
+const BACKGROUND_PARSE_AFTER: std::time::Duration = std::time::Duration::from_millis(4);
+
+impl EditorSyntaxState {
+    /// Colors come from a tree that has not been reparsed since the last edit; ask again for
+    /// exact ones (a background reparse is in flight).
+    pub fn parse_pending(&self) -> bool {
+        !self.parsed
+    }
+
+    /// Adopt a finished background parse, bringing it up to date with edits made meanwhile.
+    fn collect_background_parse(&mut self) {
+        let Some(background) = &self.background else {
+            return;
+        };
+        let (parser, tree, took) = match background.result.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // The worker panicked and took the parser with it.
+                self.background = None;
+                return;
+            }
+        };
+        let background = self.background.take().expect("checked above");
+        self.parser = Some(parser);
+        self.last_parse = took;
+        if let Some(mut tree) = tree {
+            if *background.content == *self.content {
+                self.parsed = true;
+            } else {
+                tree.edit(&input_edit(&background.content, &self.content));
+            }
+            self.tree = tree;
+            self.job = None;
+        }
+    }
+
+    /// Reparse `content` into `tree` if needed: in place when that has been fast, otherwise on a
+    /// worker thread (at most one at a time; edits made meanwhile are folded into the next).
+    fn reparse(&mut self) {
+        if self.parsed {
+            return;
+        }
+        let Some(mut parser) = self.parser.take() else {
+            return;
+        };
+        if self.last_parse < BACKGROUND_PARSE_AFTER {
+            let started = std::time::Instant::now();
+            let tree = parser.parse(&self.content, Some(&self.tree));
+            self.last_parse = started.elapsed();
+            self.parser = Some(parser);
+            if let Some(tree) = tree {
+                self.tree = tree;
+                self.parsed = true;
+                self.job = None;
+            }
+            return;
+        }
+        let content: Arc<str> = Arc::from(self.content.as_str());
+        let old_tree = self.tree.clone();
+        let (sender, result) = std::sync::mpsc::channel();
+        let text = Arc::clone(&content);
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let tree = parser.parse(&*text, Some(&old_tree));
+            let _ = sender.send((parser, tree, started.elapsed()));
+        });
+        self.background = Some(BackgroundParse { content, result });
+    }
 }
 
 /// Compiled highlight queries, one per language. Compiling Rust's query alone takes ~20 ms,
@@ -94,31 +180,38 @@ pub fn highlight_editor_code_with_revision(
             )
     });
 
-    if !up_to_date {
-        if let Some(current) = state.as_mut().filter(|_| same_language) {
+    if let Some(current) = state.as_mut().filter(|_| same_language) {
+        current.collect_background_parse();
+        if !up_to_date {
             let edit = input_edit(&current.content, content);
             current.tree.edit(&edit);
-            let tree = current.parser.parse(content, Some(&current.tree))?;
-            current.content = content.to_owned();
+            // Reuse the buffer: a fresh 1-2 MB allocation per keystroke shows up in profiles.
+            current.content.clear();
+            current.content.push_str(content);
             current.content_revision = content_revision;
-            current.tree = tree;
+            current.parsed = false;
             current.job = None;
-        } else {
-            let mut parser = Parser::new();
-            parser.set_language(&ts_language).ok()?;
-            let query = highlight_query(language)?;
-            let tree = parser.parse(content, None)?;
-            *state = Some(EditorSyntaxState {
-                language: language.to_owned(),
-                content: content.to_owned(),
-                content_revision,
-                tree,
-                job: None,
-                palette,
-                parser,
-                query,
-            });
         }
+        current.reparse();
+    } else {
+        let mut parser = Parser::new();
+        parser.set_language(&ts_language).ok()?;
+        let query = highlight_query(language)?;
+        let started = std::time::Instant::now();
+        let tree = parser.parse(content, None)?;
+        *state = Some(EditorSyntaxState {
+            language: language.to_owned(),
+            content: content.to_owned(),
+            content_revision,
+            tree,
+            parsed: true,
+            job: None,
+            palette,
+            parser: Some(parser),
+            last_parse: started.elapsed(),
+            background: None,
+            query,
+        });
     }
 
     let current = state.as_mut()?;
@@ -137,7 +230,9 @@ pub fn highlight_editor_code_with_revision(
         font_id,
     );
     current.palette = palette;
-    current.job = Some((range, job.clone()));
+    if current.parsed {
+        current.job = Some((range, job.clone()));
+    }
     Some(job)
 }
 
@@ -331,17 +426,12 @@ fn input_edit(old: &str, new: &str) -> InputEdit {
     // Common prefix and suffix by bytes (memcmp speed on large buffers), then pulled back to
     // char boundaries so the edit never splits a UTF-8 sequence.
     let (a, b) = (old.as_bytes(), new.as_bytes());
-    let mut start = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let mut start = crate::text_diff::common_prefix_len(a, b);
     while start > 0 && (!old.is_char_boundary(start) || !new.is_char_boundary(start)) {
         start -= 1;
     }
     let max_suffix = (a.len() - start).min(b.len() - start);
-    let mut suffix = a[a.len() - max_suffix..]
-        .iter()
-        .rev()
-        .zip(b[b.len() - max_suffix..].iter().rev())
-        .take_while(|(x, y)| x == y)
-        .count();
+    let mut suffix = crate::text_diff::common_suffix_len(a, b, max_suffix);
     while suffix > 0
         && (!old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix))
     {
@@ -349,13 +439,26 @@ fn input_edit(old: &str, new: &str) -> InputEdit {
     }
     let old_end = old.len() - suffix;
     let new_end = new.len() - suffix;
+    let start_position = point_at(old, start);
     InputEdit {
         start_byte: start,
         old_end_byte: old_end,
         new_end_byte: new_end,
-        start_position: point_at(old, start),
-        old_end_position: point_at(old, old_end),
-        new_end_position: point_at(new, new_end),
+        start_position,
+        old_end_position: advance_point(start_position, &a[start..old_end]),
+        new_end_position: advance_point(start_position, &b[start..new_end]),
+    }
+}
+
+/// The position after `text`, starting at `point`: only the edited span is scanned, not the
+/// whole document before it again.
+fn advance_point(point: Point, text: &[u8]) -> Point {
+    match memchr::memrchr(b'\n', text) {
+        Some(last) => Point::new(
+            point.row + memchr::memchr_iter(b'\n', text).count(),
+            text.len() - last - 1,
+        ),
+        None => Point::new(point.row, point.column + text.len()),
     }
 }
 
@@ -402,6 +505,53 @@ mod tests {
     }
 
     #[test]
+    fn slow_reparses_finish_in_the_background_with_exact_colors() {
+        let _guard = super::super::palette::PALETTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = "fn one() { let a = 1; }\n";
+        let after = "fn one() { let a = 1; }\nfn two() { let b = \"x\"; }\n";
+        let font = FontId::monospace(12.0);
+        let mut state = None;
+        highlight_editor_code_with_revision(&mut state, before, "rs", font.clone(), Some(1), None)
+            .unwrap();
+        // Pretend reparsing this document is slow, so the edit goes to a worker thread.
+        state.as_mut().unwrap().last_parse = BACKGROUND_PARSE_AFTER;
+        highlight_editor_code_with_revision(&mut state, after, "rs", font.clone(), Some(2), None)
+            .unwrap();
+        assert!(state.as_ref().unwrap().parse_pending());
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let job = loop {
+            let job = highlight_editor_code_with_revision(
+                &mut state,
+                after,
+                "rs",
+                font.clone(),
+                Some(2),
+                None,
+            )
+            .unwrap();
+            if !state.as_ref().unwrap().parse_pending() {
+                break job;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "background parse never finished"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        let expected = highlight_editor_code(&mut None, after, "rs", font).unwrap();
+        let runs = |job: &egui::text::LayoutJob| {
+            job.sections
+                .iter()
+                .map(|section| (section.byte_range.clone(), section.format.color))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(runs(&job), runs(&expected));
+    }
+
+    #[test]
     fn range_highlight_matches_the_full_job() {
         // Both jobs must see the same palette; another test briefly switches it to light.
         let _guard = super::super::palette::PALETTE_TEST_LOCK
@@ -438,6 +588,23 @@ mod tests {
                 color_at(&part, byte),
                 color_at(&full, line_two.start + byte)
             );
+        }
+    }
+
+    #[test]
+    fn input_edit_end_positions_match_a_full_scan() {
+        let old = "fn a() {}\nfn b() {\n    x\n}\n";
+        for new in [
+            "fn a() {}\nfn b() {\n    xy\n}\n",
+            "fn a() {}\nfn b() {\n\n\n    x\n}\n",
+            "fn a() {}\n}\n",
+            "fn a() {}\nfn b() {\n    x\n}\n// tail\n",
+            "",
+        ] {
+            let edit = input_edit(old, new);
+            assert_eq!(edit.start_position, point_at(old, edit.start_byte));
+            assert_eq!(edit.old_end_position, point_at(old, edit.old_end_byte));
+            assert_eq!(edit.new_end_position, point_at(new, edit.new_end_byte));
         }
     }
 

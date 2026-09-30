@@ -17,6 +17,7 @@ mod secrets;
 mod session_store;
 mod settings;
 mod terminal;
+mod text_diff;
 mod theme;
 mod ui;
 mod update;
@@ -81,6 +82,13 @@ fn main() -> eframe::Result<()> {
                 .with_drag_and_drop(true)
                 .with_icon(app_icon()),
         ),
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            // eframe defaults to two queued frames (throughput), which adds a whole refresh
+            // interval between a keystroke and the screen. oxi draws little per frame, so keep
+            // one in flight: typing and scrolling land on the next vsync.
+            surface: eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY,
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(
