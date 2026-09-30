@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-30
+
+### Added
+- Bash command allowlist that skips approval prompts for whitelisted prefixes with persistent settings storage
+- Shared tokio async runtime for improved resource efficiency
+- /plan <task> slash command for task planning
+- ACP slash commands in composer slash menu
+- Live sub-agent progress streaming in task pills
+- Per-workspace terminals that persist across workspace switches
+- Agent scratchpad functionality
+- Live workspace synchronization
+- Reasoning replay capability
+- Dismissible auto-timeout error notices
+
+### Changed
+- Tool classification via `tools::tool_side_effect` with unknown tools always prompting for approval
+- ACP split into `rpc` and `permissions` modules
+- Path safety: lexically collapse `..` before workspace check for create paths
+- Web search: DuckDuckGo restored as default with Bing fallback on anomaly challenge
+- Thinking/tool pill rendering and streaming layout improvements
+- Minimap now follows editor's wrapped rows
+- Closing last editor tab returns focus to chat composer
+- All text files normalized to LF line endings
+
+
 ## [1.2.0] - 2026-09-30
 
 ### Added
@@ -762,7 +787,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/maziluiosif/oxi/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/maziluiosif/oxi/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/maziluiosif/oxi/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/maziluiosif/oxi/compare/v1.0.0...v1.1.0
