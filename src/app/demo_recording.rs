@@ -367,6 +367,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             run.pending_approval = Some(super::state::PendingApproval {
                 name: "bash".into(),
                 summary: "rm -rf build/ && python3 -m unittest -q".into(),
+                allow_prefix: None,
             });
         }
         rec.harness.run_steps(3);

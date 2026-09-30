@@ -8,6 +8,8 @@
 
 #[cfg(test)]
 mod acp_tests;
+#[cfg(test)]
+mod stream_layout_tests;
 
 mod thinking;
 mod tool_format;
@@ -31,7 +33,7 @@ use crate::model::{
 use crate::theme::*;
 use crate::ui::preview_expand::expand_persist_id;
 
-use thinking::{render_thinking_group_block_opts, thinking_group_is_live};
+use thinking::{render_thinking_group_block, thinking_group_is_live};
 use tool_pill::{ExploredClusterCtx, render_explored_cluster, render_single_tool_block};
 
 fn user_image_texture(
@@ -387,6 +389,9 @@ fn render_activity_range(
     let last_streaming_edit = streaming
         .then(|| blocks.iter().rposition(is_edit_like_tool))
         .flatten();
+    let newest_tool = blocks
+        .iter()
+        .rposition(|block| matches!(block, AssistantBlock::Tool { .. }));
     for group in build_assistant_block_groups(slice) {
         match group {
             AssistantBlockGroup::Thinking(indices) => {
@@ -400,14 +405,7 @@ fn render_activity_range(
                     global.last().copied().unwrap_or(global[0]) + 1,
                     streaming,
                 );
-                render_thinking_group_block_opts(
-                    ui,
-                    msg_idx,
-                    global[0],
-                    combined,
-                    thinking_live,
-                    true,
-                );
+                render_thinking_group_block(ui, msg_idx, global[0], combined, thinking_live);
             }
             AssistantBlockGroup::Answer(i) => {
                 let gi = start + i;
@@ -452,6 +450,7 @@ fn render_activity_range(
                     &blocks[gi],
                     streaming,
                     last_streaming_edit == Some(gi),
+                    newest_tool == Some(gi),
                 );
             }
         }

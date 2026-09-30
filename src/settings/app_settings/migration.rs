@@ -2,9 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::super::provider::{
-    ComputeLocation, LlmProviderKind, ProviderConfig, ProviderProfile, WebSearchBackend,
-};
+use super::super::provider::{ComputeLocation, LlmProviderKind, ProviderConfig, ProviderProfile};
 use super::types::{default_local_hf_context, default_local_hf_port};
 use super::*;
 
@@ -156,17 +154,6 @@ impl AppSettings {
     }
 
     pub(super) fn normalize(&mut self) {
-        // Migrate: older settings files had only `searxng_url` (no `web_search_backend`),
-        // wrote the then-default `"duckduckgo"` explicitly. If such a file also has a
-        // non-empty SearXNG URL configured, assume the user meant the SearXNG backend;
-        // leaving it on DuckDuckGo would silently ignore the configured URL.
-        // (A missing `web_search_backend` field now deserializes to the current default,
-        // Bing — which is zero-config like DuckDuckGo, so no migration is needed for it.)
-        if !self.searxng_url.trim().is_empty()
-            && self.web_search_backend == WebSearchBackend::DuckDuckGo
-        {
-            self.web_search_backend = WebSearchBackend::SearXng;
-        }
         // Resize to the current tool count: older settings files have fewer flags, and any
         // newly-added tools default to enabled.
         if self.tools_enabled.len() != ALL_TOOL_NAMES.len() {

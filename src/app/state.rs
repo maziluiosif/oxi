@@ -21,6 +21,8 @@ pub struct PendingApproval {
     pub name: String,
     /// Human-readable summary of what the tool will do (e.g. the bash command or target path).
     pub summary: String,
+    /// For a simple `bash` command, the prefix "Always allow" would add to the allowlist.
+    pub allow_prefix: Option<String>,
 }
 
 /// Active section in the settings window (sidebar).

@@ -184,7 +184,7 @@ impl OxiApp {
                 err_ctx.request_repaint();
             },
             move |rt| {
-                let client = reqwest::Client::new();
+                let client = crate::runtime::http_client();
                 let r = rt.block_on(voice_models::download_model(&client, entry, tx.clone()));
                 let _ = tx.send(VoiceModelMsg::DownloadDone(r));
                 work_ctx.request_repaint();

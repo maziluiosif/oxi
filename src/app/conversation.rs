@@ -104,6 +104,24 @@ impl OxiApp {
                     {
                         self.respond_to_approval(ApprovalDecision::ApproveRest);
                     }
+                    if let Some(prefix) = &pa.allow_prefix
+                        && crate::ui::chrome::ghost_button(
+                            ui,
+                            &format!("Always allow `{prefix}`"),
+                            false,
+                        )
+                        .on_hover_text(
+                            "Run this and never ask again for simple commands starting with it \
+                             (edit the list in Settings → Agent → Approvals)",
+                        )
+                        .clicked()
+                    {
+                        if !self.conv.settings.bash_allowlist.contains(prefix) {
+                            self.conv.settings.bash_allowlist.push(prefix.clone());
+                            self.save_settings_quietly();
+                        }
+                        self.respond_to_approval(ApprovalDecision::AllowPrefix(prefix.clone()));
+                    }
                     if crate::ui::chrome::ghost_button(ui, "Deny", true)
                         .on_hover_text("Skip this call; the agent is told it was denied")
                         .clicked()

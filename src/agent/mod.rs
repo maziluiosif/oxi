@@ -36,7 +36,7 @@ pub(crate) fn test_python_executable() -> std::path::PathBuf {
         })
 }
 
-pub use approval::ApprovalDecision;
+pub use approval::{ApprovalDecision, suggest_bash_allow_prefix};
 pub use complete::{CompleteEvent, CompleteRequest, spawn_completion};
 pub use events::{AgentEvent, AgentOutcome, TokenUsage};
 pub(crate) use history::flatten_assistant;

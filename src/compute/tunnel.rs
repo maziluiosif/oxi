@@ -109,16 +109,15 @@ pub struct TunnelManager {
 }
 
 impl TunnelManager {
-    /// Spawn the manager's dedicated background thread + Tokio runtime. Call once at app
+    /// Spawn the manager's dedicated background thread on the shared runtime. Call once at app
     /// startup; the returned handle is safe to share and call from any thread.
     pub fn spawn() -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<TunnelRequest>();
         let observed: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
         let observed_task = observed.clone();
         std::thread::spawn(move || {
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(_) => return,
+            let Ok(rt) = crate::runtime::runtime() else {
+                return;
             };
             rt.block_on(async move {
                 let tunnels: Arc<AsyncMutex<HashMap<String, ActiveTunnel>>> =

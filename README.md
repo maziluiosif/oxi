@@ -197,6 +197,7 @@ Tool behavior:
 - `web_fetch` only accepts `http://` / `https://` URLs and strips HTML to plain text
 - web tools are read-only and do not require approval
 - filesystem mutations (`write`, `edit`, `delete`, `move`, `mkdir`) and `bash` can require explicit approval, controlled separately in Settings
+- simple `bash` commands can be always allowed by prefix (e.g. `cargo test`, `git status`) from the approval prompt or Settings → Agent; commands with pipes, `;`, `&&`, redirection, `$`, quotes or globs still ask
 - MCP tools always require approval because their side effects are not known in advance
 - `write` and `edit` generate unified diffs for the UI
 - `bash` has a configurable timeout cap, defaulting to 300 seconds
@@ -204,7 +205,7 @@ Tool behavior:
 
 ### Planning and task tracking
 
-Select **Plan** in the composer to investigate before implementing. Built-in Plan mode permits read-only tools and blocks filesystem mutations, shell/diagnostics commands and MCP calls. ACP runs also receive the planning instructions, and direct client file writes are refused. When the plan is ready, **Implement plan** starts implementation with the plan still in the conversation; **Keep planning** continues the investigation. The handoff is hidden while editing a previous prompt.
+Type `/plan` in the composer to toggle Plan mode, or `/plan <task>` to turn it on and send the task; while it is on, a **Plan** pill next to the model picker turns it off. Built-in Plan mode permits read-only tools and blocks filesystem mutations, shell/diagnostics commands and MCP calls. ACP runs also receive the planning instructions, and direct client file writes are refused. When the plan is ready, **Implement plan** starts implementation with the plan still in the conversation; **Keep planning** continues the investigation. The handoff is hidden while editing a previous prompt.
 
 The agent can maintain a checklist with `todo_write`; progress appears above the composer and is preserved in the saved chat. HTTP-provider agents can use `task` for read-only investigations with separate contexts. Delegated token usage is included in the parent conversation totals.
 
@@ -464,8 +465,8 @@ The agent can search the web without any search API key. There is no Brave, Tavi
 
 Backends:
 
-- **Bing:** the default. Zero config, reads Bing's public RSS search feed, capped at around 10 results per query.
-- **DuckDuckGo:** optional, parses the HTML results endpoint. Also zero config, though DuckDuckGo sometimes answers with a bot-challenge page.
+- **DuckDuckGo:** the default. Zero config, parses the HTML results endpoint. DuckDuckGo rate-limits bursts of queries with a bot-challenge page; when that happens the search falls back to Bing and says so in the result.
+- **Bing:** zero config, reads Bing's public RSS search feed, capped at around 10 results per query.
 - **SearXNG:** point oxi at the URL of a SearXNG instance you host. The instance must have the JSON output format enabled. This keeps every query on infrastructure you control and lets you pick which upstream engines are used.
 
 Pick the backend in Settings. `web_fetch` is a separate tool that pulls readable text out of an HTTP(S) URL, also without a key. Both web tools are read-only and run without an approval prompt.

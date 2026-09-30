@@ -268,7 +268,9 @@ impl OxiApp {
 
                 if let Some(error) = self.conv.editor.error.clone() {
                     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-                        ui.label(RichText::new(error).size(FS_TINY).color(c_error_fg()));
+                        if crate::ui::chrome::dismissible_notice(ui, "explorer_error", &error) {
+                            self.conv.editor.error = None;
+                        }
                     });
                 }
             },

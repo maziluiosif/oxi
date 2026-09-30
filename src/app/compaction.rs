@@ -42,21 +42,28 @@ pub(crate) struct ActiveCompaction {
     pub queued_send: Option<QueuedSend>,
 }
 
-/// The two slash commands understood by the composer.
+/// The slash commands understood by the composer.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum SlashCommand {
     New,
     Compact,
+    /// `/plan` toggles plan mode; `/plan <task>` turns it on and sends the task.
+    Plan(Option<String>),
 }
 
-/// Recognize an exact, argument-free `/new` or `/compact`. Anything else (including
-/// `/newfoo`) is `None` and is sent as a normal message.
+/// Recognize an exact, argument-free `/new` or `/compact`, or `/plan` with an optional task.
+/// Anything else (including `/newfoo`) is `None` and is sent as a normal message.
 pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
-    match text.trim() {
-        "/new" => Some(SlashCommand::New),
-        "/compact" => Some(SlashCommand::Compact),
-        _ => None,
+    let text = text.trim();
+    match text {
+        "/new" => return Some(SlashCommand::New),
+        "/compact" => return Some(SlashCommand::Compact),
+        "/plan" => return Some(SlashCommand::Plan(None)),
+        _ => {}
     }
+    let task = text.strip_prefix("/plan")?;
+    task.starts_with(char::is_whitespace)
+        .then(|| SlashCommand::Plan(Some(task.trim().to_string())))
 }
 
 /// Indices of user messages — the start of each conversational turn.
@@ -317,6 +324,12 @@ mod tests {
         assert_eq!(parse_slash_command("/newfoo"), None);
         assert_eq!(parse_slash_command("/compact now"), None);
         assert_eq!(parse_slash_command("hello"), None);
+        assert_eq!(parse_slash_command("/plan"), Some(SlashCommand::Plan(None)));
+        assert_eq!(
+            parse_slash_command("/plan  add a cache\nfor sessions "),
+            Some(SlashCommand::Plan(Some("add a cache\nfor sessions".into())))
+        );
+        assert_eq!(parse_slash_command("/planner"), None);
     }
 
     #[test]

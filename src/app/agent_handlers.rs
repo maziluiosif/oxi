@@ -234,7 +234,14 @@ impl OxiApp {
             }
             AgentEvent::ApprovalRequest { name, args } => {
                 let summary = approval_summary(&name, &args);
-                self.run_state_mut(key).pending_approval = Some(PendingApproval { name, summary });
+                let allow_prefix = (name == "bash")
+                    .then(|| crate::agent::suggest_bash_allow_prefix(&summary))
+                    .flatten();
+                self.run_state_mut(key).pending_approval = Some(PendingApproval {
+                    name,
+                    summary,
+                    allow_prefix,
+                });
             }
             AgentEvent::ToolOutput {
                 tool_call_id,

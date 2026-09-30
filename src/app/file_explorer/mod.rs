@@ -1,7 +1,7 @@
 //! Workspace file explorer and multi-tab text editor.
 
 use super::OxiApp;
-use crate::theme::{FS_SMALL, c_error_fg, c_warning_fg};
+use crate::theme::c_warning_fg;
 use eframe::egui::{self, RichText, Ui};
 
 mod documents;
@@ -62,8 +62,10 @@ impl OxiApp {
                 }
             });
         }
-        if let Some(error) = self.conv.editor.error.clone() {
-            ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
+        if let Some(error) = self.conv.editor.error.clone()
+            && crate::ui::chrome::dismissible_notice(ui, "editor_error", &error)
+        {
+            self.conv.editor.error = None;
         }
 
         if self.conv.editor.find_open {

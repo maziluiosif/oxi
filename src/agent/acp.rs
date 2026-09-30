@@ -21,16 +21,14 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::mpsc::{Receiver as StdReceiver, Sender as StdSender, TryRecvError};
+use std::sync::mpsc::{Receiver as StdReceiver, Sender as StdSender};
 use std::time::Duration;
 
 use base64::Engine as _;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
-use super::activity_log::{self, ActivityKind};
 use super::approval::{ApprovalDecision, ApprovalPolicy, PLAN_MODE_REFUSAL};
 use super::events::AgentEvent;
 
@@ -39,11 +37,19 @@ mod client_fs;
 
 #[path = "acp/commands.rs"]
 mod commands;
-use client_fs::{fs_read_text, fs_write_text};
+use client_fs::fs_write_text;
 pub use commands::{AcpSlashCommand, available as available_commands};
 
 #[path = "acp/install.rs"]
 mod install;
+
+#[path = "acp/permissions.rs"]
+mod permissions;
+use permissions::{PermReq, handle_permission};
+
+#[path = "acp/rpc.rs"]
+mod rpc;
+use rpc::{CommandsKey, drain_stderr, read_loop, request, write_line};
 
 #[path = "acp/sessions.rs"]
 mod sessions;
@@ -88,6 +94,8 @@ pub struct AcpPrompt {
     pub approval_rx: StdReceiver<ApprovalDecision>,
     /// Which permission requests should be routed through oxi's approval UI.
     pub approval_policy: ApprovalPolicy,
+    /// `bash` (ACP `execute`) command prefixes that run without asking.
+    pub bash_allowlist: Vec<String>,
     /// Cooperative cancellation for the turn.
     pub cancel: Arc<AtomicBool>,
     /// Plan mode: ask for a plan and refuse every permission request that could change things.
@@ -97,12 +105,6 @@ pub struct AcpPrompt {
 /// Prepended to the user's message in plan mode. ACP agents run their own tools, so oxi can't
 /// hide them; it asks for a plan and refuses the permission requests instead.
 const ACP_PLAN_MODE_PREFIX: &str = "[Plan mode] Do not modify files or run commands in this turn. Investigate with read-only tools, then reply with a concrete, numbered implementation plan (files and functions to change, edge cases, how to verify). I will approve it before you implement.";
-
-/// ACP tool kinds that cannot change anything, so plan mode lets their permission requests
-/// through to the normal policy.
-fn acp_kind_is_read_only(kind: &str) -> bool {
-    matches!(kind, "read" | "search" | "think" | "fetch")
-}
 
 /// A request to launch (if needed) and initialize a session's agent without prompting, used to
 /// warm the subprocess and discover the available model list for the UI.
@@ -137,14 +139,13 @@ pub struct AcpManager {
 }
 
 impl AcpManager {
-    /// Spawn the manager's dedicated background thread + Tokio runtime. Call once at app
+    /// Spawn the manager's dedicated background thread on the shared runtime. Call once at app
     /// startup; the returned handle is safe to share and call from any thread.
     pub fn spawn() -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<AcpCommand>();
         std::thread::spawn(move || {
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(_) => return,
+            let Ok(rt) = crate::runtime::runtime() else {
+                return;
             };
             rt.block_on(async move {
                 // Keep the managed npm adapters current without involving the user.
@@ -306,12 +307,6 @@ impl PromptCtx {
             self.updates.emit_update(&params["update"], &self.event_tx);
         }
     }
-}
-
-/// A `session/request_permission` request forwarded from the reader task to the prompt task.
-struct PermReq {
-    id: Value,
-    params: Value,
 }
 
 /// Return handles for the session's agent, launching + initializing it if there isn't already a
@@ -748,6 +743,7 @@ async fn run_prompt(
         event_tx,
         mut approval_rx,
         approval_policy,
+        mut bash_allowlist,
         cancel,
         plan_mode,
         ..
@@ -810,6 +806,7 @@ async fn run_prompt(
                         event_tx.clone(),
                         &mut approval_rx,
                         approval_policy,
+                        &mut bash_allowlist,
                         plan_mode,
                         &cancel,
                         &mut auto_approve,
@@ -831,131 +828,6 @@ async fn run_prompt(
     };
     *handles.prompt_ctx.lock().await = None;
     let _ = reply.send(result.map(|_| ()));
-}
-
-/// Resolve one forwarded `session/request_permission` request: ask the UI (unless approval is
-/// disabled or already auto-approved), then answer the agent with the selected option.
-#[allow(clippy::too_many_arguments)]
-async fn handle_permission(
-    stdin: &Arc<AsyncMutex<ChildStdin>>,
-    event_tx: StdSender<AgentEvent>,
-    approval_rx: &mut StdReceiver<ApprovalDecision>,
-    approval_policy: ApprovalPolicy,
-    plan_mode: bool,
-    cancel: &Arc<AtomicBool>,
-    auto_approve: &mut bool,
-    pr: PermReq,
-) {
-    let (name, args) = permission_name_args(&pr.params["toolCall"]);
-    let options = pr.params["options"].as_array().cloned().unwrap_or_default();
-    let kind = pr.params["toolCall"]["kind"].as_str().unwrap_or("");
-
-    let decision = if plan_mode && !acp_kind_is_read_only(kind) {
-        Some(ApprovalDecision::Deny)
-    } else if *auto_approve || !approval_policy.requires_approval(&name) {
-        Some(ApprovalDecision::Approve)
-    } else {
-        let _ = event_tx.send(AgentEvent::ApprovalRequest { name, args });
-        wait_decision(approval_rx, cancel).await
-    };
-
-    let outcome = match decision {
-        None => json!({ "outcome": "cancelled" }),
-        Some(d) => {
-            let wanted: &[&str] = match d {
-                ApprovalDecision::Approve => &["allow_once", "allow"],
-                ApprovalDecision::ApproveRest => &["allow_always", "allow_once", "allow"],
-                ApprovalDecision::Deny => &["reject_once", "reject"],
-            };
-            match pick_option(&options, wanted) {
-                Some(option_id) => {
-                    if matches!(d, ApprovalDecision::ApproveRest) {
-                        *auto_approve = true;
-                    }
-                    json!({ "outcome": "selected", "optionId": option_id })
-                }
-                None => json!({ "outcome": "cancelled" }),
-            }
-        }
-    };
-    let _ = write_line(
-        stdin,
-        &json!({"jsonrpc":"2.0","id": pr.id, "result": { "outcome": outcome }}),
-    )
-    .await;
-}
-
-/// Poll the approval back-channel until a decision arrives or the turn is cancelled.
-async fn wait_decision(
-    rx: &mut StdReceiver<ApprovalDecision>,
-    cancel: &Arc<AtomicBool>,
-) -> Option<ApprovalDecision> {
-    loop {
-        if cancel.load(Ordering::SeqCst) {
-            return None;
-        }
-        match rx.try_recv() {
-            Ok(d) => return Some(d),
-            Err(TryRecvError::Empty) => tokio::time::sleep(Duration::from_millis(80)).await,
-            Err(TryRecvError::Disconnected) => return None,
-        }
-    }
-}
-
-/// Choose a permission `optionId` from the offered options, preferring the given option `kind`s
-/// in order, then any matching allow/reject option. Never select the opposite decision.
-fn pick_option(options: &[Value], wanted_kinds: &[&str]) -> Option<String> {
-    for want in wanted_kinds {
-        if let Some(id) = options
-            .iter()
-            .filter(|o| o.get("kind").and_then(|k| k.as_str()) == Some(*want))
-            .find_map(|o| {
-                o.get("optionId")
-                    .and_then(Value::as_str)
-                    .filter(|id| !id.is_empty())
-            })
-        {
-            return Some(id.to_string());
-        }
-    }
-    // Fall back to any option whose kind starts with the same allow/reject prefix.
-    let prefix = if wanted_kinds.iter().any(|k| k.starts_with("allow")) {
-        "allow"
-    } else {
-        "reject"
-    };
-    options
-        .iter()
-        .filter(|o| {
-            o.get("kind")
-                .and_then(|k| k.as_str())
-                .is_some_and(|k| k.starts_with(prefix))
-        })
-        .find_map(|o| {
-            o.get("optionId")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-        })
-        .map(str::to_owned)
-}
-
-/// Map an ACP `toolCall` object to the (name, args) shape oxi's approval UI expects.
-fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
-    let kind = tool.get("kind").and_then(|k| k.as_str()).unwrap_or("");
-    let title = tool.get("title").and_then(|t| t.as_str()).unwrap_or("");
-    let name = match kind {
-        "execute" => "bash".to_string(),
-        "edit" | "delete" | "move" => "edit".to_string(),
-        "" => {
-            if title.is_empty() {
-                "tool".to_string()
-            } else {
-                title.to_string()
-            }
-        }
-        other => other.to_string(),
-    };
-    (name, tool.get("rawInput").cloned())
 }
 
 /// Whether `text` invokes one of the agent's advertised slash commands (`/name` or
@@ -997,254 +869,6 @@ fn build_prompt_blocks(text: &str, images: &[(String, Vec<u8>)]) -> Value {
         blocks.push(json!({ "type": "text", "text": "" }));
     }
     Value::Array(blocks)
-}
-
-/// Send a client→agent request and await its response.
-async fn request(
-    stdin: &Arc<AsyncMutex<ChildStdin>>,
-    next_id: &Arc<AtomicI64>,
-    pending: &Pending,
-    method: &str,
-    params: Value,
-) -> Result<Value, String> {
-    let id = next_id.fetch_add(1, Ordering::SeqCst);
-    let (tx, rx) = oneshot::channel();
-    pending.lock().await.insert(id, tx);
-    write_line(
-        stdin,
-        &json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
-    )
-    .await?;
-    match rx.await {
-        Ok(r) => r,
-        Err(_) => Err("ACP connection closed".to_string()),
-    }
-}
-
-async fn write_line(stdin: &Arc<AsyncMutex<ChildStdin>>, msg: &Value) -> Result<(), String> {
-    if activity_log::is_enabled() {
-        activity_log::log_json(
-            ActivityKind::Acp,
-            format!("→ {}", activity_log::rpc_title(msg)),
-            msg,
-        );
-    }
-    let mut line = serde_json::to_string(msg).map_err(|e| e.to_string())?;
-    line.push('\n');
-    let mut guard = stdin.lock().await;
-    guard
-        .write_all(line.as_bytes())
-        .await
-        .map_err(|e| format!("ACP write failed: {e}"))?;
-    guard
-        .flush()
-        .await
-        .map_err(|e| format!("ACP flush failed: {e}"))?;
-    Ok(())
-}
-
-/// Read newline-delimited JSON-RPC messages from the agent until stdout closes, dispatching
-/// each. On close, fail every outstanding request so callers don't hang.
-async fn read_loop(
-    stdout: tokio::process::ChildStdout,
-    pending: Pending,
-    prompt_ctx: Arc<AsyncMutex<Option<PromptCtx>>>,
-    stdin: Arc<AsyncMutex<ChildStdin>>,
-    alive: Arc<AtomicBool>,
-    commands_key: CommandsKey,
-) {
-    let mut lines = BufReader::new(stdout).lines();
-    // Streaming text arrives as one `session/update` per token chunk; logging each would push
-    // everything else out of the activity log, so consecutive chunks become one entry.
-    let mut chunks = String::new();
-    let mut chunk_count = 0usize;
-    let flush_chunks = |chunks: &mut String, count: &mut usize| {
-        if *count > 0 {
-            activity_log::log(
-                ActivityKind::Acp,
-                format!("← session/update · {count} streamed chunks"),
-                &*chunks,
-            );
-            chunks.clear();
-            *count = 0;
-        }
-    };
-    while let Ok(Some(line)) = lines.next_line().await {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if activity_log::is_enabled() {
-            if is_streamed_chunk(&line) {
-                chunks.push_str(&line);
-                chunks.push('\n');
-                chunk_count += 1;
-            } else {
-                flush_chunks(&mut chunks, &mut chunk_count);
-                match serde_json::from_str::<Value>(&line) {
-                    Ok(v) => activity_log::log_json(
-                        ActivityKind::Acp,
-                        format!("← {}", activity_log::rpc_title(&v)),
-                        &v,
-                    ),
-                    Err(_) => activity_log::log(ActivityKind::Acp, "← (unparsed line)", &line),
-                }
-            }
-        }
-        dispatch(&line, &pending, &prompt_ctx, &stdin, &commands_key).await;
-    }
-    flush_chunks(&mut chunks, &mut chunk_count);
-    alive.store(false, Ordering::SeqCst);
-    let mut p = pending.lock().await;
-    for (_, tx) in p.drain() {
-        let _ = tx.send(Err("ACP agent closed the connection".to_string()));
-    }
-}
-
-/// Cheap pre-parse check for streamed message/thought chunks (the bulk of ACP traffic).
-fn is_streamed_chunk(line: &str) -> bool {
-    line.contains("\"session/update\"")
-        && (line.contains("\"agent_message_chunk\"") || line.contains("\"agent_thought_chunk\""))
-}
-
-/// Where a connection's advertised slash commands are recorded (see [`commands`]).
-struct CommandsKey {
-    command_line: String,
-    cwd: PathBuf,
-}
-
-async fn dispatch(
-    line: &str,
-    pending: &Pending,
-    prompt_ctx: &Arc<AsyncMutex<Option<PromptCtx>>>,
-    stdin: &Arc<AsyncMutex<ChildStdin>>,
-    commands_key: &CommandsKey,
-) {
-    let v: Value = match serde_json::from_str(line) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
-        let id = v.get("id").cloned().filter(|x| !x.is_null());
-        if let Some(id) = id {
-            let params = v.get("params").cloned().unwrap_or(Value::Null);
-            handle_agent_request(method, id, params, stdin, prompt_ctx).await;
-        } else if method == "session/update" {
-            let update = &v["params"]["update"];
-            // Usually sent right after session setup, before any prompt, so it is handled
-            // regardless of whether a turn is in flight.
-            if update["sessionUpdate"].as_str() == Some("available_commands_update")
-                && let Some(list) = commands::parse_update(update)
-            {
-                commands::store(&commands_key.command_line, &commands_key.cwd, list);
-            } else if let Some(ctx) = prompt_ctx.lock().await.as_mut() {
-                ctx.emit_notification(&v["params"]);
-            }
-        }
-        // Other notifications (current_mode_update, …) are ignored.
-    } else if let Some(id) = v.get("id").and_then(|x| x.as_i64()) {
-        let waiter = pending.lock().await.remove(&id);
-        if let Some(w) = waiter {
-            if let Some(err) = v.get("error") {
-                let msg = err
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("ACP error")
-                    .to_string();
-                let _ = w.send(Err(msg));
-            } else {
-                let _ = w.send(Ok(v.get("result").cloned().unwrap_or(Value::Null)));
-            }
-        }
-    }
-}
-
-/// Handle an agent→client request (`fs/*`, `session/request_permission`).
-async fn handle_agent_request(
-    method: &str,
-    id: Value,
-    params: Value,
-    stdin: &Arc<AsyncMutex<ChildStdin>>,
-    prompt_ctx: &Arc<AsyncMutex<Option<PromptCtx>>>,
-) {
-    match method {
-        "fs/read_text_file" => match fs_read_text(&params) {
-            Ok(content) => reply_ok(stdin, id, json!({ "content": content })).await,
-            Err(e) => reply_err(stdin, id, -32000, &e).await,
-        },
-        "fs/write_text_file" => {
-            let result = {
-                let ctx = prompt_ctx.lock().await;
-                ctx.as_ref()
-                    .ok_or_else(|| "fs/write_text_file: no active prompt".to_string())
-                    .and_then(|ctx| ctx.write_text_file(&params))
-            };
-            match result {
-                Ok(()) => reply_ok(stdin, id, Value::Null).await,
-                Err(e) => reply_err(stdin, id, -32000, &e).await,
-            }
-        }
-        "session/request_permission" => {
-            let forwarded = {
-                let mut ctx = prompt_ctx.lock().await;
-                ctx.as_mut()
-                    .filter(|c| params["sessionId"].as_str() == Some(c.session_id.as_str()))
-                    .map(|c| {
-                        c.updates.emit_tool(&params["toolCall"], &c.event_tx);
-                        c.perm_tx.send(PermReq {
-                            id: id.clone(),
-                            params,
-                        })
-                    })
-            };
-            // No active prompt (or the prompt task is gone): cancel the request so the agent
-            // doesn't block forever.
-            if !matches!(forwarded, Some(Ok(()))) {
-                reply_ok(stdin, id, json!({ "outcome": { "outcome": "cancelled" } })).await;
-            }
-        }
-        _ => {
-            reply_err(
-                stdin,
-                id,
-                -32601,
-                &format!("method not supported: {method}"),
-            )
-            .await
-        }
-    }
-}
-
-async fn reply_ok(stdin: &Arc<AsyncMutex<ChildStdin>>, id: Value, result: Value) {
-    let _ = write_line(stdin, &json!({"jsonrpc":"2.0","id":id,"result":result})).await;
-}
-
-async fn reply_err(stdin: &Arc<AsyncMutex<ChildStdin>>, id: Value, code: i64, message: &str) {
-    let _ = write_line(
-        stdin,
-        &json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}),
-    )
-    .await;
-}
-
-/// Lines of agent stderr kept for error messages.
-const STDERR_TAIL_LINES: usize = 12;
-
-async fn drain_stderr(
-    stderr: tokio::process::ChildStderr,
-    tail: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
-) {
-    let mut lines = BufReader::new(stderr).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        if !line.trim().is_empty() {
-            eprintln!("[acp] {line}");
-            activity_log::log(ActivityKind::Acp, "stderr", &line);
-            let mut tail = tail.lock().unwrap_or_else(|e| e.into_inner());
-            if tail.len() == STDERR_TAIL_LINES {
-                tail.pop_front();
-            }
-            tail.push_back(line);
-        }
-    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,6 @@
 //! OpenAI Chat Completions streaming (used for OpenAI, OpenRouter, GPT Codex via same API).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
@@ -11,13 +10,11 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, Header
 use serde_json::{Value, json};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
-use super::dispatch::spawn_readonly_tool;
+use super::dispatch::{run_gated_tool, spawn_readonly_tool};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::{
-    MAX_TOOL_OUTPUT_CHARS, ToolOutputCallback, ToolResult, run_tool, run_tool_with_output,
-};
+use super::tools::MAX_TOOL_OUTPUT_CHARS;
 
 pub(crate) fn openai_supports_reasoning_effort(model: &str) -> bool {
     let m = model
@@ -335,28 +332,8 @@ async fn run_chat_loop_at(
                         tool_call_id: tc.id.clone(),
                         args: Some(tc.args.clone()),
                     });
-                    let result = match gate.request(tx, cancel, &tc.name, &tc.args) {
-                        Ok(()) if tc.name.eq_ignore_ascii_case("bash") => {
-                            let event_tx = tx.clone();
-                            let id = tc.id.clone();
-                            let callback: ToolOutputCallback = Arc::new(move |text| {
-                                let truncated = text.chars().count() >= MAX_TOOL_OUTPUT_CHARS;
-                                let _ = event_tx.send(AgentEvent::ToolOutput {
-                                    tool_call_id: id.clone(),
-                                    text,
-                                    truncated,
-                                });
-                            });
-                            run_tool_with_output(cwd, &tc.name, &tc.args, env, Some(callback))
-                        }
-                        Ok(()) => run_tool(cwd, &tc.name, &tc.args, env),
-                        Err(reason) => ToolResult {
-                            output: reason,
-                            is_error: true,
-                            diff: None,
-                            full_output_path: None,
-                        },
-                    };
+                    let result =
+                        run_gated_tool(gate, tx, cancel, cwd, &tc.id, &tc.name, &tc.args, env);
                     let text = result.output.clone();
                     let is_err = result.is_error;
                     let _ = tx.send(AgentEvent::ToolOutput {

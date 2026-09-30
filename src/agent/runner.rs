@@ -84,19 +84,15 @@ pub struct AgentRunRequest {
     pub undo_journal: Arc<std::sync::Mutex<crate::agent::tools::TurnUndoJournal>>,
 }
 
-/// Shared Tokio runtime for all HTTP agent runs.
+/// Spawns agent runs on the app-wide runtime ([`crate::runtime`]).
 #[derive(Clone)]
 pub struct AgentExecutor {
-    runtime: Arc<tokio::runtime::Runtime>,
+    runtime: &'static tokio::runtime::Runtime,
 }
 
 impl AgentExecutor {
     pub fn new() -> Result<Self, String> {
-        tokio::runtime::Runtime::new()
-            .map(|runtime| Self {
-                runtime: Arc::new(runtime),
-            })
-            .map_err(|e| format!("tokio: {e}"))
+        crate::runtime::runtime().map(|runtime| Self { runtime })
     }
 
     fn spawn<F>(&self, future: F) -> tokio::task::JoinHandle<F::Output>
@@ -154,6 +150,7 @@ pub fn spawn_agent_run(
                     write_edit: settings.require_write_edit_approval,
                     bash: settings.require_bash_approval,
                 },
+                settings.bash_allowlist.clone(),
                 &cancel,
                 plan_mode,
             )
@@ -248,7 +245,8 @@ pub fn spawn_agent_run(
             },
             approval_rx,
         )
-        .with_plan_mode(plan_mode);
+        .with_plan_mode(plan_mode)
+        .with_bash_allowlist(settings.bash_allowlist.clone());
 
         let r = crate::agent::dispatch::run_provider_loop(
             crate::agent::dispatch::DispatchParams {
@@ -298,6 +296,7 @@ async fn run_acp_turn(
     tx: &Sender<AgentEvent>,
     approval_rx: Receiver<ApprovalDecision>,
     approval_policy: ApprovalPolicy,
+    bash_allowlist: Vec<String>,
     cancel: &Arc<AtomicBool>,
     plan_mode: bool,
 ) {
@@ -335,6 +334,7 @@ async fn run_acp_turn(
         event_tx: tx.clone(),
         approval_rx,
         approval_policy,
+        bash_allowlist,
         cancel: cancel.clone(),
         plan_mode,
     };
