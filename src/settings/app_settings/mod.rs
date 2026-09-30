@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use super::provider::{LlmProviderKind, ProviderConfig, UiDensity, WebSearchBackend};
 
-pub const ALL_TOOL_NAMES: [&str; 15] = [
+pub const ALL_TOOL_NAMES: [&str; 18] = [
     "read",
     "write",
     "edit",
@@ -23,6 +23,9 @@ pub const ALL_TOOL_NAMES: [&str; 15] = [
     "delete",
     "move",
     "mkdir",
+    "todo_write",
+    "diagnostics",
+    "task",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -156,6 +159,10 @@ pub struct AppSettings {
     /// MCP servers to spawn (stdio). Tools appear as `mcp_<server>_<tool>`.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Record raw provider/agent traffic for the Activity window (see
+    /// [`crate::agent::activity_log`]). Off by default; the log itself is never written to disk.
+    #[serde(default)]
+    pub activity_log_enabled: bool,
 }
 
 fn default_require_approval() -> bool {
@@ -279,6 +286,7 @@ impl Default for AppSettings {
             github_username: String::new(),
             github_token: String::new(),
             mcp_servers: Vec::new(),
+            activity_log_enabled: false,
         }
     }
 }
@@ -289,7 +297,8 @@ mod query;
 mod types;
 
 pub use types::{
-    DictationSettings, LocalHfSettings, McpServerConfig, WindowsTerminal, WorkspaceEntry,
+    DEFAULT_MCP_TIMEOUT_SECS, DictationSettings, LocalHfSettings, McpServerConfig, McpTransport,
+    WindowsTerminal, WorkspaceEntry,
 };
 
 #[cfg(test)]

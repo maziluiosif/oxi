@@ -2,10 +2,12 @@
 
 use super::super::OxiApp;
 use super::layout::tool_chip;
-use crate::settings::ALL_TOOL_NAMES;
+use crate::agent::mcp::McpServerStatus;
+use crate::settings::{ALL_TOOL_NAMES, DEFAULT_MCP_TIMEOUT_SECS, McpServerConfig, McpTransport};
 use crate::theme::*;
 use crate::ui::chrome::{
-    card_frame, field_hint, field_label, field_label_first, ghost_button, settings_card_header,
+    alert_banner, card_frame, field_hint, field_label, field_label_first, ghost_button,
+    nested_card_frame, pill_tab, settings_card_header, settings_password_field,
     settings_section_title, settings_text_field, settings_text_field_width,
 };
 use eframe::egui::{self, Align, Layout, RichText, Ui};
@@ -20,7 +22,8 @@ const TOOL_GROUPS: &[(&str, &[&str])] = &[
         "Change files",
         &["write", "edit", "delete", "move", "mkdir"],
     ),
-    ("Run commands", &["bash"]),
+    ("Run commands", &["bash", "diagnostics"]),
+    ("Plan & delegate", &["todo_write", "task"]),
     ("Git", &["git_status", "git_diff"]),
     ("Web", &["web_search", "web_fetch"]),
 ];
@@ -101,34 +104,121 @@ impl OxiApp {
             settings_card_header(
                 ui,
                 "MCP servers",
-                Some("Stdio MCP servers. Tools appear as mcp_<name>_<tool> in the agent."),
+                Some("Local (stdio) or remote (Streamable HTTP) MCP servers. Tools appear as mcp_<name>_<tool>; servers with resources also get list_resources / read_resource."),
             );
+            let statuses = self.mcp.statuses();
             let mut remove_idx: Option<usize> = None;
             let n = self.conv.settings.mcp_servers.len();
             for i in 0..n {
                 let server = &mut self.conv.settings.mcp_servers[i];
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut server.enabled, "");
-                    settings_text_field_width(ui, &mut server.name, "name", 100.0);
-                    settings_text_field_width(ui, &mut server.command, "command", 120.0);
-                    let mut args = server.args.join(" ");
-                    if settings_text_field_width(ui, &mut args, "args…", 180.0).changed() {
-                        server.args = args.split_whitespace().map(str::to_string).collect();
+                let status = statuses.iter().find(|s| s.name == server.name);
+                nested_card_frame().show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut server.enabled, "");
+                        settings_text_field_width(ui, &mut server.name, "name", 120.0);
+                        for (transport, label) in
+                            [(McpTransport::Stdio, "Command"), (McpTransport::Http, "HTTP")]
+                        {
+                            if pill_tab(ui, label, server.transport == transport) {
+                                server.transport = transport;
+                            }
+                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ghost_button(ui, "Remove", true).clicked() {
+                                remove_idx = Some(i);
+                            }
+                            mcp_status_label(ui, server, status);
+                        });
+                    });
+                    if let Some(err) = status
+                        .filter(|s| server.enabled && !s.connected && !s.connecting)
+                        .and_then(|s| s.error.as_deref())
+                    {
+                        ui.add_space(4.0);
+                        alert_banner(ui, err, true);
                     }
-                    if ghost_button(ui, "Remove", true).clicked() {
-                        remove_idx = Some(i);
+                    ui.add_space(4.0);
+                    match server.transport {
+                        McpTransport::Stdio => {
+                            ui.horizontal(|ui| {
+                                settings_text_field_width(
+                                    ui,
+                                    &mut server.command,
+                                    "command (npx, uvx, …)",
+                                    150.0,
+                                );
+                                let mut args = server.args.join(" ");
+                                if settings_text_field(ui, &mut args, "args…").changed() {
+                                    server.args =
+                                        args.split_whitespace().map(str::to_string).collect();
+                                }
+                            });
+                            field_label(ui, "Environment (KEY=VALUE per line, stored in the OS keychain)");
+                            ui.add(
+                                egui::TextEdit::multiline(&mut server.env)
+                                    .desired_rows(2)
+                                    .desired_width(f32::INFINITY)
+                                    .font(egui::TextStyle::Monospace)
+                                    .hint_text("GITHUB_TOKEN=…"),
+                            );
+                        }
+                        McpTransport::Http => {
+                            settings_text_field(
+                                ui,
+                                &mut server.url,
+                                "https://example.com/mcp",
+                            );
+                            field_label(ui, "Bearer token (optional, stored in the OS keychain)");
+                            settings_password_field(ui, &mut server.bearer_token, "token");
+                        }
+                    }
+                    field_label(ui, "Call timeout (seconds)");
+                    let mut timeout = server
+                        .timeout_secs
+                        .map(|t| t.to_string())
+                        .unwrap_or_default();
+                    if settings_text_field_width(
+                        ui,
+                        &mut timeout,
+                        &DEFAULT_MCP_TIMEOUT_SECS.to_string(),
+                        120.0,
+                    )
+                    .changed()
+                    {
+                        server.timeout_secs = timeout.trim().parse::<u32>().ok().filter(|t| *t > 0);
                     }
                 });
-                ui.add_space(4.0);
+                ui.add_space(6.0);
             }
             if let Some(i) = remove_idx {
                 self.conv.settings.mcp_servers.remove(i);
             }
-            if ghost_button(ui, "Add MCP server", false).clicked() {
-                self.conv
-                    .settings
-                    .mcp_servers
-                    .push(crate::settings::McpServerConfig::default());
+            ui.horizontal(|ui| {
+                if ghost_button(ui, "Add MCP server", false).clicked() {
+                    self.conv
+                        .settings
+                        .mcp_servers
+                        .push(crate::settings::McpServerConfig::default());
+                }
+                if !self.conv.settings.mcp_servers.is_empty()
+                    && ghost_button(ui, "Connect / test", false)
+                        .on_hover_text("Restart every server with the settings above and list its tools.")
+                        .clicked()
+                {
+                    let mcp = self.mcp.clone();
+                    let servers = self.conv.settings.mcp_servers.clone();
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        mcp.reconnect_all(&servers);
+                        ctx.request_repaint();
+                    });
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+                }
+            });
+            if statuses.iter().any(|s| s.connecting) {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(250));
             }
         });
 
@@ -162,7 +252,7 @@ impl OxiApp {
                     RichText::new("Ask before bash").size(FS_SMALL).color(c_text()),
                 )
                 .on_hover_text(
-                    "When on, the agent pauses for your approval before each bash tool call.",
+                    "When on, the agent pauses for your approval before each bash or diagnostics call (diagnostics runs the project's build tooling).",
                 )
                 .changed()
             {
@@ -284,5 +374,28 @@ impl OxiApp {
                 }
             }
         });
+    }
+}
+
+/// One-line connection state for an MCP server row.
+fn mcp_status_label(ui: &mut Ui, server: &McpServerConfig, status: Option<&McpServerStatus>) {
+    let (text, color, hover) = match status {
+        _ if !server.enabled => ("disabled".to_string(), c_text_faint(), None),
+        Some(s) if s.connecting => ("connecting…".to_string(), c_text_muted(), None),
+        Some(s) if s.connected => {
+            let mut text = format!("● connected · {} tools", s.tools);
+            if s.resources {
+                text.push_str(" · resources");
+            }
+            (text, c_accent(), None)
+        }
+        Some(McpServerStatus {
+            error: Some(err), ..
+        }) => ("● error".to_string(), c_error_fg(), Some(err.clone())),
+        _ => ("not connected".to_string(), c_text_faint(), None),
+    };
+    let resp = ui.label(RichText::new(text).size(FS_TINY).color(color));
+    if let Some(hover) = hover {
+        resp.on_hover_text(hover);
     }
 }

@@ -244,6 +244,59 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
                     }
                 }
             }),
+            "todo_write" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "todo_write",
+                    "description": "Create or update your checklist for the current task; the user sees it live. Send the complete list every time (it replaces the previous one). Use it for work with 3+ steps: write all steps up front, keep exactly one item in_progress, and mark items completed as soon as they are done. Skip it for trivial one-step requests.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "todos": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "content": { "type": "string", "description": "Short imperative step, e.g. \"Fix the parser bug\"" },
+                                        "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+                                    },
+                                    "required": ["content", "status"]
+                                }
+                            }
+                        },
+                        "required": ["todos"]
+                    }
+                }
+            }),
+            "diagnostics" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "diagnostics",
+                    "description": "Type-check / lint the project and return compact `file:line:col: message` lines. Picks the checker from the project: cargo check (Cargo.toml), tsc --noEmit (tsconfig.json), go vet (go.mod), ruff or a Python syntax check (pyproject.toml / setup.py / requirements.txt). Run it after editing code and fix what it reports before you finish.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Project directory relative to the workspace (default: workspace root)" },
+                            "checker": { "type": "string", "enum": ["cargo", "tsc", "go", "python"], "description": "Force one checker instead of auto-detecting" }
+                        }
+                    }
+                }
+            }),
+            "task" => serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "task",
+                    "description": "Delegate a self-contained, read-only investigation to a sub-agent with a fresh context (it can read, search and browse, but not edit or run commands). It returns only its final report, which keeps your context small. Good for broad questions such as \"find every place X is configured and summarize how they differ\". Launch several in one turn for independent questions; they run in parallel. The sub-agent does not see this conversation, so give complete instructions.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "description": { "type": "string", "description": "3-6 word label shown to the user" },
+                            "prompt": { "type": "string", "description": "Full instructions: what to find out and what the report should contain" }
+                        },
+                        "required": ["description", "prompt"]
+                    }
+                }
+            }),
             _ => continue,
         };
         out.push(def);

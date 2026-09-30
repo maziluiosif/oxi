@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Event};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
 use super::OxiApp;
@@ -146,6 +147,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             bash_timeout_cap_secs: 60,
             mcp: None,
             undo_journal: None,
+            subagent: None,
         },
     };
 
@@ -159,6 +161,25 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.still("empty-chat-setup");
         rec.app().conv.settings.active_provider = LlmProviderKind::LocalHf;
         use super::state::SettingsTab;
+        {
+            let app = rec.app();
+            app.conv.settings.mcp_servers = vec![
+                crate::settings::McpServerConfig {
+                    name: "github".into(),
+                    command: "npx".into(),
+                    args: vec!["-y".into(), "@modelcontextprotocol/server-github".into()],
+                    ..Default::default()
+                },
+                crate::settings::McpServerConfig {
+                    name: "docs".into(),
+                    transport: crate::settings::McpTransport::Http,
+                    url: "http://127.0.0.1:9/mcp".into(),
+                    ..Default::default()
+                },
+            ];
+            let servers = app.conv.settings.mcp_servers[1..].to_vec();
+            app.mcp.sync_servers(&servers);
+        }
         rec.app().open_settings_page();
         for (tab, name) in [
             (SettingsTab::Agent, "settings-agent"),
@@ -172,8 +193,18 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             rec.app().conv.settings_tab = tab;
             rec.harness.run_steps(3);
             rec.still(name);
+            if tab == SettingsTab::Agent {
+                rec.scroll_by(-700.0);
+                rec.still("settings-agent-mcp");
+            }
         }
+        rec.app()
+            .conv
+            .settings
+            .provider_mut(LlmProviderKind::LlamaCpp)
+            .base_url = "http://localhost:8080".into();
         for provider in [
+            LlmProviderKind::LlamaCpp,
             LlmProviderKind::OpenAi,
             LlmProviderKind::ClaudeCodeAcp,
             LlmProviderKind::Ollama,
@@ -284,6 +315,42 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     rec.hold(2.2);
     rec.still("chat");
     if gallery {
+        {
+            use crate::agent::activity_log::{self as activity, ActivityKind};
+            activity::set_enabled(true);
+            activity::log_json(
+                ActivityKind::Request,
+                "POST http://localhost:8080/v1/chat/completions",
+                &serde_json::json!({
+                    "model": "qwen2.5-coder-7b",
+                    "stream": true,
+                    "messages": [{ "role": "user", "content": "Run the tests and fix the failing one" }],
+                }),
+            );
+            activity::log(
+                ActivityKind::Retry,
+                "Attempt 1/5 failed · POST http://localhost:8080/v1/chat/completions",
+                "HTTP 503: loading model",
+            );
+            activity::log(
+                ActivityKind::Response,
+                "HTTP 200 OK · http://localhost:8080/v1/chat/completions · round 1",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Running\"}}]}\n\ndata: [DONE]\n",
+            );
+            activity::log(
+                ActivityKind::Tool,
+                "bash",
+                "Arguments:\n{ \"command\": \"python -m pytest -q\" }\n\nResult:\n5 passed",
+            );
+            let app = rec.app();
+            app.conv.settings.activity_log_enabled = true;
+            super::activity_window::toggle_activity_window(&rec.harness.ctx);
+        }
+        rec.harness.run_steps(3);
+        rec.still("activity-log");
+        super::activity_window::toggle_activity_window(&rec.harness.ctx);
+        rec.app().conv.settings.activity_log_enabled = false;
+        crate::agent::activity_log::set_enabled(false);
         {
             let app = rec.app();
             let key = app.active_session_key();
@@ -460,6 +527,75 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         }
         rec.harness.run_steps(3);
         rec.still("chat-light");
+
+        // Plan mode: a planning turn with a live checklist, then the hand-off bar.
+        crate::theme::apply_theme(&rec.harness.ctx, "dark");
+        rec.app().new_chat();
+        let key = rec.app().active_session_key();
+        rec.app().run_state_mut(key).plan_mode = true;
+        rec.harness.run_steps(3);
+        rec.still("plan-mode-empty");
+        rec.app().run_state_mut(key).last_turn_planned = true;
+        rec.begin_turn("Add CSV export to the stats report");
+        rec.app().active_session_mut().chars_per_token = Some(3.25);
+        rec.send(AgentEvent::SubagentUsage(TokenUsage {
+            input_tokens: 1200,
+            output_tokens: 24,
+            cache_read_input_tokens: 300,
+            ..Default::default()
+        }));
+        rec.harness.run_steps(3);
+        let run = rec.app().run_state(key).unwrap();
+        assert_eq!(run.turn_usage.total_input(), 1500);
+        assert_eq!(run.turn_usage.output_tokens, 24);
+        assert_eq!(run.session_usage.total_input(), 1500);
+        assert_eq!(rec.app().active_session().chars_per_token, Some(3.25));
+        rec.tool(
+            "todo1",
+            "todo_write",
+            json!({"todos": [
+                {"content": "Map how reports are rendered", "status": "completed"},
+                {"content": "Find where output formats are chosen", "status": "in_progress"},
+                {"content": "Draft the CSV writer and CLI flag", "status": "pending"},
+                {"content": "List tests to add", "status": "pending"}
+            ]}),
+            0.2,
+        );
+        rec.harness.run_steps(3);
+        rec.still("tasks-panel");
+        rec.tool(
+            "todo2",
+            "todo_write",
+            json!({"todos": [
+                {"content": "Map how reports are rendered", "status": "completed"},
+                {"content": "Find where output formats are chosen", "status": "completed"},
+                {"content": "Draft the CSV writer and CLI flag", "status": "completed"},
+                {"content": "List tests to add", "status": "completed"}
+            ]}),
+            0.2,
+        );
+        rec.stream_text(
+            "## Plan\n\n1. Add `write_csv(report, path)` in `stats/report.py` next to \
+             `write_markdown`.\n2. Add `--format csv` to the CLI in `stats/cli.py`.\n3. Tests: \
+             round-trip a small report through `csv.reader`.\n",
+        );
+        rec.finish_turn();
+        rec.hold(1.0);
+        rec.still("plan-ready");
+        assert!(rec.harness.query_by_label("Implement plan").is_some());
+        let message_count = rec.app().active_session().messages.len();
+        rec.app().conv.editing_last_prompt = Some(super::state::PromptEditState {
+            previous_input: String::new(),
+            previous_images: Vec::new(),
+        });
+        rec.app().conv.input = "Revise the CSV plan".into();
+        rec.harness.run_steps(3);
+        assert!(rec.harness.query_by_label("Implement plan").is_none());
+        rec.still("plan-editing");
+        rec.app().cancel_edit_last_prompt();
+        rec.harness.run_steps(3);
+        assert!(rec.harness.query_by_label("Implement plan").is_some());
+        assert_eq!(rec.app().active_session().messages.len(), message_count);
     }
 }
 
@@ -586,7 +722,6 @@ impl Recorder<'_> {
     /// it, and report whether the transcript then holds a selection. With `streaming` the last
     /// reply keeps growing (and the view stuck to the bottom) while the pointer moves.
     fn drag_select_label(&mut self, text: &str, streaming: bool) -> bool {
-        use egui_kittest::kittest::Queryable;
         if streaming {
             let app = self.app();
             let mut reply = message(
@@ -758,6 +893,22 @@ impl Recorder<'_> {
         });
     }
 
+    /// Wheel-scroll whatever is under the middle of the window (negative = down).
+    fn scroll_by(&mut self, dy: f32) {
+        for _ in 0..10 {
+            self.harness
+                .event(Event::PointerMoved(egui::pos2(700.0, 400.0)));
+            self.harness.event(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, dy / 10.0),
+                modifiers: egui::Modifiers::NONE,
+                phase: egui::TouchPhase::Move,
+            });
+            self.harness.run_steps(1);
+        }
+        self.harness.run_steps(20);
+    }
+
     fn hold(&mut self, seconds: f32) {
         for _ in 0..(seconds * FPS as f32).round() as usize {
             self.shot();
@@ -886,6 +1037,7 @@ fn heavy_transcript(turns: usize) -> Vec<ChatMessage> {
                     is_error: Some(false),
                     full_output_path: None,
                     output_truncated: false,
+                    metadata: None,
                 },
                 AssistantBlock::Answer(answer),
             ],

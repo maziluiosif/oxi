@@ -28,9 +28,11 @@ fn all_enabled() -> ToolEnv {
         bash_timeout_cap_secs: 300,
         mcp: None,
         undo_journal: None,
+        subagent: None,
     }
 }
 
+mod agent_tools;
 mod definitions_and_diff;
 mod file_tools;
 mod path_and_shell_safety;

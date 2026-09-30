@@ -6,6 +6,9 @@
 //! the top-level per-message orchestration: turning a `ChatMessage` (or run of them)
 //! into user bubbles / assistant activity summaries / markdown answers.
 
+#[cfg(test)]
+mod acp_tests;
+
 mod thinking;
 mod tool_format;
 mod tool_pill;

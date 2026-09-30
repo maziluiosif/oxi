@@ -21,6 +21,11 @@ pub enum LlmProviderKind {
     OpenCodeGo,
     /// LM Studio local server (OpenAI-compatible API, on this machine or a LAN host).
     LmStudio,
+    /// A plain llama.cpp `llama-server` (or any other OpenAI-compatible local server) the user
+    /// runs themselves. Same wire protocol as LM Studio; separate so the defaults (port 8080)
+    /// and labels match what people actually run.
+    #[serde(rename = "llamacpp")]
+    LlamaCpp,
     /// Ollama local server (OpenAI-compatible API at `/v1`, on this machine or a LAN host).
     Ollama,
     /// oxi-managed HuggingFace GGUF models run via a local llama.cpp `llama-server` process.
@@ -42,11 +47,12 @@ impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 13] = [
+    pub const ALL: [LlmProviderKind; 14] = [
         LlmProviderKind::LocalHf,
         LlmProviderKind::RemoteHf,
         LlmProviderKind::Ollama,
         LlmProviderKind::LmStudio,
+        LlmProviderKind::LlamaCpp,
         LlmProviderKind::ClaudeCodeAcp,
         LlmProviderKind::CursorAcp,
         LlmProviderKind::CodexAcp,
@@ -70,6 +76,7 @@ impl LlmProviderKind {
             LlmProviderKind::GptCodex => "gptcodex",
             LlmProviderKind::OpenCodeGo => "opencodego",
             LlmProviderKind::LmStudio => "lmstudio",
+            LlmProviderKind::LlamaCpp => "llamacpp",
             LlmProviderKind::Ollama => "ollama",
             LlmProviderKind::LocalHf => "localhf",
             LlmProviderKind::RemoteHf => "remotehf",
@@ -103,6 +110,8 @@ impl LlmProviderKind {
             // LM Studio's built-in server speaks plain HTTP on port 1234 by default.
             // (HTTPS would need a separate reverse proxy.)
             LlmProviderKind::LmStudio => "http://localhost:1234/v1",
+            // `llama-server` listens on 8080 by default and serves the OpenAI API under `/v1`.
+            LlmProviderKind::LlamaCpp => "http://localhost:8080/v1",
             // Ollama's OpenAI-compatible API lives under `/v1` on its default port 11434.
             LlmProviderKind::Ollama => "http://localhost:11434/v1",
             LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf => "http://127.0.0.1:18080/v1",
@@ -122,6 +131,7 @@ impl LlmProviderKind {
             LlmProviderKind::GptCodex => "GPT Codex",
             LlmProviderKind::OpenCodeGo => "OpenCode Go",
             LlmProviderKind::LmStudio => "LM Studio",
+            LlmProviderKind::LlamaCpp => "llama.cpp / local server",
             LlmProviderKind::Ollama => "Ollama",
             LlmProviderKind::LocalHf => "Local HF",
             LlmProviderKind::RemoteHf => "Remote HF",
@@ -141,7 +151,7 @@ impl LlmProviderKind {
             LlmProviderKind::OpenCodeGo => "kimi-k2.7-code",
             // LM Studio / Ollama model ids depend on what's loaded/pulled; fetch the real
             // list from the dropdown.
-            LlmProviderKind::LmStudio => "local-model",
+            LlmProviderKind::LmStudio | LlmProviderKind::LlamaCpp => "local-model",
             LlmProviderKind::Ollama => "qwen2.5-coder:7b",
             LlmProviderKind::LocalHf => "local-hf-model",
             LlmProviderKind::RemoteHf => "remote-hf-model",
@@ -158,6 +168,7 @@ impl LlmProviderKind {
     pub fn default_remote_runtime_port(&self) -> u16 {
         match self {
             LlmProviderKind::LmStudio => 1234,
+            LlmProviderKind::LlamaCpp => 8080,
             LlmProviderKind::LocalHf => 18080,
             // Different from Local HF so Remote HF can safely target this same machine over SSH.
             LlmProviderKind::RemoteHf => 18081,
@@ -174,6 +185,7 @@ impl LlmProviderKind {
         matches!(
             self,
             LlmProviderKind::LmStudio
+                | LlmProviderKind::LlamaCpp
                 | LlmProviderKind::Ollama
                 | LlmProviderKind::LocalHf
                 | LlmProviderKind::RemoteHf
@@ -307,6 +319,44 @@ impl ProviderConfig {
         } else {
             self.provider.default_base_url().to_string()
         }
+    }
+
+    /// Common mistakes in a user-typed base URL, as a one-line hint for the settings form.
+    /// `None` when the field is empty (the default is used) or looks fine. Only covers the
+    /// OpenAI Chat Completions providers, where oxi appends `/chat/completions` itself.
+    pub fn base_url_warning(&self) -> Option<&'static str> {
+        let url = self.base_url.trim().trim_end_matches('/');
+        if url.is_empty() {
+            return None;
+        }
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Some("The URL needs a scheme, e.g. http://localhost:8080/v1");
+        }
+        let openai_style = matches!(
+            self.provider,
+            LlmProviderKind::OpenAi
+                | LlmProviderKind::LmStudio
+                | LlmProviderKind::LlamaCpp
+                | LlmProviderKind::Ollama
+        );
+        if !openai_style {
+            return None;
+        }
+        if url.ends_with("/chat/completions") || url.ends_with("/completions") {
+            return Some(
+                "Drop the /chat/completions suffix: oxi appends it. Use the API prefix, e.g. …/v1",
+            );
+        }
+        let path = url
+            .split_once("://")
+            .map(|(_, rest)| rest.split_once('/').map(|(_, p)| p).unwrap_or(""))
+            .unwrap_or("");
+        if path.is_empty() {
+            return Some(
+                "No API prefix: most OpenAI-compatible servers expect …/v1 (oxi appends /chat/completions).",
+            );
+        }
+        None
     }
 
     /// Compact "Provider · model" label (unit-tested; handy for status/chrome surfaces).
@@ -583,6 +633,34 @@ mod tests {
         let mut c = ProviderConfig::new(LlmProviderKind::OpenAi);
         c.base_url = "http://localhost:8080/v1/".to_string();
         assert_eq!(c.effective_base_url(), "http://localhost:8080/v1");
+    }
+
+    #[test]
+    fn base_url_warning_flags_common_mistakes() {
+        let warn = |kind, url: &str| {
+            let mut c = ProviderConfig::new(kind);
+            c.base_url = url.to_string();
+            c.base_url_warning()
+        };
+        assert!(warn(LlmProviderKind::LlamaCpp, "").is_none());
+        assert!(warn(LlmProviderKind::LlamaCpp, "http://localhost:8080/v1").is_none());
+        assert!(warn(LlmProviderKind::LlamaCpp, "http://localhost:8080/v1/").is_none());
+        assert!(warn(LlmProviderKind::LlamaCpp, "http://localhost:8080").is_some());
+        assert!(warn(LlmProviderKind::LlamaCpp, "localhost:8080/v1").is_some());
+        assert!(warn(LlmProviderKind::OpenAi, "http://h/v1/chat/completions").is_some());
+        // Azure / Anthropic endpoints have their own URL shapes; don't second-guess them.
+        assert!(warn(LlmProviderKind::CustomAnthropic, "http://localhost:8000").is_none());
+    }
+
+    #[test]
+    fn llamacpp_defaults_match_llama_server() {
+        let c = ProviderConfig::new(LlmProviderKind::LlamaCpp);
+        assert_eq!(c.effective_base_url(), "http://localhost:8080/v1");
+        assert_eq!(
+            LlmProviderKind::LlamaCpp.default_remote_runtime_port(),
+            8080
+        );
+        assert!(LlmProviderKind::LlamaCpp.allows_self_signed_tls());
     }
 
     #[test]

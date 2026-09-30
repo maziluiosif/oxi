@@ -92,6 +92,8 @@ pub enum AgentEvent {
     TextDelta(String),
     /// Extended reasoning / thinking content from models that support it.
     ThinkingDelta(String),
+    /// Complete merged tool snapshot, including live diffs and presentation metadata.
+    ToolUpdate(Box<crate::model::ToolUpdate>),
     ToolStart {
         name: String,
         tool_call_id: String,
@@ -123,6 +125,8 @@ pub enum AgentEvent {
     AssistantMessageDone,
     /// Token usage for one provider round; the UI accumulates per turn/session.
     Usage(TokenUsage),
+    /// Usage from a delegated investigation; it must not calibrate the main agent's context.
+    SubagentUsage(TokenUsage),
     /// The only terminal event for a run.
     Finished(AgentOutcome),
 }

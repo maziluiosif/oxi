@@ -25,18 +25,47 @@ impl WindowsTerminal {
     }
 }
 
-/// One MCP server entry (stdio transport).
+/// How oxi reaches an MCP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    /// Spawn `command` and speak newline-delimited JSON-RPC over its stdin/stdout.
+    #[default]
+    Stdio,
+    /// POST JSON-RPC to `url` (MCP "Streamable HTTP"; responses may be JSON or SSE).
+    Http,
+}
+
+/// One MCP server entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct McpServerConfig {
     /// Short id used in tool names (e.g. `filesystem`).
     pub name: String,
-    /// Executable to spawn (e.g. `npx`).
+    #[serde(default)]
+    pub transport: McpTransport,
+    /// Executable to spawn (e.g. `npx`) for [`McpTransport::Stdio`].
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Endpoint for [`McpTransport::Http`], e.g. `https://example.com/mcp`.
+    #[serde(default)]
+    pub url: String,
     #[serde(default = "default_mcp_enabled")]
     pub enabled: bool,
+    /// Per-call timeout in seconds for `tools/call`. `None` = [`DEFAULT_MCP_TIMEOUT_SECS`].
+    #[serde(default)]
+    pub timeout_secs: Option<u32>,
+    /// Bearer token sent to HTTP servers. Lives in the OS keychain, never in `settings.json`.
+    #[serde(default, skip_serializing)]
+    pub bearer_token: String,
+    /// Extra environment for stdio servers, one `KEY=VALUE` per line. Often holds API keys,
+    /// so it lives in the OS keychain too.
+    #[serde(default, skip_serializing)]
+    pub env: String,
 }
+
+pub const DEFAULT_MCP_TIMEOUT_SECS: u32 = 120;
 
 fn default_mcp_enabled() -> bool {
     true
@@ -46,10 +75,49 @@ impl Default for McpServerConfig {
     fn default() -> Self {
         Self {
             name: String::new(),
+            transport: McpTransport::Stdio,
             command: String::new(),
             args: Vec::new(),
+            url: String::new(),
             enabled: true,
+            timeout_secs: None,
+            bearer_token: String::new(),
+            env: String::new(),
         }
+    }
+}
+
+impl McpServerConfig {
+    /// Enabled and filled in enough to attempt a connection.
+    pub fn is_usable(&self) -> bool {
+        self.enabled
+            && !self.name.trim().is_empty()
+            && match self.transport {
+                McpTransport::Stdio => !self.command.trim().is_empty(),
+                McpTransport::Http => !self.url.trim().is_empty(),
+            }
+    }
+
+    pub fn call_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.timeout_secs
+                .filter(|s| *s > 0)
+                .unwrap_or(DEFAULT_MCP_TIMEOUT_SECS) as u64,
+        )
+    }
+
+    /// `KEY=VALUE` lines from [`Self::env`]; blank lines and `#` comments are skipped.
+    pub fn env_pairs(&self) -> Vec<(String, String)> {
+        self.env
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .filter_map(|l| {
+                let (k, v) = l.split_once('=')?;
+                let k = k.trim();
+                (!k.is_empty()).then(|| (k.to_string(), v.trim().to_string()))
+            })
+            .collect()
     }
 }
 

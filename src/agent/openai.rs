@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
+use super::activity_log::{self, ActivityKind, StreamCapture};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
@@ -139,6 +140,8 @@ async fn run_chat_loop_at(
             headers.insert(name, val);
         }
         let res = send_with_retry(client.post(url).headers(headers).json(&body), cancel).await?;
+        let mut capture = StreamCapture::new();
+        let capture_title = format!("HTTP {} · {} · round {round}", res.status(), url);
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
         let mut assistant_text = String::new();
@@ -165,6 +168,7 @@ async fn run_chat_loop_at(
                 }
             };
             let s = String::from_utf8_lossy(&chunk);
+            capture.push(&s);
             buffer.push_str(&s);
             while let Some(pos) = buffer.find('\n') {
                 let line = buffer[..pos].trim_end_matches('\r').to_string();
@@ -192,6 +196,10 @@ async fn run_chat_loop_at(
                     tx,
                 );
             }
+        }
+        capture.finish(capture_title);
+        if let Some(err) = &stream_error {
+            activity_log::log(ActivityKind::Error, "Response stream failed", err);
         }
         // The stream died (dropped connection or in-band error event) before the round
         // completed. No tool has been executed yet, so re-sending the round is safe.
@@ -697,6 +705,7 @@ mod integration_tests {
             bash_timeout_cap_secs: 300,
             mcp: None,
             undo_journal: None,
+            subagent: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -791,6 +800,7 @@ mod integration_tests {
             bash_timeout_cap_secs: 300,
             mcp: None,
             undo_journal: None,
+            subagent: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -830,5 +840,65 @@ mod integration_tests {
             .and_then(Value::as_str)
             .unwrap_or_default();
         assert!(content.contains("denied"), "unexpected content: {content}");
+    }
+
+    #[tokio::test]
+    async fn full_loop_plan_mode_refuses_writes_even_without_approval() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_matcher("/chat/completions"))
+            .respond_with(RoundResponder {
+                call_count: AtomicUsize::new(0),
+            })
+            .mount(&server)
+            .await;
+
+        let cwd = temp_workspace("full-loop-plan-mode");
+        let client = reqwest::Client::new();
+        let (tx, _rx) = mpsc::channel::<AgentEvent>();
+        let (_approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        // Approvals are off: only plan mode stands between the model and the write.
+        let mut gate =
+            ApprovalGate::new(ApprovalPolicy::disabled(), approval_rx).with_plan_mode(true);
+        let env = ToolEnv {
+            enabled: vec![true; ALL_TOOL_NAMES.len()],
+            web_search_url: String::new(),
+            web_search_backend: WebSearchBackend::default(),
+            bash_timeout_cap_secs: 300,
+            mcp: None,
+            undo_journal: None,
+            subagent: None,
+        };
+        let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
+        let tools = vec![json!({
+            "type": "function",
+            "function": {"name": "write", "description": "write a file",
+                          "parameters": {"type": "object", "properties": {}}}
+        })];
+        let base_url = server.uri();
+        let mut ctx = LoopCtx {
+            client: &client,
+            base_url: &base_url,
+            model: "test-model",
+            cwd: &cwd,
+            env: &env,
+            tx: &tx,
+            cancel: &cancel,
+            gate: &mut gate,
+            max_rounds: 10,
+            effort_override: None,
+            context_char_budget: usize::MAX,
+            tools_chars: 0,
+        };
+        let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
+        assert!(result.is_ok(), "agent loop failed: {result:?}");
+        assert!(!cwd.join("hello.txt").exists());
+        let content = messages
+            .iter()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("tool"))
+            .and_then(|m| m.get("content").and_then(Value::as_str))
+            .unwrap_or_default();
+        assert_eq!(content, crate::agent::approval::PLAN_MODE_REFUSAL);
     }
 }

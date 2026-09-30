@@ -9,6 +9,7 @@ use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 
+use super::activity_log::{self, ActivityKind, StreamCapture};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
@@ -520,6 +521,8 @@ pub async fn run_codex_responses_loop(
                 // Re-shape "HTTP {status}: {body}" errors with the Codex-specific hints.
                 Err(e) => return Err(reformat_codex_error(e)),
             };
+        let mut capture = StreamCapture::new();
+        let capture_title = format!("HTTP {} · {} · round {round}", res.status(), url);
         let mut stream = res.bytes_stream();
         let mut buffer = String::new();
         let mut assistant_text = String::new();
@@ -545,7 +548,9 @@ pub async fn run_codex_responses_loop(
                     break;
                 }
             };
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            let s = String::from_utf8_lossy(&chunk);
+            capture.push(&s);
+            buffer.push_str(&s);
             drain_codex_sse_blocks(
                 &mut buffer,
                 &mut assistant_text,
@@ -568,6 +573,10 @@ pub async fn run_codex_responses_loop(
                 &mut round_usage,
                 tx,
             );
+        }
+        capture.finish(capture_title);
+        if let Some(err) = &stream_error {
+            activity_log::log(ActivityKind::Error, "Response stream failed", err);
         }
         // The stream died (dropped connection or in-band error event) before the round
         // completed. No tool has been executed yet, so re-sending the round is safe.

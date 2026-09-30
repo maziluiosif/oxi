@@ -11,6 +11,7 @@ pub(super) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
             LlmProviderKind::RemoteHf,
             LlmProviderKind::Ollama,
             LlmProviderKind::LmStudio,
+            LlmProviderKind::LlamaCpp,
         ],
     ),
     (
@@ -46,6 +47,9 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
             "Talk to a local or LAN Ollama server (OpenAI-compatible /v1 API)."
         }
         LlmProviderKind::LmStudio => "Talk to a local or LAN LM Studio server (OpenAI-compatible).",
+        LlmProviderKind::LlamaCpp => {
+            "Talk to a llama.cpp llama-server (or vLLM, TabbyAPI, …) that you run yourself."
+        }
         LlmProviderKind::OpenAi => "Any OpenAI-compatible Chat Completions endpoint.",
         LlmProviderKind::OpenRouter => "OpenRouter multi-model router.",
         LlmProviderKind::AzureOpenAi => "Azure OpenAI deployment endpoint.",

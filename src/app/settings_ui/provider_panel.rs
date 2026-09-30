@@ -243,6 +243,7 @@ impl OxiApp {
                     | LlmProviderKind::CustomAnthropic
                     | LlmProviderKind::AzureOpenAi
                     | LlmProviderKind::LmStudio
+                    | LlmProviderKind::LlamaCpp
                     | LlmProviderKind::Ollama
                     | LlmProviderKind::LocalHf
                     | LlmProviderKind::RemoteHf
@@ -253,6 +254,10 @@ impl OxiApp {
                     &mut self.conv.settings.provider_mut(kind).base_url,
                     kind.default_base_url(),
                 );
+                if let Some(warning) = self.conv.settings.provider(kind).base_url_warning() {
+                    ui.add_space(4.0);
+                    alert_banner(ui, warning, false);
+                }
             } else {
                 field_label_first(ui, "Endpoint");
                 ui.label(
@@ -276,6 +281,7 @@ impl OxiApp {
                 LlmProviderKind::GptCodex => "OpenAI API key for Codex fallback",
                 LlmProviderKind::OpenCodeGo => "OpenCode Go API key",
                 LlmProviderKind::LmStudio => "Optional (LM Studio ignores it)",
+                LlmProviderKind::LlamaCpp => "Optional: the --api-key given to llama-server",
                 LlmProviderKind::Ollama => "Optional (Ollama ignores it by default)",
                 LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf => {
                     "Optional (llama-server usually ignores it)"
@@ -318,7 +324,10 @@ impl OxiApp {
         });
 
         // ── Compute target ─────────────────────────────────────────────────
-        if kind == LlmProviderKind::LmStudio || kind == LlmProviderKind::Ollama {
+        if matches!(
+            kind,
+            LlmProviderKind::LmStudio | LlmProviderKind::LlamaCpp | LlmProviderKind::Ollama
+        ) {
             self.render_compute_target_section(ui, kind);
         }
     }

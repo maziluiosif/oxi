@@ -142,6 +142,7 @@ impl AppSettings {
             | LlmProviderKind::CustomAnthropic
             | LlmProviderKind::OpenCodeGo
             | LlmProviderKind::LmStudio
+            | LlmProviderKind::LlamaCpp
             | LlmProviderKind::Ollama
             | LlmProviderKind::LocalHf
             | LlmProviderKind::RemoteHf

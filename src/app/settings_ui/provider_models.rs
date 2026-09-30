@@ -239,6 +239,7 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         LlmProviderKind::OpenCodeGo | LlmProviderKind::LmStudio | LlmProviderKind::Ollama => {
             Ok(String::new())
         }
+        LlmProviderKind::LlamaCpp => Ok(std::env::var("LLAMA_API_KEY").unwrap_or_default()),
         LlmProviderKind::LocalHf
         | LlmProviderKind::RemoteHf
         | LlmProviderKind::ClaudeCodeAcp

@@ -1,5 +1,23 @@
 use super::*;
 
+/// Shell snippets for the platform shell the `bash` tool runs (`/bin/sh`, or `cmd` on Windows).
+#[cfg(unix)]
+const PWD_CMD: &str = "pwd";
+#[cfg(windows)]
+const PWD_CMD: &str = "cd";
+
+fn sleep_cmd(secs: u32) -> String {
+    if cfg!(windows) {
+        let python = crate::agent::test_python_executable();
+        format!(
+            "\"{}\" -c \"import time; time.sleep({secs})\"",
+            python.display()
+        )
+    } else {
+        format!("sleep {secs}")
+    }
+}
+
 // ─── tool_bash ──────────────────────────────────────────────────────
 
 #[test]
@@ -16,13 +34,34 @@ fn tool_bash_echo() {
     assert!(res.output.contains("exit code: 0"));
 }
 
+#[cfg(windows)]
+#[test]
+fn tool_bash_quoted_executable_and_arguments() {
+    let cwd = temp_workspace("bash-quoted-command");
+    let dir = cwd.join("with spaces");
+    fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("echo.cmd");
+    fs::write(&script, "@echo off\r\necho %~1\r\n").unwrap();
+    let res = run_tool(
+        &cwd,
+        "bash",
+        &json!({"command": format!("\"{}\" \"hello world\"", script.display())}),
+        &all_enabled(),
+    );
+    assert!(!res.is_error);
+    assert!(res.output.contains("exit code: 0"), "{}", res.output);
+    assert!(res.output.contains("hello world"), "{}", res.output);
+}
+
 #[test]
 fn tool_bash_cwd_respected() {
     let cwd = temp_workspace("bash-cwd");
-    let res = run_tool(&cwd, "bash", &json!({"command": "pwd"}), &all_enabled());
+    let res = run_tool(&cwd, "bash", &json!({"command": PWD_CMD}), &all_enabled());
     assert!(!res.is_error);
-    let canonical = cwd.canonicalize().unwrap();
-    assert!(res.output.contains(canonical.to_str().unwrap()));
+    // Compare the unique leaf only: Windows may print an 8.3 short or `\\?\` form of the
+    // same directory, and macOS resolves /var to /private/var.
+    let leaf = cwd.file_name().unwrap().to_str().unwrap();
+    assert!(res.output.contains(leaf), "{}", res.output);
 }
 
 #[test]
@@ -57,11 +96,11 @@ fn tool_bash_timeout() {
     let res = run_tool(
         &cwd,
         "bash",
-        &json!({"command": "sleep 60", "timeout": 0.3}),
+        &json!({"command": sleep_cmd(60), "timeout": 0.3}),
         &all_enabled(),
     );
     assert!(!res.is_error);
-    assert!(res.output.contains("timeout"));
+    assert!(res.output.contains("timeout"), "{}", res.output);
 }
 
 #[test]
@@ -74,11 +113,11 @@ fn tool_bash_timeout_cap_clamps_requested_timeout() {
     let res = run_tool(
         &cwd,
         "bash",
-        &json!({"command": "sleep 30", "timeout": 30}),
+        &json!({"command": sleep_cmd(30), "timeout": 30}),
         &env,
     );
     assert!(!res.is_error);
-    assert!(res.output.contains("timeout"));
+    assert!(res.output.contains("timeout"), "{}", res.output);
     assert!(start.elapsed() < std::time::Duration::from_secs(3));
 }
 
@@ -89,9 +128,9 @@ fn tool_bash_default_timeout_respects_low_cap() {
     env.bash_timeout_cap_secs = 1;
     let start = std::time::Instant::now();
     // No explicit timeout: default 15s would exceed the 1s cap, so it clamps to 1s.
-    let res = run_tool(&cwd, "bash", &json!({"command": "sleep 30"}), &env);
+    let res = run_tool(&cwd, "bash", &json!({"command": sleep_cmd(30)}), &env);
     assert!(!res.is_error);
-    assert!(res.output.contains("timeout"));
+    assert!(res.output.contains("timeout"), "{}", res.output);
     assert!(start.elapsed() < std::time::Duration::from_secs(3));
 }
 

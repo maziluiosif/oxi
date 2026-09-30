@@ -86,6 +86,9 @@ fn tool_action_label(name: &str) -> String {
         "git_diff" => "Git diff",
         "web_search" => "Searched the web",
         "web_fetch" => "Fetched",
+        "todo_write" => "Updated tasks",
+        "diagnostics" => "Checked",
+        "task" => "Sub-agent",
         _ => return other_tool_label(name),
     }
     .to_string()
@@ -118,6 +121,9 @@ fn tool_running_label(name: &str) -> String {
         "git_diff" => "Git diff",
         "web_search" => "Searching the web",
         "web_fetch" => "Fetching",
+        "todo_write" => "Updating tasks",
+        "diagnostics" => "Checking",
+        "task" => "Sub-agent working",
         _ => return other_tool_label(name),
     }
     .to_string()
@@ -173,6 +179,65 @@ pub(super) fn tool_summary(
     }
 }
 
+/// ACP titles and locations complement the same summaries used by native tools.
+pub(super) fn tool_display_summary(
+    block: &crate::model::AssistantBlock,
+    running: bool,
+) -> ToolSummary {
+    let crate::model::AssistantBlock::Tool {
+        name,
+        args_summary,
+        output,
+        diff,
+        is_error,
+        metadata,
+        ..
+    } = block
+    else {
+        return ToolSummary {
+            action: String::new(),
+            detail: String::new(),
+        };
+    };
+    let mut summary = tool_summary(
+        name,
+        args_summary.as_ref(),
+        output,
+        diff.as_ref(),
+        *is_error,
+        running,
+    );
+    if let Some(meta) = metadata {
+        if !meta.title.is_empty() {
+            summary.action = meta.title.clone();
+        }
+        let status = match meta.status {
+            crate::model::ToolStatus::Pending => "Waiting",
+            crate::model::ToolStatus::Failed => "Failed",
+            crate::model::ToolStatus::Interrupted => "Interrupted",
+            _ => "",
+        };
+        if !status.is_empty() {
+            summary.action = format!("{} · {status}", summary.action);
+        }
+        if tool_target(name, args_summary.as_ref()).is_none() && !meta.locations.is_empty() {
+            summary.detail = meta
+                .locations
+                .iter()
+                .map(|loc| {
+                    let path = short_path(&loc.path, 2);
+                    match loc.line {
+                        Some(line) => format!("{path}:{line}"),
+                        None => path,
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+        }
+    }
+    summary
+}
+
 /// `"lines 12–40"` from the `read` tool's `Lines 12-40` header line.
 fn read_line_range(output: &str) -> Option<String> {
     let header = output
@@ -222,6 +287,19 @@ fn tool_target(name: &str, args_summary: Option<&String>) -> Option<String> {
         }
         "web_search" => command_preview(str_arg("query")?, 60),
         "web_fetch" => short_url(str_arg("url")?, 56),
+        "task" => command_preview(str_arg("description").or_else(|| str_arg("prompt"))?, 60),
+        "todo_write" => {
+            let todos = crate::agent::tools::parse_todos(&v)?;
+            let done = todos
+                .iter()
+                .filter(|t| t.status == crate::agent::tools::TodoStatus::Completed)
+                .count();
+            format!("{done}/{} done", todos.len())
+        }
+        "diagnostics" => str_arg("checker")
+            .or_else(|| str_arg("path"))
+            .unwrap_or("project")
+            .to_string(),
         _ => return tool_short_arg(name, args_summary),
     };
     Some(target)
@@ -239,7 +317,10 @@ pub(super) fn tool_icon(name: &str) -> &'static str {
         "ls" => "\u{f0645}",    // nf-md-file_tree
         "web_search" => crate::theme::ICON_WEB_SEARCH,
         "web_fetch" => crate::theme::ICON_GLOBE,
-        _ => "\u{f0214}", // nf-md-file
+        "todo_write" => crate::theme::ICON_TASKS,
+        "diagnostics" => "\u{f04d9}", // nf-md-stethoscope
+        "task" => "\u{f167a}",        // nf-md-robot_outline
+        _ => "\u{f0214}",             // nf-md-file
     }
 }
 

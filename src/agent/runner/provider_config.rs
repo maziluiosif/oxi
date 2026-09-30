@@ -63,7 +63,13 @@ pub(crate) fn configured_lmstudio_key(cfg: &ProviderConfig) -> String {
     if !key.is_empty() {
         return key.to_string();
     }
-    std::env::var("LMSTUDIO_API_KEY").unwrap_or_default()
+    // `llama-server --api-key` users usually export the same `LLAMA_API_KEY` it reads.
+    let env_name = if cfg.provider == crate::settings::LlmProviderKind::LlamaCpp {
+        "LLAMA_API_KEY"
+    } else {
+        "LMSTUDIO_API_KEY"
+    };
+    std::env::var(env_name).unwrap_or_default()
 }
 
 /// Ollama's local server has no auth by default, so an API key is optional. Use the
