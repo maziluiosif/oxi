@@ -96,7 +96,8 @@ impl eframe::App for OxiApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        super::frame_stats::record(ui.ctx(), frame.info().cpu_usage);
         crate::theme::set_chat_column_max_width(ui.ctx(), self.conv.settings.chat_column_max_width);
         ui.ctx().layer_painter(LayerId::background()).rect_filled(
             ui.ctx().content_rect(),

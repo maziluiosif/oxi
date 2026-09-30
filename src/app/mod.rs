@@ -20,6 +20,7 @@ mod conversation;
 mod demo_recording;
 mod eframe_app;
 mod file_explorer;
+mod frame_stats;
 mod git_panel;
 mod input_history;
 mod mentions;

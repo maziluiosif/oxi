@@ -13,10 +13,11 @@ use super::editor_paint::{
     byte_range_rects, caret_logical_line, editor_selection_rects, paint_caret, paint_indent_guides,
     paint_selected_whitespace, paint_selection, selected_logical_lines,
 };
+use super::editor_text::EditorText;
 use super::support::{
     apply_definition_underline, apply_search_highlights, find_match_ranges, language_for_path,
 };
-use super::{EditorLayoutCache, minimap, syntax_window};
+use super::{EditorLayoutCache, line_layout, minimap, syntax_window};
 
 pub(super) type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
     Vec<(usize, f32)>,
@@ -132,11 +133,22 @@ impl OxiApp {
         // project those disk-based markers onto the in-memory buffer so the gutter follows
         // inserted/deleted newlines without doing Git work on every keystroke.
         let git_line_changes = if self.conv.editor.documents[index].is_dirty() {
-            live_git_line_changes(
-                &disk_git_line_changes,
-                &self.conv.editor.documents[index].saved_content,
-                &self.conv.editor.documents[index].content,
-            )
+            // Splits both texts into lines: once per edit (the cache is reset with the text),
+            // not on every frame.
+            let document = &mut self.conv.editor.documents[index];
+            match &document.layout_cache.live_git_lines {
+                Some((disk, live)) if *disk == disk_git_line_changes => live.clone(),
+                _ => {
+                    let live = live_git_line_changes(
+                        &disk_git_line_changes,
+                        &document.saved_content,
+                        &document.content,
+                    );
+                    document.layout_cache.live_git_lines =
+                        Some((disk_git_line_changes, live.clone()));
+                    live
+                }
+            }
         } else {
             disk_git_line_changes
         };
@@ -209,27 +221,27 @@ impl OxiApp {
                                         && let Some(galley) = &layout_cache.geometry
                                         && (allow_layout_cache
                                             || galley.job.text.as_str() == text.as_str())
+                                        && layout_cache.fonts_generation
+                                            == crate::theme::fonts_generation()
                                     {
-                                        if layout_cache.keep_warm {
-                                            // egui keeps a laid-out line only while some frame
-                                            // uses it; serving every frame from this cache let
-                                            // them all expire, and the next keystroke then laid
-                                            // out the whole file from scratch (~300 ms at 20k
-                                            // lines). While the editor has focus, touch them.
-                                            let _ = ui.fonts_mut(|fonts| {
-                                                fonts.layout_job(geometry_job(text.as_str()))
-                                            });
-                                        }
                                         return Arc::clone(galley);
                                     }
 
+                                    let pixels_per_point = ui.ctx().pixels_per_point();
                                     let galley = ui.fonts_mut(|fonts| {
-                                        fonts.layout_job(geometry_job(text.as_str()))
+                                        line_layout::layout(
+                                            &mut layout_cache.lines,
+                                            geometry_job(text.as_str()),
+                                            pixels_per_point,
+                                            |job| fonts.layout_job(job),
+                                        )
                                     });
                                     if allow_layout_cache {
                                         layout_cache.revision = revision;
                                         layout_cache.wrap_width_bits = wrap_width_bits;
                                         layout_cache.pixels_per_point_bits = pixels_per_point_bits;
+                                        layout_cache.fonts_generation =
+                                            crate::theme::fonts_generation();
                                         layout_cache.geometry = Some(Arc::clone(&galley));
                                         // The cached syntax galley was laid out for the previous
                                         // wrap width / dpi. The keys now describe this new
@@ -254,7 +266,7 @@ impl OxiApp {
                                     ui.visuals_mut().text_cursor.stroke.color =
                                         egui::Color32::TRANSPARENT;
                                     ui.visuals_mut().text_cursor.blink = false;
-                                    TextEdit::multiline(&mut document.content)
+                                    TextEdit::multiline(&mut EditorText(&mut document.content))
                                         .id_salt(("workspace_text_editor", index))
                                         .font(FontId::monospace(FS_SMALL))
                                         .code_editor()
@@ -276,11 +288,11 @@ impl OxiApp {
                                 document.dirty = document.content != document.saved_content;
                                 document.layout_cache = EditorLayoutCache {
                                     edited_at: Some(std::time::Instant::now()),
+                                    lines: document.layout_cache.lines.take(),
                                     ..Default::default()
                                 };
                                 previous_minimap = document.minimap_cache.take();
                             }
-                            document.layout_cache.keep_warm = output.response.has_focus();
                             if clear_selection_requested {
                                 if let Some(range) = output.cursor_range
                                     && !range.is_empty()

@@ -426,17 +426,12 @@ fn input_edit(old: &str, new: &str) -> InputEdit {
     // Common prefix and suffix by bytes (memcmp speed on large buffers), then pulled back to
     // char boundaries so the edit never splits a UTF-8 sequence.
     let (a, b) = (old.as_bytes(), new.as_bytes());
-    let mut start = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let mut start = crate::text_diff::common_prefix_len(a, b);
     while start > 0 && (!old.is_char_boundary(start) || !new.is_char_boundary(start)) {
         start -= 1;
     }
     let max_suffix = (a.len() - start).min(b.len() - start);
-    let mut suffix = a[a.len() - max_suffix..]
-        .iter()
-        .rev()
-        .zip(b[b.len() - max_suffix..].iter().rev())
-        .take_while(|(x, y)| x == y)
-        .count();
+    let mut suffix = crate::text_diff::common_suffix_len(a, b, max_suffix);
     while suffix > 0
         && (!old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix))
     {
@@ -444,13 +439,26 @@ fn input_edit(old: &str, new: &str) -> InputEdit {
     }
     let old_end = old.len() - suffix;
     let new_end = new.len() - suffix;
+    let start_position = point_at(old, start);
     InputEdit {
         start_byte: start,
         old_end_byte: old_end,
         new_end_byte: new_end,
-        start_position: point_at(old, start),
-        old_end_position: point_at(old, old_end),
-        new_end_position: point_at(new, new_end),
+        start_position,
+        old_end_position: advance_point(start_position, &a[start..old_end]),
+        new_end_position: advance_point(start_position, &b[start..new_end]),
+    }
+}
+
+/// The position after `text`, starting at `point`: only the edited span is scanned, not the
+/// whole document before it again.
+fn advance_point(point: Point, text: &[u8]) -> Point {
+    match memchr::memrchr(b'\n', text) {
+        Some(last) => Point::new(
+            point.row + memchr::memchr_iter(b'\n', text).count(),
+            text.len() - last - 1,
+        ),
+        None => Point::new(point.row, point.column + text.len()),
     }
 }
 
@@ -580,6 +588,23 @@ mod tests {
                 color_at(&part, byte),
                 color_at(&full, line_two.start + byte)
             );
+        }
+    }
+
+    #[test]
+    fn input_edit_end_positions_match_a_full_scan() {
+        let old = "fn a() {}\nfn b() {\n    x\n}\n";
+        for new in [
+            "fn a() {}\nfn b() {\n    xy\n}\n",
+            "fn a() {}\nfn b() {\n\n\n    x\n}\n",
+            "fn a() {}\n}\n",
+            "fn a() {}\nfn b() {\n    x\n}\n// tail\n",
+            "",
+        ] {
+            let edit = input_edit(old, new);
+            assert_eq!(edit.start_position, point_at(old, edit.start_byte));
+            assert_eq!(edit.old_end_position, point_at(old, edit.old_end_byte));
+            assert_eq!(edit.new_end_position, point_at(new, edit.new_end_byte));
         }
     }
 
