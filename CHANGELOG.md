@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-30
+
+### Added
+- Plan mode with task tracking and delegated agent tools
+- Activity log for raw agent traffic recording (opt-in, off by default)
+- llama.cpp / local server provider profile with base URL validation
+- MCP client rewrite: spec-compliant stdio with newline-delimited JSON-RPC, Streamable HTTP transport, paginated tools/list, resources as tools, per-call timeouts, and app-wide connection manager
+- MCP settings: transport picker, URL, bearer token, environment variables, call timeout, live status, and Connect/test button
+- Windows process tree termination for shell tool timeouts
+
+### Changed
+- Provider dispatch refactored into shared agent::dispatch module (eliminates ~300 lines of duplication)
+- MCP servers now persist across runs and reconnect automatically instead of respawning per run
+- Tool result formatting enriched with images, resource links, and structured content
+
+### Fixed
+- Diagnostics: normalize colored checker output by stripping terminal control sequences
+- Windows: preserve quoted shell commands and resolve test interpreters to absolute paths
+- Windows: fix subprocess tests by provisioning Python for MCP integration fixtures
+
+
 ## [1.1.1] - 2026-09-29
 
 ### Fixed
@@ -741,7 +762,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/maziluiosif/oxi/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/maziluiosif/oxi/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/maziluiosif/oxi/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/maziluiosif/oxi/compare/v0.26.1...v1.0.0
