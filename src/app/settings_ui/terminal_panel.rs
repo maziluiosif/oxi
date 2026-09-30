@@ -44,7 +44,8 @@ impl OxiApp {
                             if response.clicked() && terminal != current {
                                 self.conv.settings.windows_terminal = terminal;
                                 // Ensure the next opened/restarted panel uses the selected shell.
-                                self.terminal = None;
+                                self.terminals.clear();
+                                self.active_terminal = 0;
                             }
                             if terminal == crate::settings::WindowsTerminal::Wsl && !available {
                                 response

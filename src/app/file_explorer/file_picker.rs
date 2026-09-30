@@ -5,10 +5,12 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, RichText, ScrollArea, TextEdit};
 use walkdir::WalkDir;
 
-use crate::theme::c_text_muted;
+use crate::theme::*;
 
 use super::super::OxiApp;
-use super::support::{fuzzy_path_score, load_gitignore_patterns, should_ignore};
+use super::support::{
+    fuzzy_match_positions, fuzzy_path_score, load_gitignore_patterns, should_ignore,
+};
 
 impl OxiApp {
     pub(crate) fn open_file_picker(&mut self) {
@@ -185,34 +187,30 @@ impl OxiApp {
         );
         let row_height = interact_h.max(text_h + 2.0 * pad_y) + gap_y;
         let query_height = interact_h.max(text_h + 8.0);
-        let title_height =
-            ctx.fonts_mut(|fonts| fonts.row_height(&egui::TextStyle::Heading.resolve(&style)));
         // Whatever the list still overflowed by last frame (window chrome we can't predict).
         let overflow_id = egui::Id::new("workspace_file_picker_overflow");
         let overflow = ctx.data(|d| d.get_temp::<f32>(overflow_id)).unwrap_or(0.0);
-        let picker_height = (title_height
-            + 24.0
-            + query_height
-            + 8.0
-            + matches.len() as f32 * row_height
-            + overflow)
-            .clamp(120.0, max_picker_height);
+        let picker_height =
+            (16.0 + query_height + 8.0 + matches.len() as f32 * row_height + overflow)
+                .clamp(120.0, max_picker_height);
         let picker_size = egui::vec2(
             560.0_f32.min((available.x - 32.0).max(280.0)),
             picker_height,
         );
-        egui::Window::new("Open file")
+        // A command-palette style popup: no title bar (the hint says what it does); Escape or a
+        // click outside closes it.
+        let window = egui::Window::new("Open file")
             .id(egui::Id::new("workspace_file_picker"))
+            .title_bar(false)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 72.0))
             .fixed_size(picker_size)
-            .open(&mut open)
             .show(ctx, |ui| {
                 let response = ui.add(
                     TextEdit::singleline(&mut self.conv.editor.file_picker_query)
                         .id_salt("workspace_file_picker_query")
-                        .hint_text("Type a file name or path…")
+                        .hint_text("Go to file…  (type a name or path)")
                         .desired_width(f32::INFINITY),
                 );
                 if !response.has_focus() {
@@ -230,14 +228,12 @@ impl OxiApp {
                         }
                         for (match_index, path) in matches.iter().enumerate() {
                             let relative = path.strip_prefix(&root).unwrap_or(path);
-                            let response = ui.add_sized(
-                                [ui.available_width(), ui.spacing().interact_size.y],
-                                egui::Button::selectable(
-                                    match_index == self.conv.editor.file_picker_selected,
-                                    relative.to_string_lossy(),
-                                )
-                                // Keep the label left-aligned while the selectable area fills the row.
-                                .right_text(()),
+                            let display = relative.to_string_lossy().replace('\\', "/");
+                            let response = file_picker_row(
+                                ui,
+                                &display,
+                                &query,
+                                match_index == self.conv.editor.file_picker_selected,
                             );
                             // Scrolling a hover-selected row every frame moves a different row under
                             // the stationary pointer, which changes selection again and causes a
@@ -266,6 +262,18 @@ impl OxiApp {
                     d.insert_temp(overflow_id, (total + missing).clamp(0.0, 200.0));
                 });
             });
+        if let Some(window) = window {
+            let rect = window.response.rect;
+            let clicked_outside = ctx.input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|pos| !rect.contains(pos))
+            });
+            if clicked_outside {
+                open = false;
+            }
+        }
         if let Some(path) = selected {
             // Enter/click promotes the temporary preview to a regular editor tab.
             self.preview_file_picker_path(&path);
@@ -291,4 +299,71 @@ impl OxiApp {
             }
         }
     }
+}
+
+/// One result row: file name first in the normal text color, its directory after it in a faint
+/// color, matched characters in the accent color. Only the keyboard/hover selection is filled —
+/// there is no separate hover fill, so exactly one row is ever highlighted.
+fn file_picker_row(
+    ui: &mut egui::Ui,
+    display: &str,
+    query: &str,
+    selected: bool,
+) -> egui::Response {
+    use egui::text::{LayoutJob, TextFormat};
+    let height = ui.spacing().interact_size.y + 4.0;
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    if selected {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(RADIUS_ROW), c_row_active());
+    }
+    let matched = fuzzy_match_positions(display, query);
+    let name_start = display.rfind('/').map_or(0, |i| i + 1);
+    let font = egui::FontId::proportional(FS_SMALL);
+    let mut job = LayoutJob::default();
+    let push = |job: &mut LayoutJob, range: std::ops::Range<usize>, base: egui::Color32| {
+        for (offset, ch) in display[range.clone()].char_indices() {
+            let at = range.start + offset;
+            let color = if matched.contains(&at) {
+                c_accent()
+            } else {
+                base
+            };
+            let mut buf = [0u8; 4];
+            job.append(
+                ch.encode_utf8(&mut buf),
+                0.0,
+                TextFormat::simple(font.clone(), color),
+            );
+        }
+    };
+    push(
+        &mut job,
+        name_start..display.len(),
+        if selected { c_text_strong() } else { c_text() },
+    );
+    if name_start > 0 {
+        job.append("   ", 0.0, TextFormat::simple(font.clone(), c_text_faint()));
+        push(&mut job, 0..name_start - 1, c_text_faint());
+    }
+    job.wrap.max_width = rect.width() - 16.0;
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    ui.painter().galley(
+        egui::pos2(rect.left() + 8.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        c_text(),
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
 }

@@ -14,9 +14,11 @@ use crate::ui::preview_expand::{
 };
 
 use super::thinking::{render_thinking_group_block, thinking_group_is_live};
-use crate::ui::diff::{diff_layout_job, show_split_chat_diff};
+use crate::ui::diff::{diff_layout_job, show_chat_diff};
 
-use super::tool_format::{diff_counts, mono_output_job, tool_display_summary, tool_icon};
+use super::tool_format::{
+    diff_counts, mono_output_job, relativize_paths, tool_display_summary, tool_icon,
+};
 use super::{is_edit_like_tool, selectable_layout_job};
 
 const BLOCK_PREVIEW_LINES: usize = 10;
@@ -219,6 +221,8 @@ pub(super) fn render_tool_pill(
             } else {
                 args_summary.as_deref().unwrap_or("Waiting for output…")
             };
+            let text = relativize_paths(ui.ctx(), text);
+            let text = text.as_ref();
             let overflow = text.lines().count() > BLOCK_PREVIEW_LINES || text.len() > 2000;
             let preview = if live {
                 // Live commands and sub-agents stay at the compact default height and show the newest output.
@@ -614,7 +618,7 @@ fn render_edit_tool_block(
                             .fill(diff_bg)
                             .inner_margin(Margin::symmetric(2, 0))
                             .show(ui, |ui| {
-                                show_split_chat_diff(
+                                show_chat_diff(
                                     ui,
                                     diff_text,
                                     max_rows,
@@ -628,7 +632,11 @@ fn render_edit_tool_block(
                     });
             }
             if is_open {
-                let detail = if !output.is_empty() {
+                // A one-line "Edited <path> (1 replacement)" confirmation only repeats the header
+                // and the diff above it; keep multi-line output (diagnostics, errors) visible.
+                let bare_confirmation =
+                    has_diff && !has_error && output.trim().lines().count() <= 1;
+                let detail = if !output.is_empty() && !bare_confirmation {
                     output.as_str()
                 } else if !has_diff {
                     args_summary
@@ -637,6 +645,8 @@ fn render_edit_tool_block(
                 } else {
                     ""
                 };
+                let detail = relativize_paths(ui.ctx(), detail);
+                let detail = detail.as_ref();
                 if !detail.is_empty() {
                     let overflow =
                         detail.lines().count() > BLOCK_PREVIEW_LINES || detail.len() > 2000;

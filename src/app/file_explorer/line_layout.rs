@@ -17,6 +17,9 @@ pub(crate) struct LineLayout {
     text: String,
     paragraphs: Vec<Range<usize>>,
     galleys: Vec<Arc<Galley>>,
+    /// The assembled galley for `text`. `TextEdit` lays the document out twice per frame (before
+    /// and after applying input), and the first call nearly always repeats the previous text.
+    merged: Arc<Galley>,
     key: LayoutKey,
 }
 
@@ -88,6 +91,14 @@ pub(crate) fn layout(
         fonts_generation: crate::theme::fonts_generation(),
     };
     let previous = cache.take().filter(|previous| previous.key == key);
+    if let Some(unchanged) = previous
+        .as_ref()
+        .filter(|previous| previous.text == job.text)
+    {
+        let merged = Arc::clone(&unchanged.merged);
+        *cache = previous;
+        return merged;
+    }
 
     let paragraphs = paragraph_ranges(
         &job.text,
@@ -161,6 +172,7 @@ pub(crate) fn layout(
         text,
         paragraphs,
         galleys,
+        merged: Arc::clone(&merged),
         key,
     });
     merged

@@ -453,6 +453,19 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.harness.run_steps(3);
         rec.still("sidebar-search");
         rec.app().conv.sidebar_search.clear();
+        // Folded date group: the header keeps its count, the rows are hidden.
+        {
+            let app = rec.app();
+            let wi = app.conv.active_workspace;
+            app.conv.workspaces[wi].folded_groups = vec!["today".into()];
+        }
+        rec.harness.run_steps(3);
+        rec.still("sidebar-folded-group");
+        {
+            let app = rec.app();
+            let wi = app.conv.active_workspace;
+            app.conv.workspaces[wi].folded_groups.clear();
+        }
         rec.profile("400 chats idle", false);
         rec.profile("400 chats hover", true);
         {

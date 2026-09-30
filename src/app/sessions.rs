@@ -163,6 +163,8 @@ impl OxiApp {
             sessions,
             active: 0,
             sidebar_folded: false,
+            pinned: Vec::new(),
+            folded_groups: Vec::new(),
         });
         self.select_workspace(self.conv.workspaces.len() - 1);
         self.sync_workspaces_to_settings();
@@ -178,6 +180,8 @@ impl OxiApp {
             .map(|w| crate::settings::WorkspaceEntry {
                 root_path: w.root_path.clone(),
                 folded: w.sidebar_folded,
+                pinned: w.pinned.clone(),
+                folded_groups: w.folded_groups.clone(),
             })
             .collect();
         self.sync_active_session_to_settings();

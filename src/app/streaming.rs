@@ -109,6 +109,47 @@ impl OxiApp {
         self.send_message_opts(true);
     }
 
+    /// Index of the most recent real (non-summary) user message in the active chat.
+    pub(crate) fn last_user_prompt_index(&self) -> Option<usize> {
+        self.active_session()
+            .messages
+            .iter()
+            .rposition(|m| m.role == MsgRole::User && !m.is_summary)
+    }
+
+    /// Re-sends the last prompt after a failed run: drops that prompt and everything after it,
+    /// then submits it again. Whatever is in the composer is kept as a draft.
+    pub(crate) fn retry_last_prompt(&mut self) {
+        let key = self.active_session_key();
+        if self.active_waiting_response() || self.compaction_active_for(key) {
+            return;
+        }
+        let Some(user_idx) = self.last_user_prompt_index() else {
+            return;
+        };
+        let user = self.active_session().messages[user_idx].clone();
+        let text = self
+            .run_state(key)
+            .and_then(|run| run.last_user_prompt.clone())
+            .unwrap_or(user.text);
+        let draft_input = std::mem::replace(&mut self.conv.input, text);
+        let draft_images = std::mem::replace(
+            &mut self.conv.pending_images,
+            user.attachments
+                .into_iter()
+                .map(|UserAttachment::Image { mime, data }| (mime, data))
+                .collect(),
+        );
+        self.active_session_mut().messages.truncate(user_idx);
+        self.invalidate_wire_cache(key);
+        self.run_state_mut(key).stream_error = None;
+        self.send_message_opts(false);
+        if self.conv.input.is_empty() && self.conv.pending_images.is_empty() {
+            self.conv.input = draft_input;
+            self.conv.pending_images = draft_images;
+        }
+    }
+
     /// `skip_autocompact` is set when an auto-compaction has just finished and is replaying
     /// the deferred message — it must not re-trigger the threshold check (loop guard).
     pub(crate) fn send_message_opts(&mut self, skip_autocompact: bool) {

@@ -69,7 +69,7 @@ impl EditorSyntaxState {
             } else {
                 tree.edit(&input_edit(&background.content, &self.content));
             }
-            self.tree = tree;
+            drop_off_thread(std::mem::replace(&mut self.tree, tree));
             self.job = None;
         }
     }
@@ -89,7 +89,7 @@ impl EditorSyntaxState {
             self.last_parse = started.elapsed();
             self.parser = Some(parser);
             if let Some(tree) = tree {
-                self.tree = tree;
+                drop_off_thread(std::mem::replace(&mut self.tree, tree));
                 self.parsed = true;
                 self.job = None;
             }
@@ -105,6 +105,24 @@ impl EditorSyntaxState {
             let _ = sender.send((parser, tree, started.elapsed()));
         });
         self.background = Some(BackgroundParse { content, result });
+    }
+}
+
+/// Free a replaced parse tree on a helper thread: tearing down a 20k-line file's tree takes
+/// a few milliseconds, which would otherwise land on the frame that applies the new parse.
+fn drop_off_thread(tree: tree_sitter::Tree) {
+    static DROPPER: OnceLock<Mutex<std::sync::mpsc::Sender<tree_sitter::Tree>>> = OnceLock::new();
+    let sender = DROPPER.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::channel::<tree_sitter::Tree>();
+        std::thread::Builder::new()
+            .name("oxi-ts-drop".into())
+            .spawn(move || receiver.into_iter().for_each(drop))
+            .ok();
+        Mutex::new(sender)
+    });
+    // If the thread could not start, `send` fails and the tree is dropped right here.
+    if let Ok(sender) = sender.lock() {
+        let _ = sender.send(tree);
     }
 }
 

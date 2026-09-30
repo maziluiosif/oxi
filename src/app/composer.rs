@@ -118,7 +118,19 @@ fn quiet_combo_style(ui: &mut Ui) {
     widgets.open.corner_radius = CornerRadius::same(255);
 }
 
-const COMPOSER_STACK_WIDTH: f32 = 660.0;
+/// Fixed width of the thinking-level dropdown.
+const EFFORT_W: f32 = 72.0;
+
+/// Fixed (provider, model) dropdown widths for the column width class.
+fn composer_selector_widths(narrow: bool, compact: bool) -> (f32, f32) {
+    if compact {
+        (82.0, 90.0)
+    } else if narrow {
+        (96.0, 114.0)
+    } else {
+        (104.0, 130.0)
+    }
+}
 
 fn composer_text_fits(ui: &Ui, text: &str, extra_gap: f32) -> bool {
     let galley = ui.painter().layout_no_wrap(
@@ -348,9 +360,12 @@ impl OxiApp {
         let width = ui.available_width();
         let narrow = width < 520.0;
         let compact = width < 410.0;
-        let stacked = width < COMPOSER_STACK_WIDTH;
+        let stacked = width < self.composer_single_row_width(narrow, compact);
         if stacked {
+            // Attach leads the selector row so the second row is only mode + send controls;
+            // left on the action row it sat alone under the selectors, detached from both.
             ui.horizontal_wrapped(|ui| {
+                self.render_attach_button(ui);
                 self.render_model_selector(ui, narrow, compact);
                 self.render_effort_selector(ui, compact);
             });
@@ -361,16 +376,8 @@ impl OxiApp {
         });
     }
 
-    fn render_action_controls(
-        &mut self,
-        ui: &mut Ui,
-        can_send: bool,
-        composer_focused: bool,
-        stacked: bool,
-        narrow: bool,
-        compact: bool,
-    ) {
-        // ── Left: round attach button ──────────────────────────────────────
+    /// Round paper-clip button that opens the image picker.
+    fn render_attach_button(&mut self, ui: &mut Ui) {
         let attach = crate::ui::chrome::icon_button_core(
             ui,
             ICON_ATTACH,
@@ -389,6 +396,20 @@ impl OxiApp {
         .on_hover_text("Attach image");
         if attach.clicked() {
             self.pick_image_attachment();
+        }
+    }
+
+    fn render_action_controls(
+        &mut self,
+        ui: &mut Ui,
+        can_send: bool,
+        composer_focused: bool,
+        stacked: bool,
+        narrow: bool,
+        compact: bool,
+    ) {
+        if !stacked {
+            self.render_attach_button(ui);
         }
 
         // ── Left: provider + model (compact widths when the chat column is squeezed) ──
@@ -488,12 +509,13 @@ impl OxiApp {
         let active_provider = self.conv.settings.active_provider;
         // Independent fixed widths — shared dynamic widths made the bar look jumpy
         // when labels swung from "Ollama" to "Claude Code (ACP)" / long model ids.
-        let (provider_w, model_w, model_chars) = if compact {
-            (82.0, 90.0, 10usize)
+        let (provider_w, model_w) = composer_selector_widths(narrow, compact);
+        let model_chars = if compact {
+            10usize
         } else if narrow {
-            (96.0, 114.0, 14)
+            14
         } else {
-            (104.0, 130.0, 18)
+            18
         };
 
         ui.scope(|ui| {
@@ -627,6 +649,41 @@ impl OxiApp {
 
     /// Compact thinking/reasoning selector beside the active model. ACP adapters receive this
     /// through `session/set_config_option`; HTTP providers use their native effort field.
+    fn active_provider_supports_effort(&self) -> bool {
+        matches!(
+            self.conv.settings.active_provider,
+            crate::settings::LlmProviderKind::CustomAnthropic
+                | crate::settings::LlmProviderKind::ClaudeCodeAcp
+                | crate::settings::LlmProviderKind::OpenAi
+                | crate::settings::LlmProviderKind::GptCodex
+                | crate::settings::LlmProviderKind::OpenCodeGo
+                | crate::settings::LlmProviderKind::AzureOpenAi
+                | crate::settings::LlmProviderKind::CodexAcp
+                | crate::settings::LlmProviderKind::CursorAcp
+        )
+    }
+
+    /// Width the controls need on a single row: the fixed-width selectors plus the round
+    /// buttons. The right-side extras (speed, context ring, hint) are left out because they
+    /// already hide themselves when space runs short.
+    fn composer_single_row_width(&self, narrow: bool, compact: bool) -> f32 {
+        const COMBO_PAD: f32 = 22.0;
+        const GAP: f32 = 6.0;
+        let (provider_w, model_w) = composer_selector_widths(narrow, compact);
+        let mut width =
+            ATTACH_DIAM + provider_w + model_w + 2.0 * COMBO_PAD + SEND_DIAM + 4.0 * GAP;
+        if self.active_provider_supports_effort() && !compact {
+            width += EFFORT_W + COMBO_PAD + GAP;
+        }
+        if self.plan_mode_on() {
+            width += if compact { 34.0 } else { 72.0 } + GAP;
+        }
+        if self.conv.settings.dictation.enabled {
+            width += SEND_DIAM + GAP;
+        }
+        width
+    }
+
     fn render_effort_selector(&mut self, ui: &mut Ui, compact: bool) {
         let kind = self.conv.settings.active_provider;
         let is_anthropic = matches!(
@@ -634,17 +691,7 @@ impl OxiApp {
             crate::settings::LlmProviderKind::CustomAnthropic
                 | crate::settings::LlmProviderKind::ClaudeCodeAcp
         );
-        let supports_effort = is_anthropic
-            || matches!(
-                kind,
-                crate::settings::LlmProviderKind::OpenAi
-                    | crate::settings::LlmProviderKind::GptCodex
-                    | crate::settings::LlmProviderKind::OpenCodeGo
-                    | crate::settings::LlmProviderKind::AzureOpenAi
-                    | crate::settings::LlmProviderKind::CodexAcp
-                    | crate::settings::LlmProviderKind::CursorAcp
-            );
-        if !supports_effort || compact {
+        if !self.active_provider_supports_effort() || compact {
             return;
         }
         let values: &[(&str, &str)] = if is_anthropic {
@@ -678,7 +725,7 @@ impl OxiApp {
             ComboBox::from_id_salt("active_effort_combo")
                 .selected_text(RichText::new(selected).size(FS_SMALL).color(c_text_muted()))
                 .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(72.0)
+                .width(EFFORT_W)
                 .truncate()
                 .show_ui(ui, |ui| {
                     for (value, label) in values {

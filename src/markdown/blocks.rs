@@ -255,7 +255,6 @@ pub(super) fn render_fenced_block(
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(RichText::new("●").size(7.0).color(c_text_muted()));
                             ui.label(
                                 RichText::new(lang.as_str())
                                     .size(SZ_TINY)
