@@ -267,6 +267,7 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
+                            let mut previous_minimap = None;
                             let scratchpad_changed =
                                 output.response.changed() && document.is_scratchpad;
                             if output.response.changed() {
@@ -277,7 +278,7 @@ impl OxiApp {
                                     edited_at: Some(std::time::Instant::now()),
                                     ..Default::default()
                                 };
-                                document.minimap_cache = None;
+                                previous_minimap = document.minimap_cache.take();
                             }
                             document.layout_cache.keep_warm = output.response.has_focus();
                             if clear_selection_requested {
@@ -482,7 +483,21 @@ impl OxiApp {
                                         Some(document.content_revision),
                                         Some(window_bytes.clone()),
                                     ) {
-                                        Some(job) => (job, window_bytes.start),
+                                        Some(job) => {
+                                            // Colors from a tree still being reparsed in the
+                                            // background: show them, but don't cache them.
+                                            if document
+                                                .syntax_state
+                                                .as_ref()
+                                                .is_some_and(|state| state.parse_pending())
+                                            {
+                                                highlight_pending = true;
+                                                ui.ctx().request_repaint_after(
+                                                    std::time::Duration::from_millis(16),
+                                                );
+                                            }
+                                            (job, window_bytes.start)
+                                        }
                                         None => match crate::theme::highlight_code_async(
                                             &document.content,
                                             &extension,
@@ -553,12 +568,20 @@ impl OxiApp {
                                 galley
                             });
                             minimap::refresh(ui.ctx(), document, &extension, full_job.as_ref());
+                            minimap::carry_layout_over_edit(
+                                previous_minimap.take(),
+                                &mut document.minimap_cache,
+                            );
                             minimap::ensure_layout(
+                                ui.ctx(),
                                 document
                                     .minimap_cache
                                     .as_mut()
                                     .expect("editor geometry was just prepared"),
                                 &output.galley,
+                                document.layout_cache.edited_at.is_some_and(|edited_at| {
+                                    edited_at.elapsed() < minimap::RECOLOR_AFTER_EDIT
+                                }),
                             );
                             paint_indent_guides(
                                 ui,
