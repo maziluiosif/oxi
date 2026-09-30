@@ -1,5 +1,7 @@
 #[path = "composer/plan_tasks.rs"]
 mod plan_tasks;
+#[path = "composer/slash_menu.rs"]
+mod slash_menu;
 #[path = "composer/text_menu.rs"]
 mod text_menu;
 #[path = "composer/voice_context.rs"]
@@ -79,6 +81,22 @@ fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static s
         CursorAcp => "Cursor",
         CodexAcp => "Codex",
     }
+}
+
+fn composer_provider_groups(
+    configured: &[crate::settings::LlmProviderKind],
+) -> Vec<(&'static str, Vec<crate::settings::LlmProviderKind>)> {
+    super::settings_ui::PROVIDER_GROUPS
+        .iter()
+        .filter_map(|(label, providers)| {
+            let providers: Vec<_> = providers
+                .iter()
+                .copied()
+                .filter(|kind| configured.contains(kind))
+                .collect();
+            (!providers.is_empty()).then_some((*label, providers))
+        })
+        .collect()
 }
 
 /// Quiet pill styling shared by the composer combos (provider + model): transparent at
@@ -210,10 +228,13 @@ impl OxiApp {
                         }
 
                         // === Text area ===
+                        // The `/` menu takes its keys first so they don't reach the TextEdit.
+                        let slash_menu_open = self.slash_menu_keys(ui, input_id, composer_focused);
                         // desired_rows(1) keeps it compact; it grows naturally
                         // as the user types (both newlines and soft-wrap).
                         let mut te_output = TextEdit::multiline(&mut self.conv.input)
                             .id(input_id)
+                            .lock_focus(slash_menu_open)
                             .hint_text(
                                 RichText::new(if plan_mode {
                                     "Describe what to plan…"
@@ -233,6 +254,12 @@ impl OxiApp {
                             &te_output.response,
                             &te_output.galley,
                             te_output.galley_pos,
+                        );
+                        self.render_slash_menu(
+                            ui,
+                            input_id,
+                            te_output.response.rect,
+                            te_output.response.has_focus(),
                         );
                         if self.conv.focus_chat_input_next_frame {
                             // Navigation should put the caret at the end of any existing draft,
@@ -484,25 +511,35 @@ impl OxiApp {
                     // legacy file, far too much work for every frame.
                     let oauth = crate::oauth::load_oauth_store();
                     let configured = self.conv.settings.configured_provider_kinds(&oauth);
-                    for kind in &configured {
-                        let selected = active_provider == *kind;
-                        if ui
-                            .selectable_label(selected, composer_provider_label(*kind))
-                            .clicked()
-                            && !selected
-                        {
-                            self.set_active_session_provider(*kind);
-                            self.save_settings_quietly();
-                            // Remote/local HF choices come from its downloaded-model list;
-                            // `/v1/models` only reports the one model currently loaded.
-                            if !matches!(
-                                kind,
-                                crate::settings::LlmProviderKind::LocalHf
-                                    | crate::settings::LlmProviderKind::RemoteHf
-                            ) {
-                                self.spawn_model_fetch(ui.ctx(), *kind);
-                            } else {
-                                self.refresh_local_hf_model_choices();
+                    for (index, (group_label, providers)) in composer_provider_groups(&configured)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        if index > 0 {
+                            ui.separator();
+                        }
+                        ui.label(
+                            RichText::new(group_label)
+                                .size(FS_TINY)
+                                .color(c_text_faint())
+                                .strong(),
+                        );
+                        for kind in providers {
+                            let selected = active_provider == kind;
+                            if ui.selectable_label(selected, kind.label()).clicked() && !selected {
+                                self.set_active_session_provider(kind);
+                                self.save_settings_quietly();
+                                // Remote/local HF choices come from its downloaded-model list;
+                                // `/v1/models` only reports the one model currently loaded.
+                                if !matches!(
+                                    kind,
+                                    crate::settings::LlmProviderKind::LocalHf
+                                        | crate::settings::LlmProviderKind::RemoteHf
+                                ) {
+                                    self.spawn_model_fetch(ui.ctx(), kind);
+                                } else {
+                                    self.refresh_local_hf_model_choices();
+                                }
                             }
                         }
                     }
@@ -736,6 +773,33 @@ impl OxiApp {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn provider_groups_include_every_provider_once() {
+        use crate::settings::LlmProviderKind;
+
+        let groups = composer_provider_groups(&LlmProviderKind::ALL);
+        assert_eq!(groups.len(), 3);
+        let mut grouped: Vec<_> = groups.into_iter().flat_map(|(_, kinds)| kinds).collect();
+        let mut expected = LlmProviderKind::ALL.to_vec();
+        grouped.sort();
+        expected.sort();
+        assert_eq!(grouped, expected);
+    }
+
+    #[test]
+    fn provider_groups_filter_unconfigured_providers_and_empty_categories() {
+        use crate::settings::LlmProviderKind::*;
+
+        assert_eq!(
+            composer_provider_groups(&[CodexAcp, CursorAcp, Ollama]),
+            vec![
+                ("Local / self-hosted", vec![Ollama]),
+                ("External agents (ACP)", vec![CursorAcp, CodexAcp]),
+            ]
+        );
+        assert!(composer_provider_groups(&[]).is_empty());
+    }
 
     #[test]
     fn optional_hint_never_expands_the_action_row() {

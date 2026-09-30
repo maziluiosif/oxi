@@ -11,6 +11,7 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, Header
 use serde_json::{Value, json};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
+use super::dispatch::spawn_readonly_tool;
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
@@ -500,32 +501,16 @@ pub async fn run_anthropic_loop(
                             args: Some(tc.args.clone()),
                         });
                     }
-                    let mut handles = Vec::new();
-                    for tc in batch {
-                        let cwd_owned = cwd.to_path_buf();
-                        let name = tc.name.clone();
-                        let args = tc.args.clone();
-                        let env_copy = env.clone();
-                        handles.push(tokio::task::spawn_blocking(move || {
-                            run_tool(&cwd_owned, &name, &args, &env_copy)
-                        }));
-                    }
+                    // Each call reports its own end as soon as it finishes (see `spawn_readonly_tool`).
+                    let handles: Vec<_> = batch
+                        .iter()
+                        .map(|tc| spawn_readonly_tool(cwd, &tc.id, &tc.name, &tc.args, env, tx))
+                        .collect();
                     for (j, handle) in handles.into_iter().enumerate() {
                         let tc = &batch[j];
                         let result = handle.await.map_err(|e| e.to_string())?;
                         let text = result.output.clone();
                         let is_err = result.is_error;
-                        let _ = tx.send(AgentEvent::ToolOutput {
-                            tool_call_id: tc.id.clone(),
-                            text: text.clone(),
-                            truncated: text.len() >= MAX_TOOL_OUTPUT_CHARS,
-                        });
-                        let _ = tx.send(AgentEvent::ToolEnd {
-                            tool_call_id: tc.id.clone(),
-                            is_error: Some(is_err),
-                            full_output_path: result.full_output_path,
-                            diff: result.diff,
-                        });
                         openai_messages.push(json!({
                             "role": "tool",
                             "tool_call_id": tc.id,

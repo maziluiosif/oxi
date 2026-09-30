@@ -95,6 +95,10 @@ pub struct TerminalSession {
     master: Box<dyn MasterPty + Send>,
     /// Flipped to `false` by the reader thread when the shell exits (EOF).
     alive: Arc<AtomicBool>,
+    /// The shell's pid, compared against the pty's foreground process group to tell an idle
+    /// prompt from a running command.
+    #[cfg(unix)]
+    shell_pid: Option<u32>,
     rows: u16,
     cols: u16,
     mouse: MouseState,
@@ -251,6 +255,8 @@ impl TerminalSession {
         // (the pty owns it), and we want it reaped by the OS when the session is dropped. Detach
         // it onto a waiter thread so it doesn't become a zombie.
         let mut child = _child;
+        #[cfg(unix)]
+        let shell_pid = child.process_id();
         std::thread::Builder::new()
             .name("oxi-pty-waiter".to_string())
             .spawn(move || {
@@ -263,6 +269,8 @@ impl TerminalSession {
             writer,
             master: pair.master,
             alive,
+            #[cfg(unix)]
+            shell_pid,
             rows,
             cols,
             mouse: MouseState::default(),
@@ -274,6 +282,26 @@ impl TerminalSession {
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
+    }
+
+    /// Whether a command is running in the foreground rather than the shell sitting at its
+    /// prompt. Windows has no foreground process group to inspect, so a live shell always
+    /// counts as busy there: callers use this to decide what is safe to kill.
+    pub fn has_foreground_job(&self) -> bool {
+        if !self.is_alive() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            match (self.master.process_group_leader(), self.shell_pid) {
+                (Some(group), Some(shell)) => group as u32 != shell,
+                _ => true,
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
     }
 
     /// Send raw bytes to the shell.
@@ -811,5 +839,40 @@ impl TerminalSession {
                 );
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[test]
+    fn foreground_job_tracks_running_commands() {
+        let ctx = egui::Context::default();
+        let mut term =
+            TerminalSession::spawn(&ctx, ".", 24, 80, WindowsTerminal::default()).unwrap();
+        assert!(
+            wait_for(|| !term.has_foreground_job()),
+            "idle shell reads as busy"
+        );
+        term.send(b"sleep 30\n");
+        assert!(wait_for(|| term.has_foreground_job()), "sleep not detected");
+        term.send(&[0x03]);
+        assert!(
+            wait_for(|| !term.has_foreground_job()),
+            "Ctrl+C left it busy"
+        );
     }
 }

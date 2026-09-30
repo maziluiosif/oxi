@@ -44,6 +44,9 @@ pub struct OxiApp {
     pub conv: ConversationState,
     /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
     pub terminal: Option<crate::terminal::TerminalSession>,
+    /// Shells left behind by a workspace switch while a command was still running, keyed by
+    /// workspace root; restored when that workspace becomes active again.
+    pub parked_terminals: std::collections::HashMap<String, crate::terminal::TerminalSession>,
     /// Shared async executor for all agent runs.
     pub agent_executor: crate::agent::runner::AgentExecutor,
     /// SSH tunnels for `RemoteSsh` provider configs (e.g. Ollama/LM Studio on a LAN host).
@@ -245,6 +248,7 @@ impl OxiApp {
                 voice_rx,
             },
             terminal: None,
+            parked_terminals: Default::default(),
             agent_executor: crate::agent::runner::AgentExecutor::new()
                 .expect("failed to initialize shared agent runtime"),
             tunnels: crate::compute::TunnelManager::spawn(),
@@ -437,6 +441,7 @@ impl OxiApp {
             .documents
             .iter()
             .position(|document| document.is_scratchpad);
+        let old_root = self.active_workspace().root_path.clone();
         let target_si = self.conv.workspaces[workspace_idx].active;
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
@@ -446,8 +451,7 @@ impl OxiApp {
         self.restore_active_session_config();
         self.persist_active_session_selection();
         self.refresh_git_cwd();
-        // Respawn the embedded shell so it starts in the new workspace cwd.
-        self.terminal = None;
+        self.swap_workspace_terminal(&old_root);
     }
 
     pub(crate) fn select_session_in_workspace(&mut self, workspace_idx: usize, session_idx: usize) {
@@ -490,6 +494,7 @@ impl OxiApp {
                 .iter()
                 .position(|document| document.is_scratchpad);
         }
+        let old_root = self.active_workspace().root_path.clone();
         self.swap_session_input(workspace_idx, session_idx);
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
@@ -501,8 +506,7 @@ impl OxiApp {
         self.persist_active_session_selection();
         if workspace_changed {
             self.refresh_git_cwd();
-            // Respawn the embedded shell so it starts in the new workspace cwd.
-            self.terminal = None;
+            self.swap_workspace_terminal(&old_root);
         }
     }
 

@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use super::approval::{ApprovalGate, ApprovalPolicy};
 use super::dispatch::{DispatchParams, run_provider_loop, streaming_client};
 use super::events::{AgentEvent, TokenUsage};
-use super::tools::{ToolEnv, ToolSideEffect, tool_definitions_json, tool_side_effect};
+use super::tools::{
+    ToolEnv, ToolOutputCallback, ToolSideEffect, tool_definitions_json, tool_side_effect,
+};
 use crate::settings::{ALL_TOOL_NAMES, ProviderConfig};
 
 /// Tool rounds one sub-agent may use before it must answer.
@@ -89,8 +91,13 @@ impl SubagentRunner {
     }
 
     /// Run one sub-agent to completion. Blocking: call from a blocking thread (read-only tools
-    /// run on `spawn_blocking`), never from inside an async task.
-    pub fn run(&self, args: &Value) -> Result<String, String> {
+    /// run on `spawn_blocking`), never from inside an async task. `on_progress` receives a live
+    /// log of the sub-agent's tool calls so the parent's `task` pill is not silent for minutes.
+    pub fn run(
+        &self,
+        args: &Value,
+        on_progress: Option<ToolOutputCallback>,
+    ) -> Result<String, String> {
         let prompt = args
             .get("prompt")
             .and_then(|p| p.as_str())
@@ -123,6 +130,8 @@ impl SubagentRunner {
         // Only read-only tools are offered, which never need approval.
         let mut gate = ApprovalGate::new(ApprovalPolicy::disabled(), approval_rx);
         let effort = self.cfg.effort.trim();
+        // Drain events while the loop runs so progress reaches the UI as it happens.
+        let collector = std::thread::spawn(move || collect_report(rx.into_iter(), on_progress));
         let result = self.handle.block_on(run_provider_loop(
             DispatchParams {
                 cfg: &self.cfg,
@@ -142,7 +151,9 @@ impl SubagentRunner {
             &tools,
         ));
         drop(tx);
-        let (answer, tool_counts, usage) = collect_report(rx.try_iter());
+        let (answer, tool_counts, usage) = collector
+            .join()
+            .map_err(|_| "Sub-agent report collector panicked.".to_string())?;
         // Failed/cancelled investigations still consumed the usage reported before stopping.
         if !usage.is_zero()
             && let Some(tx) = &self.usage_tx
@@ -168,31 +179,64 @@ impl SubagentRunner {
 }
 
 /// The last round's text (earlier rounds are narration before tool calls) and a count of the
-/// tools the sub-agent used, plus usage across every round.
+/// tools the sub-agent used, plus usage across every round. Each tool call is also published to
+/// `on_progress` as a cumulative log, one line per call.
 fn collect_report(
     events: impl Iterator<Item = AgentEvent>,
+    on_progress: Option<ToolOutputCallback>,
 ) -> (String, BTreeMap<String, usize>, TokenUsage) {
     let mut answer = String::new();
     let mut tools = BTreeMap::new();
     let mut usage = TokenUsage::default();
-    // Loops announce a call early (name + id) and again once its arguments are complete.
-    let mut seen = std::collections::HashSet::new();
+    // Loops announce a call early (name + id) and again once its arguments are complete, so a
+    // call's log line is refined in place rather than appended twice.
+    let mut lines: Vec<(String, String)> = Vec::new();
     for event in events {
         match event {
             AgentEvent::TextStart => answer.clear(),
             AgentEvent::TextDelta(delta) => answer.push_str(&delta),
             AgentEvent::Usage(round) => usage.add(&round),
             AgentEvent::ToolStart {
-                name, tool_call_id, ..
+                name,
+                tool_call_id,
+                args,
             } => {
-                if seen.insert(tool_call_id) {
-                    *tools.entry(name).or_insert(0) += 1;
+                let line = progress_line(&name, args.as_ref());
+                match lines.iter_mut().find(|(id, _)| *id == tool_call_id) {
+                    Some((_, existing)) if *existing == line => continue,
+                    Some((_, existing)) => *existing = line,
+                    None => {
+                        *tools.entry(name).or_insert(0) += 1;
+                        lines.push((tool_call_id, line));
+                    }
+                }
+                if let Some(cb) = &on_progress {
+                    let log: Vec<&str> = lines.iter().map(|(_, l)| l.as_str()).collect();
+                    cb(log.join("\n"));
                 }
             }
             _ => {}
         }
     }
     (answer, tools, usage)
+}
+
+/// `grep TODO`, `read src/a.rs`: the tool and its main argument, on one short line.
+fn progress_line(name: &str, args: Option<&Value>) -> String {
+    let target = args
+        .and_then(|a| {
+            ["path", "pattern", "query", "url", "command"]
+                .iter()
+                .find_map(|k| a.get(*k).and_then(Value::as_str))
+        })
+        .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    let target: String = if target.chars().count() > 80 {
+        target.chars().take(79).chain(['…']).collect()
+    } else {
+        target
+    };
+    format!("{name} {target}").trim_end().to_string()
 }
 
 fn tool_footer(tools: &BTreeMap<String, usize>) -> String {
@@ -235,7 +279,7 @@ mod tests {
             AgentEvent::TextDelta("Found it in ".into()),
             AgentEvent::TextDelta("src/a.rs:3.".into()),
         ];
-        let (answer, tools, _) = collect_report(events.into_iter());
+        let (answer, tools, _) = collect_report(events.into_iter(), None);
         assert_eq!(answer, "Found it in src/a.rs:3.");
         assert_eq!(
             tool_footer(&tools),
@@ -263,7 +307,7 @@ mod tests {
                 ..Default::default()
             }),
         ];
-        let (answer, _, usage) = collect_report(events.into_iter());
+        let (answer, _, usage) = collect_report(events.into_iter(), None);
         assert_eq!(answer, "Final report.");
         assert_eq!(usage.total_input(), 140);
         assert_eq!(usage.output_tokens, 25);
@@ -407,9 +451,15 @@ mod tests {
             100_000,
         )
         .with_usage_sender(usage_tx);
+        let progress = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = progress.clone();
         let report = runner
-            .run(&json!({"description": "read notes", "prompt": "What do the notes say?"}))
+            .run(
+                &json!({"description": "read notes", "prompt": "What do the notes say?"}),
+                Some(Arc::new(move |text| sink.lock().unwrap().push(text))),
+            )
             .unwrap();
+        assert_eq!(progress.lock().unwrap().last().unwrap(), "read notes.txt");
         assert!(
             report.starts_with("Report: notes mention the secret sauce."),
             "{report}"

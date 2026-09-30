@@ -22,3 +22,5 @@ mod provider_panel;
 mod provider_ssh;
 mod providers_panel;
 mod terminal_panel;
+
+pub(super) use provider_catalog::PROVIDER_GROUPS;

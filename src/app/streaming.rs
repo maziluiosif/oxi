@@ -117,7 +117,16 @@ impl OxiApp {
         }
 
         // Slash commands: only an exact, argument-free `/new` or `/compact` with no images.
-        if !has_images && let Some(cmd) = super::compaction::parse_slash_command(&text) {
+        // An ACP agent's own command of the same name wins (except `/new`): oxi's compaction
+        // can't shrink the context the agent keeps in its subprocess.
+        if !has_images
+            && let Some(cmd) = super::compaction::parse_slash_command(&text)
+            && (cmd == super::compaction::SlashCommand::New
+                || !self
+                    .active_acp_commands()
+                    .iter()
+                    .any(|c| c.name == "compact"))
+        {
             self.push_input_history(&text);
             self.conv.input_history_index = None;
             self.conv.input_history_draft.clear();
