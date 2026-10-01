@@ -4,6 +4,7 @@ use crate::settings::LlmProviderKind;
 
 /// Provider groups keep selectors skimmable.
 pub(in crate::app) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
+    ("Automatic", &[LlmProviderKind::Router]),
     (
         "Local / self-hosted",
         &[
@@ -64,6 +65,9 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         }
         LlmProviderKind::CodexAcp => {
             "Drive Codex CLI through the official Agent Client Protocol adapter."
+        }
+        LlmProviderKind::Router => {
+            "Picks a provider, model and effort per turn from the ones you configured, using subscription quota, spend and task difficulty."
         }
     }
 }

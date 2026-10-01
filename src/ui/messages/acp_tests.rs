@@ -153,6 +153,7 @@ fn render_acp_tool_gallery() {
         streaming: false,
         started_at: None,
         worked_duration: None,
+        route: None,
     };
     let entries = crate::session_store::chat_message_to_json_entries(&message);
     let restored = crate::hydrate::messages_from_get_messages(&json!({"messages":entries}));

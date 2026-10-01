@@ -151,6 +151,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let assistant = ChatMessage {
             role: MsgRole::Assistant,
@@ -175,6 +176,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let mut messages = vec![user.clone(), assistant.clone(), user, assistant];
 
@@ -195,6 +197,7 @@ mod tests {
                 streaming: false,
                 started_at: None,
                 worked_duration: None,
+                route: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -205,6 +208,7 @@ mod tests {
                 streaming: false,
                 started_at: None,
                 worked_duration: None,
+                route: None,
             },
             ChatMessage {
                 role: MsgRole::User,
@@ -215,6 +219,7 @@ mod tests {
                 streaming: false,
                 started_at: None,
                 worked_duration: None,
+                route: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -225,6 +230,7 @@ mod tests {
                 streaming: false,
                 started_at: None,
                 worked_duration: None,
+                route: None,
             },
         ];
 
@@ -343,6 +349,7 @@ mod tests {
                     streaming: false,
                     started_at: None,
                     worked_duration: None,
+                    route: None,
                 },
                 ChatMessage {
                     role: MsgRole::Assistant,
@@ -367,6 +374,7 @@ mod tests {
                     streaming: false,
                     started_at: None,
                     worked_duration: None,
+                    route: None,
                 },
             ],
             session_file: None,
@@ -404,6 +412,7 @@ mod tests {
                     streaming: false,
                     started_at: None,
                     worked_duration: None,
+                    route: None,
                 },
                 ChatMessage {
                     role: MsgRole::Assistant,
@@ -414,6 +423,7 @@ mod tests {
                     streaming: false,
                     started_at: None,
                     worked_duration: Some(Duration::from_secs(67)),
+                    route: None,
                 },
             ],
             session_file: None,

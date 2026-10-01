@@ -11,6 +11,7 @@ fn answer(size: usize) -> ChatMessage {
         streaming: false,
         started_at: None,
         worked_duration: None,
+        route: None,
     }
 }
 
@@ -24,6 +25,7 @@ fn user(text: &str) -> ChatMessage {
         streaming: false,
         started_at: None,
         worked_duration: None,
+        route: None,
     }
 }
 

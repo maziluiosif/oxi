@@ -394,6 +394,7 @@ fn acp_metadata_diff_and_valid_long_args_survive_session_roundtrip() {
         streaming: true,
         started_at: None,
         worked_duration: None,
+        route: None,
     };
     message.finish_streaming();
     let entries = crate::session_store::chat_message_to_json_entries(&message);

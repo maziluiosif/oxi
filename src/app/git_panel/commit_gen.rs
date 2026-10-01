@@ -163,7 +163,11 @@ impl OxiApp {
     /// Kick off the LLM completion for the commit message once the diff is in hand.
     fn start_commit_gen(&mut self, diff: &str) {
         self.conv.commit_gen_pending = false;
-        let config = self.conv.settings.commit_msg_config();
+        let config = crate::router::helper_config(
+            &self.conv.settings,
+            self.conv.settings.commit_msg_config(),
+            diff.len(),
+        );
         let system_prompt = self.conv.settings.commit_msg_system_prompt.clone();
         let user_prompt =
             format!("Write a git commit message for the following diff.\n\n```diff\n{diff}\n```");

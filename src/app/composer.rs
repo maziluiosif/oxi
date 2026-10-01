@@ -80,6 +80,7 @@ fn composer_provider_label(kind: crate::settings::LlmProviderKind) -> &'static s
         ClaudeCodeAcp => "Claude",
         CursorAcp => "Cursor",
         CodexAcp => "Codex",
+        Router => "Router",
     }
 }
 
@@ -553,7 +554,9 @@ impl OxiApp {
                                 self.save_settings_quietly();
                                 // Remote/local HF choices come from its downloaded-model list;
                                 // `/v1/models` only reports the one model currently loaded.
-                                if !matches!(
+                                if kind == crate::settings::LlmProviderKind::Router {
+                                    // Strategies, not models: nothing to fetch.
+                                } else if !matches!(
                                     kind,
                                     crate::settings::LlmProviderKind::LocalHf
                                         | crate::settings::LlmProviderKind::RemoteHf
@@ -574,6 +577,10 @@ impl OxiApp {
         // Second dropdown: model within the active provider, populated from the fetched
         // model list (falling back to just the current model id so it's never empty).
         let kind = self.conv.settings.active_provider;
+        if kind == crate::settings::LlmProviderKind::Router {
+            self.render_router_strategy_selector(ui, model_w);
+            return;
+        }
         let current = self.conv.settings.active_config().model_id.clone();
         // Local HF's runtime endpoint only exposes the model currently loaded. Its
         // composer dropdown must instead use every downloaded model, otherwise refreshing
@@ -644,6 +651,51 @@ impl OxiApp {
                 self.set_active_session_model(model_id);
                 self.save_settings_quietly();
             }
+        }
+    }
+
+    /// Under the Router the model slot picks the routing strategy (stored as the Router's
+    /// `model_id`, so it is per chat like a model choice).
+    fn render_router_strategy_selector(&mut self, ui: &mut Ui, width: f32) {
+        use crate::settings::{LlmProviderKind, RouterStrategy};
+        let current = RouterStrategy::from_id(
+            &self
+                .conv
+                .settings
+                .provider(LlmProviderKind::Router)
+                .model_id,
+        );
+        let mut picked = None;
+        ui.scope(|ui| {
+            quiet_combo_style(ui);
+            let resp = ComboBox::from_id_salt("router_strategy_combo")
+                .selected_text(
+                    RichText::new(current.label())
+                        .size(FS_SMALL)
+                        .color(c_text_muted()),
+                )
+                .icon(crate::ui::chrome::combo_chevron_icon)
+                .width(width)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    for strategy in RouterStrategy::ALL {
+                        if ui
+                            .selectable_label(strategy == current, strategy.label())
+                            .on_hover_text(strategy.description())
+                            .clicked()
+                            && strategy != current
+                        {
+                            picked = Some(strategy);
+                        }
+                    }
+                });
+            resp.response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text(current.description());
+        });
+        if let Some(strategy) = picked {
+            self.set_active_session_model(strategy.id().to_string());
+            self.save_settings_quietly();
         }
     }
 
@@ -826,7 +878,7 @@ mod layout_tests {
         use crate::settings::LlmProviderKind;
 
         let groups = composer_provider_groups(&LlmProviderKind::ALL);
-        assert_eq!(groups.len(), 3);
+        assert_eq!(groups.len(), 4);
         let mut grouped: Vec<_> = groups.into_iter().flat_map(|(_, kinds)| kinds).collect();
         let mut expected = LlmProviderKind::ALL.to_vec();
         grouped.sort();

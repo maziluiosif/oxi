@@ -37,6 +37,31 @@ impl SessionConfig {
     }
 }
 
+/// Which provider/model the Router picked for an assistant turn, and why. Persisted with the
+/// message so the explanation survives a reload and the next turn can stay on the same model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RouteNote {
+    pub provider: LlmProviderKind,
+    pub model: String,
+    #[serde(default)]
+    pub effort: String,
+    /// `light` / `standard` / `heavy`.
+    #[serde(default)]
+    pub tier: String,
+    /// Strategy label at decision time.
+    #[serde(default)]
+    pub strategy: String,
+    /// One or two sentences: the task signals and why this candidate won.
+    #[serde(default)]
+    pub reason: String,
+    /// Runner-up and skipped candidates, for the hover details.
+    #[serde(default)]
+    pub alternatives: Vec<String>,
+    /// Set when this route replaced a provider that failed mid-turn (rate limit / quota).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failover_from: Option<String>,
+}
+
 /// Provider-native conversation cache. The transcript remains the source of truth; this cache is
 /// reused only when its stable fingerprint matches the complete current request environment.
 #[derive(Clone, Debug)]
@@ -104,6 +129,8 @@ pub struct ChatMessage {
     /// Assistant only: elapsed time frozen once streaming finishes, for the collapsed
     /// "Worked for Xm Ys" summary. Set once by [`ChatMessage::finish_streaming`].
     pub worked_duration: Option<std::time::Duration>,
+    /// Assistant only: the Router's choice for this turn (`None` for a directly chosen model).
+    pub route: Option<Box<RouteNote>>,
 }
 
 impl ChatMessage {

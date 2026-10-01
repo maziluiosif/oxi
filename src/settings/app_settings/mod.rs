@@ -180,6 +180,9 @@ pub struct AppSettings {
     /// [`crate::agent::activity_log`]). Off by default; the log itself is never written to disk.
     #[serde(default)]
     pub activity_log_enabled: bool,
+    /// Preferences for the Router pseudo-provider (see [`crate::router`]).
+    #[serde(default)]
+    pub router: super::router::RouterSettings,
 }
 
 fn default_require_approval() -> bool {
@@ -312,6 +315,7 @@ impl Default for AppSettings {
             git_executable: String::new(),
             mcp_servers: Vec::new(),
             activity_log_enabled: false,
+            router: super::router::RouterSettings::default(),
         }
     }
 }

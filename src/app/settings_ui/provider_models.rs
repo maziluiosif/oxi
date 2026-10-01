@@ -244,6 +244,7 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         | LlmProviderKind::RemoteHf
         | LlmProviderKind::ClaudeCodeAcp
         | LlmProviderKind::CursorAcp
-        | LlmProviderKind::CodexAcp => Ok(String::new()),
+        | LlmProviderKind::CodexAcp
+        | LlmProviderKind::Router => Ok(String::new()),
     }
 }

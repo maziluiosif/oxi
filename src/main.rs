@@ -10,6 +10,7 @@ mod local_models_remote;
 mod markdown;
 mod model;
 mod oauth;
+mod router;
 mod runtime;
 mod rust_goto;
 mod scratchpad;
