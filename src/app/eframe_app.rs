@@ -63,6 +63,7 @@ impl eframe::App for OxiApp {
         self.ensure_active_models_fetched(ctx);
         self.drain_git(ctx);
         self.drain_commit_gen(ctx);
+        self.drain_title_gen(ctx);
         self.drain_compaction(ctx);
         self.check_external_file_changes();
         self.poll_git_changes(ctx);

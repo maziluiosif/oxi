@@ -72,18 +72,211 @@ pub fn diff_layout_job(text: &str, wrap_width: f32) -> LayoutJob {
     job
 }
 
-/// Show a unified diff as aligned old/new columns inside the transcript: faint line numbers,
-/// full-width row tints and a hairline between the two sides. Wrapping is deliberately disabled
-/// so one source row always occupies exactly one visual row in both columns; each column scrolls
-/// horizontally on its own.
-pub fn show_split_chat_diff(
+/// Show a diff inside the transcript, choosing the layout that fits: aligned old/new columns
+/// when the change replaces lines and the widest line fits in half the width, otherwise a single
+/// unified column (pure additions, pure deletions, or long lines that would be clipped in a split).
+pub fn show_chat_diff(ui: &mut Ui, text: &str, max_rows: Option<usize>, id: Id, selectable: bool) {
+    let rows = split_chat_diff_rows(text);
+    if rows.is_empty() {
+        return;
+    }
+    let has = |kind: fn(ChatDiffLineKind) -> bool| {
+        rows.iter().any(|r| kind(r.left_kind) || kind(r.right_kind))
+    };
+    let replaces = has(|k| matches!(k, ChatDiffLineKind::Removed))
+        && has(|k| matches!(k, ChatDiffLineKind::Added));
+    let widest = rows
+        .iter()
+        .map(|r| r.left.chars().count().max(r.right.chars().count()))
+        .max()
+        .unwrap_or(0);
+    let digits = rows
+        .iter()
+        .flat_map(|row| [row.left_no, row.right_no])
+        .flatten()
+        .max()
+        .unwrap_or(1)
+        .to_string()
+        .len();
+    let char_w = ui.fonts_mut(|f| f.glyph_width(&FontId::monospace(FS_CODE), '0'));
+    let half = (ui.available_width() - SPLIT_GAP) / 2.0;
+    let fits = (widest + digits + 3) as f32 * char_w <= half;
+    if replaces && fits {
+        show_split_rows(ui, limit_split_rows(rows, max_rows), id, selectable);
+    } else {
+        show_unified_rows(ui, &unified_rows(&rows), max_rows, digits, id, selectable);
+    }
+}
+
+const SPLIT_GAP: f32 = 16.0;
+
+/// One row of the single-column (unified) chat diff.
+struct UnifiedRow {
+    text: String,
+    number: Option<usize>,
+    kind: ChatDiffLineKind,
+}
+
+/// Flatten aligned split rows back into unified order: within each changed block all removed
+/// lines come first, then the added ones, like `git diff`.
+fn unified_rows(rows: &[ChatDiffRow]) -> Vec<UnifiedRow> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < rows.len() {
+        let row = &rows[i];
+        match (row.left_kind, row.right_kind) {
+            (ChatDiffLineKind::Header, _) => {
+                out.push(UnifiedRow {
+                    text: row.right.clone(),
+                    number: None,
+                    kind: ChatDiffLineKind::Header,
+                });
+                i += 1;
+            }
+            (ChatDiffLineKind::Context, _) => {
+                out.push(UnifiedRow {
+                    text: row.right.clone(),
+                    number: row.right_no,
+                    kind: ChatDiffLineKind::Context,
+                });
+                i += 1;
+            }
+            _ => {
+                let end = rows[i..]
+                    .iter()
+                    .position(|r| {
+                        matches!(
+                            r.left_kind,
+                            ChatDiffLineKind::Header | ChatDiffLineKind::Context
+                        )
+                    })
+                    .map_or(rows.len(), |p| i + p);
+                for r in &rows[i..end] {
+                    if matches!(r.left_kind, ChatDiffLineKind::Removed) {
+                        out.push(UnifiedRow {
+                            text: r.left.clone(),
+                            number: r.left_no,
+                            kind: ChatDiffLineKind::Removed,
+                        });
+                    }
+                }
+                for r in &rows[i..end] {
+                    if matches!(r.right_kind, ChatDiffLineKind::Added) {
+                        out.push(UnifiedRow {
+                            text: r.right.clone(),
+                            number: r.right_no,
+                            kind: ChatDiffLineKind::Added,
+                        });
+                    }
+                }
+                i = end;
+            }
+        }
+    }
+    out
+}
+
+fn show_unified_rows(
     ui: &mut Ui,
-    text: &str,
+    rows: &[UnifiedRow],
     max_rows: Option<usize>,
+    digits: usize,
     id: Id,
     selectable: bool,
 ) {
-    let rows = split_chat_diff_rows_limited(text, max_rows);
+    let limited = max_rows.is_some_and(|limit| rows.len() > limit);
+    let shown = if limited {
+        &rows[..max_rows.unwrap_or(0)]
+    } else {
+        rows
+    };
+    let font = FontId::monospace(FS_CODE);
+    let mut job = LayoutJob {
+        wrap: TextWrapping {
+            max_width: f32::INFINITY,
+            ..Default::default()
+        },
+        break_on_newline: true,
+        ..Default::default()
+    };
+    let total = shown.len() + usize::from(limited);
+    for (index, row) in shown.iter().enumerate() {
+        let (sign, color, number_color) = match row.kind {
+            ChatDiffLineKind::Added => ("+ ", c_diff_add_fg(), c_diff_add_fg().gamma_multiply(0.7)),
+            ChatDiffLineKind::Removed => {
+                ("- ", c_diff_del_fg(), c_diff_del_fg().gamma_multiply(0.7))
+            }
+            ChatDiffLineKind::Header => ("", c_text_faint(), c_text_faint()),
+            _ => ("  ", c_text_muted(), c_text_faint()),
+        };
+        let gutter = match (row.number, row.kind) {
+            (_, ChatDiffLineKind::Header) => String::new(),
+            (Some(n), _) => format!("{n:>digits$} {sign}"),
+            (None, _) => format!("{} {sign}", " ".repeat(digits)),
+        };
+        job.append(&gutter, 0.0, TextFormat::simple(font.clone(), number_color));
+        let mut line = row.text.clone();
+        if index + 1 < total {
+            line.push('\n');
+        }
+        job.append(&line, 0.0, TextFormat::simple(font.clone(), color));
+    }
+    if limited {
+        job.append(
+            &format!(
+                "… {} more lines · click to show all",
+                rows.len() - shown.len()
+            ),
+            0.0,
+            TextFormat::simple(font, c_text_faint()),
+        );
+    }
+    egui::ScrollArea::horizontal()
+        .id_salt(id.with("unified"))
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            let backgrounds = ui.painter().add(Shape::Noop);
+            let text_top = ui.cursor().top();
+            if selectable {
+                crate::theme::selectable_text_job(ui, job);
+            } else {
+                ui.add(
+                    egui::Label::new(job)
+                        .wrap_mode(egui::TextWrapMode::Extend)
+                        .selectable(false),
+                );
+            }
+            let used = ui.min_rect();
+            let row_h = (used.bottom() - text_top) / total.max(1) as f32;
+            let x = egui::Rangef::new(
+                used.left().min(ui.clip_rect().left()),
+                used.right().max(ui.clip_rect().right()),
+            );
+            let shapes = shown
+                .iter()
+                .enumerate()
+                .filter_map(|(i, row)| {
+                    let fill = match row.kind {
+                        ChatDiffLineKind::Added => c_diff_add_bg(),
+                        ChatDiffLineKind::Removed => c_diff_del_bg(),
+                        _ => return None,
+                    };
+                    let y0 = text_top + i as f32 * row_h;
+                    Some(Shape::rect_filled(
+                        Rect::from_x_y_ranges(x, y0..=y0 + row_h),
+                        0.0,
+                        fill,
+                    ))
+                })
+                .collect();
+            ui.painter().set(backgrounds, Shape::Vec(shapes));
+        });
+}
+
+/// Aligned old/new columns: faint line numbers, full-width row tints and a hairline between the
+/// two sides. Wrapping is deliberately disabled so one source row always occupies exactly one
+/// visual row in both columns; each column scrolls horizontally on its own.
+fn show_split_rows(ui: &mut Ui, rows: Vec<ChatDiffRow>, id: Id, selectable: bool) {
     if rows.is_empty() {
         return;
     }
@@ -95,7 +288,7 @@ pub fn show_split_chat_diff(
         .unwrap_or(1)
         .to_string()
         .len();
-    const GAP: f32 = 16.0;
+    const GAP: f32 = SPLIT_GAP;
     ui.spacing_mut().item_spacing.x = GAP;
     let top = ui.cursor().top();
     let mut divider_x = None;
@@ -152,8 +345,12 @@ pub fn show_split_chat_diff(
     }
 }
 
+#[cfg(test)]
 fn split_chat_diff_rows_limited(text: &str, max_rows: Option<usize>) -> Vec<ChatDiffRow> {
-    let mut rows = split_chat_diff_rows(text);
+    limit_split_rows(split_chat_diff_rows(text), max_rows)
+}
+
+fn limit_split_rows(mut rows: Vec<ChatDiffRow>, max_rows: Option<usize>) -> Vec<ChatDiffRow> {
     if let Some(limit) = max_rows
         && rows.len() > limit
     {
@@ -402,6 +599,21 @@ mod tests {
                 .max_width
                 .is_infinite()
         );
+    }
+
+    #[test]
+    fn unified_rows_list_removed_block_before_added_block() {
+        let rows = split_chat_diff_rows(
+            "@@ -1,3 +1,3 @@\n ctx\n-old a\n-old b\n+new a\n+new b\n+new c\n tail",
+        );
+        let unified = unified_rows(&rows);
+        let texts: Vec<&str> = unified.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["ctx", "old a", "old b", "new a", "new b", "new c", "tail"]
+        );
+        assert_eq!(unified[1].number, Some(2));
+        assert_eq!(unified[5].number, Some(4));
     }
 
     #[test]

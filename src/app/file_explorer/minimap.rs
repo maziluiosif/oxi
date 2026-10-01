@@ -45,16 +45,6 @@ pub(crate) struct MinimapGeometry {
 
 const MINIMAP_TAB_WIDTH: usize = 4;
 
-fn advance_columns(mut column: usize, text: &str) -> usize {
-    for character in text.chars() {
-        column += match character {
-            '\t' => MINIMAP_TAB_WIDTH - column % MINIMAP_TAB_WIDTH,
-            _ => 1,
-        };
-    }
-    column
-}
-
 fn build_geometry(
     content: &str,
     highlight_job: &egui::text::LayoutJob,
@@ -62,14 +52,29 @@ fn build_geometry(
 ) -> MinimapGeometry {
     // Build line metadata and indentation guides in one pass. Blank lines inherit the shallower
     // indentation of their nearest non-empty neighbours, matching the previous visual behavior.
-    let mut indent_columns = Vec::new();
-    for line in content.split('\n') {
-        let indentation = advance_columns(
-            0,
-            line.get(..line.len() - line.trim_start_matches([' ', '\t']).len())
-                .unwrap_or_default(),
-        );
-        indent_columns.push((!line.trim().is_empty()).then_some(indentation));
+    // Byte-level scan: this runs on every edit, and the `char`-pattern trims it replaces were a
+    // visible share of a keystroke in a 20k-line file.
+    let mut indent_columns =
+        Vec::with_capacity(memchr::memchr_iter(b'\n', content.as_bytes()).count() + 1);
+    let mut line_start = 0;
+    for line_end in memchr::memchr_iter(b'\n', content.as_bytes()).chain([content.len()]) {
+        let line = &content.as_bytes()[line_start..line_end];
+        line_start = line_end + 1;
+        let indent_len = line
+            .iter()
+            .position(|b| *b != b' ' && *b != b'\t')
+            .unwrap_or(line.len());
+        let mut indentation = 0;
+        for &b in &line[..indent_len] {
+            indentation += if b == b'\t' {
+                MINIMAP_TAB_WIDTH - indentation % MINIMAP_TAB_WIDTH
+            } else {
+                1
+            };
+        }
+        // `str::trim` also treats Unicode spaces as blank; only an all-whitespace rest counts.
+        let rest = &content[line_end - (line.len() - indent_len)..line_end];
+        indent_columns.push((!rest.trim().is_empty()).then_some(indentation));
     }
     let line_count = indent_columns.len();
     let mut indentation_before = Vec::with_capacity(line_count);

@@ -47,6 +47,34 @@ pub(super) fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
     Some(score)
 }
 
+/// Byte offsets in `path` of the characters [`fuzzy_path_score`] matched, for highlighting.
+/// A contiguous hit inside the file name wins over the greedy subsequence, mirroring the score.
+pub(super) fn fuzzy_match_positions(path: &str, query: &str) -> Vec<usize> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let path = path.to_ascii_lowercase();
+    let query = query.to_ascii_lowercase();
+    let filename_start = path.rfind('/').map_or(0, |index| index + 1);
+    if let Some(index) = path[filename_start..].find(&query) {
+        let start = filename_start + index;
+        return path[start..start + query.len()]
+            .char_indices()
+            .map(|(i, _)| start + i)
+            .collect();
+    }
+    let mut positions = Vec::new();
+    let mut search_from = 0usize;
+    for wanted in query.chars() {
+        let Some(relative) = path[search_from..].find(wanted) else {
+            return Vec::new();
+        };
+        positions.push(search_from + relative);
+        search_from += relative + wanted.len_utf8();
+    }
+    positions
+}
+
 pub(crate) fn find_match_ranges(
     content: &str,
     query: &str,

@@ -8,11 +8,15 @@ pub(super) fn live_git_line_changes(
     saved: &str,
     current: &str,
 ) -> Vec<GitLineChange> {
-    let saved_lines = saved.split('\n').collect::<Vec<_>>();
-    let current_lines = current.split('\n').collect::<Vec<_>>();
-    if saved_lines.len() == current_lines.len() {
+    // Typing within a line keeps the line count: answer that (by far the most common case)
+    // with two SIMD newline counts instead of splitting two copies of the file into lines.
+    if memchr::memchr_iter(b'\n', saved.as_bytes()).count()
+        == memchr::memchr_iter(b'\n', current.as_bytes()).count()
+    {
         return disk_changes.to_vec();
     }
+    let saved_lines = saved.split('\n').collect::<Vec<_>>();
+    let current_lines = current.split('\n').collect::<Vec<_>>();
 
     let prefix = saved_lines
         .iter()

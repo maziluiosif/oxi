@@ -259,6 +259,10 @@ pub struct Workspace {
     pub sessions: Vec<Session>,
     pub active: usize,
     pub sidebar_folded: bool,
+    /// Session files pinned to the top of the sidebar list (persisted in settings).
+    pub pinned: Vec<String>,
+    /// Keys of the sidebar date groups folded in this workspace (persisted in settings).
+    pub folded_groups: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -572,6 +576,13 @@ pub struct ConversationState {
     /// Receiver for the in-flight commit-message completion (deltas + terminal Done).
     /// `Some` while generating; cleared when the run finishes.
     pub commit_gen_rx: Option<std::sync::mpsc::Receiver<crate::agent::CompleteEvent>>,
+    /// In-flight chat-title completions: (workspace root, session file, auto title it replaces).
+    pub title_gen: Vec<(
+        String,
+        String,
+        String,
+        std::sync::mpsc::Receiver<crate::agent::CompleteEvent>,
+    )>,
     /// Last commit-generation error, shown inline under the composer until the next run.
     pub commit_gen_error: Option<String>,
     /// Commit message stashed while a generation streams into the field; restored

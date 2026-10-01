@@ -306,6 +306,7 @@ impl OxiApp {
                 match outcome {
                     AgentOutcome::Success { wire_cache } => {
                         self.session_mut_by_key(key).wire_cache = wire_cache;
+                        self.maybe_start_title_gen(key);
                     }
                     AgentOutcome::Failed { error } => {
                         self.invalidate_wire_cache(key);

@@ -13,6 +13,7 @@ mod stream_layout_tests;
 
 mod thinking;
 mod tool_format;
+pub use tool_format::set_display_root;
 mod tool_pill;
 
 use std::collections::hash_map::DefaultHasher;

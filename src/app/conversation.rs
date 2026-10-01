@@ -30,17 +30,41 @@ impl OxiApp {
             return;
         }
         ui.spacing_mut().item_spacing.y = 4.0;
-        if let Some(e) = self.conn.connect_error.clone()
-            && dismissible_error(ui, "Connection problem", &e)
-        {
-            self.conn.connect_error = None;
+        if let Some(e) = self.conn.connect_error.clone() {
+            let actions = ErrorActions {
+                retry: false,
+                settings: true,
+            };
+            match dismissible_error(ui, "Connection problem", &e, actions) {
+                Some(ErrorAction::Dismiss) => self.conn.connect_error = None,
+                Some(ErrorAction::OpenSettings) => self.open_provider_settings_for_active(),
+                _ => {}
+            }
         }
-        if let Some(e) = active_stream_error
-            && dismissible_error(ui, "Something went wrong", &e)
-        {
+        if let Some(e) = active_stream_error {
             let key = self.active_session_key();
-            self.run_state_mut(key).stream_error = None;
+            let actions = ErrorActions {
+                retry: !self.active_waiting_response()
+                    && !self.compaction_active_for(key)
+                    && self.last_user_prompt_index().is_some(),
+                settings: error_suggests_settings(&e),
+            };
+            match dismissible_error(ui, "Something went wrong", &e, actions) {
+                Some(ErrorAction::Dismiss) => self.run_state_mut(key).stream_error = None,
+                Some(ErrorAction::Retry) => self.retry_last_prompt(),
+                Some(ErrorAction::OpenSettings) => self.open_provider_settings_for_active(),
+                None => {}
+            }
         }
+    }
+
+    /// Opens Settings → Models & providers on the provider the active chat uses.
+    fn open_provider_settings_for_active(&mut self) {
+        let key = self.active_session_key();
+        let provider = self.ensure_session_config(key).provider;
+        self.open_settings_page();
+        self.conv.settings_tab = super::state::SettingsTab::Providers;
+        self.conv.settings_provider_tab = provider;
     }
 
     /// Approve/deny prompt for a shell or built-in filesystem mutation tool.
@@ -558,6 +582,10 @@ impl OxiApp {
                     }
                     ui.vertical(|ui| {
                         ui.set_width(col_w);
+                        crate::ui::messages::set_display_root(
+                            ui.ctx(),
+                            &self.conv.workspaces[wi].root_path,
+                        );
                         let message_count = self.conv.workspaces[wi].sessions[si].messages.len();
                         if message_count == 0 {
                             self.render_empty_state(ui);
@@ -770,6 +798,18 @@ impl OxiApp {
                         rounding: CornerRadius::same((BTN * 0.5) as u8),
                         glyph: c_text_muted(),
                     };
+                    // Soft shadow so the button reads as floating over whatever content
+                    // (tables, code blocks) scrolls underneath it.
+                    let shadow_rect = egui::Rect::from_min_size(pos, egui::vec2(BTN, BTN));
+                    ui.painter().add(
+                        egui::epaint::Shadow {
+                            offset: [0, 2],
+                            blur: 10,
+                            spread: 0,
+                            color: egui::Color32::from_black_alpha(90),
+                        }
+                        .as_shape(shadow_rect, CornerRadius::same((BTN * 0.5) as u8)),
+                    );
                     let resp = crate::ui::chrome::icon_button_core(
                         ui,
                         ICON_ANGLE_DOWN,
@@ -778,7 +818,8 @@ impl OxiApp {
                         false,
                         &look,
                     )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Jump to latest");
                     jump = resp.clicked();
                 });
             if jump {
@@ -818,8 +859,56 @@ fn approval_question(tool: &str) -> String {
 
 /// Error callout above the transcript, in the same style as the in-transcript run errors.
 /// Returns true when the user dismissed it.
-fn dismissible_error(ui: &mut Ui, title: &str, detail: &str) -> bool {
-    let mut dismissed = false;
+#[derive(Clone, Copy)]
+struct ErrorActions {
+    retry: bool,
+    settings: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ErrorAction {
+    Dismiss,
+    Retry,
+    OpenSettings,
+}
+
+/// True when the error text points at provider configuration (credentials, endpoint, model id)
+/// rather than a transient failure, so the banner offers a shortcut to the provider settings.
+fn error_suggests_settings(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    [
+        "401",
+        "403",
+        "404",
+        "unauthorized",
+        "forbidden",
+        "api key",
+        "api_key",
+        "apikey",
+        "invalid key",
+        "authentication",
+        "not signed in",
+        "connection refused",
+        "could not connect",
+        "failed to connect",
+        "dns",
+        "model not found",
+        "no such model",
+        "does not exist",
+        "endpoint",
+        "base url",
+    ]
+    .iter()
+    .any(|needle| e.contains(needle))
+}
+
+fn dismissible_error(
+    ui: &mut Ui,
+    title: &str,
+    detail: &str,
+    actions: ErrorActions,
+) -> Option<ErrorAction> {
+    let mut action = None;
     Frame::new()
         .fill(c_error_bg())
         .stroke(Stroke::new(1.0, c_error_fg().gamma_multiply(0.35)))
@@ -839,7 +928,7 @@ fn dismissible_error(ui: &mut Ui, title: &str, detail: &str) -> bool {
                         .on_hover_text("Dismiss")
                         .clicked()
                     {
-                        dismissed = true;
+                        action = Some(ErrorAction::Dismiss);
                     }
                     ui.with_layout(egui::Layout::top_down(Align::Min), |ui| {
                         ui.label(
@@ -853,12 +942,48 @@ fn dismissible_error(ui: &mut Ui, title: &str, detail: &str) -> bool {
                                 .wrap()
                                 .selectable(true),
                         );
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if actions.retry
+                                && crate::ui::chrome::mini_button_icon_enabled(
+                                    ui,
+                                    ICON_REFRESH,
+                                    "Retry",
+                                    true,
+                                )
+                                .on_hover_text("Send the last prompt again")
+                                .clicked()
+                            {
+                                action = Some(ErrorAction::Retry);
+                            }
+                            if actions.settings
+                                && crate::ui::chrome::mini_button_icon_enabled(
+                                    ui,
+                                    ICON_SETTINGS,
+                                    "Provider settings",
+                                    true,
+                                )
+                                .on_hover_text("Check the API key, endpoint and model id")
+                                .clicked()
+                            {
+                                action = Some(ErrorAction::OpenSettings);
+                            }
+                            if crate::ui::chrome::mini_button_icon_enabled(
+                                ui, ICON_COPY, "Copy", true,
+                            )
+                            .on_hover_text("Copy the error text")
+                            .clicked()
+                            {
+                                ui.ctx().copy_text(format!("{title}: {detail}"));
+                            }
+                        });
                     });
                 });
             });
         });
     ui.add_space(4.0);
-    dismissed
+    action
 }
 
 fn suggestion_card(
