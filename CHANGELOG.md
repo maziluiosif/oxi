@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-01
+
+### Added
+- Sublime-style find and replace in the editor with regex, case-sensitive, and whole-word toggles
+- Live match counter and incremental search from caret position
+- Replace and Replace All operations with $1 group expansion in regex mode
+- Find and replace keyboard shortcuts: Cmd+G / F3 for next, Cmd+Alt+F for replace, Cmd+Alt+Enter for replace all
+- Terminal tabs: multiple shell tabs per workspace that persist on switch
+- Auto-generated short chat titles after first reply (opt-out setting)
+- Sidebar: pin chats to top, foldable date groups, both persisted per workspace
+- Adaptive chat diffs: split old/new columns when they fit, unified otherwise
+- Retry last prompt after failed run
+- File picker as command-palette popup with highlighted matches
+- OXI_FRAME_STATS=1 environment variable for frame timing diagnostics
+
+### Changed
+- Providers panel: grouped provider pills with credential status and dropdown when narrow
+- Composer: fixed-width selectors with attach button on selector row
+- Tool output now shows workspace-relative paths
+- Provider-config errors link to settings
+- Editor performance: reduced input latency with one frame in flight instead of two
+- Agent events now wake UI on repaint for faster streamed text updates
+- Editor layout: per-paragraph galleys kept across edits, only changed paragraphs relaid out
+- Text diffs use block memcmp and scan only edited spans
+- Tree-sitter reparses of large files now run off UI thread when slower than 4 ms
+- Minimap relayout throttled to at most every 250 ms while editing
+
+### Fixed
+- Find field focus with stable widget id
+- Closing find panel now selects the current match
+- Removed hover tooltips from tool pill summaries
+
+
 ## [1.3.0] - 2026-09-30
 
 ### Added
@@ -787,7 +820,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/maziluiosif/oxi/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/maziluiosif/oxi/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/maziluiosif/oxi/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/maziluiosif/oxi/compare/v1.1.0...v1.1.1
