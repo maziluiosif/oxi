@@ -1,7 +1,8 @@
 //! Native Git integration for the source-control panel.
 //!
-//! All repository operations use `git2`/libgit2. No `git` executable is spawned. Work runs on a
-//! background thread so repository and network I/O never blocks egui.
+//! All repository operations use `git2`/libgit2. No `git` executable is spawned unless the user
+//! opts into system Git for network operations (see `git/system.rs`). Work runs on a background
+//! thread so repository and network I/O never blocks egui.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -11,6 +12,10 @@ use std::thread;
 #[path = "git/network.rs"]
 mod network;
 use network::{fetch, pull, push};
+
+#[path = "git/system.rs"]
+mod system;
+pub use system::version as system_git_version;
 
 #[cfg(test)]
 #[path = "git/tests.rs"]

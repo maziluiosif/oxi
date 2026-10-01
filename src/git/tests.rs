@@ -146,3 +146,84 @@ fn worker_auto_refresh_preserves_diff_and_resets_it_on_workspace_change() {
     assert!(state.diff.is_none());
     assert!(state.current_diff_path.is_none());
 }
+
+#[test]
+fn system_git_command_is_non_interactive_and_runs_in_the_workdir() {
+    let git = system::resolve_executable("/custom/bin/git");
+    assert_eq!(git, PathBuf::from("/custom/bin/git"));
+    let workdir = std::env::temp_dir();
+    let cmd = system::command(&git, &workdir, &system::push_args("feat/x"));
+    assert_eq!(cmd.get_program(), "/custom/bin/git");
+    assert_eq!(cmd.get_current_dir(), Some(workdir.as_path()));
+    let args = cmd.get_args().collect::<Vec<_>>();
+    assert_eq!(
+        args,
+        [
+            "push",
+            "--porcelain",
+            "origin",
+            "refs/heads/feat/x:refs/heads/feat/x"
+        ]
+    );
+    let envs = cmd.get_envs().collect::<Vec<_>>();
+    assert!(envs.contains(&("GIT_TERMINAL_PROMPT".as_ref(), Some("0".as_ref()))));
+    assert_eq!(system::fetch_args(), ["fetch", "origin"]);
+}
+
+#[test]
+fn system_git_resolves_a_default_executable_when_unconfigured() {
+    let git = system::resolve_executable("  ");
+    let name = git.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name == "git" || name == "git.exe", "{git:?}");
+}
+
+#[test]
+fn system_git_detects_non_fast_forward_push_rejections() {
+    assert!(system::push_rejected_non_fast_forward(
+        "To github.com:o/r.git\n!\trefs/heads/main:refs/heads/main\t[rejected] (fetch first)\nDone\n"
+    ));
+    assert!(system::push_rejected_non_fast_forward(
+        "!\trefs/heads/main:refs/heads/main\t[rejected] (non-fast-forward)\n"
+    ));
+    assert!(!system::push_rejected_non_fast_forward(
+        "!\trefs/heads/main:refs/heads/main\t[remote rejected] (pre-receive hook declined)\n"
+    ));
+    assert!(!system::push_rejected_non_fast_forward(
+        " \trefs/heads/main:refs/heads/main\t1111111..2222222\nDone\n"
+    ));
+}
+
+#[test]
+fn system_git_pushes_and_fetches_through_a_local_remote() {
+    // Needs a real `git`; skip quietly on machines without one.
+    if system::version("").is_err() {
+        return;
+    }
+    let git = system::resolve_executable("");
+    let repo = TestRepo::new();
+    let remote_dir = repo.root.with_extension("remote.git");
+    let remote = Repository::init_bare(&remote_dir).unwrap();
+    repo.repo
+        .remote("origin", remote_dir.to_str().unwrap())
+        .unwrap();
+    let branch = current_branch(&repo.repo);
+    let head = repo.repo.head().unwrap().target().unwrap();
+
+    let pushed = network::system_push(&repo.repo, &git, &branch);
+    let fetched = network::system_fetch(&repo.repo, &git);
+    let remote_head = remote
+        .find_reference(&format!("refs/heads/{branch}"))
+        .ok()
+        .and_then(|r| r.target());
+    let tracking = repo
+        .repo
+        .find_reference(&format!("refs/remotes/origin/{branch}"))
+        .ok()
+        .and_then(|r| r.target());
+    let _ = std::fs::remove_dir_all(&remote_dir);
+
+    assert_eq!(pushed, Ok(()));
+    assert_eq!(fetched, Ok(()));
+    assert_eq!(remote_head, Some(head));
+    assert_eq!(tracking, Some(head));
+}
