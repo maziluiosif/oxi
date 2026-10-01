@@ -17,6 +17,11 @@ pub(super) fn transcript_unit_fingerprint(messages: &[crate::model::ChatMessage]
         message.text.len().hash(&mut hasher);
         message.attachments.len().hash(&mut hasher);
         message.worked_duration.is_some().hash(&mut hasher);
+        message
+            .route
+            .as_ref()
+            .map(|r| (r.model.len(), r.reason.len()))
+            .hash(&mut hasher);
         message.blocks.len().hash(&mut hasher);
         for block in &message.blocks {
             match block {

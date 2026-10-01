@@ -118,8 +118,13 @@ pub(super) async fn send_with_retry(
             .try_clone()
             .ok_or_else(|| "internal: request not cloneable for retry".to_string())?;
         let (err, wait) = match this_try.send().await {
-            Ok(res) if res.status().is_success() => return Ok(res),
+            Ok(res) if res.status().is_success() => {
+                // Codex reports its usage windows on every response; keep the Router current.
+                crate::router::quota::observe_headers(res.headers());
+                return Ok(res);
+            }
             Ok(res) if is_retryable_status(res.status()) => {
+                crate::router::quota::observe_headers(res.headers());
                 let status = res.status();
                 let wait = retry_after(&res);
                 let body = res.text().await.unwrap_or_default();

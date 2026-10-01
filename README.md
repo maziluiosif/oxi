@@ -281,6 +281,12 @@ Voice dictation is optional and fully local:
 
 Settings keep one configuration per provider kind. The active provider can be switched from Settings or from the composer provider control.
 
+With **Router (auto)** selected, explicit instructions such as `Use Codex for this task` or `Folosește Claude Code pentru asta` take priority over automatic scoring. `From now on use Claude Code` / `De acum folosește Claude Code` keeps that preference for the chat, including after reopening or compaction. `Use only Codex` prevents fallback to another provider; `De acum folosește Router` restores automatic selection. Provider names in comparisons, quotations, or fenced code do not select a provider.
+
+Requests to generate an image (`Generate an image of…`, `Fă-mi un logo…`) always go to **Codex (ACP)**, the only agent that can create images, unless the same message names another provider. Automatic failover does not move these turns elsewhere.
+
+When automatic failover is enabled, a recognized quota or rate-limit failure can continue the same request with another eligible API or ACP provider. The router makes at most two switches and never retries the same provider within a request. A new ACP session receives conversation history plus bounded partial answers and tool reports from the failed attempts, and is told to inspect the workspace before continuing. Plan mode, approval policies, and cancellation remain active. Unfinished tool calls or unresolved approvals stop automatic continuation; unrelated errors stop the request. The route displayed above the answer identifies the replacement provider and the quota failure.
+
 Supported provider kinds:
 
 | Provider | Notes |
@@ -299,6 +305,23 @@ Supported provider kinds:
 | Claude Code (ACP) | oxi acts as an Agent Client Protocol client and spawns the `claude-code-acp` subprocess |
 | Cursor (ACP) | Cursor CLI's built-in ACP server (`agent acp`) |
 | Codex (ACP) | OpenAI Codex CLI through the official ACP adapter |
+
+### Auto router
+
+Select **Router** to choose among your configured providers each turn. For automatic choices, by default,
+Jev (`typesafe/jev-1.13`) classifies the task as light, standard or heavy using the
+[OpenRouter Decisions API](https://openrouter.ai/docs/guides/community/jev-tutorial).
+Set an OpenRouter API key in Settings → Providers or `OPENROUTER_API_KEY`; the
+OpenRouter chat model does not need to be selected. oxi then ranks your providers
+locally using the selected strategy, quotas, costs and conversation continuity.
+
+Classification sends the current message (up to 16 KB) and limited recent text
+context (up to 8 KB); images, thinking and tool outputs are excluded. Calls have a
+five-second timeout, count toward the monthly pay-per-use budget, and are reused
+when a turn fails over. Missing credentials, API errors and low-confidence results
+use a conservative local fallback (at least standard). You can disable Jev under
+Settings → Providers → Router to use only the local rules. Helper completions such
+as titles and commit messages use local routing without an extra Jev request.
 
 ### Provider defaults
 

@@ -310,6 +310,9 @@ pub struct SessionRunState {
     pub plan_mode: bool,
     /// The most recent turn ran in plan mode, so the chat can offer "Implement the plan".
     pub last_turn_planned: bool,
+    /// Provider/model the running turn bills against (the routed one under the Router), for
+    /// the usage ledger.
+    pub usage_target: Option<(crate::settings::LlmProviderKind, String)>,
 }
 
 impl SessionRunState {

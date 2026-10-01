@@ -332,10 +332,12 @@ pub fn render_assistant_message_run(ui: &mut Ui, msg_idx: usize, messages: &[Cha
     let mut streaming = false;
     let mut started_at = None;
     let mut worked_duration = None;
+    let mut route = None;
     for msg in messages {
         if msg.role != MsgRole::Assistant {
             continue;
         }
+        route = route.or(msg.route.as_deref());
         streaming |= msg.streaming;
         started_at = started_at.or(msg.started_at);
         worked_duration = worked_duration.or(msg.worked_duration);
@@ -348,9 +350,64 @@ pub fn render_assistant_message_run(ui: &mut Ui, msg_idx: usize, messages: &[Cha
 
     ui.vertical(|ui| {
         ui.set_width(col_w);
+        if let Some(route) = route {
+            render_route_note(ui, route);
+        }
         render_assistant_blocks(ui, msg_idx, &blocks, streaming, started_at, worked_duration);
     });
     ui.add_space(8.0);
+}
+
+/// The Router's pick for this turn: "Router → Claude Code · opus · high" with the reason
+/// underneath; hovering lists the runner-up and skipped candidates.
+fn render_route_note(ui: &mut Ui, route: &crate::model::RouteNote) {
+    let mut title = format!("Router → {} · {}", route.provider.label(), route.model);
+    if !route.effort.is_empty() {
+        title.push_str(&format!(" · {} effort", route.effort));
+    }
+    let response = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(crate::ui::chrome::icon_glyph_rich(
+                ICON_PROVIDERS,
+                FS_TINY,
+                c_accent(),
+            ));
+            ui.label(RichText::new(title).size(FS_SMALL).color(c_text_muted()));
+            if !route.strategy.is_empty() {
+                ui.label(
+                    RichText::new(format!("({})", route.strategy))
+                        .size(FS_TINY)
+                        .color(c_text_faint()),
+                );
+            }
+        })
+        .response;
+    if let Some(from) = &route.failover_from {
+        ui.add(
+            Label::new(
+                RichText::new(format!("Switched from {from}"))
+                    .size(FS_TINY)
+                    .color(c_warning_fg()),
+            )
+            .wrap(),
+        );
+    }
+    let reason = ui.add(
+        Label::new(
+            RichText::new(&route.reason)
+                .size(FS_TINY)
+                .color(c_text_faint()),
+        )
+        .wrap(),
+    );
+    if !route.alternatives.is_empty() {
+        let details = route.alternatives.join("\n");
+        response
+            .union(reason)
+            .on_hover_text(format!("Other candidates:\n{details}"));
+    }
+    ui.add_space(4.0);
 }
 
 fn trailing_answer_start(blocks: &[AssistantBlock]) -> usize {

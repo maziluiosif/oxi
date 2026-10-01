@@ -21,8 +21,12 @@ impl OxiApp {
         if !self.conv.settings.auto_title_chats {
             return;
         }
-        let config = self.conv.settings.commit_msg_config();
-        if config.is_acp() {
+        let config = crate::router::helper_config(
+            &self.conv.settings,
+            self.conv.settings.commit_msg_config(),
+            TITLE_PROMPT_CHARS,
+        );
+        if config.is_acp() || config.provider == crate::settings::LlmProviderKind::Router {
             return;
         }
         let root = self.conv.workspaces[key.workspace_idx].root_path.clone();

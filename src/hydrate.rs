@@ -47,6 +47,7 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     streaming: false,
                     started_at: None,
                     worked_duration: None,
+                    route: None,
                 });
             }
             "assistant" => {
@@ -62,6 +63,10 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     .and_then(|x| x.as_f64())
                     .filter(|s| *s > 0.0)
                     .map(Duration::from_secs_f64);
+                let route = m
+                    .get("route")
+                    .and_then(|r| serde_json::from_value(r.clone()).ok())
+                    .map(Box::new);
                 out.push(ChatMessage {
                     role: MsgRole::Assistant,
                     text: String::new(),
@@ -71,6 +76,7 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     streaming: false,
                     started_at: None,
                     worked_duration,
+                    route,
                 });
             }
             "toolResult" => {
@@ -258,6 +264,7 @@ fn merge_tool_result(out: &mut Vec<ChatMessage>, m: &Value) {
         streaming: false,
         started_at: None,
         worked_duration: None,
+        route: None,
     });
 }
 

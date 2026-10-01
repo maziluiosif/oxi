@@ -342,6 +342,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         }
     }
 
@@ -355,6 +356,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         }
     }
 
@@ -385,6 +387,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let flat = flatten_assistant(&msg);
         // Both the leading command context and the final result survive; the middle is dropped.

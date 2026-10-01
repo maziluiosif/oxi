@@ -40,6 +40,12 @@ pub fn chat_message_to_json_entries(message: &ChatMessage) -> Vec<Value> {
             {
                 entry["workedSecs"] = json!(d.as_secs_f64());
             }
+            // The Router's choice and its reason, shown above the reply after a reload too.
+            if let Some(entry) = entries.first_mut()
+                && let Some(route) = &message.route
+            {
+                entry["route"] = json!(route);
+            }
             entries
         }
     }
@@ -219,6 +225,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -239,6 +246,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries[0]["role"], "user");
@@ -265,6 +273,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -288,6 +297,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 1);
@@ -317,6 +327,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         assert_eq!(entries.len(), 2); // assistant + toolResult
@@ -346,6 +357,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         let result = &entries[1];
@@ -373,6 +385,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let entries = chat_message_to_json_entries(&msg);
         let content = entries[0]["content"].as_array().unwrap();

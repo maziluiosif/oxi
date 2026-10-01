@@ -334,6 +334,7 @@ impl OxiApp {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         });
         sess.messages.push(ChatMessage {
             role: MsgRole::Assistant,
@@ -344,6 +345,7 @@ impl OxiApp {
             streaming: true,
             started_at: Some(std::time::Instant::now()),
             worked_duration: None,
+            route: None,
         });
     }
 
@@ -571,8 +573,12 @@ impl OxiApp {
             s.messages[..s.messages.len() - 1].to_vec()
         };
         let mut settings = self.conv.settings.clone();
-        self.ensure_session_config(key)
-            .apply_to_settings(&mut settings);
+        let session_config = self.ensure_session_config(key);
+        session_config.apply_to_settings(&mut settings);
+        // Under the Router the real target arrives with `AgentEvent::Routed`.
+        self.run_state_mut(key).usage_target = (session_config.provider
+            != crate::settings::LlmProviderKind::Router)
+            .then(|| (session_config.provider, session_config.model_id.clone()));
         let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
             .session_file
             .clone();

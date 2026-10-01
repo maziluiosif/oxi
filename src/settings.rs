@@ -6,6 +6,8 @@
 
 mod app_settings;
 mod provider;
+mod router;
 
 pub use app_settings::*;
 pub use provider::*;
+pub use router::*;

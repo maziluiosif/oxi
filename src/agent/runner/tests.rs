@@ -116,6 +116,7 @@ fn chat_msg(
         streaming: false,
         started_at: None,
         worked_duration: None,
+        route: None,
     }
 }
 
@@ -148,4 +149,23 @@ fn acp_history_transcript_drops_oldest_turns_over_budget() {
     let t = acp_history_transcript(&chat);
     assert!(!t.contains("old"));
     assert!(t.starts_with("User: xxx"));
+}
+
+#[tokio::test]
+async fn router_cancellation_drops_a_pending_request_promptly() {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = cancel.clone();
+    let trigger = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        flag.store(true, Ordering::SeqCst);
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::select! {
+            _ = std::future::pending::<()>() => panic!("pending request completed"),
+            _ = wait_for_router_cancel(&cancel) => {}
+        }
+    })
+    .await
+    .expect("routing cancellation must stay responsive");
+    trigger.await.unwrap();
 }
