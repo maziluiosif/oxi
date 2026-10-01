@@ -63,12 +63,16 @@ impl OxiApp {
                         .font(FontId::new(FS_TINY, icon_font()))
                         .color(c_text_muted()),
                 );
-                ui.label(
-                    RichText::new(branch)
-                        .size(FS_TINY)
-                        .color(c_text_muted())
-                        .monospace(),
-                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&branch)
+                            .size(FS_TINY)
+                            .color(c_text_muted())
+                            .monospace(),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(&branch);
                 if ahead > 0 {
                     ui.label(
                         RichText::new(format!("↑{ahead}"))
@@ -280,62 +284,45 @@ impl OxiApp {
         staged: bool,
     ) {
         let full_w = ui.available_width();
-        ui.allocate_ui_with_layout(
-            egui::vec2(full_w, 20.0),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                ui.label(
-                    RichText::new(title.to_uppercase())
-                        .size(FS_TINY)
-                        .color(c_text_faint())
-                        .strong(),
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(full_w, 20.0), Sense::hover());
+        fixed_row_ui(ui, rect, Layout::right_to_left(Align::Center), |ui| {
+            if staged {
+                if crate::ui::chrome::icon_button_inline(ui, ICON_CLOSE, FS_TINY, c_text_faint())
+                    .on_hover_text("Unstage all")
+                    .clicked()
+                {
+                    let paths: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+                    self.request(GitOp::Unstage(paths));
+                }
+            } else {
+                if crate::ui::chrome::icon_button_inline(ui, ICON_TRASH, FS_TINY, c_text_faint())
+                    .on_hover_text("Discard all changes")
+                    .clicked()
+                {
+                    self.request_confirm(crate::app::state::ConfirmAction::GitDiscard {
+                        paths: entries.iter().map(|e| e.path.clone()).collect(),
+                    });
+                }
+                if crate::ui::chrome::icon_button_inline(ui, ICON_PLUS, FS_TINY, c_text_faint())
+                    .on_hover_text("Stage all")
+                    .clicked()
+                {
+                    let paths: Vec<String> = entries.iter().map(|e| e.path.clone()).collect();
+                    self.request(GitOp::Stage(paths));
+                }
+            }
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(title.to_uppercase())
+                            .size(FS_TINY)
+                            .color(c_text_faint())
+                            .strong(),
+                    )
+                    .truncate(),
                 );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if staged {
-                        if crate::ui::chrome::icon_button_inline(
-                            ui,
-                            ICON_CLOSE,
-                            FS_TINY,
-                            c_text_faint(),
-                        )
-                        .on_hover_text("Unstage all")
-                        .clicked()
-                        {
-                            let paths: Vec<String> =
-                                entries.iter().map(|e| e.path.clone()).collect();
-                            self.request(GitOp::Unstage(paths));
-                        }
-                    } else {
-                        if crate::ui::chrome::icon_button_inline(
-                            ui,
-                            ICON_TRASH,
-                            FS_TINY,
-                            c_text_faint(),
-                        )
-                        .on_hover_text("Discard all changes")
-                        .clicked()
-                        {
-                            self.request_confirm(crate::app::state::ConfirmAction::GitDiscard {
-                                paths: entries.iter().map(|e| e.path.clone()).collect(),
-                            });
-                        }
-                        if crate::ui::chrome::icon_button_inline(
-                            ui,
-                            ICON_PLUS,
-                            FS_TINY,
-                            c_text_faint(),
-                        )
-                        .on_hover_text("Stage all")
-                        .clicked()
-                        {
-                            let paths: Vec<String> =
-                                entries.iter().map(|e| e.path.clone()).collect();
-                            self.request(GitOp::Stage(paths));
-                        }
-                    }
-                });
-            },
-        );
+            });
+        });
     }
 
     fn render_change_row(
@@ -376,8 +363,10 @@ impl OxiApp {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(crate::theme::RADIUS_ROW), fill);
 
-        ui.scope_builder(
-            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 0.0))),
+        fixed_row_ui(
+            ui,
+            rect.shrink2(egui::vec2(6.0, 0.0)),
+            Layout::left_to_right(Align::Center),
             |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     // Action button: stage (when unstaged) / unstage (when staged)
@@ -435,8 +424,8 @@ impl OxiApp {
                     // whole row width and the button never gets space on narrow
                     // panels. Reserving it on staged rows too keeps both sections
                     // truncating at the same column.
-                    const ACTION_W: f32 = 22.0;
-                    let label_w = (ui.available_width() - ACTION_W).max(0.0);
+                    let action_w = 18.0 + ui.spacing().item_spacing.x;
+                    let label_w = (ui.available_width() - action_w).max(0.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(label_w, ui.available_height()),
                         Layout::left_to_right(Align::Center),
@@ -632,5 +621,80 @@ fn status_color(status: char) -> Color32 {
         'U' => c_danger(),
         '?' => c_text_muted(),
         _ => c_text(),
+    }
+}
+
+/// Rows have fixed geometry: overflowing child content must not widen the scroll
+/// area's subsequent rows and push their right-aligned actions beyond the panel.
+fn fixed_row_ui<R>(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    layout: Layout,
+    contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout));
+    row_ui.shrink_clip_rect(rect);
+    contents(&mut row_ui)
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn git_rows_keep_bulk_actions_inside_narrow_panels() {
+        for width in [224.0, 284.0, 624.0] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let mut fonts_ready = false;
+                let mut harness = egui_kittest::Harness::builder()
+                    .with_size(egui::vec2(width + 16.0, 240.0))
+                    .with_pixels_per_point(scale)
+                    .with_os(egui::os::OperatingSystem::Windows)
+                    .build_ui(move |ui| {
+                        if !fonts_ready {
+                            crate::theme::setup_style(ui.ctx());
+                            fonts_ready = true;
+                            return;
+                        }
+                        ui.set_width(width);
+                        ScrollArea::vertical().show(ui, |ui| {
+                            let right = ui.max_rect().right();
+                            // An overflowing file row used to widen the following
+                            // section's available area, putting its actions offscreen.
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 22.0),
+                                Sense::hover(),
+                            );
+                            fixed_row_ui(ui, rect, Layout::left_to_right(Align::Center), |ui| {
+                                ui.add(
+                                    egui::Label::new("very_long_directory/".repeat(40))
+                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                            });
+                            assert!(ui.max_rect().right() <= right + 0.5);
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 20.0),
+                                Sense::hover(),
+                            );
+                            fixed_row_ui(ui, rect, Layout::right_to_left(Align::Center), |ui| {
+                                for icon in [ICON_TRASH, ICON_PLUS] {
+                                    let response = crate::ui::chrome::icon_button_inline(
+                                        ui,
+                                        icon,
+                                        FS_TINY,
+                                        c_text_faint(),
+                                    );
+                                    assert!(ui.clip_rect().contains_rect(response.rect));
+                                    assert!(response.rect.right() <= right + 0.5);
+                                }
+                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                    ui.add(egui::Label::new("CHANGES").truncate());
+                                });
+                            });
+                        });
+                    });
+                harness.run_steps(3);
+            }
+        }
     }
 }
