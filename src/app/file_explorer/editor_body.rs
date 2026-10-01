@@ -14,9 +14,7 @@ use super::editor_paint::{
     paint_selected_whitespace, paint_selection, selected_logical_lines,
 };
 use super::editor_text::EditorText;
-use super::support::{
-    apply_definition_underline, apply_search_highlights, find_match_ranges, language_for_path,
-};
+use super::support::{apply_definition_underline, apply_search_highlights, language_for_path};
 use super::{EditorLayoutCache, line_layout, minimap, syntax_window};
 
 pub(super) type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
@@ -52,18 +50,15 @@ impl OxiApp {
             std::mem::take(&mut self.conv.editor.goto_definition_requested);
         // Keep match geometry for one extra frame while Find closes so Escape/X can
         // apply the current match caret before the panel disappears.
-        let find_ranges = if self.conv.editor.find_open
+        let find_results = if self.conv.editor.find_open
             || self.conv.editor.find_select_pending
             || self.conv.editor.find_focus_editor_pending
         {
-            find_match_ranges(
-                &self.conv.editor.documents[index].content,
-                &self.conv.editor.find_query,
-                self.conv.editor.find_case_sensitive,
-            )
+            self.conv.editor.find_results()
         } else {
-            Vec::new()
+            Arc::default()
         };
+        let find_ranges: &[std::ops::Range<usize>] = &find_results.ranges;
         let active_find_match = (!find_ranges.is_empty()).then(|| {
             self.conv
                 .editor
@@ -164,6 +159,7 @@ impl OxiApp {
             .map(|_| self.conv.editor.documents[index].viewport_anchor_line);
         self.conv.editor.documents[index].viewport_width_bits = Some(prospective_width_bits);
         let mut goto_definition_byte = None;
+        let mut editor_selection = None;
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
 
@@ -348,9 +344,12 @@ impl OxiApp {
                                         egui::text::CCursor::new(end),
                                     )
                                 } else {
-                                    // Find navigation places an insertion caret immediately after
-                                    // the match, ready to continue editing the document.
-                                    egui::text::CCursorRange::one(egui::text::CCursor::new(end))
+                                    // Find selects the match, like Sublime: typing replaces it and
+                                    // F3 / Cmd+G continue from its end.
+                                    egui::text::CCursorRange::two(
+                                        egui::text::CCursor::new(start),
+                                        egui::text::CCursor::new(end),
+                                    )
                                 };
                                 output.state.cursor.set_char_range(Some(cursor_range));
                                 output.state.store(ui.ctx(), output.response.id);
@@ -448,6 +447,10 @@ impl OxiApp {
                             } else {
                                 None
                             };
+                            editor_selection = output.cursor_range.map(|range| {
+                                let sorted = range.as_sorted_char_range();
+                                (sorted.start.0, sorted.end.0)
+                            });
                             let selection = output.cursor_range.filter(|range| !range.is_empty());
                             let wrap_width_bits =
                                 output.galley.job.wrap.max_width.round().to_bits();
@@ -545,8 +548,18 @@ impl OxiApp {
                                     let start = range.start.clamp(job_start, job_end);
                                     start - job_start..range.end.clamp(start, job_end) - job_start
                                 };
-                                let local_find: Vec<_> = find_ranges.iter().map(to_job).collect();
-                                apply_search_highlights(&mut job, &local_find, active_find_match);
+                                // Matches are sorted; only those inside the job need highlighting.
+                                let first_find =
+                                    find_ranges.partition_point(|range| range.end <= job_start);
+                                let local_find: Vec<_> = find_ranges[first_find..]
+                                    .iter()
+                                    .take_while(|range| range.start < job_end)
+                                    .map(to_job)
+                                    .collect();
+                                let local_active = active_find_match
+                                    .and_then(|active| active.checked_sub(first_find))
+                                    .filter(|active| *active < local_find.len());
+                                apply_search_highlights(&mut job, &local_find, local_active);
                                 if let Some(range) = hovered_definition.as_ref()
                                     && !to_job(range).is_empty()
                                 {
@@ -909,6 +922,7 @@ impl OxiApp {
                 ui.ctx().request_repaint();
             }
         });
+        self.conv.editor.editor_selection_chars = editor_selection;
         if let Some(byte) = goto_definition_byte {
             self.go_to_rust_definition(byte);
         }

@@ -504,7 +504,16 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.app().conv.editor.find_query = "ordered".into();
         rec.harness.run_steps(4);
         rec.still("editor-find");
+        rec.app().conv.editor.find_replace_open = true;
+        rec.app().conv.editor.find_options.whole_word = true;
+        rec.app().conv.editor.replace_query = "sorted".into();
+        rec.harness.run_steps(4);
+        rec.still("editor-find-replace");
+        rec.app().conv.editor.find_query = "no such text".into();
+        rec.harness.run_steps(4);
+        rec.still("editor-find-none");
         rec.app().conv.editor.find_open = false;
+        rec.app().conv.editor.find_replace_open = false;
         rec.app().open_file_picker();
         rec.harness.run_steps(4);
         rec.still("file-picker");
