@@ -388,3 +388,29 @@ fn normalize_keeps_default_when_no_url() {
     assert_eq!(s.web_search_backend, WebSearchBackend::DuckDuckGo);
     assert_eq!(s.effective_web_search_url(), "");
 }
+
+#[test]
+fn system_git_defaults_off_and_loads_from_files_without_the_fields() {
+    let s = AppSettings::default();
+    assert!(!s.git_use_system_cli);
+    assert!(s.git_executable.is_empty());
+
+    // Settings files written before the option existed must keep libgit2 + token auth.
+    let json = r#"{"providers": {}, "system_prompt": "hi", "github_username": "octocat"}"#;
+    let s: AppSettings = serde_json::from_str(json).unwrap();
+    assert!(!s.git_use_system_cli);
+    assert!(s.git_executable.is_empty());
+}
+
+#[test]
+fn system_git_settings_roundtrip() {
+    let s = AppSettings {
+        git_use_system_cli: true,
+        git_executable: "/opt/homebrew/bin/git".into(),
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&s).unwrap();
+    let back: AppSettings = serde_json::from_str(&json).unwrap();
+    assert!(back.git_use_system_cli);
+    assert_eq!(back.git_executable, "/opt/homebrew/bin/git");
+}
