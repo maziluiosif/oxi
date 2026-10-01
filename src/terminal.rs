@@ -869,9 +869,21 @@ mod tests {
         );
         term.send(b"sleep 30\n");
         assert!(wait_for(|| term.has_foreground_job()), "sleep not detected");
-        term.send(&[0x03]);
+        // The foreground group switches to the job before its command execs, and an
+        // interrupt landing in that window can be lost while the child still holds the
+        // shell's signal setup. Keep pressing Ctrl+C like a user would until it lands.
+        let mut last_interrupt: Option<Instant> = None;
         assert!(
-            wait_for(|| !term.has_foreground_job()),
+            wait_for(|| {
+                if !term.has_foreground_job() {
+                    return true;
+                }
+                if last_interrupt.is_none_or(|t| t.elapsed() >= Duration::from_millis(500)) {
+                    term.send(&[0x03]);
+                    last_interrupt = Some(Instant::now());
+                }
+                false
+            }),
             "Ctrl+C left it busy"
         );
     }
