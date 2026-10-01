@@ -25,7 +25,7 @@ jobs:
           # Tags are needed to find the previous release.
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
