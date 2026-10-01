@@ -108,7 +108,7 @@ async fn run_case(
     } else {
         None
     };
-    let python = if cfg!(windows) { "python" } else { "python3" };
+    let python = crate::agent::test_python_executable();
     for (kind, adapter_mode, log) in [
         (
             LlmProviderKind::CodexAcp,
@@ -133,7 +133,8 @@ async fn run_case(
         let cfg = settings.provider_mut(kind);
         cfg.model_id = "default".into();
         cfg.acp_command = format!(
-            "{python} -u \"{}\" {adapter_mode} \"{}\"",
+            "\"{}\" -u \"{}\" {adapter_mode} \"{}\"",
+            python.display(),
             script.display(),
             log.display()
         );
@@ -155,7 +156,8 @@ async fn run_case(
         let cfg = settings.provider_mut(LlmProviderKind::CursorAcp);
         cfg.model_id = "default".into();
         cfg.acp_command = format!(
-            "{python} -u \"{}\" quota \"{}\"",
+            "\"{}\" -u \"{}\" quota \"{}\"",
+            python.display(),
             script.display(),
             root.join("third.json").display()
         );
