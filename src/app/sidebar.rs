@@ -245,11 +245,45 @@ impl OxiApp {
             // in-progress chats, and chats that need attention remain visible.
             let mut visible_sessions = 0usize;
             let mut row_advance: Option<f32> = None;
-            for si in 0..n_sessions {
+            let order = sidebar_session_order(&self.conv.workspaces[wi]);
+            let mut group_counts = std::collections::HashMap::new();
+            for (_, group) in &order {
+                *group_counts.entry(*group).or_insert(0usize) += 1;
+            }
+            let searching = !q.is_empty();
+            let mut last_group = None;
+            let mut hidden_by_group_fold = false;
+            for (si, group) in order {
                 if sidebar_changed {
                     return;
                 }
-                if folded {
+                if self.conv.workspaces[wi].sessions.get(si).is_none() {
+                    return;
+                }
+                // While searching, every match is listed and date groups ignore their fold.
+                let group_folded = !folded
+                    && !searching
+                    && self.conv.workspaces[wi]
+                        .folded_groups
+                        .iter()
+                        .any(|key| key == group.key());
+                // Headers of a folded group still show (that is how it unfolds); while searching
+                // only groups with a match get one.
+                if !folded && !searching && last_group != Some(group) {
+                    last_group = Some(group);
+                    if sidebar_group_header(ui, group, group_folded, group_counts[&group]) {
+                        let list = &mut self.conv.workspaces[wi].folded_groups;
+                        if group_folded {
+                            list.retain(|key| key != group.key());
+                        } else {
+                            list.push(group.key().to_string());
+                        }
+                        self.sync_workspaces_to_settings();
+                        sidebar_changed = true;
+                        continue;
+                    }
+                }
+                if folded || group_folded {
                     let key = self.session_key(wi, si);
                     let globally_selected = wi == self.conv.active_workspace && si == active_si;
                     let running = self.session_row_is_running(wi, si);
@@ -260,16 +294,18 @@ impl OxiApp {
                                     || !self.active_chat_is_visible(ui.ctx())))
                     });
                     if !globally_selected && !running && !needs_attention {
+                        hidden_by_group_fold |= group_folded;
                         continue;
                     }
                 }
-                if self.conv.workspaces[wi].sessions.get(si).is_none() {
-                    return;
-                }
-                if !q.is_empty() && !self.session_matches_search(wi, si, &q) {
+                if searching && !self.session_matches_search(wi, si, &q) {
                     continue;
                 }
                 visible_sessions += 1;
+                if !folded && searching && last_group != Some(group) {
+                    last_group = Some(group);
+                    sidebar_group_header(ui, group, false, group_counts[&group]);
+                }
                 // Rows are all the same height: once one has been measured, a row scrolled out
                 // of view only reserves its space. Long histories otherwise cost a full layout
                 // of every row on every frame (~1.5 ms at 400 chats).
@@ -390,6 +426,22 @@ impl OxiApp {
                                     self.select_session_in_workspace(wi, si);
                                 }
                                 response.context_menu(|ui| {
+                                    if let Some(file) =
+                                        self.conv.workspaces[wi].sessions[si].session_file.clone()
+                                    {
+                                        let pinned =
+                                            self.conv.workspaces[wi].pinned.contains(&file);
+                                        let label = if pinned { "Unpin chat" } else { "Pin chat" };
+                                        if ui.button(label).clicked() {
+                                            let list = &mut self.conv.workspaces[wi].pinned;
+                                            if pinned {
+                                                list.retain(|f| f != &file);
+                                            } else {
+                                                list.push(file);
+                                            }
+                                            self.sync_workspaces_to_settings();
+                                        }
+                                    }
                                     if wi == self.conv.active_workspace && !running {
                                         if ui.button("Rename chat").clicked() {
                                             self.conv.renaming_session = Some((wi, si));
@@ -490,7 +542,7 @@ impl OxiApp {
             }
             // A folded workspace with no exceptional rows is intentionally just its header;
             // "No chats yet" would otherwise make folding look as if the workspace were empty.
-            if visible_sessions == 0 && (!folded || !q.is_empty()) {
+            if visible_sessions == 0 && !hidden_by_group_fold && (!folded || !q.is_empty()) {
                 ui.horizontal(|ui| {
                     ui.add_space(10.0);
                     let msg = if q.is_empty() {
@@ -976,6 +1028,135 @@ impl OxiApp {
 
 /// Soft vertical fade behind the floating composer so transcript text doesn't compete
 /// with the input card.
+/// Sidebar section a chat row is listed under.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+enum SidebarGroup {
+    Pinned,
+    Today,
+    Yesterday,
+    Week,
+    Month,
+    Older,
+}
+
+impl SidebarGroup {
+    /// Stable id persisted in settings for a folded group.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Pinned => "pinned",
+            Self::Today => "today",
+            Self::Yesterday => "yesterday",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Older => "older",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Pinned => "Pinned",
+            Self::Today => "Today",
+            Self::Yesterday => "Yesterday",
+            Self::Week => "Previous 7 days",
+            Self::Month => "Previous 30 days",
+            Self::Older => "Older",
+        }
+    }
+
+    /// Bucket by local calendar day, so "Yesterday" means the previous date, not 24–48 h ago.
+    fn for_time(modified: std::time::SystemTime, today: chrono::NaiveDate) -> Self {
+        let day = chrono::DateTime::<chrono::Local>::from(modified).date_naive();
+        match (today - day).num_days() {
+            ..=0 => Self::Today,
+            1 => Self::Yesterday,
+            2..=7 => Self::Week,
+            8..=30 => Self::Month,
+            _ => Self::Older,
+        }
+    }
+}
+
+/// Rows in display order: pinned chats first, then by recency bucket. The sort is stable, so
+/// within a bucket chats keep their stored (most-recent-first) order.
+fn sidebar_session_order(ws: &super::state::Workspace) -> Vec<(usize, SidebarGroup)> {
+    let today = chrono::Local::now().date_naive();
+    let mut order: Vec<(usize, SidebarGroup)> = ws
+        .sessions
+        .iter()
+        .enumerate()
+        .map(|(si, session)| {
+            let pinned = session
+                .session_file
+                .as_ref()
+                .is_some_and(|f| ws.pinned.contains(f));
+            let group = if pinned {
+                SidebarGroup::Pinned
+            } else {
+                SidebarGroup::for_time(session.modified, today)
+            };
+            (si, group)
+        })
+        .collect();
+    order.sort_by_key(|&(_, group)| group);
+    order
+}
+
+/// Clickable date-group header: chevron, label, and the chat count while folded. Returns
+/// whether it was clicked (the caller toggles the fold).
+fn sidebar_group_header(
+    ui: &mut Ui,
+    group: SidebarGroup,
+    group_folded: bool,
+    count: usize,
+) -> bool {
+    const H: f32 = 20.0;
+    ui.add_space(4.0);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), H), Sense::click());
+    let response = response.on_hover_text(if group_folded {
+        "Show these chats"
+    } else {
+        "Hide these chats"
+    });
+    let hovered = response.hovered();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
+    }
+    let color = if hovered {
+        c_text_muted()
+    } else {
+        c_text_faint()
+    };
+    let chevron_x = rect.left() + 13.0;
+    ui.painter().text(
+        egui::pos2(chevron_x, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        if group_folded {
+            ICON_CHEVRON_RIGHT
+        } else {
+            ICON_ANGLE_DOWN
+        },
+        FontId::new(FS_TINY - 2.0, icon_font()),
+        color,
+    );
+    let label = if group_folded {
+        format!("{}  ·  {count}", group.label())
+    } else {
+        group.label().to_string()
+    };
+    ui.painter().text(
+        egui::pos2(chevron_x + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(FS_TINY),
+        color,
+    );
+    ui.add_space(1.0);
+    response.clicked()
+}
+
 fn paint_composer_scrim(ui: &mut Ui, rect: egui::Rect) {
     if rect.height() < 4.0 {
         return;

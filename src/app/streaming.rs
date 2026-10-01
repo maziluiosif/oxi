@@ -2,12 +2,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use crate::agent::events::AgentEvent;
 use crate::agent::runner::AgentRunRequest;
 use crate::agent::spawn_agent_run;
 use crate::model::{
     AssistantBlock, ChatMessage, MsgRole, UserAttachment, make_session_title,
     set_tool_output_on_blocks,
 };
+use eframe::egui;
 
 use super::{OxiApp, SessionKey};
 use crate::session_store;
@@ -105,6 +107,47 @@ impl OxiApp {
         self.invalidate_wire_cache(key);
         self.conv.editing_last_prompt = None;
         self.send_message_opts(true);
+    }
+
+    /// Index of the most recent real (non-summary) user message in the active chat.
+    pub(crate) fn last_user_prompt_index(&self) -> Option<usize> {
+        self.active_session()
+            .messages
+            .iter()
+            .rposition(|m| m.role == MsgRole::User && !m.is_summary)
+    }
+
+    /// Re-sends the last prompt after a failed run: drops that prompt and everything after it,
+    /// then submits it again. Whatever is in the composer is kept as a draft.
+    pub(crate) fn retry_last_prompt(&mut self) {
+        let key = self.active_session_key();
+        if self.active_waiting_response() || self.compaction_active_for(key) {
+            return;
+        }
+        let Some(user_idx) = self.last_user_prompt_index() else {
+            return;
+        };
+        let user = self.active_session().messages[user_idx].clone();
+        let text = self
+            .run_state(key)
+            .and_then(|run| run.last_user_prompt.clone())
+            .unwrap_or(user.text);
+        let draft_input = std::mem::replace(&mut self.conv.input, text);
+        let draft_images = std::mem::replace(
+            &mut self.conv.pending_images,
+            user.attachments
+                .into_iter()
+                .map(|UserAttachment::Image { mime, data }| (mime, data))
+                .collect(),
+        );
+        self.active_session_mut().messages.truncate(user_idx);
+        self.invalidate_wire_cache(key);
+        self.run_state_mut(key).stream_error = None;
+        self.send_message_opts(false);
+        if self.conv.input.is_empty() && self.conv.pending_images.is_empty() {
+            self.conv.input = draft_input;
+            self.conv.pending_images = draft_images;
+        }
     }
 
     /// `skip_autocompact` is set when an auto-compaction has just finished and is replaying
@@ -546,7 +589,7 @@ impl OxiApp {
             }
             None => format!("mem:{}:{}", key.workspace_idx, key.session_idx),
         };
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = relay_waking_ui(self.conv.git_ctx.clone());
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let undo_journal = Arc::new(std::sync::Mutex::new(
@@ -615,5 +658,70 @@ impl OxiApp {
         run.agent_rx = None;
         run.approval_tx = None;
         run.pending_approval = None;
+    }
+}
+
+/// Agent event channel whose sends also wake the UI.
+///
+/// The worker only pushes into a plain channel, and the UI drains it when it paints. Without a
+/// wake-up, streamed text reached the screen on the 50 ms fallback tick in bursts (20 updates a
+/// second) instead of on the next frame. A relay thread forwards each event and requests a
+/// repaint; egui coalesces those into at most one frame per vsync. When the worker hangs up, the
+/// relay drops its sender too, so the UI still sees `Disconnected` exactly as before.
+fn relay_waking_ui(
+    ctx: egui::Context,
+) -> (
+    std::sync::mpsc::Sender<AgentEvent>,
+    std::sync::mpsc::Receiver<AgentEvent>,
+) {
+    let (worker_tx, worker_rx) = std::sync::mpsc::channel::<AgentEvent>();
+    let (ui_tx, ui_rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("oxi-agent-events".into())
+        .spawn(move || {
+            for event in worker_rx {
+                if ui_tx.send(event).is_err() {
+                    break;
+                }
+                ctx.request_repaint();
+            }
+        });
+    match spawned {
+        Ok(_) => (worker_tx, ui_rx),
+        // No relay thread: fall back to a direct channel drained on the fallback tick.
+        Err(_) => std::sync::mpsc::channel(),
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+
+    #[test]
+    fn relay_forwards_in_order_wakes_the_ui_and_reports_hangup() {
+        let ctx = egui::Context::default();
+        let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&woken);
+        ctx.set_request_repaint_callback(move |_| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        let (tx, rx) = relay_waking_ui(ctx);
+        for delta in ["a", "b", "c"] {
+            tx.send(AgentEvent::TextDelta(delta.into())).unwrap();
+        }
+        drop(tx);
+        let timeout = std::time::Duration::from_secs(5);
+        let received: Vec<String> = (0..3)
+            .map(|_| match rx.recv_timeout(timeout).unwrap() {
+                AgentEvent::TextDelta(delta) => delta,
+                _ => panic!("unexpected event"),
+            })
+            .collect();
+        assert_eq!(received, ["a", "b", "c"]);
+        assert_eq!(
+            rx.recv_timeout(timeout).unwrap_err(),
+            std::sync::mpsc::RecvTimeoutError::Disconnected
+        );
+        assert!(woken.load(std::sync::atomic::Ordering::SeqCst) >= 1);
     }
 }

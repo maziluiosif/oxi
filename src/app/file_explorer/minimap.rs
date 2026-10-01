@@ -26,6 +26,7 @@ struct MinimapSegment {
 
 struct MinimapLayout {
     job: Weak<egui::text::LayoutJob>,
+    built_at: std::time::Instant,
     row_count: usize,
     width: f32,
     line_rows: Vec<usize>,
@@ -44,16 +45,6 @@ pub(crate) struct MinimapGeometry {
 
 const MINIMAP_TAB_WIDTH: usize = 4;
 
-fn advance_columns(mut column: usize, text: &str) -> usize {
-    for character in text.chars() {
-        column += match character {
-            '\t' => MINIMAP_TAB_WIDTH - column % MINIMAP_TAB_WIDTH,
-            _ => 1,
-        };
-    }
-    column
-}
-
 fn build_geometry(
     content: &str,
     highlight_job: &egui::text::LayoutJob,
@@ -61,14 +52,29 @@ fn build_geometry(
 ) -> MinimapGeometry {
     // Build line metadata and indentation guides in one pass. Blank lines inherit the shallower
     // indentation of their nearest non-empty neighbours, matching the previous visual behavior.
-    let mut indent_columns = Vec::new();
-    for line in content.split('\n') {
-        let indentation = advance_columns(
-            0,
-            line.get(..line.len() - line.trim_start_matches([' ', '\t']).len())
-                .unwrap_or_default(),
-        );
-        indent_columns.push((!line.trim().is_empty()).then_some(indentation));
+    // Byte-level scan: this runs on every edit, and the `char`-pattern trims it replaces were a
+    // visible share of a keystroke in a 20k-line file.
+    let mut indent_columns =
+        Vec::with_capacity(memchr::memchr_iter(b'\n', content.as_bytes()).count() + 1);
+    let mut line_start = 0;
+    for line_end in memchr::memchr_iter(b'\n', content.as_bytes()).chain([content.len()]) {
+        let line = &content.as_bytes()[line_start..line_end];
+        line_start = line_end + 1;
+        let indent_len = line
+            .iter()
+            .position(|b| *b != b' ' && *b != b'\t')
+            .unwrap_or(line.len());
+        let mut indentation = 0;
+        for &b in &line[..indent_len] {
+            indentation += if b == b'\t' {
+                MINIMAP_TAB_WIDTH - indentation % MINIMAP_TAB_WIDTH
+            } else {
+                1
+            };
+        }
+        // `str::trim` also treats Unicode spaces as blank; only an all-whitespace rest counts.
+        let rest = &content[line_end - (line.len() - indent_len)..line_end];
+        indent_columns.push((!rest.trim().is_empty()).then_some(indentation));
     }
     let line_count = indent_columns.len();
     let mut indentation_before = Vec::with_capacity(line_count);
@@ -111,15 +117,42 @@ fn build_geometry(
     }
 }
 
-pub(super) fn ensure_layout(geometry: &mut MinimapGeometry, galley: &Arc<egui::Galley>) {
+/// How often the silhouette is re-projected while the text keeps changing. The projection walks
+/// every glyph in the document, so redoing it per keystroke made typing in large files lag; a
+/// 2 px-per-row overview that trails the text by a fraction of a second is not noticeable.
+const RELAYOUT_WHILE_EDITING: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Carry the silhouette of the previous text over an edit, so [`ensure_layout`] can keep painting
+/// it until [`RELAYOUT_WHILE_EDITING`] has passed instead of rebuilding it on every keystroke.
+pub(super) fn carry_layout_over_edit(
+    previous: Option<MinimapGeometry>,
+    next: &mut Option<MinimapGeometry>,
+) {
+    if let (Some(previous), Some(next)) = (previous, next.as_mut())
+        && next.layout.is_none()
+        && previous.palette == next.palette
+    {
+        next.layout = previous.layout;
+    }
+}
+
+pub(super) fn ensure_layout(
+    ctx: &egui::Context,
+    geometry: &mut MinimapGeometry,
+    galley: &Arc<egui::Galley>,
+    editing: bool,
+) {
     // TextEdit can clone a galley to paint selection visuals without changing its layout job.
     let weak = Arc::downgrade(&galley.job);
-    if geometry
-        .layout
-        .as_ref()
-        .is_some_and(|layout| layout.job.ptr_eq(&weak))
-    {
-        return;
+    if let Some(layout) = geometry.layout.as_ref() {
+        if layout.job.ptr_eq(&weak) {
+            return;
+        }
+        let age = layout.built_at.elapsed();
+        if editing && age < RELAYOUT_WHILE_EDITING {
+            ctx.request_repaint_after(RELAYOUT_WHILE_EDITING - age);
+            return;
+        }
     }
 
     let mut segments: Vec<MinimapSegment> = Vec::new();
@@ -167,6 +200,7 @@ pub(super) fn ensure_layout(geometry: &mut MinimapGeometry, galley: &Arc<egui::G
     };
     geometry.layout = Some(MinimapLayout {
         job: weak,
+        built_at: std::time::Instant::now(),
         row_count: galley.rows.len(),
         width: width.max(1.0),
         line_rows,
@@ -175,7 +209,7 @@ pub(super) fn ensure_layout(geometry: &mut MinimapGeometry, galley: &Arc<egui::G
 }
 
 /// How long the text must stay unchanged before the minimap is re-colored after an edit.
-const RECOLOR_AFTER_EDIT: std::time::Duration = std::time::Duration::from_millis(500);
+pub(super) const RECOLOR_AFTER_EDIT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Keep the document's minimap in step with its text.
 ///
@@ -216,22 +250,33 @@ pub(super) fn refresh(
     }
     let colored = match full_job {
         Some(job) => Some(job.clone()),
-        None => crate::theme::highlight_editor_code_with_revision(
-            &mut document.syntax_state,
-            &document.content,
-            extension,
-            egui::FontId::monospace(FS_SMALL),
-            Some(document.content_revision),
-            None,
-        )
-        .or_else(|| {
-            crate::theme::highlight_code_async(
+        None => {
+            let job = crate::theme::highlight_editor_code_with_revision(
+                &mut document.syntax_state,
                 &document.content,
                 extension,
                 egui::FontId::monospace(FS_SMALL),
-                ctx,
-            )
-        }),
+                Some(document.content_revision),
+                None,
+            );
+            if document
+                .syntax_state
+                .as_ref()
+                .is_some_and(|state| state.parse_pending())
+            {
+                // Wait for the background reparse rather than keep provisional colors.
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+                return;
+            }
+            job.or_else(|| {
+                crate::theme::highlight_code_async(
+                    &document.content,
+                    extension,
+                    egui::FontId::monospace(FS_SMALL),
+                    ctx,
+                )
+            })
+        }
     };
     if let Some(job) = colored {
         document.minimap_cache = None;
@@ -451,7 +496,7 @@ mod tests {
             let text = format!("{first_line}\ntail");
             let galley = layout(&ctx, &text, 120.0);
             let mut geometry = geometry(&text);
-            ensure_layout(&mut geometry, &galley);
+            ensure_layout(&ctx, &mut geometry, &galley, false);
             let minimap = geometry.layout.as_ref().unwrap();
             let tail_row = galley
                 .rows
@@ -505,7 +550,7 @@ mod tests {
         }
         let mut geometry = build_geometry(&text, &highlight, active_palette().syntax);
         let galley = layout(&ctx, &text, 120.0);
-        ensure_layout(&mut geometry, &galley);
+        ensure_layout(&ctx, &mut geometry, &galley, false);
         let minimap = geometry.layout.as_ref().unwrap();
         let final_row = minimap.line_rows[2];
 
@@ -544,19 +589,19 @@ mod tests {
         let text = format!("{}\ntail", "word ".repeat(60));
         let mut geometry = geometry(&text);
         let wide = layout(&ctx, &text, 240.0);
-        ensure_layout(&mut geometry, &wide);
+        ensure_layout(&ctx, &mut geometry, &wide, false);
         let wide_count = geometry.layout.as_ref().unwrap().row_count;
         let segments = geometry.layout.as_ref().unwrap().segments.as_ptr();
 
         let selection_clone = Arc::new((*wide).clone());
-        ensure_layout(&mut geometry, &selection_clone);
+        ensure_layout(&ctx, &mut geometry, &selection_clone, false);
         assert_eq!(
             geometry.layout.as_ref().unwrap().segments.as_ptr(),
             segments
         );
 
         let narrow = layout(&ctx, &text, 80.0);
-        ensure_layout(&mut geometry, &narrow);
+        ensure_layout(&ctx, &mut geometry, &narrow, false);
         let minimap = geometry.layout.as_ref().unwrap();
         assert!(minimap.row_count > wide_count);
         assert_eq!(minimap.row_count, narrow.rows.len());
@@ -565,11 +610,32 @@ mod tests {
     }
 
     #[test]
+    fn edits_keep_the_previous_silhouette_until_the_relayout_interval() {
+        let ctx = egui::Context::default();
+        let before = "fn a() {}\n";
+        let mut previous = geometry(before);
+        ensure_layout(&ctx, &mut previous, &layout(&ctx, before, 240.0), false);
+        let segments = previous.layout.as_ref().unwrap().segments.as_ptr();
+
+        let after = "fn a() {}\nfn b() {}\n";
+        let edited = layout(&ctx, after, 240.0);
+        let mut next = Some(geometry(after));
+        carry_layout_over_edit(Some(previous), &mut next);
+        let mut next = next.unwrap();
+        ensure_layout(&ctx, &mut next, &edited, true);
+        assert_eq!(next.layout.as_ref().unwrap().segments.as_ptr(), segments);
+
+        // Once typing stops (or the interval passes) the silhouette follows the new text.
+        ensure_layout(&ctx, &mut next, &edited, false);
+        assert_eq!(next.layout.as_ref().unwrap().row_count, edited.rows.len());
+    }
+
+    #[test]
     fn empty_document_has_one_blank_visual_row() {
         let ctx = egui::Context::default();
         let mut geometry = geometry("");
         let galley = layout(&ctx, "", 120.0);
-        ensure_layout(&mut geometry, &galley);
+        ensure_layout(&ctx, &mut geometry, &galley, false);
         let minimap = geometry.layout.as_ref().unwrap();
 
         assert_eq!(geometry.line_count, 1);

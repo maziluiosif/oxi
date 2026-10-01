@@ -79,11 +79,21 @@ impl OxiApp {
         card_frame().show(ui, |ui| {
             settings_card_header(
                 ui,
-                "Commit message generator",
+                "Commit messages & chat titles",
                 Some(
-                    "The Generate button in the git panel drafts a commit message from the staged diff. Uses its own provider/model and prompt, separate from the agent.",
+                    "A helper model, separate from the agent: the Generate button in the git panel drafts a commit message from the staged diff, and new chats get a short title after their first reply.",
                 ),
             );
+            ui.checkbox(
+                &mut self.conv.settings.auto_title_chats,
+                RichText::new("Name new chats with this model")
+                    .size(FS_SMALL)
+                    .color(c_text()),
+            )
+            .on_hover_text(
+                "After a chat's first reply, replace its title (the first prompt) with a 2–6 word summary. Renamed chats are never touched. Not available with ACP agents.",
+            );
+            ui.add_space(6.0);
 
             settings_caption(ui, "Provider");
             ui.add_space(4.0);

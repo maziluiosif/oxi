@@ -13,10 +13,9 @@ use super::editor_paint::{
     byte_range_rects, caret_logical_line, editor_selection_rects, paint_caret, paint_indent_guides,
     paint_selected_whitespace, paint_selection, selected_logical_lines,
 };
-use super::support::{
-    apply_definition_underline, apply_search_highlights, find_match_ranges, language_for_path,
-};
-use super::{EditorLayoutCache, minimap, syntax_window};
+use super::editor_text::EditorText;
+use super::support::{apply_definition_underline, apply_search_highlights, language_for_path};
+use super::{EditorLayoutCache, line_layout, minimap, syntax_window};
 
 pub(super) type EditorScrollOutput = egui::scroll_area::ScrollAreaOutput<(
     Vec<(usize, f32)>,
@@ -51,18 +50,15 @@ impl OxiApp {
             std::mem::take(&mut self.conv.editor.goto_definition_requested);
         // Keep match geometry for one extra frame while Find closes so Escape/X can
         // apply the current match caret before the panel disappears.
-        let find_ranges = if self.conv.editor.find_open
+        let find_results = if self.conv.editor.find_open
             || self.conv.editor.find_select_pending
             || self.conv.editor.find_focus_editor_pending
         {
-            find_match_ranges(
-                &self.conv.editor.documents[index].content,
-                &self.conv.editor.find_query,
-                self.conv.editor.find_case_sensitive,
-            )
+            self.conv.editor.find_results()
         } else {
-            Vec::new()
+            Arc::default()
         };
+        let find_ranges: &[std::ops::Range<usize>] = &find_results.ranges;
         let active_find_match = (!find_ranges.is_empty()).then(|| {
             self.conv
                 .editor
@@ -132,11 +128,22 @@ impl OxiApp {
         // project those disk-based markers onto the in-memory buffer so the gutter follows
         // inserted/deleted newlines without doing Git work on every keystroke.
         let git_line_changes = if self.conv.editor.documents[index].is_dirty() {
-            live_git_line_changes(
-                &disk_git_line_changes,
-                &self.conv.editor.documents[index].saved_content,
-                &self.conv.editor.documents[index].content,
-            )
+            // Splits both texts into lines: once per edit (the cache is reset with the text),
+            // not on every frame.
+            let document = &mut self.conv.editor.documents[index];
+            match &document.layout_cache.live_git_lines {
+                Some((disk, live)) if *disk == disk_git_line_changes => live.clone(),
+                _ => {
+                    let live = live_git_line_changes(
+                        &disk_git_line_changes,
+                        &document.saved_content,
+                        &document.content,
+                    );
+                    document.layout_cache.live_git_lines =
+                        Some((disk_git_line_changes, live.clone()));
+                    live
+                }
+            }
         } else {
             disk_git_line_changes
         };
@@ -152,6 +159,7 @@ impl OxiApp {
             .map(|_| self.conv.editor.documents[index].viewport_anchor_line);
         self.conv.editor.documents[index].viewport_width_bits = Some(prospective_width_bits);
         let mut goto_definition_byte = None;
+        let mut editor_selection = None;
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
 
@@ -209,27 +217,27 @@ impl OxiApp {
                                         && let Some(galley) = &layout_cache.geometry
                                         && (allow_layout_cache
                                             || galley.job.text.as_str() == text.as_str())
+                                        && layout_cache.fonts_generation
+                                            == crate::theme::fonts_generation()
                                     {
-                                        if layout_cache.keep_warm {
-                                            // egui keeps a laid-out line only while some frame
-                                            // uses it; serving every frame from this cache let
-                                            // them all expire, and the next keystroke then laid
-                                            // out the whole file from scratch (~300 ms at 20k
-                                            // lines). While the editor has focus, touch them.
-                                            let _ = ui.fonts_mut(|fonts| {
-                                                fonts.layout_job(geometry_job(text.as_str()))
-                                            });
-                                        }
                                         return Arc::clone(galley);
                                     }
 
+                                    let pixels_per_point = ui.ctx().pixels_per_point();
                                     let galley = ui.fonts_mut(|fonts| {
-                                        fonts.layout_job(geometry_job(text.as_str()))
+                                        line_layout::layout(
+                                            &mut layout_cache.lines,
+                                            geometry_job(text.as_str()),
+                                            pixels_per_point,
+                                            |job| fonts.layout_job(job),
+                                        )
                                     });
                                     if allow_layout_cache {
                                         layout_cache.revision = revision;
                                         layout_cache.wrap_width_bits = wrap_width_bits;
                                         layout_cache.pixels_per_point_bits = pixels_per_point_bits;
+                                        layout_cache.fonts_generation =
+                                            crate::theme::fonts_generation();
                                         layout_cache.geometry = Some(Arc::clone(&galley));
                                         // The cached syntax galley was laid out for the previous
                                         // wrap width / dpi. The keys now describe this new
@@ -254,7 +262,7 @@ impl OxiApp {
                                     ui.visuals_mut().text_cursor.stroke.color =
                                         egui::Color32::TRANSPARENT;
                                     ui.visuals_mut().text_cursor.blink = false;
-                                    TextEdit::multiline(&mut document.content)
+                                    TextEdit::multiline(&mut EditorText(&mut document.content))
                                         .id_salt(("workspace_text_editor", index))
                                         .font(FontId::monospace(FS_SMALL))
                                         .code_editor()
@@ -267,6 +275,7 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
+                            let mut previous_minimap = None;
                             let scratchpad_changed =
                                 output.response.changed() && document.is_scratchpad;
                             if output.response.changed() {
@@ -275,11 +284,11 @@ impl OxiApp {
                                 document.dirty = document.content != document.saved_content;
                                 document.layout_cache = EditorLayoutCache {
                                     edited_at: Some(std::time::Instant::now()),
+                                    lines: document.layout_cache.lines.take(),
                                     ..Default::default()
                                 };
-                                document.minimap_cache = None;
+                                previous_minimap = document.minimap_cache.take();
                             }
-                            document.layout_cache.keep_warm = output.response.has_focus();
                             if clear_selection_requested {
                                 if let Some(range) = output.cursor_range
                                     && !range.is_empty()
@@ -335,9 +344,12 @@ impl OxiApp {
                                         egui::text::CCursor::new(end),
                                     )
                                 } else {
-                                    // Find navigation places an insertion caret immediately after
-                                    // the match, ready to continue editing the document.
-                                    egui::text::CCursorRange::one(egui::text::CCursor::new(end))
+                                    // Find selects the match, like Sublime: typing replaces it and
+                                    // F3 / Cmd+G continue from its end.
+                                    egui::text::CCursorRange::two(
+                                        egui::text::CCursor::new(start),
+                                        egui::text::CCursor::new(end),
+                                    )
                                 };
                                 output.state.cursor.set_char_range(Some(cursor_range));
                                 output.state.store(ui.ctx(), output.response.id);
@@ -435,6 +447,10 @@ impl OxiApp {
                             } else {
                                 None
                             };
+                            editor_selection = output.cursor_range.map(|range| {
+                                let sorted = range.as_sorted_char_range();
+                                (sorted.start.0, sorted.end.0)
+                            });
                             let selection = output.cursor_range.filter(|range| !range.is_empty());
                             let wrap_width_bits =
                                 output.galley.job.wrap.max_width.round().to_bits();
@@ -482,7 +498,21 @@ impl OxiApp {
                                         Some(document.content_revision),
                                         Some(window_bytes.clone()),
                                     ) {
-                                        Some(job) => (job, window_bytes.start),
+                                        Some(job) => {
+                                            // Colors from a tree still being reparsed in the
+                                            // background: show them, but don't cache them.
+                                            if document
+                                                .syntax_state
+                                                .as_ref()
+                                                .is_some_and(|state| state.parse_pending())
+                                            {
+                                                highlight_pending = true;
+                                                ui.ctx().request_repaint_after(
+                                                    std::time::Duration::from_millis(16),
+                                                );
+                                            }
+                                            (job, window_bytes.start)
+                                        }
                                         None => match crate::theme::highlight_code_async(
                                             &document.content,
                                             &extension,
@@ -518,8 +548,18 @@ impl OxiApp {
                                     let start = range.start.clamp(job_start, job_end);
                                     start - job_start..range.end.clamp(start, job_end) - job_start
                                 };
-                                let local_find: Vec<_> = find_ranges.iter().map(to_job).collect();
-                                apply_search_highlights(&mut job, &local_find, active_find_match);
+                                // Matches are sorted; only those inside the job need highlighting.
+                                let first_find =
+                                    find_ranges.partition_point(|range| range.end <= job_start);
+                                let local_find: Vec<_> = find_ranges[first_find..]
+                                    .iter()
+                                    .take_while(|range| range.start < job_end)
+                                    .map(to_job)
+                                    .collect();
+                                let local_active = active_find_match
+                                    .and_then(|active| active.checked_sub(first_find))
+                                    .filter(|active| *active < local_find.len());
+                                apply_search_highlights(&mut job, &local_find, local_active);
                                 if let Some(range) = hovered_definition.as_ref()
                                     && !to_job(range).is_empty()
                                 {
@@ -553,12 +593,20 @@ impl OxiApp {
                                 galley
                             });
                             minimap::refresh(ui.ctx(), document, &extension, full_job.as_ref());
+                            minimap::carry_layout_over_edit(
+                                previous_minimap.take(),
+                                &mut document.minimap_cache,
+                            );
                             minimap::ensure_layout(
+                                ui.ctx(),
                                 document
                                     .minimap_cache
                                     .as_mut()
                                     .expect("editor geometry was just prepared"),
                                 &output.galley,
+                                document.layout_cache.edited_at.is_some_and(|edited_at| {
+                                    edited_at.elapsed() < minimap::RECOLOR_AFTER_EDIT
+                                }),
                             );
                             paint_indent_guides(
                                 ui,
@@ -874,6 +922,7 @@ impl OxiApp {
                 ui.ctx().request_repaint();
             }
         });
+        self.conv.editor.editor_selection_chars = editor_selection;
         if let Some(byte) = goto_definition_byte {
             self.go_to_rust_definition(byte);
         }

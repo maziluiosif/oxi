@@ -47,41 +47,124 @@ pub(super) fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
     Some(score)
 }
 
-pub(crate) fn find_match_ranges(
-    content: &str,
-    query: &str,
-    case_sensitive: bool,
-) -> Vec<std::ops::Range<usize>> {
+/// Byte offsets in `path` of the characters [`fuzzy_path_score`] matched, for highlighting.
+/// A contiguous hit inside the file name wins over the greedy subsequence, mirroring the score.
+pub(super) fn fuzzy_match_positions(path: &str, query: &str) -> Vec<usize> {
     if query.is_empty() {
         return Vec::new();
     }
-    if case_sensitive {
-        return content
-            .match_indices(query)
-            .map(|(start, matched)| start..start + matched.len())
+    let path = path.to_ascii_lowercase();
+    let query = query.to_ascii_lowercase();
+    let filename_start = path.rfind('/').map_or(0, |index| index + 1);
+    if let Some(index) = path[filename_start..].find(&query) {
+        let start = filename_start + index;
+        return path[start..start + query.len()]
+            .char_indices()
+            .map(|(i, _)| start + i)
             .collect();
     }
-
-    // Unicode lowercasing can expand a character and change byte lengths. Keep a source span for
-    // every folded character so matches can be mapped back to the original string.
-    let mut folded_content = String::new();
-    let mut source_spans = Vec::new();
-    for (start, character) in content.char_indices() {
-        let end = start + character.len_utf8();
-        for folded in character.to_lowercase() {
-            folded_content.push(folded);
-            source_spans.push(start..end);
-        }
+    let mut positions = Vec::new();
+    let mut search_from = 0usize;
+    for wanted in query.chars() {
+        let Some(relative) = path[search_from..].find(wanted) else {
+            return Vec::new();
+        };
+        positions.push(search_from + relative);
+        search_from += relative + wanted.len_utf8();
     }
-    let folded_query = query.to_lowercase();
-    folded_content
-        .match_indices(&folded_query)
-        .filter_map(|(start, matched)| {
-            let start_char = folded_content[..start].chars().count();
-            let end_char = start_char + matched.chars().count();
-            Some(source_spans.get(start_char)?.start..source_spans.get(end_char - 1)?.end)
+    positions
+}
+
+/// Search flags of the editor Find panel (Sublime's regex / case / whole-word toggles).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FindOptions {
+    pub regex: bool,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+}
+
+/// All matches of one query in one document revision.
+#[derive(Default)]
+pub(crate) struct FindResults {
+    pub ranges: Vec<std::ops::Range<usize>>,
+    /// Set when the query is not a valid regular expression.
+    pub error: Option<String>,
+    /// Compiled pattern, kept for `$1`-style replacement expansion in regex mode.
+    pattern: Option<regex::Regex>,
+    regex_mode: bool,
+}
+
+/// Highlighting every hit of a one-letter query in a huge file is useless and slow.
+const MAX_FIND_MATCHES: usize = 50_000;
+
+/// Find every non-empty, non-overlapping match of `query`. Literal queries are escaped and run
+/// through the same engine, so case folding is Unicode-aware in every mode; `^`/`$` match at
+/// line boundaries (CRLF included), like Sublime.
+pub(crate) fn find_matches(content: &str, query: &str, options: FindOptions) -> FindResults {
+    if query.is_empty() {
+        return FindResults::default();
+    }
+    let source = if options.regex {
+        std::borrow::Cow::Borrowed(query)
+    } else {
+        std::borrow::Cow::Owned(regex::escape(query))
+    };
+    let pattern = match regex::RegexBuilder::new(&source)
+        .case_insensitive(!options.case_sensitive)
+        .multi_line(true)
+        .crlf(true)
+        .build()
+    {
+        Ok(pattern) => pattern,
+        Err(_) => {
+            return FindResults {
+                error: Some("Invalid pattern".to_owned()),
+                ..Default::default()
+            };
+        }
+    };
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let ranges = pattern
+        .find_iter(content)
+        .filter(|found| !found.is_empty())
+        .filter(|found| {
+            !options.whole_word
+                || (!content[..found.start()]
+                    .chars()
+                    .next_back()
+                    .is_some_and(is_word)
+                    && !content[found.end()..].chars().next().is_some_and(is_word))
         })
-        .collect()
+        .map(|found| found.range())
+        .take(MAX_FIND_MATCHES)
+        .collect();
+    FindResults {
+        ranges,
+        error: None,
+        pattern: Some(pattern),
+        regex_mode: options.regex,
+    }
+}
+
+impl FindResults {
+    /// Text that replaces the match at `range`: `$1`/`${name}` groups are expanded in regex
+    /// mode, the replacement is inserted verbatim otherwise.
+    pub(crate) fn replacement_for(
+        &self,
+        content: &str,
+        range: &std::ops::Range<usize>,
+        replacement: &str,
+    ) -> String {
+        if let (true, Some(pattern)) = (self.regex_mode, &self.pattern)
+            && let Some(captures) = pattern.captures_at(content, range.start)
+            && captures.get(0).is_some_and(|found| found.range() == *range)
+        {
+            let mut expanded = String::new();
+            captures.expand(replacement, &mut expanded);
+            return expanded;
+        }
+        replacement.to_owned()
+    }
 }
 
 pub(super) fn apply_search_highlights(
@@ -305,13 +388,47 @@ mod tests {
 
     #[test]
     fn search_ranges_use_non_overlapping_matches() {
+        let ranges = |content: &str, query: &str, case_sensitive: bool| {
+            let options = FindOptions {
+                case_sensitive,
+                ..Default::default()
+            };
+            find_matches(content, query, options).ranges
+        };
+        assert_eq!(ranges("one two one", "one", true), vec![0..3, 8..11]);
+        assert_eq!(ranges("One ONE", "one", false), vec![0..3, 4..7]);
+        assert!(ranges("One ONE", "one", true).is_empty());
+        assert!(ranges("anything", "", false).is_empty());
+        // Literal mode treats regex syntax as plain text.
+        assert_eq!(ranges("a.b axb", "a.b", true), vec![0..3]);
+    }
+
+    #[test]
+    fn search_whole_word_and_regex_modes() {
+        let whole_word = FindOptions {
+            whole_word: true,
+            ..Default::default()
+        };
         assert_eq!(
-            find_match_ranges("one two one", "one", true),
-            vec![0..3, 8..11]
+            find_matches("foo foobar _foo foo", "foo", whole_word).ranges,
+            vec![0..3, 16..19]
         );
-        assert_eq!(find_match_ranges("One ONE", "one", false), vec![0..3, 4..7]);
-        assert!(find_match_ranges("One ONE", "one", true).is_empty());
-        assert!(find_match_ranges("anything", "", false).is_empty());
+        let regex = FindOptions {
+            regex: true,
+            case_sensitive: true,
+            ..Default::default()
+        };
+        let results = find_matches("let a = 1;\r\nlet bc = 22;", r"^let (\w+)", regex);
+        assert_eq!(results.ranges, vec![0..5, 12..18]);
+        let content = "let a = 1;\r\nlet bc = 22;";
+        assert_eq!(
+            results.replacement_for(content, &results.ranges[1], "const $1"),
+            "const bc"
+        );
+        // Empty matches (`x*`) are skipped rather than highlighted everywhere.
+        assert_eq!(find_matches("axxb", "x*", regex).ranges, vec![1..3]);
+        let invalid = find_matches("text", "(", regex);
+        assert!(invalid.ranges.is_empty() && invalid.error.is_some());
     }
 
     #[test]

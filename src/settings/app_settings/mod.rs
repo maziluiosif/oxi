@@ -132,6 +132,10 @@ pub struct AppSettings {
     /// System prompt for the "generate commit message" feature.
     #[serde(default = "default_commit_msg_system_prompt")]
     pub commit_msg_system_prompt: String,
+    /// After a chat's first successful reply, ask the commit-message helper model for a short
+    /// title instead of keeping the first prompt verbatim.
+    #[serde(default = "default_auto_title_chats")]
+    pub auto_title_chats: bool,
     /// Sidebar workspaces (project folders) and their fold state, restored on startup.
     /// The cwd workspace is always present at runtime even if missing here.
     #[serde(default)]
@@ -226,6 +230,10 @@ fn default_chat_column_max_width() -> f32 {
     crate::theme::CHAT_COLUMN_MAX_DEFAULT
 }
 
+fn default_auto_title_chats() -> bool {
+    true
+}
+
 fn default_include_agents_md() -> bool {
     true
 }
@@ -282,6 +290,7 @@ impl Default for AppSettings {
             commit_msg_provider: None,
             commit_msg_model_id: String::new(),
             commit_msg_system_prompt: default_commit_msg_system_prompt(),
+            auto_title_chats: default_auto_title_chats(),
             workspaces: Vec::new(),
             last_active_workspace_root_path: None,
             last_active_session_file: None,

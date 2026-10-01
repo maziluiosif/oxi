@@ -9,11 +9,13 @@ mod editor_body;
 mod editor_logic;
 mod editor_paint;
 mod editor_tabs;
+mod editor_text;
 mod explorer_tree;
 mod file_operations;
 mod file_picker;
 mod find_replace;
 mod layout_cache;
+mod line_layout;
 mod media_view;
 mod minimap;
 mod navigation_diff;
@@ -24,8 +26,9 @@ mod syntax_window;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use find_replace::{FIND_FIELD_ID, FindCache};
 pub(crate) use minimap::MinimapGeometry;
-pub(crate) use support::find_match_ranges;
+pub(crate) use support::{FindOptions, FindResults, find_matches};
 
 pub(crate) use explorer_tree::ExplorerCache;
 pub(crate) use layout_cache::EditorLayoutCache;
@@ -77,11 +80,7 @@ impl OxiApp {
             } else {
                 self.render_editor_body(ui);
             }
-            let panel_height = if self.conv.editor.find_replace_open {
-                67.0
-            } else {
-                32.0
-            };
+            let panel_height = self.find_panel_height();
             let panel_rect = egui::Rect::from_min_size(
                 egui::pos2(editor_rect.left(), editor_rect.bottom() - panel_height),
                 egui::vec2(editor_rect.width(), panel_height),

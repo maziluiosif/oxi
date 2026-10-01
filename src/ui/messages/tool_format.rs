@@ -22,6 +22,76 @@ pub(super) fn diff_counts(diff: &str) -> (usize, usize) {
     (added, removed)
 }
 
+/// Workspace root prefixes (as typed, canonical, and the macOS `/private` alias) stripped from
+/// tool output for display, so a Read or Edit result shows `src/lib.rs` rather than the full
+/// absolute path. Stored per frame in egui temp data by the transcript view.
+#[derive(Clone, Default)]
+struct DisplayRoot {
+    raw: String,
+    prefixes: std::sync::Arc<Vec<String>>,
+}
+
+pub fn set_display_root(ctx: &eframe::egui::Context, root: &str) {
+    let id = eframe::egui::Id::new("oxi_display_root");
+    let unchanged = ctx.data(|d| {
+        d.get_temp::<DisplayRoot>(id)
+            .is_some_and(|current| current.raw == root)
+    });
+    if unchanged {
+        return;
+    }
+    fn push(prefixes: &mut Vec<String>, p: &str) {
+        let p = p.trim_end_matches('/');
+        if p.len() > 1 && !prefixes.iter().any(|q| q == p) {
+            prefixes.push(p.to_string());
+        }
+    }
+    let mut prefixes = Vec::new();
+    push(&mut prefixes, root);
+    if let Ok(canonical) = std::fs::canonicalize(root) {
+        push(&mut prefixes, &canonical.to_string_lossy());
+    }
+    for p in prefixes.clone() {
+        match p.strip_prefix("/private") {
+            Some(stripped) => push(&mut prefixes, stripped),
+            None => push(&mut prefixes, &format!("/private{p}")),
+        }
+    }
+    // Longest first so `/private/var/x` is replaced before `/var/x` can match inside it.
+    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            DisplayRoot {
+                raw: root.to_string(),
+                prefixes: std::sync::Arc::new(prefixes),
+            },
+        )
+    });
+}
+
+/// `text` with the workspace root prefix removed from absolute paths (see [`set_display_root`]).
+pub(super) fn relativize_paths<'a>(
+    ctx: &eframe::egui::Context,
+    text: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    let prefixes = ctx.data(|d| {
+        d.get_temp::<DisplayRoot>(eframe::egui::Id::new("oxi_display_root"))
+            .map(|r| r.prefixes)
+    });
+    let Some(prefixes) = prefixes else {
+        return text.into();
+    };
+    let mut out = std::borrow::Cow::Borrowed(text);
+    for prefix in prefixes.iter() {
+        let with_sep = format!("{prefix}/");
+        if out.contains(&with_sep) {
+            out = out.replace(&with_sep, "").into();
+        }
+    }
+    out
+}
+
 fn short_path(path: &str, max_segments: usize) -> String {
     let segs: Vec<&str> = path
         .trim_start_matches('/')

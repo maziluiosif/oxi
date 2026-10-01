@@ -63,6 +63,7 @@ impl eframe::App for OxiApp {
         self.ensure_active_models_fetched(ctx);
         self.drain_git(ctx);
         self.drain_commit_gen(ctx);
+        self.drain_title_gen(ctx);
         self.drain_compaction(ctx);
         self.check_external_file_changes();
         self.poll_git_changes(ctx);
@@ -96,7 +97,8 @@ impl eframe::App for OxiApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        super::frame_stats::record(ui.ctx(), frame.info().cpu_usage);
         crate::theme::set_chat_column_max_width(ui.ctx(), self.conv.settings.chat_column_max_width);
         ui.ctx().layer_painter(LayerId::background()).rect_filled(
             ui.ctx().content_rect(),
@@ -242,7 +244,7 @@ impl OxiApp {
     /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B chats sidebar,
     /// Cmd/Ctrl+E workspace explorer, Cmd/Ctrl+Shift+N opens the scratchpad,
     /// Cmd/Ctrl+Shift+B git changes panel, Cmd/Ctrl+P opens any workspace file,
-    /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds and F12 navigates
+    /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds (Cmd+G / F3 next, with Shift previous) and F12 navigates
     /// to a Rust definition in an open editor, Cmd/Ctrl+. stops a run.
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
         if self.confirm_prompt_open() {
@@ -261,6 +263,8 @@ impl OxiApp {
             save_file,
             find_file,
             find_replace,
+            find_next,
+            find_previous,
             goto_definition,
             stop,
             escape,
@@ -275,7 +279,16 @@ impl OxiApp {
                 i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::N),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::S),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::F),
-                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::H),
+                // Sublime's Replace: Cmd+Alt+F on macOS (Cmd+H hides the app), Ctrl+H elsewhere.
+                if cfg!(target_os = "macos") {
+                    i.modifiers.matches_exact(cmd.plus(Modifiers::ALT)) && i.key_pressed(Key::F)
+                } else {
+                    i.modifiers.matches_exact(cmd) && i.key_pressed(Key::H)
+                },
+                (i.modifiers.matches_exact(cmd) && i.key_pressed(Key::G))
+                    || (i.modifiers.is_none() && i.key_pressed(Key::F3)),
+                (i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::G))
+                    || (i.modifiers.matches_exact(Modifiers::SHIFT) && i.key_pressed(Key::F3)),
                 i.modifiers.is_none() && i.key_pressed(Key::F12),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
                 i.key_pressed(Key::Escape),
@@ -310,48 +323,16 @@ impl OxiApp {
             && !self.conv.settings_open
             && self.conv.editor.active_document().is_some()
         {
-            let find_next =
-                find_file && self.conv.editor.find_open && !self.conv.editor.find_query.is_empty();
-            if find_next {
-                let match_count = self
-                    .conv
-                    .editor
-                    .active_document()
-                    .map(|document| {
-                        super::file_explorer::find_match_ranges(
-                            &document.content,
-                            &self.conv.editor.find_query,
-                            self.conv.editor.find_case_sensitive,
-                        )
-                        .len()
-                    })
-                    .unwrap_or(0);
-                if match_count > 0 {
-                    self.conv.editor.find_active_match = if self.conv.editor.find_has_navigated {
-                        (self.conv.editor.find_active_match + 1) % match_count
-                    } else {
-                        0
-                    };
-                    self.conv.editor.find_has_navigated = true;
-                    self.conv.editor.find_select_pending = false;
-                    self.conv.editor.find_reveal_pending = true;
-                    // Cmd/Ctrl+F is Find Next and must keep keyboard focus in the actual
-                    // Find widget after the editor scroll/caret update runs this frame.
-                    self.conv.editor.find_focus_editor_pending = false;
-                    self.conv.editor.focus_find_next_frame = true;
-                }
-            } else {
-                self.conv.editor.find_open = true;
-                self.conv.editor.find_replace_open = find_replace;
-                // Opening Find only focuses its field; it must not move the document.
-                self.conv.editor.find_select_pending = false;
-                self.conv.editor.find_reveal_pending = false;
-                self.conv.editor.find_has_navigated = false;
-                self.conv.editor.focus_find_next_frame = true;
-                ctx.memory_mut(|memory| {
-                    memory.request_focus(egui::Id::new("workspace_editor_find"));
-                });
-            }
+            self.conv.editor.open_find(find_replace);
+            ctx.memory_mut(|memory| {
+                memory.request_focus(egui::Id::new(super::file_explorer::FIND_FIELD_ID));
+            });
+        }
+        if (find_next || find_previous)
+            && !self.conv.settings_open
+            && self.conv.editor.active_document().is_some()
+        {
+            self.conv.editor.find_step(find_next);
         }
         if goto_definition
             && !self.conv.settings_open
@@ -371,10 +352,7 @@ impl OxiApp {
         if escape && self.conv.editor.file_picker_open {
             self.cancel_file_picker();
         } else if escape && self.conv.editor.find_open {
-            self.conv.editor.find_open = false;
-            // Preserve/apply the current result before returning focus to the editor.
-            self.conv.editor.find_select_pending = self.conv.editor.find_has_navigated;
-            self.conv.editor.find_focus_editor_pending = true;
+            self.conv.editor.close_find();
         } else if escape && self.conv.settings_open {
             if self.conv.settings_exit_prompt.is_some() {
                 // Modal already up: Escape means "Stay".

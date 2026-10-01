@@ -407,6 +407,12 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.profile_scroll("heavy scroll");
         rec.profile("heavy hover", true);
         rec.profile_streaming("heavy stream");
+        rec.profile_composer_typing("composer typing");
+        println!(
+            "PROFILE composer received {} chars",
+            rec.app().conv.input.len()
+        );
+        rec.app().conv.input.clear();
         for streaming in [false, true] {
             let selected = rec.drag_select_label("That is the whole story for turn", streaming);
             println!(
@@ -447,6 +453,19 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.harness.run_steps(3);
         rec.still("sidebar-search");
         rec.app().conv.sidebar_search.clear();
+        // Folded date group: the header keeps its count, the rows are hidden.
+        {
+            let app = rec.app();
+            let wi = app.conv.active_workspace;
+            app.conv.workspaces[wi].folded_groups = vec!["today".into()];
+        }
+        rec.harness.run_steps(3);
+        rec.still("sidebar-folded-group");
+        {
+            let app = rec.app();
+            let wi = app.conv.active_workspace;
+            app.conv.workspaces[wi].folded_groups.clear();
+        }
         rec.profile("400 chats idle", false);
         rec.profile("400 chats hover", true);
         {
@@ -485,7 +504,16 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.app().conv.editor.find_query = "ordered".into();
         rec.harness.run_steps(4);
         rec.still("editor-find");
+        rec.app().conv.editor.find_replace_open = true;
+        rec.app().conv.editor.find_options.whole_word = true;
+        rec.app().conv.editor.replace_query = "sorted".into();
+        rec.harness.run_steps(4);
+        rec.still("editor-find-replace");
+        rec.app().conv.editor.find_query = "no such text".into();
+        rec.harness.run_steps(4);
+        rec.still("editor-find-none");
         rec.app().conv.editor.find_open = false;
+        rec.app().conv.editor.find_replace_open = false;
         rec.app().open_file_picker();
         rec.harness.run_steps(4);
         rec.still("file-picker");
@@ -493,6 +521,19 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.harness.run_steps(2);
         rec.profile("editor idle", false);
         rec.profile("editor hover", true);
+        // A typical source file (~2k lines): typing at the caret.
+        let medium = project.join("medium.rs");
+        let mut source = String::new();
+        for i in 0..400 {
+            source.push_str(&format!(
+                "/// Doubles every value below the limit.\nfn handler_{i}(values: &[u32]) -> Vec<u32> {{\n    values.iter().filter(|v| **v < {i}).map(|v| v * 2).collect()\n}}\n\n"
+            ));
+        }
+        std::fs::write(&medium, source).unwrap();
+        rec.app()
+            .open_editor_file(std::fs::canonicalize(&medium).unwrap());
+        rec.hold(1.0);
+        rec.profile_typing("2k file typing");
         // A 20k-line file: idle, wheel scrolling, and typing at the caret.
         let big = project.join("big.py");
         let mut source = String::new();
@@ -686,10 +727,12 @@ impl Recorder<'_> {
                 .or_default()
                 .native_pixels_per_point = Some(SCALE);
             let started = Instant::now();
-            let _ = ctx.run_ui(raw, |ui| {
+            let output = ctx.run_ui(raw, |ui| {
                 eframe::App::logic(app, ui.ctx(), &mut frame);
                 eframe::App::ui(app, ui, &mut frame);
             });
+            // Tessellation runs on the UI thread every painted frame too.
+            let _ = ctx.tessellate(output.shapes, output.pixels_per_point);
             if i >= WARM_UP {
                 times.push(started.elapsed());
             }
@@ -875,6 +918,29 @@ impl Recorder<'_> {
                 return Vec::new();
             }
             vec![Event::Text(if i % 20 == 19 { "\n" } else { "x" }.into())]
+        });
+    }
+
+    /// Click into the composer, then type a character (and now and then a space) every frame.
+    fn profile_composer_typing(&mut self, label: &str) {
+        let composer = egui::pos2(620.0, 688.0);
+        self.measure(label, 120, |i, _| match i {
+            0 => vec![
+                Event::PointerMoved(composer),
+                Event::PointerButton {
+                    pos: composer,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            1 => vec![Event::PointerButton {
+                pos: composer,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            _ => vec![Event::Text(if i % 6 == 5 { " " } else { "a" }.into())],
         });
     }
 

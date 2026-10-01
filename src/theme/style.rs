@@ -250,11 +250,20 @@ impl Default for FontSelection {
 /// [`setup_style`]); written on startup and whenever the user changes fonts.
 static ACTIVE_FONTS: RwLock<Option<FontSelection>> = RwLock::new(None);
 
+static FONTS_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Set the active fonts. Call [`setup_style`] afterwards to reinstall and relayout.
 pub fn set_active_fonts(sel: FontSelection) {
     if let Ok(mut guard) = ACTIVE_FONTS.write() {
         *guard = Some(sel);
     }
+    FONTS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Bumped whenever the fonts change. Caches that keep galleys across frames key on it, since
+/// glyph widths change with the font.
+pub fn fonts_generation() -> u64 {
+    FONTS_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn active_fonts() -> FontSelection {
@@ -439,5 +448,10 @@ pub fn setup_style(ctx: &egui::Context) {
     style.spacing.scroll.floating = true;
     style.spacing.scroll.dormant_background_opacity = 0.0;
     style.spacing.scroll.dormant_handle_opacity = 0.0;
+    // Responsiveness over flourish, like a native editor: keeping the caret in view (arrow keys,
+    // Enter on the last visible line, find) scrolls at once instead of easing over 100-300 ms,
+    // and expand/collapse and fades take ~one frame instead of 200 ms.
+    style.scroll_animation = egui::style::ScrollAnimation::none();
+    style.animation_time = 0.06;
     ctx.all_styles_mut(|s| *s = style.clone());
 }

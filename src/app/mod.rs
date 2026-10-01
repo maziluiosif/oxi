@@ -20,6 +20,7 @@ mod conversation;
 mod demo_recording;
 mod eframe_app;
 mod file_explorer;
+mod frame_stats;
 mod git_panel;
 mod input_history;
 mod mentions;
@@ -31,6 +32,7 @@ mod status_bar;
 mod streaming;
 mod task_runner;
 mod terminal_panel;
+mod title_gen;
 mod update_check;
 
 pub use state::{
@@ -42,11 +44,14 @@ pub struct OxiApp {
     pub conn: ConnectionState,
     pub flow: RunState,
     pub conv: ConversationState,
-    /// Live PTY-backed terminal for the bottom panel; created lazily on first open.
-    pub terminal: Option<crate::terminal::TerminalSession>,
+    /// Live PTY-backed shells for the bottom panel, one per tab; the first is created lazily
+    /// on first open.
+    pub terminals: Vec<crate::terminal::TerminalSession>,
+    /// Index into `terminals` of the tab shown in the panel.
+    pub active_terminal: usize,
     /// Shells left behind by a workspace switch while a command was still running, keyed by
     /// workspace root; restored when that workspace becomes active again.
-    pub parked_terminals: std::collections::HashMap<String, crate::terminal::TerminalSession>,
+    pub parked_terminals: std::collections::HashMap<String, Vec<crate::terminal::TerminalSession>>,
     /// Shared async executor for all agent runs.
     pub agent_executor: crate::agent::runner::AgentExecutor,
     /// SSH tunnels for `RemoteSsh` provider configs (e.g. Ollama/LM Studio on a LAN host).
@@ -110,16 +115,22 @@ impl OxiApp {
         let last_active_workspace_root_path = settings.last_active_workspace_root_path.clone();
         let last_active_session_file = settings.last_active_session_file.clone();
         // Restore persisted workspaces; the cwd workspace is always present, first, and active.
-        let cwd_folded = settings
+        let cwd_entry = settings
             .workspaces
             .iter()
-            .find(|w| w.root_path == root_path)
-            .is_some_and(|w| w.folded);
+            .find(|w| w.root_path == root_path);
+        let cwd_folded = cwd_entry.is_some_and(|w| w.folded);
+        let cwd_pinned = cwd_entry.map(|w| w.pinned.clone()).unwrap_or_default();
+        let cwd_folded_groups = cwd_entry
+            .map(|w| w.folded_groups.clone())
+            .unwrap_or_default();
         let mut workspaces = vec![Workspace {
             root_path: root_path.clone(),
             sessions: Self::initial_workspace_sessions(&root_path, false),
             active: 0,
             sidebar_folded: cwd_folded,
+            pinned: cwd_pinned,
+            folded_groups: cwd_folded_groups,
         }];
         for entry in &settings.workspaces {
             if entry.root_path == root_path {
@@ -130,6 +141,8 @@ impl OxiApp {
                 sessions: Self::initial_workspace_sessions(&entry.root_path, false),
                 active: 0,
                 sidebar_folded: entry.folded,
+                pinned: entry.pinned.clone(),
+                folded_groups: entry.folded_groups.clone(),
             });
         }
         let active_workspace = last_active_workspace_root_path
@@ -211,6 +224,7 @@ impl OxiApp {
                 confirm_prompt: None,
                 commit_gen_pending: false,
                 commit_gen_rx: None,
+                title_gen: Vec::new(),
                 commit_gen_error: None,
                 commit_gen_stash: None,
                 git_tx: None,
@@ -247,7 +261,8 @@ impl OxiApp {
                 voice_model_rx: None,
                 voice_rx,
             },
-            terminal: None,
+            terminals: Vec::new(),
+            active_terminal: 0,
             parked_terminals: Default::default(),
             agent_executor: crate::agent::runner::AgentExecutor::new()
                 .expect("failed to initialize shared agent runtime"),

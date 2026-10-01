@@ -30,20 +30,52 @@ impl OxiApp {
         self.save_settings_quietly();
     }
 
-    /// Hand the terminal over after a workspace switch. The old shell is parked if a command is
-    /// still running in it (a dev server or build must survive the switch) and dropped otherwise;
-    /// the new workspace gets its parked shell back, or a fresh one spawned lazily in its root.
+    /// Hand the terminals over after a workspace switch. Shells with a command still running
+    /// are parked (a dev server or build must survive the switch), idle ones are dropped; the
+    /// new workspace gets its parked shells back, or a fresh one spawned lazily in its root.
     pub(crate) fn swap_workspace_terminal(&mut self, old_root: &str) {
-        if let Some(term) = self.terminal.take()
-            && term.has_foreground_job()
-        {
-            self.parked_terminals.insert(old_root.to_string(), term);
+        let busy: Vec<_> = std::mem::take(&mut self.terminals)
+            .into_iter()
+            .filter(|term| term.has_foreground_job())
+            .collect();
+        if !busy.is_empty() {
+            self.parked_terminals.insert(old_root.to_string(), busy);
         }
         let new_root = self.active_workspace().root_path.clone();
-        self.terminal = self
+        self.terminals = self
             .parked_terminals
             .remove(&new_root)
-            .filter(|term| term.is_alive());
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|term| term.is_alive())
+            .collect();
+        self.active_terminal = 0;
+    }
+
+    fn spawn_terminal(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let cwd = self.active_workspace().root_path.clone();
+        let term = crate::terminal::TerminalSession::spawn(
+            ctx,
+            &cwd,
+            24,
+            80,
+            self.conv.settings.windows_terminal,
+        )?;
+        self.terminals.push(term);
+        self.active_terminal = self.terminals.len() - 1;
+        Ok(())
+    }
+
+    /// Close one tab. The panel stays open; the body respawns a shell if it was the last one.
+    fn close_terminal(&mut self, index: usize) {
+        if index >= self.terminals.len() {
+            return;
+        }
+        self.terminals.remove(index);
+        if self.active_terminal > index || self.active_terminal >= self.terminals.len() {
+            self.active_terminal = self.active_terminal.saturating_sub(1);
+        }
+        self.conv.focus_terminal_next_frame = true;
     }
 
     /// Render the bottom terminal panel (call before the `CentralPanel`).
@@ -109,14 +141,48 @@ impl OxiApp {
                         .color(c_sidebar_section())
                         .strong(),
                 );
-                let alive = self.terminal.as_ref().is_none_or(|t| t.is_alive());
-                if !alive {
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("(exited)")
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
+                ui.add_space(4.0);
+                let mut select = None;
+                let mut close = None;
+                let tabs = self.terminals.len().max(1);
+                for index in 0..tabs {
+                    let term = self.terminals.get(index);
+                    let label = match term {
+                        Some(t) if !t.is_alive() => format!("Shell {} (exited)", index + 1),
+                        _ => format!("Shell {}", index + 1),
+                    };
+                    // Windows has no foreground process group, so every live shell would
+                    // read as busy there; only show the dot where it means something.
+                    let busy = cfg!(unix) && term.is_some_and(|t| t.has_foreground_job());
+                    let (clicked, closed) = terminal_tab(
+                        ui,
+                        index,
+                        &label,
+                        index == self.active_terminal,
+                        busy,
+                        tabs > 1,
                     );
+                    if clicked {
+                        select = Some(index);
+                    }
+                    if closed {
+                        close = Some(index);
+                    }
+                }
+                if crate::ui::chrome::icon_button_plain(ui, ICON_PLUS, 20.0, false)
+                    .on_hover_text("New shell")
+                    .clicked()
+                    && let Err(e) = self.spawn_terminal(ui.ctx())
+                {
+                    self.run_state_mut(self.active_session_key()).stream_error =
+                        Some(format!("Failed to start terminal: {e}"));
+                }
+                if let Some(index) = select {
+                    self.active_terminal = index;
+                    self.conv.focus_terminal_next_frame = true;
+                }
+                if let Some(index) = close {
+                    self.close_terminal(index);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.add_space(6.0);
@@ -127,10 +193,24 @@ impl OxiApp {
                         self.toggle_terminal();
                     }
                     if crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false)
-                        .on_hover_text("Restart shell")
+                        .on_hover_text("Restart this shell")
                         .clicked()
+                        && self.active_terminal < self.terminals.len()
                     {
-                        self.terminal = None;
+                        let cwd = self.active_workspace().root_path.clone();
+                        match crate::terminal::TerminalSession::spawn(
+                            ui.ctx(),
+                            &cwd,
+                            24,
+                            80,
+                            self.conv.settings.windows_terminal,
+                        ) {
+                            Ok(term) => self.terminals[self.active_terminal] = term,
+                            Err(e) => {
+                                self.run_state_mut(self.active_session_key()).stream_error =
+                                    Some(format!("Failed to start terminal: {e}"));
+                            }
+                        }
                         self.conv.focus_terminal_next_frame = true;
                     }
                 });
@@ -148,31 +228,21 @@ impl OxiApp {
         let (_, rect) = ui.allocate_space(avail);
         let inner = rect.shrink2(egui::vec2(6.0, 2.0));
 
-        // Lazily (re)spawn the shell rooted at the active workspace.
-        if self.terminal.is_none() {
-            let cwd = self.active_workspace().root_path.clone();
-            match crate::terminal::TerminalSession::spawn(
-                ui.ctx(),
-                &cwd,
-                24,
-                80,
-                self.conv.settings.windows_terminal,
-            ) {
-                Ok(term) => self.terminal = Some(term),
-                Err(e) => {
-                    ui.painter().text(
-                        inner.left_top() + egui::vec2(2.0, 2.0),
-                        egui::Align2::LEFT_TOP,
-                        format!("Failed to start terminal: {e}"),
-                        egui::FontId::monospace(12.0),
-                        c_danger(),
-                    );
-                    return;
-                }
-            }
+        // Lazily spawn the first shell, rooted at the active workspace.
+        if self.terminals.is_empty()
+            && let Err(e) = self.spawn_terminal(ui.ctx())
+        {
+            ui.painter().text(
+                inner.left_top() + egui::vec2(2.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                format!("Failed to start terminal: {e}"),
+                egui::FontId::monospace(12.0),
+                c_danger(),
+            );
+            return;
         }
-
-        if let Some(term) = self.terminal.as_mut() {
+        self.active_terminal = self.active_terminal.min(self.terminals.len() - 1);
+        if let Some(term) = self.terminals.get_mut(self.active_terminal) {
             term.ui(ui, inner, &mut self.conv.focus_terminal_next_frame);
         }
     }
@@ -184,4 +254,82 @@ impl OxiApp {
                 Some(format!("Save settings: {e}"));
         }
     }
+}
+
+/// One header tab: label, a dot while a command runs, and a close "×" on hover (only when
+/// there is more than one tab). Returns `(clicked, close_clicked)`.
+fn terminal_tab(
+    ui: &mut egui::Ui,
+    index: usize,
+    label: &str,
+    active: bool,
+    busy: bool,
+    closable: bool,
+) -> (bool, bool) {
+    const H: f32 = 20.0;
+    const CLOSE_W: f32 = 16.0;
+    let font = FontId::proportional(FS_TINY);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, egui::Color32::PLACEHOLDER);
+    let dot_w = if busy { 10.0 } else { 0.0 };
+    let close_w = if closable { CLOSE_W } else { 0.0 };
+    let width = galley.size().x + 16.0 + dot_w + close_w;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, H), Sense::click());
+    let hovered = ui.rect_contains_pointer(rect);
+    let fill = if active {
+        c_row_active()
+    } else if hovered {
+        c_row_hover()
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(RADIUS_ROW), fill);
+    let mut x = rect.left() + 8.0;
+    if busy {
+        ui.painter()
+            .circle_filled(egui::pos2(x + 3.0, rect.center().y), 3.0, c_accent());
+        x += dot_w;
+    }
+    let text_color = if active { c_text() } else { c_text_muted() };
+    ui.painter().galley(
+        egui::pos2(x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        text_color,
+    );
+    let mut closed = false;
+    if closable && (hovered || active) {
+        let close_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - 4.0 - CLOSE_W * 0.5, rect.center().y),
+            egui::vec2(CLOSE_W, CLOSE_W),
+        );
+        let close = ui
+            .interact(
+                close_rect,
+                ui.id().with(("terminal_tab_close", index)),
+                Sense::click(),
+            )
+            .on_hover_text(if busy {
+                "Close shell (stops the running command)"
+            } else {
+                "Close shell"
+            });
+        ui.painter().text(
+            close_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            ICON_CLOSE,
+            FontId::new(FS_TINY - 1.0, icon_font()),
+            if close.hovered() {
+                c_accent()
+            } else {
+                c_text_faint()
+            },
+        );
+        closed = close.clicked();
+    }
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    (response.clicked() && !closed, closed)
 }
