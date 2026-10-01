@@ -95,13 +95,21 @@ pub struct EditorState {
     /// Whether the bottom search panel also shows replacement controls.
     pub find_replace_open: bool,
     pub find_query: String,
-    /// Match letter casing exactly when searching.
-    pub find_case_sensitive: bool,
+    /// Regex / case-sensitive / whole-word toggles.
+    pub find_options: super::file_explorer::FindOptions,
     pub replace_query: String,
     /// Selected occurrence in the active document's current search results.
     pub find_active_match: usize,
     pub find_last_query: String,
-    pub find_last_case_sensitive: bool,
+    pub find_last_options: super::file_explorer::FindOptions,
+    /// Byte offset the incremental search starts from: the editor selection when Find opened.
+    pub find_origin_byte: usize,
+    /// Matches for the active document, reused until its text, the query or the options change.
+    pub find_cache: Option<super::file_explorer::FindCache>,
+    /// Select the whole Find query on its next render, so typing replaces it.
+    pub find_select_query_next_frame: bool,
+    /// Primary editor selection (sorted char indices) as of the last editor frame.
+    pub editor_selection_chars: Option<(usize, usize)>,
     /// Whether the current query has already navigated to its first match.
     pub find_has_navigated: bool,
     /// Move the editor caret to `find_active_match` on the next render.
