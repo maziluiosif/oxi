@@ -165,6 +165,14 @@ pub struct AppSettings {
     /// [`Self::load`] hydrates it from the OS keychain and [`Self::save`] writes it back.
     #[serde(default, skip_serializing)]
     pub github_token: String,
+    /// Run Git network operations (fetch, pull, push) through the installed `git` executable and
+    /// its own credentials (credential helper, SSH keys) instead of libgit2 + `github_token`.
+    #[serde(default)]
+    pub git_use_system_cli: bool,
+    /// Path to the `git` executable used when [`Self::git_use_system_cli`] is on. Empty means
+    /// auto-detect: `git` on `PATH`, then common install locations.
+    #[serde(default)]
+    pub git_executable: String,
     /// MCP servers to spawn (stdio). Tools appear as `mcp_<server>_<tool>`.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
@@ -303,6 +311,8 @@ impl Default for AppSettings {
             git_author_email: String::new(),
             github_username: String::new(),
             github_token: String::new(),
+            git_use_system_cli: false,
+            git_executable: String::new(),
             mcp_servers: Vec::new(),
             activity_log_enabled: false,
             router: super::router::RouterSettings::default(),

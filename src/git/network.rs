@@ -1,11 +1,25 @@
 //! Git remote authentication and fetch/pull/push integration.
+//!
+//! Network operations use libgit2 with the stored GitHub token by default. When
+//! `AppSettings::git_use_system_cli` is on, fetch and push run the installed `git` executable
+//! instead (see `system.rs`); merging after a fetch always stays in libgit2.
 
 use git2::{
     BranchType, Cred, CredentialType, FetchOptions, PushOptions, RemoteCallbacks, Repository,
     ResetType, build::CheckoutBuilder,
 };
 
-use super::{author_signature, current_branch, err};
+use std::path::{Path, PathBuf};
+
+use super::{author_signature, current_branch, err, repo_root, system};
+
+/// The `git` executable to use for network operations, or `None` for libgit2 + token auth.
+fn system_git() -> Option<PathBuf> {
+    let settings = crate::settings::AppSettings::load();
+    settings
+        .git_use_system_cli
+        .then(|| system::resolve_executable(&settings.git_executable))
+}
 
 fn github_credentials() -> (String, String) {
     let settings = crate::settings::AppSettings::load();
@@ -73,7 +87,23 @@ fn remote_error(repo: &Repository, remote: &str, operation: &str, error: git2::E
     format!("{operation} failed for {url}: {error}")
 }
 
+pub(super) fn system_fetch(repo: &Repository, git: &Path) -> Result<(), String> {
+    let output = system::run(git, repo_root(repo)?, &system::fetch_args())?;
+    if output.success {
+        Ok(())
+    } else {
+        Err(format!(
+            "fetch failed for {}: {}",
+            remote_url(repo, "origin"),
+            output.failure_message()
+        ))
+    }
+}
+
 pub(super) fn fetch(repo: &Repository) -> Result<(), String> {
+    if let Some(git) = system_git() {
+        return system_fetch(repo, &git);
+    }
     let mut remote = repo.find_remote("origin").map_err(err)?;
     let mut options = FetchOptions::new();
     options.remote_callbacks(remote_callbacks());
@@ -211,22 +241,59 @@ fn push_once(repo: &Repository, branch: &str) -> Result<(), git2::Error> {
     remote.push(&[&refspec], Some(&mut options))
 }
 
+fn libgit2_push(repo: &Repository, branch: &str) -> Result<(), String> {
+    match push_once(repo, branch) {
+        Ok(()) => Ok(()),
+        Err(error) if error.code() == git2::ErrorCode::NotFastForward => {
+            // Match the useful part of `git push`: refresh the remote tracking branch, safely
+            // integrate it, then retry. Never force-push and never overwrite remote history.
+            fetch(repo)?;
+            integrate_upstream(repo)?;
+            push_once(repo, branch).map_err(|e| remote_error(repo, "origin", "push", e))
+        }
+        Err(error) => Err(remote_error(repo, "origin", "push", error)),
+    }
+}
+
+/// System Git counterpart of [`libgit2_push`], with the same fetch-integrate-retry behaviour on
+/// a non-fast-forward rejection.
+pub(super) fn system_push(repo: &Repository, git: &Path, branch: &str) -> Result<(), String> {
+    let root = repo_root(repo)?;
+    let args = system::push_args(branch);
+    let output = system::run(git, root, &args)?;
+    if output.success {
+        return Ok(());
+    }
+    if !system::push_rejected_non_fast_forward(&output.stdout) {
+        return Err(format!(
+            "push failed for {}: {}",
+            remote_url(repo, "origin"),
+            output.failure_message()
+        ));
+    }
+    system_fetch(repo, git)?;
+    integrate_upstream(repo)?;
+    let retry = system::run(git, root, &args)?;
+    if retry.success {
+        Ok(())
+    } else {
+        Err(format!(
+            "push failed for {}: {}",
+            remote_url(repo, "origin"),
+            retry.failure_message()
+        ))
+    }
+}
+
 pub(super) fn push(repo: &Repository) -> Result<(), String> {
     let branch = current_branch(repo);
     if branch.is_empty() || branch == "HEAD" {
         return Err("Cannot push while HEAD is detached".into());
     }
 
-    match push_once(repo, &branch) {
-        Ok(()) => {}
-        Err(error) if error.code() == git2::ErrorCode::NotFastForward => {
-            // Match the useful part of `git push`: refresh the remote tracking branch, safely
-            // integrate it, then retry. Never force-push and never overwrite remote history.
-            fetch(repo)?;
-            integrate_upstream(repo)?;
-            push_once(repo, &branch).map_err(|e| remote_error(repo, "origin", "push", e))?;
-        }
-        Err(error) => return Err(remote_error(repo, "origin", "push", error)),
+    match system_git() {
+        Some(git) => system_push(repo, &git, &branch)?,
+        None => libgit2_push(repo, &branch)?,
     }
 
     let mut local = repo.find_branch(&branch, BranchType::Local).map_err(err)?;
