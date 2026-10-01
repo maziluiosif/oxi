@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-01
+
+### Added
+- Support system Git credentials for network operations
+- Automatic provider routing
+
+### Changed
+- Refresh app icon
+- Constrain and clip git rows to prevent overflow and keep bulk actions visible
+
+### Fixed
+- Improve terminal interrupt handling on loaded systems
+- Resolve Python path for Windows routing fixture
+
+
 ## [1.4.0] - 2026-10-01
 
 ### Added
@@ -820,7 +835,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/maziluiosif/oxi/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/maziluiosif/oxi/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/maziluiosif/oxi/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/maziluiosif/oxi/compare/v1.1.1...v1.2.0
