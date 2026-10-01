@@ -71,6 +71,8 @@ impl AppSettings {
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp => true,
             LlmProviderKind::AzureOpenAi => true,
+            // Picks among the providers above; local runtimes always count as configured.
+            LlmProviderKind::Router => true,
             LlmProviderKind::CustomAnthropic => {
                 has_profile_key(kind)
                     || std::env::var("CUSTOM_ANTHROPIC_API_KEY").is_ok()

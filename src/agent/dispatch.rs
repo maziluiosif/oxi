@@ -190,6 +190,10 @@ pub(crate) async fn run_provider_loop(
                     .to_string(),
             )
         }
+        LlmProviderKind::Router => Err(
+            "Router: no HTTP provider is available for this request (ACP agents can't run one-shot completions)."
+                .to_string(),
+        ),
     }
 }
 

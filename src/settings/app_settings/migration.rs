@@ -146,7 +146,8 @@ impl AppSettings {
             | LlmProviderKind::RemoteHf
             | LlmProviderKind::ClaudeCodeAcp
             | LlmProviderKind::CursorAcp
-            | LlmProviderKind::CodexAcp => String::new(),
+            | LlmProviderKind::CodexAcp
+            | LlmProviderKind::Router => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;
         cfg.openrouter_title = old.openrouter_title;

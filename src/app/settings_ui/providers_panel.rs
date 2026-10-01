@@ -87,6 +87,10 @@ impl OxiApp {
         });
         ui.add_space(12.0);
 
+        if provider == LlmProviderKind::Router {
+            self.render_router_settings(ui);
+            return;
+        }
         self.render_provider_config(ui, provider);
 
         // Provider OAuth (single section below the config, for clarity)
@@ -113,7 +117,7 @@ impl OxiApp {
 impl OxiApp {
     /// Providers with usable credentials, refreshed at most every 2 s: the check reads the
     /// OAuth store (keychain-backed), far too slow to repeat every frame.
-    fn cached_configured_providers(&self, ctx: &egui::Context) -> Vec<LlmProviderKind> {
+    pub(super) fn cached_configured_providers(&self, ctx: &egui::Context) -> Vec<LlmProviderKind> {
         let id = egui::Id::new("settings_configured_providers");
         let now = ctx.input(|i| i.time);
         if let Some((at, kinds)) = ctx.data(|d| d.get_temp::<(f64, Vec<LlmProviderKind>)>(id))

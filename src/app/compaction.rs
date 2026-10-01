@@ -169,6 +169,7 @@ impl OxiApp {
         config.model_id = session_config.model_id;
         config.effort = session_config.effort;
         config.context_window = session_config.context_window;
+        let config = crate::router::helper_config(&self.conv.settings, config, transcript.len());
         let (rx, _handle) = spawn_completion(CompleteRequest {
             config,
             system_prompt: COMPACTION_SYSTEM_PROMPT.to_string(),
@@ -229,6 +230,10 @@ impl OxiApp {
                 {
                     let sess = self.session_mut_by_key(key);
                     let split = active.split_len.min(sess.messages.len());
+                    let summary = crate::router::preference::preserve_in_summary(
+                        summary,
+                        &sess.messages[..split],
+                    );
                     sess.messages.drain(..split);
                     sess.messages.insert(
                         0,
@@ -241,6 +246,7 @@ impl OxiApp {
                             streaming: false,
                             started_at: None,
                             worked_duration: None,
+                            route: None,
                         },
                     );
                 }
@@ -289,6 +295,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         }
     }
 
@@ -302,6 +309,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         }
     }
 

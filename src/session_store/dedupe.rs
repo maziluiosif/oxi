@@ -111,6 +111,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         }
     }
 
@@ -124,6 +125,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         }
     }
 
@@ -217,6 +219,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let b = ChatMessage {
             role: MsgRole::User,
@@ -230,6 +233,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         assert!(chat_messages_equal(&a, &b));
     }
@@ -248,6 +252,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         let b = ChatMessage {
             role: MsgRole::User,
@@ -261,6 +266,7 @@ mod tests {
             streaming: false,
             started_at: None,
             worked_duration: None,
+            route: None,
         };
         assert!(!chat_messages_equal(&a, &b));
     }

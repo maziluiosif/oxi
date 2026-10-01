@@ -41,13 +41,17 @@ pub enum LlmProviderKind {
     CursorAcp,
     /// OpenAI Codex CLI through the official ACP adapter.
     CodexAcp,
+    /// Not a backend: picks one of the other configured providers (and a model + effort) per
+    /// turn. Its `model_id` holds the routing strategy. See [`crate::router`].
+    Router,
 }
 
 impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 14] = [
+    pub const ALL: [LlmProviderKind; 15] = [
+        LlmProviderKind::Router,
         LlmProviderKind::LocalHf,
         LlmProviderKind::RemoteHf,
         LlmProviderKind::Ollama,
@@ -83,6 +87,7 @@ impl LlmProviderKind {
             LlmProviderKind::ClaudeCodeAcp => "claudecodeacp",
             LlmProviderKind::CursorAcp => "cursoracp",
             LlmProviderKind::CodexAcp => "codexacp",
+            LlmProviderKind::Router => "router",
         }
     }
 
@@ -118,7 +123,8 @@ impl LlmProviderKind {
             // ACP does not use an HTTP base URL; it launches a subprocess (see `acp_command`).
             LlmProviderKind::ClaudeCodeAcp
             | LlmProviderKind::CursorAcp
-            | LlmProviderKind::CodexAcp => "",
+            | LlmProviderKind::CodexAcp
+            | LlmProviderKind::Router => "",
         }
     }
 
@@ -138,6 +144,7 @@ impl LlmProviderKind {
             LlmProviderKind::ClaudeCodeAcp => "Claude Code (ACP)",
             LlmProviderKind::CursorAcp => "Cursor (ACP)",
             LlmProviderKind::CodexAcp => "Codex (ACP)",
+            LlmProviderKind::Router => "Router (auto)",
         }
     }
 
@@ -158,6 +165,7 @@ impl LlmProviderKind {
             // Informational only: Claude Code picks the model from its own config/login.
             LlmProviderKind::ClaudeCodeAcp => "sonnet",
             LlmProviderKind::CursorAcp | LlmProviderKind::CodexAcp => "default",
+            LlmProviderKind::Router => "balanced",
         }
     }
 
@@ -668,8 +676,8 @@ mod tests {
         for kind in LlmProviderKind::ALL {
             assert!(!kind.label().is_empty());
             assert!(!kind.default_model_id().is_empty());
-            // ACP providers launch subprocesses and have no HTTP base URL.
-            if !ProviderConfig::new(kind).is_acp() {
+            // ACP providers launch subprocesses and the Router delegates; neither has a URL.
+            if !ProviderConfig::new(kind).is_acp() && kind != LlmProviderKind::Router {
                 assert!(!kind.default_base_url().is_empty());
             }
         }

@@ -59,7 +59,7 @@ fn finish_with_error(tx: &Sender<AgentEvent>, msg: impl Into<String>) {
 
 mod provider_config;
 pub use provider_config::openrouter_extra_headers;
-pub(super) use provider_config::{
+pub(crate) use provider_config::{
     azure_openai_api_version, configured_azure_openai_key, configured_custom_anthropic_key,
     configured_lmstudio_key, configured_ollama_key, configured_openai_key,
     configured_opencode_go_key, configured_openrouter_key, opencode_go_model_uses_anthropic,
@@ -104,7 +104,10 @@ impl AgentExecutor {
     }
 }
 
-pub fn spawn_agent_run(
+mod routing;
+pub use routing::spawn_agent_run;
+
+fn spawn_agent_attempt(
     executor: &AgentExecutor,
     request: AgentRunRequest,
     tx: Sender<AgentEvent>,
@@ -125,6 +128,7 @@ pub fn spawn_agent_run(
             plan_mode,
             undo_journal,
         } = request;
+
         let cwd_ref = cwd.as_path();
         let cfg = settings.active_config().clone();
 
@@ -138,7 +142,7 @@ pub fn spawn_agent_run(
                 .mark_non_reversible(
                     "The ACP agent manages its own tools, so this response cannot be restored safely.",
                 );
-            run_acp_turn(
+            let outcome = run_acp_turn(
                 &cfg,
                 &acp,
                 acp_session_key,
@@ -155,6 +159,12 @@ pub fn spawn_agent_run(
                 plan_mode,
             )
             .await;
+            if let AgentOutcome::Failed { error } = &outcome
+                && crate::router::quota::is_quota_error(error)
+            {
+                crate::router::quota::start_cooldown(cfg.provider, QUOTA_COOLDOWN);
+            }
+            let _ = tx.send(AgentEvent::Finished(outcome));
             return;
         }
 
@@ -167,11 +177,6 @@ pub fn spawn_agent_run(
                 *on &= crate::agent::approval::allowed_in_plan_mode(name);
             }
         }
-        let context_tokens = cfg.effective_context_window(settings.context_window_default);
-        let context_budget = crate::agent::history::context_char_budget_from_tokens(
-            context_tokens,
-            chars_per_token,
-        );
         let max_rounds = settings.max_tool_rounds;
         let mut tools = tool_definitions_json(&enabled, settings.bash_timeout_cap_secs);
         // Connects new/changed servers and restarts dead ones; a no-op when everything is up.
@@ -188,6 +193,14 @@ pub fn spawn_agent_run(
         // The tool definitions ride along in every request, so count them as fixed overhead when
         // deciding how much history fits under the trim ceiling.
         let tools_chars: usize = tools.iter().map(|v| v.to_string().len()).sum();
+        let default_window = settings.context_window_default;
+        let context_budget_for = |cfg: &ProviderConfig| {
+            crate::agent::history::context_char_budget_from_tokens(
+                cfg.effective_context_window(default_window),
+                chars_per_token,
+            )
+        };
+        let context_budget = context_budget_for(&cfg);
         let wire_fingerprint = wire_fingerprint_for(&settings, &system, &tools);
         let prior_wire = wire_candidate
             .filter(|cache| cache.fingerprint == wire_fingerprint)
@@ -215,29 +228,6 @@ pub fn spawn_agent_run(
             undo_journal: Some(undo_journal),
             subagent: None,
         };
-        tool_env.subagent = Some(Arc::new(
-            crate::agent::subagent::SubagentRunner::new(
-                cfg.clone(),
-                tunnels.clone(),
-                cwd.clone(),
-                &tool_env,
-                tokio::runtime::Handle::current(),
-                cancel.clone(),
-                context_budget,
-            )
-            .with_usage_sender(tx.clone()),
-        ));
-
-        let effort_override = (!cfg.effort.trim().is_empty()).then_some(cfg.effort.trim());
-        // No total request timeout: it would also cover the streamed body and kill long turns
-        // mid-stream (see `streaming_client`).
-        let client = match crate::agent::dispatch::streaming_client(&cfg, 180) {
-            Ok(c) => c,
-            Err(e) => {
-                finish_with_error(&tx, e);
-                return;
-            }
-        };
         let mut gate = ApprovalGate::new(
             ApprovalPolicy {
                 write_edit: settings.require_write_edit_approval,
@@ -248,42 +238,81 @@ pub fn spawn_agent_run(
         .with_plan_mode(plan_mode)
         .with_bash_allowlist(settings.bash_allowlist.clone());
 
-        let r = crate::agent::dispatch::run_provider_loop(
-            crate::agent::dispatch::DispatchParams {
-                cfg: &cfg,
-                client: &client,
-                tunnels: Some(&tunnels),
-                cwd: cwd_ref,
-                env: &tool_env,
-                tx: &tx,
-                cancel: &cancel,
-                gate: &mut gate,
-                max_rounds,
-                effort_override,
-                context_char_budget: context_budget,
-                tools_chars,
-            },
-            &mut messages,
-            &tools,
-        )
-        .await;
-        let outcome = match r {
-            Err(_) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
-            Err(error) => AgentOutcome::Failed { error },
-            Ok(()) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
-            Ok(()) => AgentOutcome::Success {
-                wire_cache: Some(WireCache {
-                    fingerprint: wire_fingerprint,
-                    messages,
-                }),
-            },
+        let outcome = {
+            tool_env.subagent = Some(Arc::new(
+                crate::agent::subagent::SubagentRunner::new(
+                    cfg.clone(),
+                    tunnels.clone(),
+                    cwd.clone(),
+                    &tool_env,
+                    tokio::runtime::Handle::current(),
+                    cancel.clone(),
+                    context_budget,
+                )
+                .with_usage_sender(tx.clone()),
+            ));
+
+            let effort_override = (!cfg.effort.trim().is_empty()).then_some(cfg.effort.trim());
+            // No total request timeout: it would also cover the streamed body and kill long
+            // turns mid-stream (see `streaming_client`).
+            let client = match crate::agent::dispatch::streaming_client(&cfg, 180) {
+                Ok(c) => c,
+                Err(e) => {
+                    finish_with_error(&tx, e);
+                    return;
+                }
+            };
+
+            let r = crate::agent::dispatch::run_provider_loop(
+                crate::agent::dispatch::DispatchParams {
+                    cfg: &cfg,
+                    client: &client,
+                    tunnels: Some(&tunnels),
+                    cwd: cwd_ref,
+                    env: &tool_env,
+                    tx: &tx,
+                    cancel: &cancel,
+                    gate: &mut gate,
+                    max_rounds,
+                    effort_override,
+                    context_char_budget: context_budget,
+                    tools_chars,
+                },
+                &mut messages,
+                &tools,
+            )
+            .await;
+            match r {
+                _ if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
+                Err(error) => {
+                    if crate::router::quota::is_quota_error(&error) {
+                        crate::router::quota::start_cooldown(cfg.provider, QUOTA_COOLDOWN);
+                    }
+                    AgentOutcome::Failed { error }
+                }
+                Ok(()) => AgentOutcome::Success {
+                    wire_cache: Some(WireCache { fingerprint: wire_fingerprint, messages }),
+                },
+            }
         };
         let _ = tx.send(AgentEvent::Finished(outcome));
     })
 }
 
+/// How long the router avoids a provider after a rate-limit / quota error when the provider
+/// did not report when its window resets.
+const QUOTA_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+fn first_line(s: &str) -> &str {
+    let line = s.lines().next().unwrap_or(s);
+    match line.char_indices().nth(140) {
+        Some((i, _)) => &line[..i],
+        None => line,
+    }
+}
+
 /// Drive one Claude Code (ACP) turn: extract the latest user message, submit it to the ACP
-/// manager, and translate the outcome into the terminal [`AgentEvent`]s the UI expects. Unlike
+/// manager, and return the outcome for the caller's terminal [`AgentEvent::Finished`]. Unlike
 /// the HTTP providers there is no wire history to emit — the agent keeps session state in its
 /// subprocess.
 #[allow(clippy::too_many_arguments)]
@@ -299,7 +328,7 @@ async fn run_acp_turn(
     bash_allowlist: Vec<String>,
     cancel: &Arc<AtomicBool>,
     plan_mode: bool,
-) {
+) -> AgentOutcome {
     let last_user_idx = chat_for_history
         .iter()
         .rposition(|m| m.role == crate::model::MsgRole::User);
@@ -339,13 +368,12 @@ async fn run_acp_turn(
         plan_mode,
     };
 
-    let outcome = match acp.prompt(req).await {
+    match acp.prompt(req).await {
         Err(_) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
         Err(error) => AgentOutcome::Failed { error },
         Ok(()) if cancel.load(Ordering::SeqCst) => AgentOutcome::Cancelled,
         Ok(()) => AgentOutcome::Success { wire_cache: None },
-    };
-    let _ = tx.send(AgentEvent::Finished(outcome));
+    }
 }
 
 /// Upper bound on the replayed transcript; older turns are dropped first.
@@ -401,6 +429,13 @@ fn acp_history_transcript(chat: &[ChatMessage]) -> String {
         total += turns[start].len() + 2;
     }
     turns[start..].join("\n\n")
+}
+
+/// Cancel routing immediately even while a classifier request or quota probe is pending.
+async fn wait_for_router_cancel(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 #[cfg(test)]

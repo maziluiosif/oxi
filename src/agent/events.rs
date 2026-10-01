@@ -127,6 +127,9 @@ pub enum AgentEvent {
     Usage(TokenUsage),
     /// Usage from a delegated investigation; it must not calibrate the main agent's context.
     SubagentUsage(TokenUsage),
+    /// The Router picked the provider/model for this turn (sent before any output, and again
+    /// if the turn fails over to another provider).
+    Routed(Box<crate::model::RouteNote>),
     /// The only terminal event for a run.
     Finished(AgentOutcome),
 }

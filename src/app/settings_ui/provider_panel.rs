@@ -293,6 +293,7 @@ impl OxiApp {
                 LlmProviderKind::CodexAcp => {
                     "Optional OPENAI_API_KEY / CODEX_API_KEY (else Codex login is used)"
                 }
+                LlmProviderKind::Router => "",
             };
             settings_password_field(
                 ui,

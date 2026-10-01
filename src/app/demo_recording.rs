@@ -203,7 +203,31 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             .settings
             .provider_mut(LlmProviderKind::LlamaCpp)
             .base_url = "http://localhost:8080".into();
+        crate::router::quota::set_snapshot_for_tests(
+            LlmProviderKind::ClaudeCodeAcp,
+            crate::router::quota::QuotaSnapshot {
+                windows: vec![
+                    crate::router::quota::UsageWindow {
+                        label: "5h".into(),
+                        used_pct: 32.0,
+                        resets_at: Some(crate::router::quota::now_secs() + 4_200),
+                        model_scope: None,
+                    },
+                    crate::router::quota::UsageWindow {
+                        label: "7d".into(),
+                        used_pct: 61.0,
+                        resets_at: Some(crate::router::quota::now_secs() + 200_000),
+                        model_scope: None,
+                    },
+                ],
+                plan: Some("max".into()),
+                source: "Claude usage (Claude Code login)".into(),
+                updated_at: crate::router::quota::now_secs(),
+                ..Default::default()
+            },
+        );
         for provider in [
+            LlmProviderKind::Router,
             LlmProviderKind::LlamaCpp,
             LlmProviderKind::OpenAi,
             LlmProviderKind::ClaudeCodeAcp,
@@ -214,6 +238,10 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             app.conv.settings_provider_tab = provider;
             rec.harness.run_steps(3);
             rec.still(&format!("settings-provider-{provider:?}").to_lowercase());
+            if provider == LlmProviderKind::Router {
+                rec.scroll_by(-900.0);
+                rec.still("settings-provider-router-quota");
+            }
         }
         rec.app().conv.settings_tab = SettingsTab::Providers;
         rec.app().conv.settings_open = false;
@@ -239,6 +267,25 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     rec.type_text("Run the tests and fix the failing one", 2);
     rec.hold(0.4);
     rec.begin_turn("Run the tests and fix the failing one");
+    if gallery {
+        rec.send(AgentEvent::Routed(Box::new(crate::model::RouteNote {
+            provider: LlmProviderKind::ClaudeCodeAcp,
+            model: "sonnet".into(),
+            effort: "medium".into(),
+            tier: "standard".into(),
+            strategy: "Balanced".into(),
+            reason: "Standard task (fix, test). Claude Code (ACP) · sonnet because: right size \
+                     for the task; your standard-task model; subscription, 5h 32% used, 7d 61% \
+                     used. Next best: OpenRouter · anthropic/claude-sonnet-4.5 (pay per use, ~$0.17)."
+                .into(),
+            alternatives: vec![
+                "OpenRouter · anthropic/claude-sonnet-4.5 — score -8: pay per use, ~$0.17".into(),
+            ],
+            failover_from: None,
+        })));
+        rec.harness.run_steps(4);
+        rec.still("chat-routed");
+    }
     rec.hold(0.5);
 
     // 3. The agent works through it with real tools.
@@ -1218,6 +1265,7 @@ fn message(role: MsgRole, text: &str, blocks: Vec<AssistantBlock>) -> ChatMessag
         streaming: false,
         started_at: None,
         worked_duration: None,
+        route: None,
     }
 }
 

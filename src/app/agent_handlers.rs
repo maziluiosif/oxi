@@ -192,6 +192,14 @@ impl OxiApp {
         ctx.request_repaint();
     }
 
+    /// Append one provider round to the usage ledger the Router budgets against.
+    fn record_usage(&self, key: SessionKey, usage: &crate::agent::TokenUsage) {
+        if let Some((kind, model)) = self.run_state(key).and_then(|r| r.usage_target.as_ref()) {
+            let billing = self.conv.settings.router.billing(*kind);
+            crate::router::ledger::record(*kind, model, billing, usage);
+        }
+    }
+
     fn apply_agent_event(&mut self, ctx: &egui::Context, key: SessionKey, ev: AgentEvent) {
         // Any event other than another retry means the stream is flowing again.
         if !matches!(ev, AgentEvent::StreamRetry { .. }) {
@@ -278,12 +286,20 @@ impl OxiApp {
                 self.reset_streaming_tail(key);
             }
             AgentEvent::AssistantMessageDone => {}
+            AgentEvent::Routed(note) => {
+                self.run_state_mut(key).usage_target = Some((note.provider, note.model.clone()));
+                if let Some(message) = self.last_assistant_mut(key) {
+                    message.route = Some(note);
+                }
+            }
             AgentEvent::SubagentUsage(usage) => {
+                self.record_usage(key, &usage);
                 let run = self.run_state_mut(key);
                 run.turn_usage.add(&usage);
                 run.session_usage.add(&usage);
             }
             AgentEvent::Usage(usage) => {
+                self.record_usage(key, &usage);
                 {
                     let run = self.run_state_mut(key);
                     run.turn_usage.add(&usage);
