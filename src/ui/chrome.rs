@@ -387,7 +387,7 @@ fn icon_accessible_label(icon: &str) -> &str {
         ICON_MENU => "Chats",
         ICON_EXPLORER => "Files",
         ICON_TERMINAL => "Terminal",
-        ICON_GIT => "Git changes",
+        ICON_GIT => "Git panel",
         ICON_REFRESH => "Refresh",
         ICON_SEND => "Send message",
         ICON_STOP => "Stop",

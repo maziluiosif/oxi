@@ -25,6 +25,9 @@ pub(crate) struct EditorLayoutCache {
     /// Per-paragraph galleys of the last laid-out text; kept across edits so a keystroke
     /// re-lays only the edited paragraph (see [`super::line_layout`]).
     pub(super) lines: Option<super::line_layout::LineLayout>,
+    /// Bracket pair (char indices) touching the caret at the given char index; recomputed
+    /// only when the caret moves (the whole cache resets on edit).
+    pub(super) bracket_pair: Option<(usize, Option<(usize, usize)>)>,
     /// Git gutter markers projected onto the edited text, and the on-disk markers they came from.
     pub(super) live_git_lines: Option<(
         Vec<crate::git::GitLineChange>,

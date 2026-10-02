@@ -10,8 +10,9 @@ use crate::theme::*;
 use super::super::OxiApp;
 use super::editor_logic::{char_index_to_byte, live_git_line_changes};
 use super::editor_paint::{
-    byte_range_rects, caret_logical_line, editor_selection_rects, paint_caret, paint_indent_guides,
-    paint_selected_whitespace, paint_selection, selected_logical_lines,
+    byte_range_rects, caret_logical_line, editor_selection_rects, paint_bracket_underlines,
+    paint_caret, paint_indent_guides, paint_selected_whitespace, paint_selection,
+    paint_selection_matches, selected_logical_lines,
 };
 use super::editor_text::EditorText;
 use super::support::{apply_definition_underline, apply_search_highlights, language_for_path};
@@ -36,6 +37,10 @@ impl OxiApp {
             return;
         };
         let extension = language_for_path(&self.conv.editor.documents[index].path).to_owned();
+        let navigation_supported = crate::code_nav::supports(&extension);
+        if navigation_supported {
+            self.prewarm_code_navigation(&extension);
+        }
         let navigation_range = self
             .conv
             .editor
@@ -188,6 +193,20 @@ impl OxiApp {
                                 editor_view_size.y.max(24.0),
                             );
                             let document = &mut self.conv.editor.documents[index];
+                            let editor_id = ui.make_persistent_id(("workspace_text_editor", index));
+                            // Sublime's editing commands (Cmd+/, Cmd+D, Cmd+L, ...) run before
+                            // TextEdit so it never sees their keys.
+                            let command = super::editor_commands::handle_editor_commands(
+                                ui,
+                                editor_id,
+                                &mut document.content,
+                                &extension,
+                            );
+                            let command_edited = command.is_some_and(|(_, edited)| edited);
+                            let mut previous_minimap = None;
+                            if command_edited {
+                                previous_minimap = mark_document_edited(document);
+                            }
                             let revision = document.content_revision;
                             let pixels_per_point_bits = ui.ctx().pixels_per_point().to_bits();
                             let allow_layout_cache = !has_mutating_text_input(ui);
@@ -263,7 +282,7 @@ impl OxiApp {
                                         egui::Color32::TRANSPARENT;
                                     ui.visuals_mut().text_cursor.blink = false;
                                     TextEdit::multiline(&mut EditorText(&mut document.content))
-                                        .id_salt(("workspace_text_editor", index))
+                                        .id(editor_id)
                                         .font(FontId::monospace(FS_SMALL))
                                         .code_editor()
                                         .frame(egui::Frame::NONE)
@@ -275,19 +294,10 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
-                            let mut previous_minimap = None;
-                            let scratchpad_changed =
-                                output.response.changed() && document.is_scratchpad;
+                            let scratchpad_changed = (output.response.changed() || command_edited)
+                                && document.is_scratchpad;
                             if output.response.changed() {
-                                document.content_revision =
-                                    document.content_revision.wrapping_add(1);
-                                document.dirty = document.content != document.saved_content;
-                                document.layout_cache = EditorLayoutCache {
-                                    edited_at: Some(std::time::Instant::now()),
-                                    lines: document.layout_cache.lines.take(),
-                                    ..Default::default()
-                                };
-                                previous_minimap = document.minimap_cache.take();
+                                previous_minimap = mark_document_edited(document);
                             }
                             if clear_selection_requested {
                                 if let Some(range) = output.cursor_range
@@ -327,7 +337,15 @@ impl OxiApp {
                             // Every "visible only" cull below must use the real viewport, or it
                             // silently degrades to whole-file work per frame (a select-all in a
                             // few-thousand-line file drops to ~12 fps otherwise).
-                            let viewport_clip = ui.clip_rect().intersect(output.text_clip_rect);
+                            // Horizontally it is only as wide as the galley — zero for an empty
+                            // file, which clipped the caret away, and flush with column 0, which
+                            // cut the caret there in half — so take the x range from the whole
+                            // TextEdit (margins included) instead.
+                            let viewport_clip =
+                                ui.clip_rect().intersect(egui::Rect::from_x_y_ranges(
+                                    output.response.rect.x_range(),
+                                    output.text_clip_rect.y_range(),
+                                ));
                             let navigation_range = navigation_range.as_ref().map(|range| {
                                 super::editor_logic::clamp_byte_range(&document.content, range)
                             });
@@ -379,6 +397,13 @@ impl OxiApp {
                             if focus_editor_requested && find_caret_target.is_none() {
                                 output.response.request_focus();
                             }
+                            if let Some((caret, _)) = command {
+                                let caret = output
+                                    .galley
+                                    .pos_from_cursor(egui::text::CCursor::new(caret))
+                                    .translate(output.galley_pos.to_vec2());
+                                ui.scroll_to_rect(caret, None);
+                            }
 
                             // The primary caret's char index is free from the cursor range. The
                             // byte offset (needed only when a definition jump fires) and the logical
@@ -391,7 +416,7 @@ impl OxiApp {
                                 .map(|range| caret_logical_line(&output.galley, range.primary));
                             let definition_modifier =
                                 ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
-                            let hovered_definition = if extension == "rs"
+                            let hovered_definition = if navigation_supported
                                 && definition_modifier
                                 && output.response.hovered()
                             {
@@ -403,7 +428,7 @@ impl OxiApp {
                                             .cursor_from_pos(position - output.galley_pos);
                                         let byte =
                                             char_index_to_byte(&document.content, cursor.index.0);
-                                        crate::rust_goto::identifier_at(&document.content, byte)
+                                        crate::code_nav::identifier_at(&document.content, byte)
                                             .map(|(_, range)| range)
                                             .filter(|range| {
                                                 byte_range_rects(
@@ -427,14 +452,14 @@ impl OxiApp {
                                 .flatten();
                             let mut context_goto = false;
                             output.response.context_menu(|ui| {
-                                if extension == "rs"
-                                    && ui.button("Go to definition    F12").clicked()
+                                if navigation_supported
+                                    && ui.button("Go to Definition    F12").clicked()
                                 {
                                     context_goto = true;
                                     ui.close();
                                 }
                             });
-                            let navigation_request = if extension == "rs" {
+                            let navigation_request = if navigation_supported {
                                 click_byte.or_else(|| {
                                     (goto_definition_requested || context_goto)
                                         .then(|| {
@@ -695,6 +720,47 @@ impl OxiApp {
                                 c_text(),
                             );
 
+                            paint_selection_matches(
+                                ui,
+                                &output.galley,
+                                output.galley_pos,
+                                viewport_clip,
+                                &document.content,
+                                selection,
+                                &window.visible,
+                            );
+                            if let Some(cursor_range) = output.cursor_range
+                                && cursor_range.is_empty()
+                            {
+                                let caret = cursor_range.primary.index.0;
+                                let pair = match document.layout_cache.bracket_pair {
+                                    Some((cached, pair)) if cached == caret => pair,
+                                    _ => {
+                                        let content = document.content.as_str();
+                                        let pair = super::editor_commands::bracket_pair_at(
+                                            content,
+                                            super::editor_text::byte_index(content, caret),
+                                        )
+                                        .map(|(a, b)| {
+                                            (
+                                                super::editor_text::char_index(content, a),
+                                                super::editor_text::char_index(content, b),
+                                            )
+                                        });
+                                        document.layout_cache.bracket_pair = Some((caret, pair));
+                                        pair
+                                    }
+                                };
+                                if let Some((a, b)) = pair {
+                                    paint_bracket_underlines(
+                                        ui,
+                                        &output.galley,
+                                        output.galley_pos,
+                                        viewport_clip,
+                                        [a, b],
+                                    );
+                                }
+                            }
                             if let Some(selection) = selection {
                                 paint_selected_whitespace(
                                     ui,
@@ -924,9 +990,24 @@ impl OxiApp {
         });
         self.conv.editor.editor_selection_chars = editor_selection;
         if let Some(byte) = goto_definition_byte {
-            self.go_to_rust_definition(byte);
+            self.go_to_definition(byte, ui.ctx());
         }
     }
+}
+
+/// Invalidate every per-revision cache after the text changed. Returns the old minimap, which
+/// keeps being shown until the new one is laid out.
+fn mark_document_edited(
+    document: &mut crate::app::state::EditorDocument,
+) -> Option<super::MinimapGeometry> {
+    document.content_revision = document.content_revision.wrapping_add(1);
+    document.dirty = document.content != document.saved_content;
+    document.layout_cache = EditorLayoutCache {
+        edited_at: Some(std::time::Instant::now()),
+        lines: document.layout_cache.lines.take(),
+        ..Default::default()
+    };
+    document.minimap_cache.take()
 }
 
 fn has_mutating_text_input(ui: &Ui) -> bool {

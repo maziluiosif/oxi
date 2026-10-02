@@ -540,6 +540,14 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     rec.still("editor-git");
     if gallery {
         use crate::app::git_panel::GitTab;
+        // An empty scratchpad must still show its caret at line 1, column 1.
+        rec.app().open_scratchpad();
+        rec.harness.run_steps(4);
+        rec.still("scratchpad-empty");
+        rec.app().reveal_chat_view();
+        rec.app()
+            .open_editor_file(std::fs::canonicalize(project.join("stats.py")).unwrap());
+        rec.harness.run_steps(4);
         rec.app().conv.git_tab = GitTab::History;
         rec.harness.run_steps(4);
         rec.still("git-history");
@@ -565,6 +573,87 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.harness.run_steps(4);
         rec.still("file-picker");
         rec.app().cancel_file_picker();
+        rec.harness.run_steps(2);
+        // Sublime-style tabs: an unsaved active tab, the pointer over an inactive one.
+        {
+            let app = rec.app();
+            let active = app.conv.editor.active;
+            app.open_editor_file_only(
+                std::fs::canonicalize(project.join("test_stats.py")).unwrap(),
+            );
+            app.conv.editor.active = active;
+            if let Some(document) = app.conv.editor.active_document_mut() {
+                document.content.push('\n');
+                document.dirty = true;
+                document.content_revision += 1;
+            }
+        }
+        rec.harness.run_steps(4);
+        let tab = rec
+            .harness
+            .query_all_by_label("test_stats.py")
+            .map(|node| node.rect())
+            .min_by(|a, b| a.top().total_cmp(&b.top()));
+        if let Some(tab) = tab {
+            // AccessKit rects are in physical pixels.
+            let scale = rec.harness.ctx.pixels_per_point();
+            rec.harness
+                .hover_at((tab.center().to_vec2() / scale).to_pos2());
+        }
+        rec.harness.run_steps(4);
+        rec.still("editor-tabs-hover");
+        rec.app().open_file_picker_with("@");
+        rec.harness.run_steps(4);
+        rec.still("goto-symbol");
+        rec.app().cancel_file_picker();
+        if let Some(document) = rec.app().conv.editor.active_document_mut() {
+            document.content = document.saved_content.clone();
+            document.dirty = false;
+            document.content_revision += 1;
+        }
+        rec.harness.run_steps(2);
+        rec.check_editor_commands();
+        // VS Code-style diff tab: working-tree file diff (split, inline), then a commit.
+        rec.app().request(crate::git::GitOp::ShowDiff {
+            path: "stats.py".into(),
+            staged: false,
+        });
+        rec.app().conv.diff_view_open = true;
+        rec.app().conv.editor.diff_tab_active = true;
+        rec.wait_for_git_diff("stats.py");
+        rec.still("diff-split");
+        rec.profile("diff split idle", false);
+        rec.app().conv.git_open = false;
+        rec.harness.run_steps(4);
+        rec.still("diff-split-wide");
+        rec.app().conv.git_open = true;
+        rec.app()
+            .conv
+            .git_diff_view
+            .as_mut()
+            .unwrap()
+            .set_inline(true);
+        rec.harness.run_steps(4);
+        rec.still("diff-inline");
+        rec.app()
+            .conv
+            .git_diff_view
+            .as_mut()
+            .unwrap()
+            .set_inline(false);
+        let hash = rec.app().conv.git.log.first().map(|c| c.hash.clone());
+        if let Some(hash) = hash {
+            rec.app()
+                .request(crate::git::GitOp::ShowCommit(hash.clone()));
+            rec.wait_for_git_diff(&format!("Commit {hash}"));
+            rec.still("diff-commit");
+            // The commit being shown is highlighted in the History list.
+            rec.app().conv.git_tab = crate::app::git_panel::GitTab::History;
+            rec.harness.run_steps(4);
+            rec.still("git-history-selected");
+            rec.app().conv.git_tab = crate::app::git_panel::GitTab::Changes;
+        }
+        rec.app().close_editor_git_diff();
         rec.harness.run_steps(2);
         rec.profile("editor idle", false);
         rec.profile("editor hover", true);
@@ -599,6 +688,41 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         // Colors must still match the text after edits (the highlight is now per window).
         rec.harness.run_steps(4);
         rec.still("big-file-after-typing");
+    }
+    if gallery {
+        // A deep explorer tree with long names and a busy Git panel: row selection,
+        // indentation, status letters and truncation at a normal sidebar width.
+        let nested = project.join("src/reporting/exporters");
+        std::fs::create_dir_all(&nested).unwrap();
+        for name in [
+            "csv.py",
+            "a_really_long_exporter_module_name_that_overflows.py",
+            "json.py",
+        ] {
+            std::fs::write(nested.join(name), "x = 1\n").unwrap();
+        }
+        for i in 0..30 {
+            std::fs::write(project.join(format!("module_{i:02}.py")), "x = 1\n").unwrap();
+        }
+        let deep = std::fs::canonicalize(
+            nested.join("a_really_long_exporter_module_name_that_overflows.py"),
+        )
+        .unwrap();
+        {
+            let app = rec.app();
+            for dir in ["src", "src/reporting", "src/reporting/exporters"] {
+                app.conv
+                    .explorer_expanded
+                    .insert(std::fs::canonicalize(project.join(dir)).unwrap());
+            }
+            app.conv.explorer_cache.invalidate();
+            app.conv.sidebar_open = true;
+            app.conv.sidebar_mode = crate::app::state::SidebarMode::Explorer;
+            app.open_editor_file(deep);
+            app.request(crate::git::GitOp::Refresh);
+        }
+        rec.hold(1.5);
+        rec.still("explorer-tree");
     }
     if gallery {
         rec.app().conv.terminal_open = true;
@@ -1021,6 +1145,139 @@ impl Recorder<'_> {
             self.harness.run_steps(1);
         }
         self.harness.run_steps(20);
+    }
+
+    /// Step frames until the git worker delivers the diff titled `title`.
+    /// Drive go to definition (F12) and the Sublime editing commands with real key events.
+    fn check_editor_commands(&mut self) {
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let tests = std::fs::canonicalize(self.project.join("test_stats.py")).unwrap();
+        let stats = std::fs::canonicalize(self.project.join("stats.py")).unwrap();
+        {
+            let app = self.app();
+            app.open_editor_file(tests.clone());
+            let content = &app.conv.editor.active_document().unwrap().content;
+            let at = content.find("mean([1").unwrap() + 1;
+            app.conv.editor.navigation_target = Some((tests.clone(), at..at));
+            app.conv.editor.focus_editor_next_frame = true;
+        }
+        self.harness.run_steps(3);
+        self.harness
+            .event(key(egui::Key::F12, egui::Modifiers::NONE));
+        let mut landed = false;
+        for _ in 0..200 {
+            self.harness.step();
+            if self
+                .app()
+                .conv
+                .editor
+                .active_document()
+                .is_some_and(|document| document.path == stats)
+            {
+                landed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.harness.run_steps(3);
+        println!("CHECK F12 from an import to the defining file: {landed}");
+        assert!(landed, "go to definition did not open stats.py");
+
+        // The caret now sits on `def mean`: Cmd+/ comments that line, Cmd+Z restores it.
+        let saved = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .content
+            .clone();
+        self.harness
+            .event(key(egui::Key::Slash, egui::Modifiers::COMMAND));
+        self.harness.run_steps(2);
+        let commented = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .content
+            .clone();
+        let ok = commented.contains("# def mean(values):");
+        println!("CHECK Cmd+/ comments the caret line: {ok}");
+        assert!(ok, "toggle comment failed");
+        self.harness
+            .event(key(egui::Key::Z, egui::Modifiers::COMMAND));
+        self.harness.run_steps(2);
+        let restored = self.app().conv.editor.active_document().unwrap().content == saved;
+        println!("CHECK Cmd+Z undoes the command: {restored}");
+        assert!(restored, "undo after toggle comment failed");
+        self.harness.event(key(
+            egui::Key::D,
+            egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+        ));
+        self.harness.run_steps(2);
+        // F12 selected the name `mean`; like Sublime, a selection is duplicated in place.
+        let duplicated = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .unwrap()
+            .content
+            .contains("def meanmean(values):");
+        println!("CHECK Cmd+Shift+D duplicates the selection: {duplicated}");
+
+        assert!(duplicated, "duplicate failed");
+        self.harness
+            .event(key(egui::Key::Z, egui::Modifiers::COMMAND));
+        self.harness.run_steps(2);
+        let app = self.app();
+        let path = app.conv.editor.active_document().unwrap().path.clone();
+        if let Some(index) = app
+            .conv
+            .editor
+            .documents
+            .iter()
+            .position(|d| d.path == tests)
+        {
+            app.conv.editor.remove_document(index);
+        }
+        if let Some(index) = app
+            .conv
+            .editor
+            .documents
+            .iter()
+            .position(|d| d.path == path)
+        {
+            app.conv.editor.active = Some(index);
+        }
+        self.harness.run_steps(2);
+    }
+
+    fn wait_for_git_diff(&mut self, title: &str) {
+        for _ in 0..400 {
+            self.harness.step();
+            let ready = self
+                .app()
+                .conv
+                .git
+                .diff
+                .as_ref()
+                .is_some_and(|(t, _)| t == title);
+            if ready {
+                self.harness.run_steps(4);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("git diff {title:?} never arrived");
     }
 
     fn hold(&mut self, seconds: f32) {

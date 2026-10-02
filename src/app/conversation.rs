@@ -2,10 +2,10 @@
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, CornerRadius, FontId, Frame, Label, Margin, RichText, ScrollArea, Stroke, Ui,
+    self, Align, CornerRadius, Frame, Label, Margin, RichText, ScrollArea, Stroke, Ui,
 };
 
-use crate::agent::{ApprovalDecision, TokenUsage};
+use crate::agent::ApprovalDecision;
 use crate::model::MsgRole;
 use crate::theme::*;
 use crate::ui::messages::{render_assistant_message_run, render_message};
@@ -155,189 +155,6 @@ impl OxiApp {
                 });
             });
         ui.add_space(4.0);
-    }
-
-    pub(crate) fn render_chat_header(&mut self, ui: &mut Ui, column_center_w: f32) {
-        let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
-        let pad = ((column_center_w - col_w) * 0.5).max(0.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            if pad > 0.0 {
-                ui.add_space(pad);
-            }
-            ui.allocate_ui_with_layout(
-                egui::vec2(col_w, 38.0),
-                egui::Layout::right_to_left(Align::Center),
-                |ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-
-                    // Right cluster — sized to its content so it never overflows the title.
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), 28.0),
-                        egui::Layout::right_to_left(Align::Center),
-                        |ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            // Quiet outline button: the composer's send button is the one
-                            // strongly colored action on screen.
-                            if crate::ui::chrome::icon_button_core(
-                                ui,
-                                ICON_PLUS,
-                                egui::vec2(28.0, 28.0),
-                                FS_SMALL,
-                                false,
-                                &crate::ui::chrome::IconButtonLook {
-                                    fill: c_bg_elevated(),
-                                    hover_fill: c_row_hover(),
-                                    stroke: c_border_subtle(),
-                                    hover_stroke: c_border(),
-                                    rounding: CornerRadius::same(RADIUS_CHIP),
-                                    glyph: c_text(),
-                                },
-                            )
-                            .on_hover_text("Start a new chat in this workspace (Cmd/Ctrl+N)")
-                            .clicked()
-                            {
-                                self.new_chat();
-                            }
-                            self.render_header_status_chip(ui);
-                        },
-                    );
-
-                    // Left group gets whatever the right cluster didn’t take.
-                    let left_w = ui.available_width();
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(left_w, 38.0),
-                        egui::Layout::left_to_right(Align::Center),
-                        |ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            let workspace =
-                                workspace_sidebar_label(&self.active_workspace().root_path);
-                            let session_title =
-                                sidebar_session_title_display(&self.active_session().title);
-                            ui.vertical(|ui| {
-                                ui.set_width(ui.available_width());
-                                ui.add(
-                                    Label::new(
-                                        RichText::new(session_title)
-                                            .size(FS_BODY)
-                                            .color(c_text_strong())
-                                            .strong(),
-                                    )
-                                    .truncate(),
-                                );
-                                let provider = self.conv.settings.active_config().provider.label();
-                                ui.add(
-                                    Label::new(
-                                        RichText::new(format!("{workspace} · {provider}"))
-                                            .size(FS_TINY)
-                                            .color(c_text_muted()),
-                                    )
-                                    .truncate(),
-                                );
-                            });
-                        },
-                    );
-                },
-            );
-            if pad > 0.0 {
-                ui.add_space(pad);
-            }
-        });
-    }
-
-    fn render_header_status_chip(&self, ui: &mut Ui) {
-        let (label, dot, hover) = if self.compaction_active_for(self.active_session_key()) {
-            (
-                "Compacting…".to_string(),
-                c_accent(),
-                "Summarizing older turns to free up context".to_string(),
-            )
-        } else if let Some(err) = self.active_stream_error() {
-            (
-                "Error".to_string(),
-                crate::theme::c_danger(),
-                err.to_string(),
-            )
-        } else if let Some(reason) = self
-            .active_run_state()
-            .and_then(|s| s.stream_retrying.clone())
-        {
-            (
-                "Reconnecting…".to_string(),
-                crate::theme::c_warning_fg(),
-                reason,
-            )
-        } else if self.active_waiting_response() {
-            let elapsed = self
-                .active_run_state()
-                .and_then(|s| s.stream_started_at)
-                .map(|t| format_stream_elapsed(t.elapsed()));
-            let mut hover = "Agent is working".to_string();
-            if let Some(usage) = self.active_run_state().map(|s| {
-                if s.turn_usage.is_zero() {
-                    s.last_turn_usage
-                } else {
-                    s.turn_usage
-                }
-            }) && !usage.is_zero()
-            {
-                hover = format!("{hover} · {}", format_token_usage(usage));
-            }
-            let label = match elapsed {
-                Some(e) => format!("Running · {e}"),
-                None => "Running".to_string(),
-            };
-            (label, c_accent(), hover)
-        } else if !self.active_provider_ready() {
-            (
-                "Needs API key".to_string(),
-                crate::theme::c_warning_fg(),
-                format!(
-                    "{} has no API key yet — add one in Settings → Models & providers",
-                    self.conv.settings.active_provider.label()
-                ),
-            )
-        } else {
-            let mut hover = "Ready to send".to_string();
-            if let Some(usage) = self.active_run_state().map(|s| s.last_turn_usage)
-                && !usage.is_zero()
-            {
-                hover = format!("Ready · last run: {}", format_token_usage(usage));
-            }
-            ("Ready".to_string(), crate::theme::c_success(), hover)
-        };
-
-        // Hand-painted at the same 28px height as the neighboring header buttons —
-        // a Frame sizes itself to the text and sits visually off-line next to them.
-        const H: f32 = 28.0;
-        const PAD_X: f32 = 10.0;
-        const GAP: f32 = 5.0;
-        let text_galley =
-            ui.painter()
-                .layout_no_wrap(label, FontId::proportional(FS_TINY), c_text_muted());
-        let dot_galley =
-            ui.painter()
-                .layout_no_wrap("●".to_string(), FontId::proportional(8.0), dot);
-        let w = PAD_X * 2.0 + text_galley.rect.width() + GAP + dot_galley.rect.width();
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, H), egui::Sense::hover());
-        ui.painter().rect(
-            rect,
-            CornerRadius::same(255),
-            c_bg_input(),
-            Stroke::new(1.0, c_border_subtle()),
-            egui::StrokeKind::Middle,
-        );
-        let text_pos = egui::pos2(
-            rect.left() + PAD_X,
-            rect.center().y - text_galley.rect.height() * 0.5,
-        );
-        let dot_pos = egui::pos2(
-            rect.left() + PAD_X + text_galley.rect.width() + GAP,
-            rect.center().y - dot_galley.rect.height() * 0.5,
-        );
-        ui.painter().galley(text_pos, text_galley, c_text_muted());
-        ui.painter().galley(dot_pos, dot_galley, dot);
-        resp.on_hover_text(hover);
     }
 
     pub(crate) fn render_empty_state(&mut self, ui: &mut Ui) {
@@ -1042,39 +859,6 @@ fn suggestion_card(
             .selectable(false),
     );
     response
-}
-
-fn format_token_usage(usage: TokenUsage) -> String {
-    let input = usage.total_input();
-    let output = usage.output_tokens;
-    let cached = usage.cache_hit_pct();
-    let mut text = if input == 0 {
-        format!("{} out", format_token_count(output))
-    } else {
-        format!(
-            "{} in ({}% cached) · {} out",
-            format_token_count(input),
-            cached,
-            format_token_count(output)
-        )
-    };
-    if let Some(rate) = usage.output_tokens_per_sec() {
-        text.push_str(&format!(
-            " · {}",
-            super::composer_helpers::format_tokens_per_sec(rate)
-        ));
-    }
-    text
-}
-
-fn format_token_count(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.1}m", tokens as f64 / 1_000_000.0)
-    } else if tokens >= 1_000 {
-        format!("{:.1}k", tokens as f64 / 1_000.0)
-    } else {
-        tokens.to_string()
-    }
 }
 
 /// Same idea as egui’s default click-vs-drag distance (~6px).

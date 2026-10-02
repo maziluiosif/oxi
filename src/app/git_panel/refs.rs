@@ -1,6 +1,8 @@
 //! Branches tab (list + create/checkout) and history tab (commit log + diff-on-click).
 
-use eframe::egui::{self, Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Ui};
+use eframe::egui::{
+    self, Align, Color32, CornerRadius, FontId, Layout, RichText, ScrollArea, Sense, Ui,
+};
 
 use crate::git::GitOp;
 use crate::theme::*;
@@ -136,42 +138,56 @@ impl OxiApp {
         let full_w = ui.available_width();
         let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 40.0), Sense::click());
         let hovered = response.hovered();
-        let fill = if hovered {
+        // The commit whose diff is open (ShowCommit records its hash as the diff path).
+        let selected = self.conv.diff_view_open
+            && self.conv.git.current_diff_path.as_deref() == Some(commit.hash.as_str());
+        let fill = if selected {
+            c_row_active()
+        } else if hovered {
             c_row_hover()
         } else {
             Color32::TRANSPARENT
         };
         ui.painter()
             .rect_filled(rect, CornerRadius::same(crate::theme::RADIUS_ROW), fill);
-        ui.scope_builder(
-            egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(6.0, 4.0))),
-            |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(&commit.hash[..7.min(commit.hash.len())])
-                                .size(FS_TINY)
-                                .color(c_accent())
-                                .monospace(),
-                        );
-                        ui.add_space(6.0);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(commit.message.clone())
-                                    .size(FS_SMALL)
-                                    .color(c_text()),
-                            )
-                            .truncate(),
-                        );
-                    });
-                    ui.add_space(1.0);
-                    ui.label(
-                        RichText::new(format!("{} · {}", commit.author, commit.date))
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
-                    );
-                });
-            },
+        // Text is painted, not added as labels: labels sense the pointer themselves, which
+        // dropped the row's hover fill and click whenever the pointer was over the text.
+        let inner = rect.shrink2(egui::vec2(6.0, 4.0));
+        let hash = &commit.hash[..7.min(commit.hash.len())];
+        let hash_galley =
+            ui.painter()
+                .layout_no_wrap(hash.to_owned(), FontId::monospace(FS_TINY), c_accent());
+        let line_h = inner.height() / 2.0;
+        let first_y = inner.top() + line_h / 2.0;
+        ui.painter().galley(
+            egui::pos2(inner.left(), first_y - hash_galley.size().y / 2.0),
+            hash_galley.clone(),
+            c_accent(),
+        );
+        let message_left = inner.left() + hash_galley.size().x + 6.0;
+        let message = single_line_galley(
+            ui,
+            &commit.message,
+            FontId::proportional(FS_SMALL),
+            if selected { c_text_strong() } else { c_text() },
+            inner.right() - message_left,
+        );
+        ui.painter().galley(
+            egui::pos2(message_left, first_y - message.size().y / 2.0),
+            message,
+            c_text(),
+        );
+        let meta = single_line_galley(
+            ui,
+            &format!("{} · {}", commit.author, commit.date),
+            FontId::proportional(FS_TINY),
+            c_text_muted(),
+            inner.width(),
+        );
+        ui.painter().galley(
+            egui::pos2(inner.left(), first_y + line_h - meta.size().y / 2.0),
+            meta,
+            c_text_muted(),
         );
         if response.clicked() {
             self.request(GitOp::ShowCommit(commit.hash.clone()));
@@ -196,4 +212,20 @@ impl OxiApp {
             });
         }
     }
+}
+
+/// One line of text elided with `…` to `max_width`.
+fn single_line_galley(
+    ui: &Ui,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap.max_width = max_width.max(0.0);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    ui.fonts_mut(|f| f.layout_job(job))
 }

@@ -547,9 +547,10 @@ fn render_activity_summary(
             None => "Working".to_string(),
         }
     } else {
+        // Sub-second turns read as "Worked for 0s"; drop the duration like an untracked one.
         let base = match worked_duration {
-            Some(d) => format!("Worked for {}", format_worked_duration(d)),
-            None => "Worked".to_string(),
+            Some(d) if d.as_secs() > 0 => format!("Worked for {}", format_worked_duration(d)),
+            _ => "Worked".to_string(),
         };
         let tool_n = blocks[..worked_end]
             .iter()
