@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-02
+
+### Added
+- Compare tab in the git panel for diffing branches/refs
+- Stage/revert individual diff hunks via text splice
+- Quick-diff peek in the editor gutter for changed regions
+- Accessibility labels for icon+text buttons
+
+### Fixed
+- Crash when reverting a change from the quick-diff peek
+- Git test failures on CI runners without global Git identity
+
+
 ## [1.7.0] - 2026-10-02
 
 ### Added
@@ -865,7 +878,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/maziluiosif/oxi/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/maziluiosif/oxi/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/maziluiosif/oxi/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/maziluiosif/oxi/compare/v1.4.0...v1.5.0
