@@ -122,6 +122,9 @@ pub(super) fn estimate_message_chars(m: &ChatMessage) -> usize {
                     .iter()
                     .map(|a| match a {
                         crate::model::UserAttachment::Image { data, .. } => data.len() * 4 / 3,
+                        crate::model::UserAttachment::Text { name, text } => {
+                            name.len() + text.len()
+                        }
                     })
                     .sum::<usize>()
         }

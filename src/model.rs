@@ -76,10 +76,28 @@ pub enum MsgRole {
     Assistant,
 }
 
-/// User message attachment (image bytes; base64 only when converting for provider APIs).
+/// User message attachment; pasted text remains separate from the visible prompt.
 #[derive(Clone)]
 pub enum UserAttachment {
     Image { mime: String, data: Vec<u8> },
+    Text { name: String, text: String },
+}
+
+impl ChatMessage {
+    /// Complete text sent to text-only providers and compaction, including pasted files.
+    pub fn user_prompt_text(&self) -> String {
+        let mut text = self.text.clone();
+        for attachment in &self.attachments {
+            if let UserAttachment::Text {
+                name,
+                text: content,
+            } = attachment
+            {
+                text.push_str(&format!("\n\n[Attached text: {name}]\n{content}"));
+            }
+        }
+        text
+    }
 }
 
 /// Segments streamed from the provider loop (`thinking_*` / `text_*` / tool events).
@@ -167,6 +185,7 @@ pub struct Session {
     pub input_text: String,
     /// Per-session staged image attachments.
     pub pending_images: Vec<(String, Vec<u8>)>,
+    pub pending_texts: Vec<UserAttachment>,
     /// Last activity: file mtime at load time, bumped to `now` on every save.
     /// Drives the relative "6h" age label on sidebar rows.
     pub modified: std::time::SystemTime,

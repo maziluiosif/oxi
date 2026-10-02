@@ -180,6 +180,7 @@ impl OxiApp {
                 rename_draft: String::new(),
                 chat_scroll_id: egui::Id::new("main_chat_scroll"),
                 pending_images: Vec::new(),
+                pending_texts: Vec::new(),
                 scroll_to_bottom_once: true,
                 stick_bottom_hold_frames: 0,
                 input_history: Vec::new(),
@@ -422,6 +423,11 @@ impl OxiApp {
             std::mem::take(&mut self.conv.input);
         self.conv.workspaces[old_wi].sessions[old_si].pending_images =
             std::mem::take(&mut self.conv.pending_images);
+        self.conv.workspaces[old_wi].sessions[old_si].pending_texts =
+            std::mem::take(&mut self.conv.pending_texts);
+        self.conv.pending_texts = std::mem::take(
+            &mut self.conv.workspaces[new_workspace].sessions[new_session].pending_texts,
+        );
         self.conv.input = std::mem::take(
             &mut self.conv.workspaces[new_workspace].sessions[new_session].input_text,
         );
@@ -553,6 +559,7 @@ impl OxiApp {
             messages_loaded: true,
             input_text: String::new(),
             pending_images: Vec::new(),
+            pending_texts: Vec::new(),
             modified: std::time::SystemTime::now(),
             chars_per_token: None,
             wire_cache: None,

@@ -114,6 +114,30 @@ impl OxiApp {
             if !state.busy && state.last_op.as_deref() == Some("collect commit diff") {
                 saw_final_snapshot = true;
             }
+            let previous = latest.as_ref().unwrap_or(&self.conv.git);
+            if state.diff_only {
+                // The diff worker answers with just the diff view: keep everything else.
+                let mut merged = previous.clone();
+                if state.view_generation >= previous.view_generation {
+                    merged.diff = state.diff;
+                    merged.current_diff_path = state.current_diff_path;
+                    merged.current_diff_staged = state.current_diff_staged;
+                    merged.view_generation = state.view_generation;
+                    if state.error.is_some() {
+                        merged.error = state.error;
+                    }
+                }
+                merged.commit_diff = None;
+                latest = Some(merged);
+                continue;
+            }
+            if !state.busy && state.view_generation < previous.view_generation {
+                // Computed before a newer file/commit was opened: its diff is stale.
+                state.diff = previous.diff.clone();
+                state.current_diff_path = previous.current_diff_path.clone();
+                state.current_diff_staged = previous.current_diff_staged;
+                state.view_generation = previous.view_generation;
+            }
             if state.busy {
                 // The worker emits a lightweight "busy" snapshot before each git op.
                 // Keep the last real snapshot's content in place while only updating
@@ -134,6 +158,7 @@ impl OxiApp {
                 state.error = previous.error.clone();
                 state.current_diff_path = previous.current_diff_path.clone();
                 state.current_diff_staged = previous.current_diff_staged;
+                state.view_generation = previous.view_generation;
             }
             if let Some(diff) = &state.commit_diff {
                 collected_diff = Some(diff.clone());

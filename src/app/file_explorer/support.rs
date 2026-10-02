@@ -314,40 +314,57 @@ pub(crate) fn file_icon(path: &Path) -> (&'static str, egui::Color32) {
     (ICON_FILE, color)
 }
 
-pub(super) fn load_gitignore_patterns(root: &Path) -> Vec<String> {
-    std::fs::read_to_string(root.join(".gitignore"))
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('!'))
-        .map(|line| {
-            line.trim_start_matches('/')
-                .trim_end_matches('/')
-                .to_owned()
-        })
-        .collect()
+/// The workspace `.gitignore`, parsed once. Globs are compiled up front: matching used to
+/// compile every pattern again for every path and every path suffix, which made walking a large
+/// workspace (Cmd/Ctrl+P, the explorer, symbol indexing) take seconds.
+#[derive(Default)]
+pub(crate) struct GitIgnore {
+    rules: Vec<IgnoreRule>,
 }
 
-pub(super) fn should_ignore(
-    root: &Path,
-    path: &Path,
-    directory: bool,
-    patterns: &[String],
-) -> bool {
+struct IgnoreRule {
+    pattern: String,
+    glob: Option<glob::Pattern>,
+}
+
+impl GitIgnore {
+    pub(super) fn load(root: &Path) -> Self {
+        Self::parse(&std::fs::read_to_string(root.join(".gitignore")).unwrap_or_default())
+    }
+
+    pub(super) fn parse(text: &str) -> Self {
+        let rules = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('!'))
+            .map(|line| {
+                let pattern = line
+                    .trim_start_matches('/')
+                    .trim_end_matches('/')
+                    .to_owned();
+                IgnoreRule {
+                    glob: glob::Pattern::new(&pattern).ok(),
+                    pattern,
+                }
+            })
+            .collect();
+        Self { rules }
+    }
+}
+
+pub(super) fn should_ignore(root: &Path, path: &Path, directory: bool, ignore: &GitIgnore) -> bool {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
     (directory && ALWAYS_SKIPPED_DIRS.contains(&name))
-        || is_gitignored(root, path, directory, patterns)
+        || is_gitignored(root, path, directory, ignore)
 }
 
-pub(super) fn is_gitignored(
-    root: &Path,
-    path: &Path,
-    directory: bool,
-    patterns: &[String],
-) -> bool {
+pub(super) fn is_gitignored(root: &Path, path: &Path, directory: bool, ignore: &GitIgnore) -> bool {
+    if ignore.rules.is_empty() {
+        return false;
+    }
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -363,24 +380,32 @@ pub(super) fn is_gitignored(
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/");
-    patterns.iter().any(|pattern| {
+    // `a/b/c`, `b/c`, `c`: a pattern may match the path from any directory down.
+    let suffixes = || {
+        std::iter::once(relative.as_str()).chain(
+            relative
+                .match_indices('/')
+                .map(|(index, _)| &relative[index + 1..]),
+        )
+    };
+    ignore.rules.iter().any(|rule| {
+        let pattern = &rule.pattern;
         let direct = if pattern.contains('*') {
-            glob::Pattern::new(pattern)
-                .is_ok_and(|glob| glob.matches(&relative) || glob.matches(name))
+            rule.glob
+                .as_ref()
+                .is_some_and(|glob| glob.matches(&relative) || glob.matches(name))
         } else {
-            relative == *pattern || relative.starts_with(&format!("{pattern}/")) || name == pattern
+            relative == *pattern
+                || relative
+                    .strip_prefix(pattern.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+                || name == pattern
         };
-        if direct {
-            return true;
-        }
-        relative.split('/').enumerate().any(|(index, _)| {
-            let suffix = relative
-                .split('/')
-                .skip(index)
-                .collect::<Vec<_>>()
-                .join("/");
-            glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(&suffix))
-        })
+        direct
+            || rule
+                .glob
+                .as_ref()
+                .is_some_and(|glob| suffixes().any(|suffix| glob.matches(suffix)))
     })
 }
 
@@ -454,7 +479,7 @@ mod tests {
     #[test]
     fn gitignore_patterns_hide_matching_paths_but_not_gitignore_itself() {
         let root = Path::new("/workspace");
-        let patterns = vec!["target".into(), "*.log".into(), "build/*.js".into()];
+        let patterns = GitIgnore::parse("target\n*.log\n/build/*.js\n# comment\n");
         assert!(should_ignore(
             root,
             Path::new("/workspace/target"),
@@ -470,6 +495,18 @@ mod tests {
         assert!(should_ignore(
             root,
             Path::new("/workspace/build/app.js"),
+            false,
+            &patterns
+        ));
+        assert!(should_ignore(
+            root,
+            Path::new("/workspace/crates/core/target"),
+            true,
+            &patterns
+        ));
+        assert!(!should_ignore(
+            root,
+            Path::new("/workspace/src/targets.rs"),
             false,
             &patterns
         ));

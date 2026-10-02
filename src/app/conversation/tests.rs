@@ -58,3 +58,73 @@ fn fingerprint_changes_when_streaming_ends() {
         transcript_unit_fingerprint(std::slice::from_ref(&done))
     );
 }
+
+#[test]
+fn selection_scroll_survives_nested_scroll_areas_and_stops_on_release() {
+    use eframe::egui::text::{LayoutJob, TextFormat};
+    use eframe::egui::{
+        self, Color32, Event, FontId, Modifiers, PointerButton, Pos2, RawInput, Rect,
+    };
+    let ctx = egui::Context::default();
+    let mut offset = 0.0;
+    let mut frame = |events| {
+        let _ = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 350.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let output = egui::ScrollArea::vertical()
+                    .id_salt("outer")
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        let mut job = LayoutJob::default();
+                        job.append(
+                            &"select this row\n".repeat(60),
+                            0.0,
+                            TextFormat::simple(FontId::monospace(16.0), Color32::WHITE),
+                        );
+                        crate::theme::selectable_text_job(ui, job);
+                        egui::ScrollArea::horizontal()
+                            .id_salt("code-block")
+                            .show(ui, |ui| {
+                                ui.label("nested code block");
+                            });
+                        let (delta, _) = super::conversation_selection_scroll_delta(ui);
+                        ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
+                    });
+                offset = output.state.offset.y;
+            },
+        );
+        offset
+    };
+    frame(vec![]);
+    frame(vec![
+        Event::PointerMoved(egui::pos2(12.0, 12.0)),
+        Event::PointerButton {
+            pos: egui::pos2(12.0, 12.0),
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    let mut down = 0.0;
+    for _ in 0..8 {
+        down = frame(vec![Event::PointerMoved(egui::pos2(50.0, 230.0))]);
+    }
+    assert!(down > 30.0, "drag must reveal text below: {down}");
+    let mut up = down;
+    for _ in 0..4 {
+        up = frame(vec![Event::PointerMoved(egui::pos2(50.0, 0.0))]);
+    }
+    assert!(up < down, "drag must reveal text above");
+    let released = frame(vec![Event::PointerButton {
+        pos: egui::pos2(50.0, 0.0),
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    }]);
+    let stopped = frame(vec![]);
+    assert_eq!(released, stopped);
+}

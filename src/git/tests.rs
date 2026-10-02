@@ -148,6 +148,54 @@ fn worker_auto_refresh_preserves_diff_and_resets_it_on_workspace_change() {
 }
 
 #[test]
+fn diff_worker_answers_views_alone_and_supersedes_stale_ones() {
+    let repo = TestRepo::new();
+    std::fs::write(repo.root.join("file.txt"), "external update\n").unwrap();
+    std::fs::write(repo.root.join("other.txt"), "untracked\n").unwrap();
+    let channels = GitChannels::new(repo.cwd().into(), egui::Context::default());
+    let hash = repo.repo.head().unwrap().target().unwrap().to_string();
+    channels.tx.send(GitOp::ShowCommit(hash)).unwrap();
+    channels
+        .tx
+        .send(GitOp::ShowDiff {
+            path: "file.txt".into(),
+            staged: false,
+        })
+        .unwrap();
+    let state = loop {
+        let state = channels
+            .rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        if state.diff_only && state.view_generation == 2 {
+            break state;
+        }
+    };
+    assert_eq!(state.current_diff_path.as_deref(), Some("file.txt"));
+    let (title, text) = state.diff.unwrap();
+    assert_eq!(title, "file.txt");
+    assert!(text.contains("+external update"));
+    // A literal pathspec: the untracked neighbour is not part of this file's diff.
+    assert!(!text.contains("untracked"));
+}
+
+#[test]
+fn line_changes_cover_only_changed_files() {
+    let repo = TestRepo::new();
+    std::fs::write(repo.root.join("file.txt"), "original\nadded\n").unwrap();
+    std::fs::write(repo.root.join("new.txt"), "a\nb\n").unwrap();
+    let state = handle_op(repo.cwd(), GitOp::Refresh);
+    assert_eq!(
+        state.line_changes["file.txt"],
+        [GitLineChange {
+            line: 1,
+            kind: GitLineKind::Added
+        }]
+    );
+    assert_eq!(state.line_changes["new.txt"].len(), 3);
+}
+
+#[test]
 fn system_git_command_is_non_interactive_and_runs_in_the_workdir() {
     let git = system::resolve_executable("/custom/bin/git");
     assert_eq!(git, PathBuf::from("/custom/bin/git"));

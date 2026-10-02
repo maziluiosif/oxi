@@ -5,6 +5,7 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui::{self, RichText, ScrollArea, TextEdit};
 use walkdir::WalkDir;
@@ -12,9 +13,7 @@ use walkdir::WalkDir;
 use crate::theme::*;
 
 use super::super::OxiApp;
-use super::support::{
-    fuzzy_match_positions, fuzzy_path_score, load_gitignore_patterns, should_ignore,
-};
+use super::support::{GitIgnore, fuzzy_match_positions, fuzzy_path_score, should_ignore};
 
 /// Where a picker row leads.
 #[derive(Clone, PartialEq)]
@@ -27,6 +26,64 @@ enum PickerTarget {
 
 /// Goto Symbol entries of one file: outline symbols with their 1-based line numbers.
 pub(crate) type PickerOutline = Vec<(crate::code_nav::Symbol, usize)>;
+
+/// A workspace file with its path relative to the root, as the picker shows and ranks it.
+struct PickerFile {
+    path: PathBuf,
+    display: String,
+}
+
+/// The picker's file list and its ranked rows. Walking a large workspace takes seconds on
+/// Windows, so the walk runs on a worker and the last list stays usable meanwhile; ranking runs
+/// only when the query or the inputs change, not on every frame.
+#[derive(Default)]
+pub(crate) struct PickerCache {
+    root: String,
+    files: Arc<Vec<PickerFile>>,
+    /// Bumped whenever `files` is replaced, to invalidate `ranked`.
+    generation: u64,
+    loaded: bool,
+    walk: Option<Receiver<Vec<PickerFile>>>,
+    ranked: Option<(RankKey, Arc<Vec<PickerEntry>>)>,
+}
+
+/// Everything the ranked rows depend on.
+#[derive(PartialEq)]
+struct RankKey {
+    query: String,
+    project_symbols: bool,
+    files_generation: u64,
+    /// Identity of the loaded project symbol list (`Arc` address), 0 while loading.
+    symbols: usize,
+    /// The picker's origin document and its revision, for `@` and `:` queries.
+    origin: Option<(PathBuf, u64)>,
+}
+
+/// Every non-ignored file under `root`, sorted by relative path.
+fn walk_workspace_files(root: &Path) -> Vec<PickerFile> {
+    let ignored = GitIgnore::load(root);
+    let mut files: Vec<PickerFile> = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.path() == root
+                || !should_ignore(root, entry.path(), entry.file_type().is_dir(), &ignored)
+        })
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| {
+            let path = entry.into_path();
+            let display = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            PickerFile { path, display }
+        })
+        .collect();
+    files.sort_by_cached_key(|file| file.display.to_ascii_lowercase());
+    files
+}
 
 struct PickerEntry {
     primary: String,
@@ -54,28 +111,28 @@ impl OxiApp {
     }
 
     pub(crate) fn open_file_picker(&mut self) {
-        let root = PathBuf::from(&self.active_workspace().root_path);
-        let ignored = load_gitignore_patterns(&root);
-        self.conv.editor.file_picker_files = WalkDir::new(&root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| {
-                entry.path() == root
-                    || !should_ignore(&root, entry.path(), entry.file_type().is_dir(), &ignored)
-            })
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_file())
-            .map(|entry| entry.into_path())
-            .collect();
-        self.conv
-            .editor
-            .file_picker_files
-            .sort_by_cached_key(|path| {
-                path.strip_prefix(&root)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .to_ascii_lowercase()
-            });
+        // Show the last list right away and refresh it in the background, so files created
+        // since then appear a moment later instead of the picker waiting for a full walk.
+        let root = self.active_workspace().root_path.clone();
+        let cache = &mut self.conv.editor.file_picker_cache;
+        if cache.root != root {
+            *cache = PickerCache {
+                root: root.clone(),
+                generation: cache.generation + 1,
+                ..Default::default()
+            };
+        }
+        if cache.walk.is_none() {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new()
+                .name("oxi-file-picker".into())
+                .spawn(move || {
+                    let _ = sender.send(walk_workspace_files(Path::new(&root)));
+                });
+            if spawned.is_ok() {
+                cache.walk = Some(receiver);
+            }
+        }
         self.conv.editor.file_picker_query.clear();
         self.conv.editor.file_picker_last_query.clear();
         self.conv.editor.file_picker_selected = 0;
@@ -213,6 +270,67 @@ impl OxiApp {
         outline
     }
 
+    /// Adopt a finished workspace walk. Returns whether one is still running.
+    fn poll_file_picker_walk(&mut self) -> bool {
+        let cache = &mut self.conv.editor.file_picker_cache;
+        let Some(walk) = &cache.walk else {
+            return false;
+        };
+        match walk.try_recv() {
+            Ok(files) => {
+                cache.files = Arc::new(files);
+                cache.generation += 1;
+                cache.loaded = true;
+                cache.walk = None;
+                false
+            }
+            Err(TryRecvError::Empty) => true,
+            Err(TryRecvError::Disconnected) => {
+                cache.loaded = true;
+                cache.walk = None;
+                false
+            }
+        }
+    }
+
+    /// Rows for the current query, best first; reused until the query or its inputs change.
+    fn cached_picker_entries(&mut self, root: &Path, query: &str) -> Arc<Vec<PickerEntry>> {
+        let origin = self
+            .conv
+            .editor
+            .file_picker_origin
+            .as_ref()
+            .and_then(|(path, _)| {
+                self.conv
+                    .editor
+                    .documents
+                    .iter()
+                    .find(|document| &document.path == path)
+                    .map(|document| (path.clone(), document.content_revision))
+            });
+        let key = RankKey {
+            query: query.to_owned(),
+            project_symbols: self.conv.editor.file_picker_project_symbols,
+            files_generation: self.conv.editor.file_picker_cache.generation,
+            symbols: self
+                .conv
+                .editor
+                .code_nav
+                .project_symbols
+                .as_ref()
+                .map_or(0, |symbols| Arc::as_ptr(symbols) as usize),
+            origin,
+        };
+        if let Some((cached, entries)) = &self.conv.editor.file_picker_cache.ranked
+            && *cached == key
+        {
+            return Arc::clone(entries);
+        }
+        let entries = Arc::new(self.picker_entries(root, query));
+        self.conv.editor.file_picker_cache.ranked = Some((key, Arc::clone(&entries)));
+        entries
+    }
+
     /// Rows for the current query, best first.
     fn picker_entries(&mut self, root: &Path, query: &str) -> Vec<PickerEntry> {
         let relative = |path: &Path| {
@@ -339,22 +457,30 @@ impl OxiApp {
             Some((name, "")) => (name, None),
             _ => (query, None),
         };
-        let mut ranked = self
-            .conv
-            .editor
-            .file_picker_files
+        let cache = &self.conv.editor.file_picker_cache;
+        if !cache.loaded && cache.files.is_empty() {
+            return vec![PickerEntry {
+                primary: "Indexing workspace files…".into(),
+                primary_matches: Vec::new(),
+                secondary: String::new(),
+                secondary_matches: Vec::new(),
+                target: None,
+            }];
+        }
+        let files = Arc::clone(&cache.files);
+        let mut ranked = files
             .iter()
-            .filter_map(|path| {
-                let display = relative(path);
-                fuzzy_path_score(&display, file_query).map(|score| (score, display, path))
+            .filter_map(|file| {
+                fuzzy_path_score(&file.display, file_query)
+                    .map(|score| (score, file.display.as_str(), &file.path))
             })
             .collect::<Vec<_>>();
-        ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
         ranked
             .into_iter()
             .take(100)
             .map(|(_, display, path)| {
-                let matched = fuzzy_match_positions(&display, file_query);
+                let matched = fuzzy_match_positions(display, file_query);
                 let name_start = display.rfind('/').map_or(0, |i| i + 1);
                 PickerEntry {
                     primary: display[name_start..].to_owned(),
@@ -452,6 +578,9 @@ impl OxiApp {
             return;
         }
         self.poll_code_navigation();
+        if self.poll_file_picker_walk() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         let root = PathBuf::from(&self.active_workspace().root_path);
         let query = self.conv.editor.file_picker_query.to_ascii_lowercase();
         if query != self.conv.editor.file_picker_last_query {
@@ -459,7 +588,7 @@ impl OxiApp {
             self.conv.editor.file_picker_last_query.clone_from(&query);
         }
         let symbol_mode = self.conv.editor.file_picker_project_symbols || query.starts_with('@');
-        let matches = self.picker_entries(&root, &query);
+        let matches = self.cached_picker_entries(&root, &query);
 
         let (arrow_up, arrow_down, enter) = ctx.input_mut(|input| {
             (

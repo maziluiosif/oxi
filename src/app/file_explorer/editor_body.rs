@@ -157,7 +157,10 @@ impl OxiApp {
         const MINIMAP_SCROLLBAR_WIDTH: f32 = 10.0;
         let prospective_editor_width =
             (editor_view_size.x - gutter_width - MINIMAP_WIDTH - MINIMAP_SCROLLBAR_WIDTH).max(80.0);
-        let prospective_width_bits = prospective_editor_width.round().to_bits();
+        // Exact, not rounded: at fractional DPI (125%/150% on Windows) a sidebar drag moves the
+        // width by sub-pixel steps that still re-wrap rows. Treating those frames as "no resize"
+        // re-sampled the anchor from a shifted layout and the file crept away while dragging.
+        let prospective_width_bits = prospective_editor_width.to_bits();
         let resize_anchor = self.conv.editor.documents[index]
             .viewport_width_bits
             .filter(|width| *width != prospective_width_bits)
@@ -808,7 +811,10 @@ impl OxiApp {
                                 let line_rect =
                                     placed_row.rect().translate(output.galley_pos.to_vec2());
                                 let y = line_rect.center().y;
-                                if line_rect.top() <= viewport_clip.top() {
+                                // Tolerance: after a resize rebase the anchor line sits exactly at
+                                // the viewport top, and float error must not hand the anchor to
+                                // the line above (each resize frame would then creep upwards).
+                                if line_rect.top() <= viewport_clip.top() + 0.5 {
                                     viewport_anchor_line = logical_line;
                                 }
                                 if resize_anchor == Some(logical_line) {

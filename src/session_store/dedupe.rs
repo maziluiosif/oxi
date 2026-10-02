@@ -47,6 +47,11 @@ fn user_attachments_equal(left: &[UserAttachment], right: &[UserAttachment]) -> 
                         data: right_data,
                     },
                 ) => left_mime == right_mime && left_data == right_data,
+                (
+                    UserAttachment::Text { name: a, text: b },
+                    UserAttachment::Text { name: c, text: d },
+                ) => a == c && b == d,
+                _ => false,
             })
 }
 

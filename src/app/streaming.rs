@@ -55,6 +55,13 @@ impl OxiApp {
         };
         let previous_input = std::mem::take(&mut self.conv.input);
         let previous_images = std::mem::take(&mut self.conv.pending_images);
+        let previous_texts = std::mem::take(&mut self.conv.pending_texts);
+        self.conv.pending_texts = user
+            .attachments
+            .iter()
+            .filter(|a| matches!(a, UserAttachment::Text { .. }))
+            .cloned()
+            .collect();
         self.conv.input = self
             .run_state(key)
             .and_then(|run| run.last_user_prompt.clone())
@@ -62,11 +69,15 @@ impl OxiApp {
         self.conv.pending_images = user
             .attachments
             .into_iter()
-            .map(|UserAttachment::Image { mime, data }| (mime, data))
+            .filter_map(|a| match a {
+                UserAttachment::Image { mime, data } => Some((mime, data)),
+                _ => None,
+            })
             .collect();
         self.conv.editing_last_prompt = Some(super::state::PromptEditState {
             previous_input,
             previous_images,
+            previous_texts,
         });
         self.conv.focus_chat_input_next_frame = true;
     }
@@ -75,12 +86,16 @@ impl OxiApp {
         if let Some(edit) = self.conv.editing_last_prompt.take() {
             self.conv.input = edit.previous_input;
             self.conv.pending_images = edit.previous_images;
+            self.conv.pending_texts = edit.previous_texts;
         }
     }
 
     fn submit_edited_last_prompt(&mut self) {
         let key = self.active_session_key();
-        if self.conv.input.trim().is_empty() && self.conv.pending_images.is_empty() {
+        if self.conv.input.trim().is_empty()
+            && self.conv.pending_images.is_empty()
+            && self.conv.pending_texts.is_empty()
+        {
             return;
         }
         let journal = self.run_state(key).and_then(|r| r.undo_journal.clone());
@@ -133,20 +148,35 @@ impl OxiApp {
             .and_then(|run| run.last_user_prompt.clone())
             .unwrap_or(user.text);
         let draft_input = std::mem::replace(&mut self.conv.input, text);
+        let draft_texts = std::mem::replace(
+            &mut self.conv.pending_texts,
+            user.attachments
+                .iter()
+                .filter(|a| matches!(a, UserAttachment::Text { .. }))
+                .cloned()
+                .collect(),
+        );
         let draft_images = std::mem::replace(
             &mut self.conv.pending_images,
             user.attachments
                 .into_iter()
-                .map(|UserAttachment::Image { mime, data }| (mime, data))
+                .filter_map(|a| match a {
+                    UserAttachment::Image { mime, data } => Some((mime, data)),
+                    _ => None,
+                })
                 .collect(),
         );
         self.active_session_mut().messages.truncate(user_idx);
         self.invalidate_wire_cache(key);
         self.run_state_mut(key).stream_error = None;
         self.send_message_opts(false);
-        if self.conv.input.is_empty() && self.conv.pending_images.is_empty() {
+        if self.conv.input.is_empty()
+            && self.conv.pending_images.is_empty()
+            && self.conv.pending_texts.is_empty()
+        {
             self.conv.input = draft_input;
             self.conv.pending_images = draft_images;
+            self.conv.pending_texts = draft_texts;
         }
     }
 
@@ -154,12 +184,13 @@ impl OxiApp {
     /// the deferred message — it must not re-trigger the threshold check (loop guard).
     pub(crate) fn send_message_opts(&mut self, skip_autocompact: bool) {
         let text = self.conv.input.trim().to_string();
-        let has_images = !self.conv.pending_images.is_empty();
-        if text.is_empty() && !has_images {
+        let has_attachments =
+            !self.conv.pending_images.is_empty() || !self.conv.pending_texts.is_empty();
+        if text.is_empty() && !has_attachments {
             return;
         }
 
-        // Slash commands: `/new` and `/compact` only exact, argument-free and with no images.
+        // Slash commands: `/new` and `/compact` only exact, argument-free and with no attachments.
         // An ACP agent's own command of the same name wins (except `/new` and `/plan`): oxi's
         // compaction can't shrink the context the agent keeps in its subprocess.
         let mut text = text;
@@ -173,7 +204,7 @@ impl OxiApp {
                         run.plan_mode = true;
                         text = task;
                     }
-                    None if !has_images => {
+                    None if !has_attachments => {
                         run.plan_mode = !run.plan_mode;
                         self.push_input_history(&text);
                         self.conv.input_history_index = None;
@@ -181,7 +212,7 @@ impl OxiApp {
                         self.conv.input.clear();
                         return;
                     }
-                    // Bare `/plan` with images: plan them.
+                    // Bare `/plan` with attachments: plan them.
                     None => {
                         run.plan_mode = true;
                         text.clear();
@@ -189,7 +220,7 @@ impl OxiApp {
                 }
             }
             Some(cmd)
-                if !has_images
+                if !has_attachments
                     && (cmd == super::compaction::SlashCommand::New
                         || !self
                             .active_acp_commands()
@@ -245,12 +276,20 @@ impl OxiApp {
                 && self.compactable_turns(key) > super::compaction::COMPACT_KEEP_RECENT_TURNS
             {
                 let images = std::mem::take(&mut self.conv.pending_images);
+                let texts = std::mem::take(&mut self.conv.pending_texts);
                 self.conv.input.clear();
                 self.notify_composer(
                     "Context is almost full — compacting first; your message will be sent \
                      automatically.",
                 );
-                self.start_compaction(key, Some(super::compaction::QueuedSend { text, images }));
+                self.start_compaction(
+                    key,
+                    Some(super::compaction::QueuedSend {
+                        text,
+                        images,
+                        texts,
+                    }),
+                );
                 return;
             }
         }
@@ -260,7 +299,12 @@ impl OxiApp {
             self.active_session_mut().title = if !text.is_empty() {
                 make_session_title(&text)
             } else {
-                "Image".to_string()
+                if !self.conv.pending_texts.is_empty() {
+                    "Pasted text"
+                } else {
+                    "Image"
+                }
+                .to_string()
             };
         }
 
@@ -269,13 +313,14 @@ impl OxiApp {
         self.conv.input_history_draft.clear();
 
         let pending = std::mem::take(&mut self.conv.pending_images);
-        let user_attachments: Vec<UserAttachment> = pending
+        let mut user_attachments: Vec<UserAttachment> = pending
             .iter()
             .map(|(mime, data)| UserAttachment::Image {
                 mime: mime.clone(),
                 data: data.clone(),
             })
             .collect();
+        user_attachments.append(&mut self.conv.pending_texts);
         self.conv.input.clear();
         self.conv.scroll_to_bottom_once = true;
 

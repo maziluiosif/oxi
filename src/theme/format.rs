@@ -66,6 +66,12 @@ pub fn selectable_text_job(ui: &mut Ui, job: LayoutJob) {
     let saved = ui.visuals().selection;
     ui.visuals_mut().selection.bg_fill = editor_selection_fill();
     ui.visuals_mut().selection.stroke.color = dominant;
+    let original = galley.clone();
+    let background_slot = ui.painter().add(eframe::egui::Shape::Noop);
+    let selection_slot = ui.painter().add(eframe::egui::Shape::Noop);
+    let text_slot = ui
+        .ctx()
+        .graphics(|g| g.get(ui.layer_id()).unwrap().next_idx());
     eframe::egui::text_selection::LabelSelectionState::label_text_selection(
         ui,
         &response,
@@ -75,6 +81,71 @@ pub fn selectable_text_job(ui: &mut Ui, job: LayoutJob) {
         Stroke::NONE,
     );
     ui.visuals_mut().selection = saved;
+    // egui 0.35 exposes label selection through its painted galley. Each selected row has
+    // exactly four appended background vertices. Keep its cross-label drag/copy handling,
+    // replace only those quads with our editor contour, and preserve original glyph colors.
+    let mut rects = Vec::new();
+    let mut backgrounds = Vec::new();
+    ui.ctx().graphics_mut(|g| {
+        if let Some(list) = g.get_mut(ui.layer_id()) {
+            list.mutate_shape(text_slot, |shape| {
+                if let eframe::egui::Shape::Text(text) = &mut shape.shape {
+                    if !text
+                        .galley
+                        .rows
+                        .iter()
+                        .zip(&original.rows)
+                        .any(|(selected, original)| {
+                            selected.row.visuals.mesh.vertices.len()
+                                == original.row.visuals.mesh.vertices.len() + 4
+                        })
+                    {
+                        return;
+                    }
+                    let selected = std::sync::Arc::make_mut(&mut text.galley);
+                    for (placed, original) in selected.rows.iter_mut().zip(&original.rows) {
+                        let base = original.row.visuals.mesh.vertices.len();
+                        if placed.row.visuals.mesh.vertices.len() == base + 4 {
+                            let row = std::sync::Arc::make_mut(&mut placed.row);
+                            let mut rect = eframe::egui::Rect::NOTHING;
+                            for vertex in &mut row.visuals.mesh.vertices[base..] {
+                                rect.extend_with(vertex.pos);
+                                vertex.color = Color32::TRANSPARENT;
+                            }
+                            if rect.width() > 0.0 {
+                                rects.push(
+                                    rect.translate(placed.pos.to_vec2() + text.pos.to_vec2()),
+                                );
+                            }
+                            // Paint section backgrounds (including inline code) below the
+                            // continuous contour, while keeping glyphs above it.
+                            let background_end = row.visuals.glyph_index_start;
+                            if background_end > 0 {
+                                let mut mesh = row.visuals.mesh.clone();
+                                mesh.indices = mesh.indices[..background_end].to_vec();
+                                mesh.translate(placed.pos.to_vec2() + text.pos.to_vec2());
+                                backgrounds.push(eframe::egui::Shape::mesh(mesh));
+                                row.visuals.mesh.indices.drain(..background_end);
+                                row.visuals.glyph_index_start = 0;
+                            }
+                            for (vertex, source) in row.visuals.mesh.vertices[..base]
+                                .iter_mut()
+                                .zip(&original.row.visuals.mesh.vertices)
+                            {
+                                vertex.color = source.color;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    ui.painter()
+        .set(background_slot, eframe::egui::Shape::Vec(backgrounds));
+    ui.painter().set(
+        selection_slot,
+        crate::ui::text_selection::selection_shape(&rects, editor_selection_fill()),
+    );
 }
 
 pub fn animated_status_job(label: &str, size: f32, time: f64) -> LayoutJob {
@@ -266,5 +337,195 @@ mod tests {
         assert_eq!(tool_status_label("web_search"), "Web search");
         assert_eq!(tool_status_label("bash"), "Bash");
         assert_eq!(tool_status_label("  "), "Running");
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use eframe::egui::{self, Event, Modifiers, PointerButton, RawInput, Rect};
+
+    fn frame(ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
+        ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 350.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                for text in ["first paragraph\nsecond row", "third paragraph"] {
+                    let mut job = LayoutJob::default();
+                    job.append(
+                        text,
+                        0.0,
+                        egui::text::TextFormat::simple(FontId::monospace(16.0), Color32::WHITE),
+                    );
+                    job.wrap.max_width = 400.0;
+                    selectable_text_job(ui, job);
+                }
+            },
+        )
+    }
+
+    #[test]
+    fn custom_chat_selection_preserves_copy_across_blocks() {
+        let ctx = egui::Context::default();
+        let output = frame(&ctx, vec![]);
+        let text: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                if let egui::Shape::Text(t) = &s.shape {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(text.len(), 2);
+        let start = text[0].pos + egui::vec2(0.0, 8.0);
+        let end = text[1].pos + egui::vec2(text[1].galley.size().x, 8.0);
+        frame(
+            &ctx,
+            vec![
+                Event::PointerMoved(start),
+                Event::PointerButton {
+                    pos: start,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        let selected = frame(&ctx, vec![Event::PointerMoved(end)]);
+        let contours = selected.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Vec(shapes) if shapes.iter().any(|s| matches!(s, egui::Shape::Path(_))))).count();
+        assert_eq!(contours, 2, "one outer contour per selected text block");
+        frame(
+            &ctx,
+            vec![Event::PointerButton {
+                pos: end,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        let copied = frame(&ctx, vec![Event::Copy]);
+        assert!(copied.platform_output.commands.iter().any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text.contains("first paragraph") && text.contains("second row") && text.contains("third paragraph"))));
+    }
+
+    #[test]
+    fn inline_code_background_is_below_selection_and_glyphs_keep_colors() {
+        let ctx = egui::Context::default();
+        let render = |events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 350.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut job = LayoutJob::default();
+                    job.append(
+                        "before ",
+                        0.0,
+                        TextFormat::simple(FontId::proportional(16.0), Color32::WHITE),
+                    );
+                    let mut code = TextFormat::simple(FontId::proportional(16.0), Color32::YELLOW);
+                    code.background = Color32::DARK_GRAY;
+                    job.append("inline code", 0.0, code);
+                    job.append(
+                        " after",
+                        0.0,
+                        TextFormat::simple(FontId::proportional(16.0), Color32::WHITE),
+                    );
+                    selectable_text_job(ui, job);
+                },
+            )
+        };
+        let initial = render(vec![]);
+        let original = initial
+            .shapes
+            .iter()
+            .find_map(|s| {
+                if let egui::Shape::Text(t) = &s.shape {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let start = original.pos + egui::vec2(1.0, 8.0);
+        let end = original.pos + egui::vec2(original.galley.size().x, 8.0);
+        render(vec![
+            Event::PointerMoved(start),
+            Event::PointerButton {
+                pos: start,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        let selected = render(vec![Event::PointerMoved(end)]);
+        let text_index = selected
+            .shapes
+            .iter()
+            .position(|s| matches!(s.shape, egui::Shape::Text(_)))
+            .unwrap();
+        let contour_index = selected.shapes.iter().position(|s| matches!(&s.shape, egui::Shape::Vec(v) if v.iter().any(|s| matches!(s, egui::Shape::Path(_))))).unwrap();
+        let background_index = selected.shapes.iter().position(|s| matches!(&s.shape, egui::Shape::Vec(v) if v.iter().any(|s| matches!(s, egui::Shape::Mesh(_))))).unwrap();
+        assert!(background_index < contour_index && contour_index < text_index);
+        let egui::Shape::Text(text) = &selected.shapes[text_index].shape else {
+            unreachable!()
+        };
+        assert_eq!(text.galley.rows[0].row.visuals.glyph_index_start, 0);
+        for (vertex, original) in text.galley.rows[0]
+            .row
+            .visuals
+            .mesh
+            .vertices
+            .iter()
+            .zip(&original.galley.rows[0].row.visuals.mesh.vertices)
+        {
+            assert_eq!(vertex.color, original.color);
+        }
+    }
+
+    #[test]
+    #[ignore = "UI review artifact; run with --ignored"]
+    fn render_selection_review() {
+        let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(650.0, 420.0)).wgpu().build_ui(|ui| {
+            crate::theme::apply_theme(ui.ctx(), "dark");
+            ui.label("Chat selection uses the editor contour");
+            let mut job = LayoutJob::default();
+            job.append("First selected row of the chat.\nA longer middle row without an internal border.\nLast selected row.", 0.0, egui::text::TextFormat::simple(FontId::proportional(16.0), Color32::WHITE));
+            let mut code = TextFormat::simple(FontId::proportional(16.0), crate::theme::c_md_code_fg());
+            code.background = crate::theme::c_md_code_bg();
+            job.append(" Inline code selection", 0.0, code);
+            job.wrap.max_width = 550.0;
+            selectable_text_job(ui, job);
+            ui.separator();
+            ui.button("pasted-1.txt · 120 lines").on_hover_text("Click to preview the full text");
+            let rects = vec![Rect::from_min_max(egui::pos2(20.0, 210.0), egui::pos2(480.0, 228.0)), Rect::from_min_max(egui::pos2(20.0, 228.0), egui::pos2(600.0, 246.0)), Rect::from_min_max(egui::pos2(20.0, 246.0), egui::pos2(200.0, 264.0))];
+            crate::ui::text_selection::paint_selection(ui.painter(), &rects, editor_selection_fill());
+            for (row, text) in ["Terminal selected row", "Middle row joins continuously", "Last row"].iter().enumerate() {
+                ui.painter().text(egui::pos2(22.0, 210.0 + row as f32 * 18.0), egui::Align2::LEFT_TOP, text, FontId::monospace(14.0), Color32::WHITE);
+            }
+        });
+        harness.run_steps(3);
+        harness.event(Event::PointerMoved(egui::pos2(10.0, 40.0)));
+        harness.event(Event::PointerButton {
+            pos: egui::pos2(10.0, 40.0),
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        harness.step();
+        harness.event(Event::PointerMoved(egui::pos2(280.0, 84.0)));
+        harness.step();
+        harness
+            .render()
+            .unwrap()
+            .save("/tmp/oxi-selection-review.png")
+            .unwrap();
     }
 }

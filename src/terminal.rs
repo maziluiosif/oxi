@@ -770,6 +770,43 @@ impl TerminalSession {
         let screen = parser.screen();
         let (rows, cols) = screen.size();
 
+        let selection_rects = self
+            .selection
+            .filter(|s| s.anchor != s.focus)
+            .map(|s| {
+                let (start, end) = ordered_selection(s);
+                (0..rows)
+                    .filter_map(|row| {
+                        let logical = i64::from(row) - self.scroll_offset as i64;
+                        if logical < start.0 || logical > end.0 {
+                            return None;
+                        }
+                        let left = if logical == start.0 { start.1 } else { 0 };
+                        let right = if logical == end.0 {
+                            end.1.saturating_add(1).min(cols)
+                        } else {
+                            cols
+                        };
+                        (right > left).then(|| {
+                            Rect::from_min_max(
+                                rect.left_top()
+                                    + egui::vec2(left as f32 * cell_w, row as f32 * cell_h),
+                                rect.left_top()
+                                    + egui::vec2(right as f32 * cell_w, (row + 1) as f32 * cell_h),
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // Draw after ANSI backgrounds but before text, at exact terminal cell heights.
+        let backgrounds_slot = painter.add(egui::Shape::Noop);
+        let mut backgrounds = Vec::new();
+        crate::ui::text_selection::paint_selection(
+            &painter,
+            &selection_rects,
+            theme::editor_selection_fill(),
+        );
         for row in 0..rows {
             let y = rect.top() + row as f32 * cell_h;
             // Build the row as runs of identical styling for fewer galleys.
@@ -791,22 +828,21 @@ impl TerminalSession {
                 if cell.inverse() {
                     std::mem::swap(&mut fg, &mut bg);
                 }
-                let selected = self.selection.is_some_and(|selection| {
-                    if selection.anchor == selection.focus {
-                        return false;
-                    }
-                    let (start, end) = ordered_selection(selection);
-                    let point = (i64::from(row) - self.scroll_offset as i64, col);
-                    point >= start && point <= end
-                });
+                if let Some(bg) = bg {
+                    let width = if cell.is_wide() { 2.0 } else { 1.0 };
+                    backgrounds.push(egui::Shape::rect_filled(
+                        Rect::from_min_size(
+                            egui::pos2(rect.left() + col as f32 * cell_w, y),
+                            egui::vec2(cell_w * width, cell_h),
+                        ),
+                        0.0,
+                        bg,
+                    ));
+                }
                 let fmt = TextFormat {
                     font_id: font.clone(),
                     color: fg.unwrap_or_else(theme::c_text),
-                    background: if selected {
-                        theme::c_accent().linear_multiply(0.35)
-                    } else {
-                        bg.unwrap_or(Color32::TRANSPARENT)
-                    },
+                    background: Color32::TRANSPARENT,
                     italics: cell.italic(),
                     underline: if cell.underline() {
                         Stroke::new(1.0, fg.unwrap_or_else(theme::c_text))
@@ -821,6 +857,8 @@ impl TerminalSession {
             let galley = ui.fonts_mut(|f| f.layout_job(job));
             painter.galley(egui::pos2(rect.left(), y), galley, theme::c_text());
         }
+
+        painter.set(backgrounds_slot, egui::Shape::Vec(backgrounds));
 
         // Cursor block.
         if !screen.hide_cursor() {
