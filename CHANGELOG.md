@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-02
+
+### Added
+- Ctrl+P: workspace walking on worker thread with previous list shown immediately
+- Git diffs now run on dedicated worker thread with latest-request-wins behavior
+- Composer input is now scrollable
+- Large pastes are converted to text attachments that persist through sessions and providers
+
+### Changed
+- Precompile .gitignore globs for picker, explorer, and symbol index
+- Ctrl+P ranking only updates when query changes
+- Git file/commit diffs use literal pathspecs instead of work tree scanning
+- Editor maintains top line position during sidebar resize at fractional DPI
+- Explorer indentation reduced for deep trees to keep names visible
+- Stale-scroll check now compares offsets for better convergence at 125% DPI
+
+### Fixed
+- Windows responsiveness on large projects
+- Pasted-text attachment handling
+- Composer input flickering at high DPI
+
+
 ## [1.6.0] - 2026-10-02
 
 ### Added
@@ -843,7 +865,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/maziluiosif/oxi/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/maziluiosif/oxi/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/maziluiosif/oxi/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/maziluiosif/oxi/compare/v1.3.0...v1.4.0
