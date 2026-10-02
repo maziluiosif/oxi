@@ -800,6 +800,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.app().conv.editing_last_prompt = Some(super::state::PromptEditState {
             previous_input: String::new(),
             previous_images: Vec::new(),
+            previous_texts: Vec::new(),
         });
         rec.app().conv.input = "Revise the CSV plan".into();
         rec.harness.run_steps(3);

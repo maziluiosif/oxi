@@ -104,6 +104,14 @@ fn parse_user_message(m: &Value) -> (String, Vec<UserAttachment>) {
                         text.push_str(t);
                     }
                 }
+                "text_attachment" => {
+                    if let (Some(name), Some(text)) = (p["name"].as_str(), p["text"].as_str()) {
+                        attachments.push(UserAttachment::Text {
+                            name: name.into(),
+                            text: text.into(),
+                        });
+                    }
+                }
                 "image" => {
                     let mime = p
                         .get("mimeType")

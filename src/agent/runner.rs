@@ -334,14 +334,15 @@ async fn run_acp_turn(
         .rposition(|m| m.role == crate::model::MsgRole::User);
     let last_user = last_user_idx.map(|i| &chat_for_history[i]);
     let history = acp_history_transcript(&chat_for_history[..last_user_idx.unwrap_or(0)]);
-    let text = last_user.map(|m| m.text.clone()).unwrap_or_default();
+    let text = last_user.map(|m| m.user_prompt_text()).unwrap_or_default();
     let images: Vec<(String, Vec<u8>)> = last_user
         .map(|m| {
             m.attachments
                 .iter()
-                .map(|a| match a {
+                .filter_map(|a| match a {
+                    crate::model::UserAttachment::Text { .. } => None,
                     crate::model::UserAttachment::Image { mime, data } => {
-                        (mime.clone(), data.clone())
+                        Some((mime.clone(), data.clone()))
                     }
                 })
                 .collect()
@@ -394,9 +395,18 @@ fn acp_history_transcript(chat: &[ChatMessage]) -> String {
                 ));
             }
             MsgRole::User => {
-                let mut t = format!("User: {}", m.text.trim());
-                if !m.attachments.is_empty() {
-                    t.push_str(&format!("\n[{} image(s) attached]", m.attachments.len()));
+                let mut t = format!("User: {}", m.user_prompt_text().trim());
+                if m.attachments
+                    .iter()
+                    .any(|a| matches!(a, crate::model::UserAttachment::Image { .. }))
+                {
+                    t.push_str(&format!(
+                        "\n[{} image(s) attached]",
+                        m.attachments
+                            .iter()
+                            .filter(|a| matches!(a, crate::model::UserAttachment::Image { .. }))
+                            .count()
+                    ));
                 }
                 turns.push(t);
             }

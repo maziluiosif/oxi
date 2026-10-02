@@ -136,6 +136,11 @@ impl eframe::App for OxiApp {
         self.render_confirm_prompt(ui.ctx());
         self.render_editor_prompt(ui.ctx());
         crate::ui::image_viewer::show(ui.ctx());
+        crate::ui::text_attachment::show(
+            ui.ctx(),
+            self.text_attachment_scope(),
+            &mut self.conv.pending_texts,
+        );
         self.render_activity_window(ui.ctx());
     }
 }

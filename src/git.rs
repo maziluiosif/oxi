@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[path = "git/network.rs"]
@@ -79,6 +80,12 @@ pub struct GitState {
     pub current_diff_path: Option<String>,
     pub current_diff_staged: Option<bool>,
     pub commit_diff: Option<String>,
+    /// Counts diff-view changes (open file/commit, close, ops that reset the view). A state
+    /// whose generation is older than the one already shown must not replace its diff.
+    pub view_generation: u64,
+    /// Only `diff`, `current_diff_*` and `error` are meaningful: an answer of the diff worker,
+    /// merged into the last full snapshot.
+    pub diff_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -102,60 +109,199 @@ pub enum GitOp {
 }
 
 pub struct GitChannels {
-    pub tx: Sender<GitOp>,
+    pub tx: GitSender,
     pub rx: Receiver<GitState>,
+}
+
+/// What the diff view shows, shared by the UI-side sender and both workers.
+#[derive(Default)]
+struct ViewState {
+    cwd: String,
+    view: Option<GitOp>,
+    generation: u64,
+}
+
+/// Routes UI requests: opening a file or commit diff goes to a dedicated diff worker, so a
+/// click is answered at once instead of queueing behind a whole-repository status scan (an
+/// auto refresh) and then running one itself; that took seconds in large repositories.
+#[derive(Clone)]
+pub struct GitSender {
+    main: Sender<(GitOp, u64)>,
+    diff: Sender<(GitOp, u64)>,
+    shared: Arc<Mutex<ViewState>>,
+}
+
+impl GitSender {
+    pub fn send(&self, op: GitOp) -> Result<(), mpsc::SendError<GitOp>> {
+        let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        let (target, generation) = match &op {
+            GitOp::ShowDiff { .. } | GitOp::ShowCommit(_) | GitOp::ClearDiff => {
+                shared.generation += 1;
+                shared.view = (!matches!(op, GitOp::ClearDiff)).then(|| op.clone());
+                (&self.diff, shared.generation)
+            }
+            // Re-reads the current view when it runs.
+            GitOp::AutoRefresh => (&self.main, 0),
+            other => {
+                if let GitOp::SetCwd(path) = other {
+                    shared.cwd = path.clone();
+                }
+                // Every other operation answers with a snapshot without a diff.
+                shared.generation += 1;
+                shared.view = None;
+                (&self.main, shared.generation)
+            }
+        };
+        drop(shared);
+        target
+            .send((op, generation))
+            .map_err(|error| mpsc::SendError(error.0.0))
+    }
 }
 
 impl GitChannels {
     pub fn new(cwd: String, ctx: egui::Context) -> Self {
         let (op_tx, op_rx) = mpsc::channel();
+        let (diff_tx, diff_rx) = mpsc::channel();
         let (snap_tx, snap_rx) = mpsc::channel();
-        let _ = thread::Builder::new()
-            .name("oxi-git".into())
-            .spawn(move || git_worker(cwd, op_rx, snap_tx, ctx));
+        let shared = Arc::new(Mutex::new(ViewState {
+            cwd: cwd.clone(),
+            ..Default::default()
+        }));
+        {
+            let (shared, snap_tx, ctx) = (Arc::clone(&shared), snap_tx.clone(), ctx.clone());
+            let _ = thread::Builder::new()
+                .name("oxi-git-diff".into())
+                .spawn(move || diff_worker(diff_rx, snap_tx, shared, ctx));
+        }
+        {
+            let shared = Arc::clone(&shared);
+            let _ = thread::Builder::new()
+                .name("oxi-git".into())
+                .spawn(move || git_worker(cwd, op_rx, snap_tx, shared, ctx));
+        }
         Self {
-            tx: op_tx,
+            tx: GitSender {
+                main: op_tx,
+                diff: diff_tx,
+                shared,
+            },
             rx: snap_rx,
         }
     }
 }
 
-fn git_worker(cwd: String, rx: Receiver<GitOp>, tx: Sender<GitState>, ctx: egui::Context) {
+fn git_worker(
+    cwd: String,
+    rx: Receiver<(GitOp, u64)>,
+    tx: Sender<GitState>,
+    shared: Arc<Mutex<ViewState>>,
+    ctx: egui::Context,
+) {
     let mut cwd = cwd;
-    let mut diff_view: Option<GitOp> = None;
     let _ = tx.send(GitState {
         busy: true,
         last_op: Some("refresh".into()),
         ..Default::default()
     });
-    for op in rx {
+    for (op, generation) in rx {
         if let GitOp::SetCwd(path) = op {
             cwd = path;
-            diff_view = None;
-            let _ = tx.send(handle_op(&cwd, GitOp::Refresh));
+            let mut state = handle_op(&cwd, GitOp::Refresh);
+            state.view_generation = generation;
+            let _ = tx.send(state);
             ctx.request_repaint();
             continue;
         }
         if matches!(op, GitOp::AutoRefresh) {
-            let _ = tx.send(auto_refresh(&cwd, diff_view.as_ref()));
+            let (view, generation) = {
+                let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
+                (shared.view.clone(), shared.generation)
+            };
+            let mut state = auto_refresh(&cwd, view.as_ref());
+            state.view_generation = generation;
+            let _ = tx.send(state);
         } else {
             let _ = tx.send(GitState {
                 busy: true,
                 last_op: Some(label_op(&op).into()),
                 ..Default::default()
             });
-            diff_view = match &op {
-                GitOp::ShowDiff { .. } | GitOp::ShowCommit(_) => Some(op.clone()),
-                _ => None,
-            };
             let collecting_diff = matches!(op, GitOp::CollectCommitDiff);
             let mut state = handle_op(&cwd, op);
             if collecting_diff {
                 state.last_op = Some("collect commit diff".into());
             }
+            state.view_generation = generation;
             let _ = tx.send(state);
         }
         ctx.request_repaint();
+    }
+}
+
+/// Answers diff-view requests. Only the newest queued request is computed: clicking through
+/// a list of files or commits never builds the diffs that were already skipped past.
+fn diff_worker(
+    rx: Receiver<(GitOp, u64)>,
+    tx: Sender<GitState>,
+    shared: Arc<Mutex<ViewState>>,
+    ctx: egui::Context,
+) {
+    while let Ok(mut job) = rx.recv() {
+        while let Ok(newer) = rx.try_recv() {
+            job = newer;
+        }
+        let (op, generation) = job;
+        let cwd = {
+            let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
+            if shared.generation != generation {
+                // Superseded by an operation on the main worker (which resets the view).
+                continue;
+            }
+            shared.cwd.clone()
+        };
+        let mut state = view_diff(&cwd, op);
+        state.view_generation = generation;
+        state.diff_only = true;
+        state.last_op = Some("diff".into());
+        let _ = tx.send(state);
+        ctx.request_repaint();
+    }
+}
+
+/// The diff-view part of a snapshot for `op`, without the repository status.
+fn view_diff(cwd: &str, op: GitOp) -> GitState {
+    let repo = match open_repo(cwd) {
+        Ok(repo) if !repo.is_bare() => repo,
+        _ => return GitState::default(),
+    };
+    match op {
+        GitOp::ShowDiff { path, staged } => GitState {
+            diff: Some((
+                if staged {
+                    format!("Staged: {path}")
+                } else {
+                    path.clone()
+                },
+                show_diff(&repo, &path, staged),
+            )),
+            current_diff_path: Some(path),
+            current_diff_staged: Some(staged),
+            ..Default::default()
+        },
+        GitOp::ShowCommit(hash) => match show_commit(&repo, &hash) {
+            Ok(text) => GitState {
+                diff: Some((format!("Commit {hash}"), text)),
+                current_diff_path: Some(hash),
+                current_diff_staged: Some(true),
+                ..Default::default()
+            },
+            Err(error) => GitState {
+                error: Some(error),
+                ..Default::default()
+            },
+        },
+        _ => GitState::default(),
     }
 }
 
@@ -343,7 +489,8 @@ fn make_diff_with_context<'a>(
         .recurse_untracked_dirs(true)
         .show_untracked_content(true);
     if let Some(path) = path {
-        opts.pathspec(path);
+        // A literal path lets libgit2 visit only that file instead of the whole work tree.
+        opts.pathspec(path).disable_pathspec_match(true);
     }
     if staged {
         let tree = head_tree(repo);
@@ -382,16 +529,27 @@ fn show_diff(repo: &Repository, path: &str, staged: bool) -> String {
 
 fn working_tree_line_changes(
     repo: &Repository,
+    staged: &[GitEntry],
     unstaged: &[GitEntry],
 ) -> HashMap<String, Vec<GitLineChange>> {
     let mut changes = HashMap::new();
+    // Status already knows which files changed. Diffing just those (as literal paths) avoids a
+    // second scan of the whole work tree, which dominated refreshes in large repositories.
+    let changed: Vec<&str> = staged
+        .iter()
+        .chain(unstaged)
+        .filter(|entry| entry.status != '?' && entry.status != 'D')
+        .map(|entry| entry.path.as_str())
+        .collect();
     let mut line_opts = DiffOptions::new();
-    line_opts
-        .include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .context_lines(0);
+    line_opts.context_lines(0).disable_pathspec_match(true);
+    for path in &changed {
+        line_opts.pathspec(path);
+    }
     let tree = head_tree(repo);
-    if let Ok(diff) = repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut line_opts)) {
+    if !changed.is_empty()
+        && let Ok(diff) = repo.diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut line_opts))
+    {
         let _ = diff.foreach(
             &mut |_delta, _| true,
             None,
@@ -446,7 +604,7 @@ fn snapshot(
     let branches = list_branches(repo);
     let (ahead, behind) = ahead_behind(repo);
     let (staged, unstaged) = status_entries(repo).unwrap_or_default();
-    let line_changes = working_tree_line_changes(repo, &unstaged);
+    let line_changes = working_tree_line_changes(repo, &staged, &unstaged);
     let diff = preset.or_else(|| {
         diff_pref.as_ref().map(|(p, s)| {
             (
@@ -476,6 +634,8 @@ fn snapshot(
         current_diff_path: diff_pref.as_ref().map(|x| x.0.clone()),
         current_diff_staged: diff_pref.map(|x| x.1),
         commit_diff: None,
+        view_generation: 0,
+        diff_only: false,
     }
 }
 

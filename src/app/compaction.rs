@@ -27,6 +27,7 @@ const COMPACT_TRANSCRIPT_CAP_CHARS: usize = 300_000;
 pub(crate) struct QueuedSend {
     pub text: String,
     pub images: Vec<(String, Vec<u8>)>,
+    pub texts: Vec<crate::model::UserAttachment>,
 }
 
 /// State for the one in-flight compaction (there is at most one app-wide).
@@ -98,7 +99,7 @@ pub(crate) fn compaction_transcript(messages: &[ChatMessage]) -> String {
                 } else {
                     "User:\n"
                 });
-                s.push_str(&m.text);
+                s.push_str(&m.user_prompt_text());
                 s.push_str("\n\n");
             }
             MsgRole::Assistant => {
@@ -262,6 +263,7 @@ impl OxiApp {
                 if let Some(queued) = active.queued_send {
                     self.conv.input = queued.text;
                     self.conv.pending_images = queued.images;
+                    self.conv.pending_texts = queued.texts;
                     self.send_message_opts(true);
                 }
             }
@@ -277,6 +279,7 @@ impl OxiApp {
         if let Some(q) = queued {
             self.conv.input = q.text;
             self.conv.pending_images = q.images;
+            self.conv.pending_texts = q.texts;
         }
     }
 }

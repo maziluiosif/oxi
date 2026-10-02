@@ -43,9 +43,16 @@ pub async fn classify_turn(
         .flat_map(|m| &m.blocks)
         .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
         .count();
+    let prompt = last_user
+        .map(ChatMessage::user_prompt_text)
+        .unwrap_or_default();
     let input = classify::ClassifyInput {
-        text: last_user.map(|m| m.text.as_str()).unwrap_or_default(),
-        has_images: last_user.is_some_and(|m| !m.attachments.is_empty()),
+        text: &prompt,
+        has_images: last_user.is_some_and(|m| {
+            m.attachments
+                .iter()
+                .any(|a| matches!(a, crate::model::UserAttachment::Image { .. }))
+        }),
         plan_mode,
         history_chars: earlier.iter().map(message_chars).sum(),
         chars_per_token,
@@ -173,6 +180,13 @@ fn parse_tier(s: &str) -> Option<classify::Tier> {
 
 fn message_chars(m: &ChatMessage) -> usize {
     m.text.len()
+        + m.attachments
+            .iter()
+            .map(|a| match a {
+                crate::model::UserAttachment::Text { name, text } => name.len() + text.len(),
+                _ => 0,
+            })
+            .sum::<usize>()
         + m.blocks
             .iter()
             .map(|b| match b {

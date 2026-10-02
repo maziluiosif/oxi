@@ -375,23 +375,6 @@ impl OxiApp {
 
                 ui.add_space(16.0);
 
-                let (sel_scroll, consume) = conversation_selection_scroll_delta(ui);
-                if sel_scroll != egui::Vec2::ZERO {
-                    // Apply instantly (no egui scroll animation): we feed a small per-frame delta
-                    // every frame, so egui's built-in smoothing would re-ease each step and stutter.
-                    // Our own time-based velocity already produces smooth motion.
-                    ui.scroll_with_delta_animation(
-                        sel_scroll,
-                        egui::style::ScrollAnimation::none(),
-                    );
-                    if consume {
-                        ui.ctx().input_mut(|i| {
-                            i.smooth_scroll_delta = egui::Vec2::ZERO;
-                        });
-                    }
-                    ui.ctx().request_repaint();
-                }
-
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if pad > 0.0 {
@@ -578,6 +561,23 @@ impl OxiApp {
                 // the last messages can move above/behind it instead of being permanently hidden
                 // at the bottom edge.
                 ui.add_space(bottom_overlay_h.max(0.0));
+
+                let (sel_scroll, consume) = conversation_selection_scroll_delta(ui);
+                if sel_scroll != egui::Vec2::ZERO {
+                    // Apply instantly (no egui scroll animation): we feed a small per-frame delta
+                    // every frame, so egui's built-in smoothing would re-ease each step and stutter.
+                    // Our own time-based velocity already produces smooth motion.
+                    ui.scroll_with_delta_animation(
+                        sel_scroll,
+                        egui::style::ScrollAnimation::none(),
+                    );
+                    if consume {
+                        ui.ctx().input_mut(|i| {
+                            i.smooth_scroll_delta = egui::Vec2::ZERO;
+                        });
+                    }
+                    ui.ctx().request_repaint();
+                }
 
                 if (force_scroll_bottom || hold_stick) && !user_has_selection {
                     // Request the bottom using the final in-content cursor, after every message

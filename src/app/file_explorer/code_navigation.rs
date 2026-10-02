@@ -15,7 +15,7 @@ use walkdir::WalkDir;
 use crate::code_nav::{DefinitionLocation, DefinitionRequest, Symbol, SymbolIndex};
 
 use super::super::OxiApp;
-use super::support::{load_gitignore_patterns, should_ignore};
+use super::support::{GitIgnore, should_ignore};
 
 /// Upper bound on files a workspace index walks, so a huge monorepo cannot stall a lookup.
 const MAX_WORKSPACE_FILES: usize = 30_000;
@@ -60,7 +60,7 @@ pub(crate) struct CodeNavState {
 
 /// Source files under `root` that navigation understands, skipping ignored and vendored trees.
 fn workspace_source_files(root: &Path) -> Vec<PathBuf> {
-    let ignored = load_gitignore_patterns(root);
+    let ignored = GitIgnore::load(root);
     WalkDir::new(root)
         .follow_links(false)
         .into_iter()

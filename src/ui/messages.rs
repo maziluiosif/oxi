@@ -234,19 +234,15 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
                     .show(ui, |ui| {
                         ui.set_max_width(bubble_w);
                         if !msg.text.is_empty() {
-                            ui.add(
-                                Label::new(
-                                    RichText::new(&msg.text)
-                                        .size(FS_BODY)
-                                        .line_height(Some(FS_BODY * 1.35))
-                                        .color(c_text()),
-                                )
-                                // The bubble is right-anchored (`Align::Max`), but its wrapped
-                                // lines should read left-aligned rather than hug the right edge.
-                                .halign(egui::Align::Min)
-                                .wrap()
-                                .selectable(true),
+                            let mut job = egui::text::LayoutJob::default();
+                            let mut format = egui::text::TextFormat::simple(
+                                egui::FontId::proportional(FS_BODY),
+                                c_text(),
                             );
+                            format.line_height = Some(FS_BODY * 1.35);
+                            job.append(&msg.text, 0.0, format);
+                            job.wrap.max_width = ui.available_width();
+                            crate::theme::selectable_text_job(ui, job);
                         }
                         if !msg.attachments.is_empty() {
                             if !msg.text.is_empty() {
@@ -279,6 +275,17 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
         ui.spacing_mut().item_spacing = eframe::egui::vec2(6.0, 6.0);
         for (i, att) in attachments.iter().enumerate() {
             match att {
+                UserAttachment::Text { name, text } => {
+                    if ui
+                        .button(format!(
+                            "{ICON_FILE} {name} · {} lines",
+                            text.lines().count()
+                        ))
+                        .clicked()
+                    {
+                        crate::ui::text_attachment::open(ui.ctx(), name, text);
+                    }
+                }
                 UserAttachment::Image { mime, data } => {
                     if let Some(tex) = user_image_texture(ui, msg_idx, i, data) {
                         // Thumbnail: max 320px, maintain aspect ratio

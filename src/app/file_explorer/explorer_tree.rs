@@ -11,7 +11,7 @@ use crate::theme::*;
 use crate::ui::chrome::icon_glyph_rich;
 
 use super::super::{OxiApp, state::FileOperation};
-use super::support::{file_icon, is_gitignored, load_gitignore_patterns};
+use super::support::{GitIgnore, file_icon, is_gitignored};
 
 const ALWAYS_SKIPPED_DIRS: &[&str] = &[".git"];
 /// How long a directory listing is reused before the explorer reads the folder again. Changes
@@ -24,7 +24,25 @@ const EXPLORER_CACHE_TTL: Duration = Duration::from_secs(2);
 #[derive(Default)]
 pub(crate) struct ExplorerCache {
     dirs: HashMap<PathBuf, CachedDir>,
-    gitignore: Option<(PathBuf, Instant, Rc<[String]>)>,
+    gitignore: Option<(PathBuf, Instant, Rc<GitIgnore>)>,
+    /// Deepest row drawn in the current / previous frame, to size the indentation.
+    deepest: usize,
+    deepest_previous: usize,
+}
+
+/// Indentation per tree level. The full 14 px until a deep path (Java packages, monorepos)
+/// would leave its name too little room; then every level shrinks evenly so a file revealed
+/// twelve folders down still shows its name instead of a lone "…".
+fn explorer_indent_step(row_width: f32, deepest: usize) -> f32 {
+    const FULL_STEP: f32 = 14.0;
+    const MIN_STEP: f32 = 5.0;
+    // Chevron slot, icon, gaps and a Git status letter.
+    const ROW_CHROME: f32 = 64.0;
+    const MIN_NAME_WIDTH: f32 = 120.0;
+    if deepest == 0 {
+        return FULL_STEP;
+    }
+    ((row_width - ROW_CHROME - MIN_NAME_WIDTH) / deepest as f32).clamp(MIN_STEP, FULL_STEP)
 }
 
 struct CachedDir {
@@ -46,14 +64,14 @@ impl ExplorerCache {
         self.gitignore = None;
     }
 
-    fn gitignore(&mut self, root: &Path) -> Rc<[String]> {
+    fn gitignore(&mut self, root: &Path) -> Rc<GitIgnore> {
         if let Some((cached_root, at, patterns)) = &self.gitignore
             && cached_root == root
             && at.elapsed() < EXPLORER_CACHE_TTL
         {
             return patterns.clone();
         }
-        let patterns: Rc<[String]> = load_gitignore_patterns(root).into();
+        let patterns = Rc::new(GitIgnore::load(root));
         self.gitignore = Some((root.to_path_buf(), Instant::now(), patterns.clone()));
         patterns
     }
@@ -62,7 +80,7 @@ impl ExplorerCache {
         &mut self,
         root: &Path,
         directory: &Path,
-        ignored: &[String],
+        ignored: &GitIgnore,
     ) -> Result<Rc<[ExplorerEntry]>, String> {
         if let Some(cached) = self.dirs.get(directory)
             && cached.at.elapsed() < EXPLORER_CACHE_TTL
@@ -85,7 +103,7 @@ impl ExplorerCache {
 fn read_explorer_directory(
     root: &Path,
     directory: &Path,
-    ignored: &[String],
+    ignored: &GitIgnore,
 ) -> Result<Rc<[ExplorerEntry]>, String> {
     let mut entries: Vec<ExplorerEntry> = std::fs::read_dir(directory)
         .map_err(|error| error.to_string())?
@@ -118,6 +136,8 @@ impl OxiApp {
         ui.set_min_width(ui.max_rect().width());
         let root = PathBuf::from(&self.active_workspace().root_path);
         let ignored = self.conv.explorer_cache.gitignore(&root);
+        let cache = &mut self.conv.explorer_cache;
+        cache.deepest_previous = std::mem::take(&mut cache.deepest);
         // Explorer decorations share the existing async Git worker with the source-control panel.
         let git_was_uninitialized = self.conv.git_rx.is_none();
         self.ensure_git_channels();
@@ -262,8 +282,17 @@ impl OxiApp {
                         .id_salt("workspace_file_explorer")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            self.render_explorer_directory(ui, &root, &root, &ignored, 1)
+                            let step = explorer_indent_step(
+                                ui.available_width(),
+                                self.conv.explorer_cache.deepest_previous,
+                            );
+                            self.render_explorer_directory(ui, &root, &root, &ignored, 1, step)
                         });
+                    if self.conv.explorer_cache.deepest != self.conv.explorer_cache.deepest_previous
+                    {
+                        // Expanding/collapsing changed the deepest level: re-indent next frame.
+                        ui.ctx().request_repaint();
+                    }
                 }
 
                 if let Some(error) = self.conv.editor.error.clone() {
@@ -299,8 +328,9 @@ impl OxiApp {
         ui: &mut Ui,
         root: &Path,
         directory: &Path,
-        ignored: &[String],
+        ignored: &GitIgnore,
         depth: usize,
+        indent_step: f32,
     ) {
         let entries = match self.conv.explorer_cache.listing(root, directory, ignored) {
             Ok(entries) => entries,
@@ -314,7 +344,8 @@ impl OxiApp {
             let path = entry.path.clone();
             let name = &entry.name;
             let git_ignored = entry.git_ignored;
-            let indent = depth as f32 * 14.0;
+            let indent = depth as f32 * indent_step;
+            self.conv.explorer_cache.deepest = self.conv.explorer_cache.deepest.max(depth);
             if entry.is_dir {
                 let expanded = self.conv.explorer_expanded.contains(&path);
                 let (rect, response) = ui.allocate_exact_size(
@@ -352,7 +383,14 @@ impl OxiApp {
                 }
                 response.context_menu(|ui| self.render_path_context_menu(ui, &path, true));
                 if expanded {
-                    self.render_explorer_directory(ui, root, &path, ignored, depth + 1);
+                    self.render_explorer_directory(
+                        ui,
+                        root,
+                        &path,
+                        ignored,
+                        depth + 1,
+                        indent_step,
+                    );
                 }
             } else {
                 // Ctrl/Cmd+P temporarily changes the active editor tab while previewing.

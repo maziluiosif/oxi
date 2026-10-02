@@ -89,6 +89,8 @@ impl OxiApp {
             std::mem::take(&mut self.conv.input);
         self.conv.workspaces[active_workspace].sessions[old_session].pending_images =
             std::mem::take(&mut self.conv.pending_images);
+        self.conv.workspaces[active_workspace].sessions[old_session].pending_texts =
+            std::mem::take(&mut self.conv.pending_texts);
         self.conv.input_history_index = None;
         self.conv.input_history_draft.clear();
         self.conv.composer_notice = None;
@@ -488,6 +490,7 @@ impl OxiApp {
             }
             self.conv.input.clear();
             self.conv.pending_images.clear();
+            self.conv.pending_texts.clear();
             self.conv.input_history_index = None;
             self.conv.input_history_draft.clear();
             self.conv.scroll_to_bottom_once = true;
@@ -584,6 +587,8 @@ impl OxiApp {
                 std::mem::take(&mut self.active_workspace_mut().sessions[new_si].input_text);
             self.conv.pending_images =
                 std::mem::take(&mut self.active_workspace_mut().sessions[new_si].pending_images);
+            self.conv.pending_texts =
+                std::mem::take(&mut self.active_workspace_mut().sessions[new_si].pending_texts);
             self.conv.input_history_index = None;
             self.conv.input_history_draft.clear();
             self.conv.scroll_to_bottom_once = true;

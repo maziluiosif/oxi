@@ -7,6 +7,47 @@
 use super::*;
 
 impl OxiApp {
+    pub(super) fn attach_large_paste(&mut self, text: &str) -> bool {
+        if !is_large_paste(text) {
+            return false;
+        }
+        let mut index = 1;
+        let name = loop {
+            let candidate = format!("pasted-{index}.txt");
+            if !self.conv.pending_texts.iter().any(|a| matches!(a, crate::model::UserAttachment::Text { name, .. } if name == &candidate)) { break candidate; }
+            index += 1;
+        };
+        self.conv
+            .pending_texts
+            .push(crate::model::UserAttachment::Text {
+                name,
+                text: text.to_owned(),
+            });
+        true
+    }
+
+    pub(super) fn intercept_large_pastes(&mut self, ui: &Ui, input_id: Id) {
+        if !ui.ctx().memory(|m| m.has_focus(input_id)) {
+            return;
+        }
+        let pastes = ui.input_mut(|input| {
+            let mut pastes = Vec::new();
+            input.events.retain(|event| {
+                if let egui::Event::Paste(text) = event
+                    && is_large_paste(text)
+                {
+                    pastes.push(text.clone());
+                    return false;
+                }
+                true
+            });
+            pastes
+        });
+        for text in pastes {
+            self.attach_large_paste(&text);
+        }
+    }
+
     pub(super) fn composer_text_menu(
         &mut self,
         ui: &Ui,
@@ -20,6 +61,9 @@ impl OxiApp {
             && let Some(pos) = response.interact_pointer_pos()
             && let Some(text) = read_primary_selection()
         {
+            if self.attach_large_paste(&text) {
+                return;
+            }
             let at = galley.cursor_from_pos(pos - galley_pos).index.0;
             let caret = replace_char_range(&mut self.conv.input, at..at, &text);
             set_char_range(ui.ctx(), input_id, caret..caret);
@@ -62,6 +106,10 @@ impl OxiApp {
                 if !self.paste_clipboard_image()
                     && let Some(text) = read_clipboard_text()
                 {
+                    if self.attach_large_paste(&text) {
+                        ui.close();
+                        return;
+                    }
                     let at = caret.unwrap_or_else(|| self.conv.input.chars().count());
                     let range = selection.clone().unwrap_or(at..at);
                     let caret = replace_char_range(&mut self.conv.input, range, &text);
@@ -131,9 +179,23 @@ fn read_primary_selection() -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
+/// Only paste events become attachments; normal typing is never converted.
+fn is_large_paste(text: &str) -> bool {
+    text.chars().take(2_001).count() > 2_000 || text.lines().take(21).count() > 20
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_paste_threshold_counts_characters_and_lines() {
+        assert!(!is_large_paste(&"ă".repeat(2_000)));
+        assert!(is_large_paste(&"ă".repeat(2_001)));
+        assert!(!is_large_paste(&"line\n".repeat(20)));
+        assert!(is_large_paste(&"line\n".repeat(21)));
+        assert!(!is_large_paste("small paste"));
+    }
 
     #[test]
     fn replace_char_range_handles_multibyte_text() {

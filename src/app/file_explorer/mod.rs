@@ -29,7 +29,7 @@ mod syntax_window;
 mod tests;
 
 pub(crate) use code_navigation::CodeNavState;
-pub(crate) use file_picker::PickerOutline;
+pub(crate) use file_picker::{PickerCache, PickerOutline};
 pub(crate) use find_replace::{FIND_FIELD_ID, FindCache};
 pub(crate) use minimap::MinimapGeometry;
 pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};

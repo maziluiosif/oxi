@@ -66,6 +66,9 @@ fn user_content_to_json(text: &str, attachments: &[UserAttachment]) -> Value {
 
     for attachment in attachments {
         match attachment {
+            UserAttachment::Text { name, text } => {
+                blocks.push(json!({"type": "text_attachment", "name": name, "text": text}))
+            }
             UserAttachment::Image { mime, data } => blocks.push(json!({
                 "type": "image",
                 "mimeType": mime,
@@ -176,6 +179,43 @@ mod tests {
     use super::*;
     use crate::model::{AssistantBlock, MsgRole, UserAttachment};
     use std::path::Path;
+
+    #[test]
+    fn pasted_text_round_trips_and_reaches_provider_intact() {
+        let payload = "  început\n@src/main.rs\n/compact\n".repeat(500);
+        let message = ChatMessage {
+            role: MsgRole::User,
+            text: "Inspect this".into(),
+            is_summary: false,
+            attachments: vec![
+                UserAttachment::Text {
+                    name: "pasted-1.txt".into(),
+                    text: payload.clone(),
+                },
+                UserAttachment::Image {
+                    mime: "image/png".into(),
+                    data: vec![1, 2, 3],
+                },
+            ],
+            blocks: vec![],
+            streaming: false,
+            started_at: None,
+            worked_duration: None,
+            route: None,
+        };
+        let entries = chat_message_to_json_entries(&message);
+        let restored = crate::hydrate::messages_from_get_messages(&json!({"messages": entries}));
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].text, "Inspect this");
+        assert!(
+            matches!(&restored[0].attachments[0], UserAttachment::Text { name, text } if name == "pasted-1.txt" && text == &payload)
+        );
+        assert!(restored[0].user_prompt_text().ends_with(&payload));
+        assert!(crate::session_store::dedupe::chat_messages_equal(
+            &message,
+            &restored[0]
+        ));
+    }
 
     #[test]
     fn session_file_stem_from_path() {

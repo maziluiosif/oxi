@@ -152,6 +152,11 @@ pub(crate) fn user_content_to_openai(text: &str, attachments: &[UserAttachment])
 
     for attachment in attachments {
         match attachment {
+            UserAttachment::Text { name, text } => {
+                blocks.push(
+                    json!({"type": "text", "text": format!("[Attached text: {name}]\n{text}")}),
+                );
+            }
             UserAttachment::Image { mime, data } => {
                 blocks.push(json!({
                     "type": "image_url",
@@ -331,6 +336,28 @@ pub(crate) fn trim_wire_history_to_budget(
 mod tests {
     use super::*;
     use crate::model::{AssistantBlock, ChatMessage, MsgRole};
+
+    #[test]
+    fn pasted_text_is_sent_in_full_with_images() {
+        let payload = "  începe\n@src/main.rs\n/compact\n".repeat(500);
+        let attachments = vec![
+            UserAttachment::Text {
+                name: "pasted-1.txt".into(),
+                text: payload.clone(),
+            },
+            UserAttachment::Image {
+                mime: "image/png".into(),
+                data: vec![1, 2, 3],
+            },
+        ];
+        let wire = user_content_to_openai("Inspect", &attachments);
+        assert_eq!(wire[0]["text"], "Inspect");
+        assert_eq!(
+            wire[1]["text"],
+            format!("[Attached text: pasted-1.txt]\n{payload}")
+        );
+        assert_eq!(wire[2]["type"], "image_url");
+    }
 
     fn user_msg(text: &str) -> ChatMessage {
         ChatMessage {

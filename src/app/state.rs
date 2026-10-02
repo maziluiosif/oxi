@@ -150,7 +150,8 @@ pub struct EditorState {
     pub file_picker_query: String,
     pub file_picker_last_query: String,
     pub file_picker_selected: usize,
-    pub file_picker_files: Vec<PathBuf>,
+    /// Workspace file list (walked on a worker) and the ranked rows of the current query.
+    pub file_picker_cache: super::file_explorer::PickerCache,
     /// File currently shown as a temporary editor tab behind the picker.
     pub file_picker_preview: Option<PathBuf>,
     /// Editor tab that was active before the picker opened.
@@ -493,6 +494,7 @@ pub struct UpdateMsg(pub Result<crate::update::ReleaseInfo, String>);
 pub struct PromptEditState {
     pub previous_input: String,
     pub previous_images: Vec<(String, Vec<u8>)>,
+    pub previous_texts: Vec<crate::model::UserAttachment>,
 }
 
 /// Whether one chat matched the sidebar search, and what that answer was computed from.
@@ -523,6 +525,7 @@ pub struct ConversationState {
     pub rename_draft: String,
     pub chat_scroll_id: egui::Id,
     pub pending_images: Vec<(String, Vec<u8>)>,
+    pub pending_texts: Vec<crate::model::UserAttachment>,
     pub scroll_to_bottom_once: bool,
     /// Keep transcript `stick_to_bottom` for a few frames while a newly opened/session-loaded
     /// conversation settles its layout.
@@ -619,7 +622,7 @@ pub struct ConversationState {
     /// if the generation fails so the user's own text isn't lost.
     pub commit_gen_stash: Option<String>,
     /// Git worker request channel. Responses arrive on `git_rx`; drained each frame.
-    pub git_tx: Option<std::sync::mpsc::Sender<crate::git::GitOp>>,
+    pub git_tx: Option<crate::git::GitSender>,
     pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
     /// egui context used for the git worker so it can request repaints.
     pub git_ctx: eframe::egui::Context,
