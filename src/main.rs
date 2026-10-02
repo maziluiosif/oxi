@@ -2,6 +2,7 @@
 
 mod agent;
 mod app;
+mod code_nav;
 mod compute;
 mod git;
 mod hydrate;
@@ -12,7 +13,6 @@ mod model;
 mod oauth;
 mod router;
 mod runtime;
-mod rust_goto;
 mod scratchpad;
 mod secrets;
 mod session_store;

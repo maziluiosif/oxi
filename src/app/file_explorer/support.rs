@@ -244,6 +244,26 @@ pub(super) fn apply_definition_underline(
     job.sections = sections;
 }
 
+/// Hover text for a file: its path relative to the workspace (what the explorer and git panel
+/// show), falling back to a `~`-abbreviated absolute path for files outside it.
+pub(super) fn display_path(root: &Path, path: &Path) -> String {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return relative.display().to_string();
+    }
+    // Documents may hold the canonical path (`/private/var/...` on macOS) of a symlinked root.
+    if let Ok(canonical_root) = root.canonicalize()
+        && let Ok(relative) = path.strip_prefix(&canonical_root)
+    {
+        return relative.display().to_string();
+    }
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from)
+        && let Ok(relative) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", relative.display());
+    }
+    path.display().to_string()
+}
+
 pub(super) fn language_for_path(path: &Path) -> &'static str {
     match path
         .extension()
@@ -273,7 +293,7 @@ pub(super) fn language_for_path(path: &Path) -> &'static str {
     }
 }
 
-pub(super) fn file_icon(path: &Path) -> (&'static str, egui::Color32) {
+pub(crate) fn file_icon(path: &Path) -> (&'static str, egui::Color32) {
     let color = match path
         .extension()
         .and_then(|extension| extension.to_str())

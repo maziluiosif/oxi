@@ -47,7 +47,7 @@ pub enum SettingsExitAction {
     ToggleSidebar,
     ToggleExplorer,
     ToggleTerminal,
-    ToggleGitChanges,
+    ToggleGitPanel,
     ToggleGitBranches,
 }
 
@@ -144,6 +144,9 @@ pub struct EditorState {
     pub focus_file_operation_next_frame: bool,
     /// Cmd/Ctrl+P workspace file picker state.
     pub file_picker_open: bool,
+    /// Editor column rect and the frame it was drawn in; the picker centers over it instead
+    /// of over the whole window (where it spilled into the git panel).
+    pub editor_area: Option<(u64, eframe::egui::Rect)>,
     pub file_picker_query: String,
     pub file_picker_last_query: String,
     pub file_picker_selected: usize,
@@ -155,6 +158,21 @@ pub struct EditorState {
     pub file_picker_previous_diff_active: bool,
     /// Whether the preview tab was created by the picker and should be removed on cancel.
     pub file_picker_preview_created: bool,
+    /// Goto Symbol in Project (Cmd/Ctrl+Shift+R) instead of files. In the file mode, `@` lists
+    /// the current file's symbols and `:` goes to a line, like Sublime.
+    pub file_picker_project_symbols: bool,
+    /// Editor caret when the picker opened; restored when a symbol/line preview is cancelled.
+    pub file_picker_origin: Option<(PathBuf, usize)>,
+    /// Last location a symbol/line query previewed, so the editor only moves when it changes.
+    pub file_picker_previewed: Option<(PathBuf, std::ops::Range<usize>)>,
+    /// Goto Symbol outline of the picker's document, keyed by path and content revision.
+    pub file_picker_outline: Option<(
+        PathBuf,
+        u64,
+        std::sync::Arc<super::file_explorer::PickerOutline>,
+    )>,
+    /// Tree-sitter navigation: the workspace symbol index and lookups running on workers.
+    pub code_nav: super::file_explorer::CodeNavState,
     /// File that the Explorer should expand to and scroll into view on its next render.
     /// Ctrl/Cmd+P previews deliberately never set this.
     pub explorer_reveal_pending: Option<PathBuf>,
@@ -554,10 +572,11 @@ pub struct ConversationState {
     pub composer_measured_full_h: f32,
     /// Diff view replaces the chat window while a file/commit diff is open.
     pub diff_view_open: bool,
-    /// Cached colorized diff job, keyed on (title+text hash, wrap width). Avoids
-    /// rebuilding the (potentially huge) `LayoutJob` on every frame while the same
-    /// diff stays open.
-    pub diff_job_cache: Option<(u64, u32, egui::text::LayoutJob)>,
+    /// Parsed git diff plus its view state (layout mode, folds, scroll), rebuilt only when
+    /// the diff text changes.
+    pub git_diff_view: Option<crate::ui::diff_view::DiffView>,
+    /// Same for the active editor document's unsaved-changes diff.
+    pub unsaved_diff_view: Option<crate::ui::diff_view::DiffView>,
     /// Measured heights of transcript units (a user message or a contiguous assistant run),
     /// keyed by `(workspace_idx, session_idx, unit_start_message_idx)`. Units outside the
     /// scroll viewport advance the cursor by their cached height instead of being rendered,

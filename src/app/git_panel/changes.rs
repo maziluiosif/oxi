@@ -334,6 +334,7 @@ impl OxiApp {
         _total: usize,
     ) {
         let full_w = ui.available_width();
+        let mut open_file = false;
         let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 22.0), Sense::click());
         let hovered = response.hovered();
         // Pure geometric hover test — `Ui::rect_contains_pointer` also checks layer
@@ -394,13 +395,26 @@ impl OxiApp {
                         self.request(GitOp::Stage(vec![entry.path.clone()]));
                     }
                     ui.add_space(6.0);
-                    ui.label(
-                        RichText::new(format!("{:<1}", entry.status))
-                            .size(FS_SMALL)
-                            .color(status_color(entry.status))
-                            .strong(),
+                    // Fixed-width status slot: proportional letters ("M" vs "?") used to
+                    // start each file name at a slightly different x.
+                    let (status_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(12.0, 16.0), Sense::hover());
+                    ui.painter().text(
+                        status_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        entry.status,
+                        FontId::monospace(FS_SMALL),
+                        crate::app::file_explorer::git_status_color(entry.status),
                     );
                     ui.add_space(6.0);
+                    let (icon, icon_color) =
+                        crate::app::file_explorer::file_icon(std::path::Path::new(&entry.path));
+                    ui.label(
+                        RichText::new(icon)
+                            .font(FontId::new(FS_SMALL, icon_font()))
+                            .color(icon_color),
+                    );
+                    ui.add_space(5.0);
                     // Filename first, parent dir faint after — the name is what you scan for.
                     let (dir, file) = match entry.path.rsplit_once('/') {
                         Some((d, f)) => (Some(d), f),
@@ -424,7 +438,7 @@ impl OxiApp {
                     // whole row width and the button never gets space on narrow
                     // panels. Reserving it on staged rows too keeps both sections
                     // truncating at the same column.
-                    let action_w = 18.0 + ui.spacing().item_spacing.x;
+                    let action_w = 2.0 * (18.0 + ui.spacing().item_spacing.x);
                     let label_w = (ui.available_width() - action_w).max(0.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(label_w, ui.available_height()),
@@ -437,6 +451,19 @@ impl OxiApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         // Discard is destructive — keep it hover-only so it doesn't
                         // read as part of every row.
+                        if row_hot
+                            && entry.status != 'D'
+                            && crate::ui::chrome::icon_button_inline(
+                                ui,
+                                ICON_FILE,
+                                FS_TINY,
+                                c_text_faint(),
+                            )
+                            .on_hover_text("Open file")
+                            .clicked()
+                        {
+                            open_file = true;
+                        }
                         if !staged
                             && row_hot
                             && crate::ui::chrome::icon_button_inline(
@@ -457,66 +484,47 @@ impl OxiApp {
             },
         );
 
-        // A changed file is most useful in the real editor: open it directly so it can be
-        // inspected and edited in place. Deleted files no longer have an editable worktree
-        // version, so retain the read-only diff viewer as their fallback.
-        if response.clicked() {
-            let path =
-                std::path::PathBuf::from(&self.active_workspace().root_path).join(&entry.path);
-            if path.is_file() {
-                let first_changed_line = self
-                    .conv
-                    .git
-                    .line_changes
-                    .get(&entry.path)
-                    .and_then(|changes| changes.iter().min_by_key(|change| change.line))
-                    .map(|change| change.line);
-                self.close_editor_git_diff();
-                self.open_editor_file_only(path);
-                self.conv.editor.git_full_highlight_path = self
-                    .conv
-                    .editor
-                    .active_document()
-                    .map(|document| document.path.clone());
-                if let Some(line) = first_changed_line
-                    && let Some(document) = self.conv.editor.active_document()
-                {
-                    let target_path = document.path.clone();
-                    let byte = document
-                        .content
-                        .split_inclusive('\n')
-                        .take(line)
-                        .map(str::len)
-                        .sum::<usize>()
-                        .min(document.content.len());
-                    self.conv.editor.navigation_target = Some((target_path, byte..byte));
-                }
-                self.conv.editor.focus_editor_next_frame = true;
-            } else {
-                self.request(GitOp::ShowDiff {
-                    path: entry.path.clone(),
-                    staged,
-                });
-                self.conv.diff_view_open = true;
-                self.conv.editor.diff_tab_active = true;
-            }
+        // Like VS Code: a click shows the change as a diff; the hover action (or the diff's
+        // own "Open file" button / line numbers) jumps into the editable file.
+        if open_file {
+            self.open_changed_file(&entry.path);
+        } else if response.clicked() {
+            self.request(GitOp::ShowDiff {
+                path: entry.path.clone(),
+                staged,
+            });
+            self.conv.diff_view_open = true;
+            self.conv.editor.diff_tab_active = true;
         }
         if hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
     }
 
+    /// Open a changed file in the editor at its first change, with git changes highlighted.
+    fn open_changed_file(&mut self, relative: &str) {
+        let path = std::path::PathBuf::from(&self.active_workspace().root_path).join(relative);
+        if !path.is_file() {
+            return;
+        }
+        let first_changed_line = self
+            .conv
+            .git
+            .line_changes
+            .get(relative)
+            .and_then(|changes| changes.iter().map(|change| change.line).min());
+        self.close_editor_git_diff();
+        self.apply_diff_action(crate::ui::diff_view::DiffAction::OpenFile {
+            path: relative.to_owned(),
+            line: first_changed_line.map(|line| line + 1),
+        });
+    }
+
     /// Full-area diff viewer that replaces the chat window while a diff is open.
     /// Constrained to the same centered column as the chat header/transcript so it
     /// stays aligned when the side panels are closed. Easy to close via the close
     /// button or Esc.
-    pub(crate) fn render_diff_view(
-        &mut self,
-        ui: &mut Ui,
-        title: &str,
-        diff_text: &str,
-        column_center_w: f32,
-    ) {
+    pub(crate) fn render_diff_view(&mut self, ui: &mut Ui, title: &str, column_center_w: f32) {
         // Close the viewer on Esc.
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.request(GitOp::ClearDiff);
@@ -571,56 +579,10 @@ impl OxiApp {
         });
         ui.add_space(6.0);
 
-        // Full-size scroll area; the diff text is centered inside it (same pattern
-        // as the transcript in `render_conversation`).
-        let avail_h = ui.available_height();
-        ScrollArea::vertical()
-            .id_salt("diff_view_scroll")
-            .max_height(avail_h)
-            .auto_shrink([false, false])
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-            .show(ui, |ui| {
-                let viewport_w = ui.max_rect().width();
-                ui.set_max_width(viewport_w);
-                let wrap_width = col_w.max(200.0);
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                std::hash::Hash::hash(title, &mut hasher);
-                std::hash::Hash::hash(diff_text, &mut hasher);
-                let key = (std::hash::Hasher::finish(&hasher), wrap_width.to_bits());
-                let cached = self
-                    .conv
-                    .diff_job_cache
-                    .as_ref()
-                    .is_some_and(|(h, w, _)| (*h, *w) == key);
-                if !cached {
-                    let job = crate::ui::diff::diff_layout_job(diff_text, wrap_width);
-                    self.conv.diff_job_cache = Some((key.0, key.1, job));
-                }
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    if pad > 0.0 {
-                        ui.add_space(pad);
-                    }
-                    ui.vertical(|ui| {
-                        ui.set_width(wrap_width);
-                        if let Some((_, _, job)) = &self.conv.diff_job_cache {
-                            ui.label(job.clone());
-                        }
-                    });
-                });
-            });
-    }
-}
-
-fn status_color(status: char) -> Color32 {
-    match status {
-        'M' => c_accent(),
-        'A' => c_diff_add_fg(),
-        'D' => c_diff_del_fg(),
-        'R' | 'C' => c_accent(),
-        'U' => c_danger(),
-        '?' => c_text_muted(),
-        _ => c_text(),
+        // The diff body uses the full column width: side-by-side panes need the room.
+        if let Some(action) = self.show_git_diff_view(ui) {
+            self.apply_diff_action(action);
+        }
     }
 }
 

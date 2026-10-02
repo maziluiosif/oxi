@@ -12,17 +12,22 @@ use super::super::OxiApp;
 
 impl OxiApp {
     pub(super) fn render_settings_terminal_panel(&mut self, ui: &mut Ui) {
-        settings_section_title(
-            ui,
-            "Terminal",
-            Some("Choose the shell used by the embedded terminal."),
+        #[cfg(windows)]
+        let (subtitle, card_title, card_hint) = (
+            "Choose the shell used by the embedded terminal.",
+            "Windows shell",
+            "The new choice is used the next time the terminal starts.",
         );
+        // Only Windows has a choice to make; elsewhere this page just says which shell runs.
+        #[cfg(not(windows))]
+        let (subtitle, card_title, card_hint) = (
+            "The shell used by the embedded terminal.",
+            "Shell",
+            "Change your login shell to use a different one.",
+        );
+        settings_section_title(ui, "Terminal", Some(subtitle));
         card_frame().show(ui, |ui| {
-            settings_card_header(
-                ui,
-                "Windows shell",
-                Some("The new choice is used the next time the terminal starts."),
-            );
+            settings_card_header(ui, card_title, Some(card_hint));
 
             #[cfg(windows)]
             {
@@ -64,11 +69,15 @@ impl OxiApp {
             }
 
             #[cfg(not(windows))]
-            ui.label(
-                RichText::new("oxi uses your platform's default shell on this operating system.")
-                    .size(FS_SMALL)
-                    .color(c_text_muted()),
-            );
+            {
+                let shell = std::env::var("SHELL").unwrap_or_default();
+                let text = if shell.is_empty() {
+                    "oxi starts your login shell.".to_owned()
+                } else {
+                    format!("oxi starts your login shell: {shell}")
+                };
+                ui.label(RichText::new(text).size(FS_SMALL).color(c_text_muted()));
+            }
         });
     }
 }

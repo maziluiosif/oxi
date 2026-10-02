@@ -446,3 +446,91 @@ pub(super) fn paint_indent_guides(
         }
     }
 }
+
+/// Sublime's `match_brackets`: underline the bracket at the caret and its partner.
+pub(super) fn paint_bracket_underlines(
+    ui: &Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
+    brackets: [usize; 2],
+) {
+    let painter = ui.painter().with_clip_rect(clip_rect);
+    let stroke = egui::Stroke::new(1.5, c_text_muted());
+    for at in brackets {
+        let range = egui::text::CCursorRange::two(
+            egui::text::CCursor::new(at),
+            egui::text::CCursor::new(at + 1),
+        );
+        for rect in editor_selection_rects(galley, galley_pos, clip_rect, range) {
+            painter.hline(rect.x_range(), rect.bottom() - 1.0, stroke);
+        }
+    }
+}
+
+/// Longest selection whose other occurrences are outlined.
+const MAX_MATCHED_SELECTION: usize = 200;
+
+/// Sublime's `match_selection`: outline every other occurrence of a single-line selection on
+/// screen (whole words only when the selection is a word). Only the visible lines are
+/// searched, so the cost does not grow with the file.
+pub(super) fn paint_selection_matches(
+    ui: &Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
+    content: &str,
+    selection: Option<egui::text::CCursorRange>,
+    visible_lines: &std::ops::Range<usize>,
+) {
+    use super::editor_text::{byte_index, char_index};
+    let Some(selection) = selection else {
+        return;
+    };
+    let sorted = selection.as_sorted_char_range();
+    if sorted.end.0 - sorted.start.0 > MAX_MATCHED_SELECTION {
+        return;
+    }
+    let start = byte_index(content, sorted.start.0);
+    let end = byte_index(content, sorted.end.0);
+    let needle = &content[start..end];
+    if needle.trim().is_empty() || needle.contains('\n') {
+        return;
+    }
+    let is_word = needle.chars().all(crate::code_nav::is_identifier_char);
+    let window = super::syntax_window::line_byte_range(content, visible_lines);
+    let haystack = &content[window.clone()];
+    let painter = ui.painter().with_clip_rect(clip_rect);
+    let stroke = egui::Stroke::new(1.0, c_text_faint());
+    let mut base_char = char_index(content, window.start);
+    let mut counted = 0usize;
+    for (offset, _) in haystack.match_indices(needle) {
+        let at = window.start + offset;
+        if at == start {
+            continue;
+        }
+        if is_word {
+            let before = content[..at].chars().next_back();
+            let after = content[at + needle.len()..].chars().next();
+            if before.is_some_and(crate::code_nav::is_identifier_char)
+                || after.is_some_and(crate::code_nav::is_identifier_char)
+            {
+                continue;
+            }
+        }
+        base_char += haystack[counted..offset].chars().count();
+        counted = offset;
+        let range = egui::text::CCursorRange::two(
+            egui::text::CCursor::new(base_char),
+            egui::text::CCursor::new(base_char + needle.chars().count()),
+        );
+        for rect in editor_selection_rects(galley, galley_pos, clip_rect, range) {
+            painter.rect_stroke(
+                rect.expand(0.5),
+                egui::CornerRadius::same(2),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+}

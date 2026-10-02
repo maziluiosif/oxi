@@ -243,9 +243,10 @@ impl OxiApp {
     /// Global shortcuts that work outside the composer TextEdit.
     /// Cmd/Ctrl+N new chat, Cmd/Ctrl+` terminal, Cmd/Ctrl+B chats sidebar,
     /// Cmd/Ctrl+E workspace explorer, Cmd/Ctrl+Shift+N opens the scratchpad,
-    /// Cmd/Ctrl+Shift+B git changes panel, Cmd/Ctrl+P opens any workspace file,
-    /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds (Cmd+G / F3 next, with Shift previous) and F12 navigates
-    /// to a Rust definition in an open editor, Cmd/Ctrl+. stops a run.
+    /// Cmd/Ctrl+Shift+B git panel, Cmd/Ctrl+P opens any workspace file,
+    /// Cmd/Ctrl+S saves, Cmd/Ctrl+F finds (Cmd+G / F3 next, with Shift previous), F12 goes to the
+    /// definition under the caret, Cmd/Ctrl+R lists the file's symbols, Cmd/Ctrl+Shift+R the
+    /// project's, Ctrl+G (macOS) goes to a line, Cmd/Ctrl+. stops a run.
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
         if self.confirm_prompt_open() {
             return;
@@ -266,6 +267,9 @@ impl OxiApp {
             find_next,
             find_previous,
             goto_definition,
+            goto_symbol,
+            goto_project_symbol,
+            goto_line,
             stop,
             escape,
         ) = ctx.input(|i| {
@@ -290,6 +294,12 @@ impl OxiApp {
                 (i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::G))
                     || (i.modifiers.matches_exact(Modifiers::SHIFT) && i.key_pressed(Key::F3)),
                 i.modifiers.is_none() && i.key_pressed(Key::F12),
+                i.modifiers.matches_exact(cmd) && i.key_pressed(Key::R),
+                i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::R),
+                // Sublime's Goto Line. Only macOS: elsewhere Ctrl+G is Find Next here.
+                cfg!(target_os = "macos")
+                    && i.modifiers.matches_exact(Modifiers::CTRL)
+                    && i.key_pressed(Key::G),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
                 i.key_pressed(Key::Escape),
             )
@@ -308,7 +318,7 @@ impl OxiApp {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleExplorer);
         }
         if toggle_git {
-            self.request_settings_exit(super::state::SettingsExitAction::ToggleGitChanges);
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleGitPanel);
         }
         if open_file && !self.conv.settings_open && !self.conv.editor.file_picker_open {
             self.open_file_picker();
@@ -337,10 +347,25 @@ impl OxiApp {
         if goto_definition
             && !self.conv.settings_open
             && self.conv.editor.active_document().is_some_and(|document| {
-                document.path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+                crate::code_nav::language_for_path(&document.path).is_some()
             })
         {
             self.conv.editor.goto_definition_requested = true;
+        }
+        let editing = !self.conv.settings_open
+            && !self.conv.editor.file_picker_open
+            && self
+                .conv
+                .editor
+                .active_document()
+                .is_some_and(|document| document.media.is_none());
+        if goto_symbol && editing {
+            self.open_file_picker_with("@");
+        } else if goto_line && editing {
+            self.open_file_picker_with(":");
+        }
+        if goto_project_symbol && !self.conv.settings_open && !self.conv.editor.file_picker_open {
+            self.open_project_symbol_picker(ctx);
         }
         if stop && self.any_waiting_response() {
             self.send_abort();

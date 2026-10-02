@@ -119,10 +119,31 @@ fn quiet_combo_style(ui: &mut Ui) {
     widgets.open.corner_radius = CornerRadius::same(255);
 }
 
-/// Fixed width of the thinking-level dropdown.
+/// Widest the thinking-level dropdown gets.
 const EFFORT_W: f32 = 72.0;
 
-/// Fixed (provider, model) dropdown widths for the column width class.
+/// Popup lists stay readable even under a short label such as "Auto".
+const COMBO_POPUP_MIN_W: f32 = 140.0;
+
+/// A quiet dropdown that hugs its label (chevron right after the text) but never grows past
+/// `max_w`; longer labels truncate. The slot used to be fixed-width, which left a wide gap
+/// between short labels like "Local HF" and their chevron.
+fn quiet_combo<R>(ui: &mut Ui, max_w: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let height = ui.available_height();
+    // `max_w` is the label + chevron area, as `ComboBox::width` was; the frame pads around it.
+    let max_w = max_w + 2.0 * ui.spacing().button_padding.x;
+    ui.allocate_ui_with_layout(
+        egui::vec2(max_w, height),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            quiet_combo_style(ui);
+            add(ui)
+        },
+    )
+    .inner
+}
+
+/// Maximum (provider, model) dropdown widths for the column width class.
 fn composer_selector_widths(narrow: bool, compact: bool) -> (f32, f32) {
     if compact {
         (82.0, 90.0)
@@ -504,12 +525,12 @@ impl OxiApp {
 
     /// Two borderless dropdowns styled as quiet text with a chevron: provider (only
     /// providers the user has actually configured), then model within that provider's
-    /// config. Widths stay fixed so switching providers/models doesn't shove the
-    /// attach/send controls around; labels are short/parsed to fit.
+    /// config. Each hugs its label up to a cap, so short names keep the chevron close and
+    /// long ones ("Claude Code (ACP)", long model ids) truncate instead of growing the bar.
     fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool, compact: bool) {
         let active_provider = self.conv.settings.active_provider;
-        // Independent fixed widths — shared dynamic widths made the bar look jumpy
-        // when labels swung from "Ollama" to "Claude Code (ACP)" / long model ids.
+        // Independent caps — one shared dynamic width made the bar look jumpy when labels
+        // swung from "Ollama" to "Claude Code (ACP)" / long model ids.
         let (provider_w, model_w) = composer_selector_widths(narrow, compact);
         let model_chars = if compact {
             10usize
@@ -519,17 +540,16 @@ impl OxiApp {
             18
         };
 
-        ui.scope(|ui| {
-            quiet_combo_style(ui);
-
+        quiet_combo(ui, provider_w, |ui| {
             let label = composer_provider_label(active_provider);
             let resp = ComboBox::from_id_salt("provider_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(provider_w)
+                .width(0.0)
                 .truncate()
                 .height(300.0)
                 .show_ui(ui, |ui| {
+                    ui.set_min_width(COMBO_POPUP_MIN_W);
                     // Only while the popup is open: this clones the secrets blob and probes a
                     // legacy file, far too much work for every frame.
                     let oauth = crate::oauth::load_oauth_store();
@@ -611,17 +631,16 @@ impl OxiApp {
         };
 
         let mut selected_model: Option<String> = None;
-        ui.scope(|ui| {
-            quiet_combo_style(ui);
-
+        quiet_combo(ui, model_w, |ui| {
             let label = short_model_label(&current, model_chars);
             let resp = ComboBox::from_id_salt("active_model_combo")
                 .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
                 .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(model_w)
+                .width(0.0)
                 .truncate()
                 .height(300.0)
                 .show_ui(ui, |ui| {
+                    ui.set_min_width(COMBO_POPUP_MIN_W);
                     for m in &items {
                         // Full id in the popup so the user can tell near-duplicates apart;
                         // the closed button keeps the short parsed form.
@@ -666,8 +685,7 @@ impl OxiApp {
                 .model_id,
         );
         let mut picked = None;
-        ui.scope(|ui| {
-            quiet_combo_style(ui);
+        quiet_combo(ui, width, |ui| {
             let resp = ComboBox::from_id_salt("router_strategy_combo")
                 .selected_text(
                     RichText::new(current.label())
@@ -675,9 +693,10 @@ impl OxiApp {
                         .color(c_text_muted()),
                 )
                 .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(width)
+                .width(0.0)
                 .truncate()
                 .show_ui(ui, |ui| {
+                    ui.set_min_width(COMBO_POPUP_MIN_W);
                     for strategy in RouterStrategy::ALL {
                         if ui
                             .selectable_label(strategy == current, strategy.label())
@@ -770,16 +789,15 @@ impl OxiApp {
             .map(|(_, label)| *label)
             .unwrap_or("Auto");
         let mut changed = None;
-        ui.scope(|ui| {
-            quiet_combo_style(ui);
-            // Fixed short label + width so this doesn't grow/shrink with "Thinking: …"
-            // or when switching between Auto / Medium / XHigh.
+        // Short labels so this doesn't grow with "Thinking: …"; capped at EFFORT_W.
+        quiet_combo(ui, EFFORT_W, |ui| {
             ComboBox::from_id_salt("active_effort_combo")
                 .selected_text(RichText::new(selected).size(FS_SMALL).color(c_text_muted()))
                 .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(EFFORT_W)
+                .width(0.0)
                 .truncate()
                 .show_ui(ui, |ui| {
+                    ui.set_min_width(COMBO_POPUP_MIN_W);
                     for (value, label) in values {
                         if ui.selectable_label(current == *value, *label).clicked() {
                             changed = Some((*value).to_string());

@@ -168,27 +168,46 @@ impl OxiApp {
 
 /// Two-column reference of the app's keyboard shortcuts (see `handle_global_shortcuts`).
 fn render_shortcuts(ui: &mut Ui) {
-    let cmd = if cfg!(target_os = "macos") {
-        "⌘"
+    let mac = cfg!(target_os = "macos");
+    // macOS spells chords with modifier glyphs (⌘⇧B), elsewhere with words (Ctrl+Shift+B),
+    // matching the hints elsewhere in the app.
+    let (cmd, shift, alt) = if mac {
+        ("⌘", "⇧", "⌥")
     } else {
-        "Ctrl+"
+        ("Ctrl+", "Shift+", "Alt+")
     };
-    let shortcuts: [(String, &str); 15] = [
+    let replace = if mac {
+        format!("{cmd}{alt}F")
+    } else {
+        format!("{cmd}H")
+    };
+    let goto_line = if mac {
+        "⌃G".to_owned()
+    } else {
+        format!("{cmd}P :")
+    };
+    let shortcuts: [(String, &str); 21] = [
         (format!("{cmd}N"), "New chat"),
         (format!("{cmd}."), "Stop the running reply"),
         ("Enter".into(), "Send message"),
-        ("Shift+Enter".into(), "New line in the message"),
+        (format!("{shift}Enter"), "New line in the message"),
         ("↑ / ↓".into(), "Previous / next sent message"),
         ("Hold Space".into(), "Dictate (when voice is on)"),
         (format!("{cmd}B"), "Show or hide chats"),
         (format!("{cmd}E"), "Show or hide the file explorer"),
-        (format!("{cmd}Shift+B"), "Show or hide source control"),
+        (format!("{cmd}{shift}B"), "Show or hide source control"),
         (format!("{cmd}`"), "Show or hide the terminal"),
         (format!("{cmd}P"), "Open a file in the workspace"),
-        (format!("{cmd}Shift+N"), "Open global scratchpad"),
+        (format!("{cmd}R"), "Go to symbol in the file"),
+        (format!("{cmd}{shift}R"), "Go to symbol in the project"),
+        (goto_line, "Go to line"),
+        ("F12".into(), "Go to definition"),
+        (format!("{cmd}{shift}N"), "Open global scratchpad"),
         (format!("{cmd}S"), "Save the open file"),
-        (format!("{cmd}F / {cmd}H"), "Find / find and replace"),
-        ("F12".into(), "Go to definition (Rust)"),
+        (format!("{cmd}F / {replace}"), "Find / find and replace"),
+        (format!("{cmd}G / {cmd}{shift}G"), "Next / previous match"),
+        (format!("{cmd}/"), "Toggle line comment"),
+        (format!("{cmd}{shift}D"), "Duplicate line or selection"),
     ];
     egui::Grid::new("about_shortcuts")
         .num_columns(2)
