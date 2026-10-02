@@ -48,6 +48,7 @@ impl OxiApp {
     /// refreshes. Called from `select_workspace` / new-workspace flows.
     pub(crate) fn refresh_git_cwd(&mut self) {
         self.conv.git_last_auto_refresh = None;
+        self.conv.git_compare = Default::default();
         if self.conv.git_rx.is_none() {
             return;
         }
@@ -96,6 +97,7 @@ impl OxiApp {
     }
 
     pub(crate) fn drain_git(&mut self, ctx: &egui::Context) {
+        self.drain_git_compare();
         let Some(rx) = self.conv.git_rx.as_ref() else {
             return;
         };

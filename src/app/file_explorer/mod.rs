@@ -21,6 +21,7 @@ mod line_layout;
 mod media_view;
 mod minimap;
 mod navigation_diff;
+mod quick_diff;
 mod safety;
 mod support;
 mod syntax_window;
@@ -37,6 +38,7 @@ pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
 pub(crate) use explorer_tree::{ExplorerCache, git_status_color};
 pub(crate) use layout_cache::EditorLayoutCache;
 pub(crate) use media_view::MediaKind;
+pub(crate) use quick_diff::QuickDiff;
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {

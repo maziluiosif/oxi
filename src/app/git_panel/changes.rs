@@ -131,12 +131,19 @@ impl OxiApp {
                 (GitTab::Changes, "Changes"),
                 (GitTab::Branches, "Branches"),
                 (GitTab::History, "History"),
+                (GitTab::Compare, "Compare"),
             ] {
                 let selected = self.conv.git_tab == tab;
                 let n = match tab {
                     GitTab::Changes => self.conv.git.staged.len() + self.conv.git.unstaged.len(),
                     GitTab::Branches => self.conv.git.branches.len(),
                     GitTab::History => self.conv.git.log.len(),
+                    GitTab::Compare => self
+                        .conv
+                        .git_compare
+                        .data
+                        .as_ref()
+                        .map_or(0, |data| data.commits.len()),
                 };
                 let label = if n > 0 {
                     format!("{label} {n}")
@@ -502,16 +509,13 @@ impl OxiApp {
     }
 
     /// Open a changed file in the editor at its first change, with git changes highlighted.
-    fn open_changed_file(&mut self, relative: &str) {
+    pub(crate) fn open_changed_file(&mut self, relative: &str) {
         let path = std::path::PathBuf::from(&self.active_workspace().root_path).join(relative);
         if !path.is_file() {
             return;
         }
         let first_changed_line = self
-            .conv
-            .git
-            .line_changes
-            .get(relative)
+            .git_gutter_line_changes(relative)
             .and_then(|changes| changes.iter().map(|change| change.line).min());
         self.close_editor_git_diff();
         self.apply_diff_action(crate::ui::diff_view::DiffAction::OpenFile {

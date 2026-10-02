@@ -223,6 +223,7 @@ impl OxiApp {
                 git: crate::git::GitState::default(),
                 git_commit_message: String::new(),
                 git_new_branch: String::new(),
+                git_compare: Default::default(),
                 confirm_prompt: None,
                 commit_gen_pending: false,
                 commit_gen_rx: None,

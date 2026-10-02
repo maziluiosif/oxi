@@ -2,13 +2,16 @@
 //!
 //! Split by responsibility: [`commit_gen`] (git worker channel plumbing + the AI
 //! commit-message generator), [`changes`] (header, tabs, the Changes tab, and the diff
-//! viewer), and [`refs`] (branches + history tabs). This file keeps the shared `GitTab`
-//! type, panel width bounds, and the top-level [`OxiApp::render_git_panel`] orchestrator
-//! that dispatches into the three tabs.
+//! viewer), [`refs`] (branches + history tabs) and [`compare`] (branch comparison). This
+//! file keeps the shared `GitTab` type, panel width bounds, and the top-level
+//! [`OxiApp::render_git_panel`] orchestrator that dispatches into the tabs.
 
 mod changes;
 mod commit_gen;
+mod compare;
 mod refs;
+
+pub use compare::CompareView;
 
 use eframe::egui::{self, Margin, RichText, Ui};
 
@@ -23,6 +26,8 @@ pub enum GitTab {
     Changes,
     Branches,
     History,
+    /// The current branch against a base branch, like a pull request.
+    Compare,
 }
 
 pub const GIT_W_MIN: f32 = 240.0;
@@ -90,6 +95,7 @@ impl OxiApp {
                     GitTab::Changes => self.render_git_changes(ui),
                     GitTab::Branches => self.render_git_branches(ui),
                     GitTab::History => self.render_git_history(ui),
+                    GitTab::Compare => self.render_git_compare(ui),
                 }
             });
         ui.expand_to_include_rect(ui.max_rect());

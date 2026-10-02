@@ -86,6 +86,10 @@ struct DiffFile {
     side_text: [String; 2],
     side_job: [Option<LayoutJob>; 2],
     max_chars: usize,
+    /// Item ranges of each contiguous run of changed lines.
+    blocks: Vec<Range<usize>>,
+    /// Index into `blocks` for each item.
+    block_of: Vec<Option<usize>>,
 }
 
 impl DiffFile {
@@ -114,6 +118,48 @@ impl DiffFile {
 
     fn kind(&self, item: usize) -> Option<Kind> {
         self.line(item).map(|line| line.kind)
+    }
+
+    fn block(&self, block: usize) -> DiffBlock {
+        let range = self.blocks[block].clone();
+        let lines = || range.clone().filter_map(|item| self.line(item));
+        let side_lines = |kind| {
+            lines()
+                .filter(|line| line.kind == kind)
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>()
+        };
+        // An empty side starts right after the line before the block (or right before the
+        // line after it), within the same hunk.
+        let neighbor = |number: fn(&Line) -> Option<usize>| {
+            lines().find_map(number).or_else(|| {
+                self.items[..range.start]
+                    .iter()
+                    .rev()
+                    .map_while(|item| match item {
+                        Item::Line(line) => Some(line),
+                        Item::Gap { .. } => None,
+                    })
+                    .find_map(|line| number(line).map(|n| n + 1))
+                    .or_else(|| {
+                        self.items[range.end..]
+                            .iter()
+                            .map_while(|item| match item {
+                                Item::Line(line) => Some(line),
+                                Item::Gap { .. } => None,
+                            })
+                            .find_map(number)
+                    })
+                    .or(Some(1))
+            })
+        };
+        DiffBlock {
+            path: self.path().to_owned(),
+            old_start: neighbor(|line| line.old_no).unwrap_or(1),
+            old_lines: side_lines(Kind::Removed),
+            new_start: neighbor(|line| line.new_no).unwrap_or(1),
+            new_lines: side_lines(Kind::Added),
+        }
     }
 }
 
@@ -179,6 +225,43 @@ struct RowLayout {
 pub enum DiffAction {
     /// Open the file (patch path, e.g. `src/main.rs`) in the editor, optionally at a 1-based line.
     OpenFile { path: String, line: Option<usize> },
+    /// Apply `action` to one block of changed lines.
+    Block {
+        action: BlockAction,
+        block: DiffBlock,
+    },
+}
+
+/// Per-block buttons the host supports for the diff it shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockAction {
+    /// Put the old lines back in place of the new ones.
+    Revert,
+    /// Write the new lines into the old side (the index).
+    Stage,
+    /// Put the old lines back in the new side (the index).
+    Unstage,
+}
+
+impl BlockAction {
+    fn label(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Revert => (ICON_UNDO, "Revert", "Revert this change"),
+            Self::Stage => (ICON_PLUS, "Stage", "Stage this change"),
+            Self::Unstage => (ICON_CLOSE, "Unstage", "Unstage this change"),
+        }
+    }
+}
+
+/// One block of changed lines: both sides' lines and where they start (1-based; where they
+/// would be inserted when a side is empty).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffBlock {
+    pub path: String,
+    pub old_start: usize,
+    pub old_lines: Vec<String>,
+    pub new_start: usize,
+    pub new_lines: Vec<String>,
 }
 
 /// A parsed diff plus its view state (layout mode, folds, scroll), kept across frames.
@@ -280,6 +363,7 @@ impl DiffView {
         ui: &mut Ui,
         source: &str,
         can_open: &dyn Fn(&str) -> bool,
+        block_actions: &[BlockAction],
     ) -> Option<DiffAction> {
         let mut action = None;
         let full = ui.available_rect_before_wrap();
@@ -364,7 +448,8 @@ impl DiffView {
         let output = scroll.show_viewport(&mut content_ui, |ui, viewport| {
             ui.set_min_size(vec2(content.width(), self.layout.total));
             let origin = ui.max_rect().min;
-            if let Some(a) = self.paint_rows(ui, origin, viewport, char_w, can_open) {
+            if let Some(a) = self.paint_rows(ui, origin, viewport, char_w, can_open, block_actions)
+            {
                 action = Some(a);
             }
         });
@@ -556,6 +641,7 @@ impl DiffView {
         viewport: Rect,
         char_w: f32,
         can_open: &dyn Fn(&str) -> bool,
+        block_actions: &[BlockAction],
     ) -> Option<DiffAction> {
         let mut action = None;
         let width = ui.max_rect().width();
@@ -748,6 +834,11 @@ impl DiffView {
         for label in right_labels {
             label.add(ui, self.scroll_x);
         }
+        if !block_actions.is_empty()
+            && let Some(a) = self.block_buttons(ui, &visible, block_actions)
+        {
+            action = Some(a);
+        }
 
         // Sticky header: the file being read keeps its name visible while scrolled into it.
         if let Some(&(_, row, rect)) = visible.first()
@@ -762,6 +853,104 @@ impl DiffView {
                 self.collapsed_files.insert(file);
                 self.pending_scroll = Some(self.layout.ys[header]);
                 ui.ctx().request_repaint();
+            }
+        }
+        action
+    }
+
+    /// The changed-lines block a row shows, if any.
+    fn row_block(&self, row: Row) -> Option<(usize, usize)> {
+        let (file, items) = match row {
+            Row::Split { file, left, right } => (file, [left, right]),
+            Row::Inline { file, item } => (file, [Some(item), None]),
+            _ => return None,
+        };
+        let f = &self.model.files[file];
+        items
+            .into_iter()
+            .flatten()
+            .find_map(|item| f.block_of.get(item).copied().flatten())
+            .map(|block| (file, block))
+    }
+
+    /// Buttons for the block under the pointer, over the top right of its first visible row.
+    fn block_buttons(
+        &self,
+        ui: &mut Ui,
+        visible: &[(usize, Row, Rect)],
+        block_actions: &[BlockAction],
+    ) -> Option<DiffAction> {
+        let pointer = ui.input(|i| i.pointer.hover_pos())?;
+        if !ui.clip_rect().contains(pointer) {
+            return None;
+        }
+        let hovered = visible
+            .iter()
+            .find(|(_, _, rect)| rect.contains(pointer))
+            .and_then(|&(_, row, _)| self.row_block(row))?;
+        let (file, block) = hovered;
+        if self.model.files[file].truncated {
+            return None;
+        }
+        let &(_, _, first) = visible
+            .iter()
+            .find(|&&(_, row, _)| self.row_block(row) == Some(hovered))?;
+        // Keep the buttons inside the viewport when the block starts above it.
+        let top = first.top().max(ui.clip_rect().top());
+        let mut right = first.right() - 8.0;
+        let mut action = None;
+        for &block_action in block_actions.iter().rev() {
+            let (icon, label, hover) = block_action.label();
+            let text = format!("{icon} {label}");
+            let mut job = LayoutJob::default();
+            job.append(
+                icon,
+                0.0,
+                TextFormat::simple(FontId::new(FS_TINY, icon_font()), c_text()),
+            );
+            job.append(
+                label,
+                4.0,
+                TextFormat::simple(FontId::proportional(FS_TINY), c_text()),
+            );
+            let galley = ui.painter().layout_job(job);
+            let rect = Rect::from_min_size(
+                pos2(right - galley.size().x - 12.0, top + 1.0),
+                vec2(galley.size().x + 12.0, line_height() - 2.0),
+            );
+            right = rect.left() - 4.0;
+            let response = ui
+                .interact(
+                    rect,
+                    ui.id().with(("diff_block", file, block, text)),
+                    Sense::click(),
+                )
+                .on_hover_text(hover);
+            let painter = ui.painter();
+            painter.rect(
+                rect,
+                egui::CornerRadius::same(4),
+                if response.hovered() {
+                    c_row_hover()
+                } else {
+                    c_bg_elevated()
+                },
+                Stroke::new(1.0, c_border()),
+                egui::StrokeKind::Inside,
+            );
+            painter.galley(
+                pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0),
+                galley,
+                c_text(),
+            );
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if response.clicked() {
+                action = Some(DiffAction::Block {
+                    action: block_action,
+                    block: self.model.files[file].block(block),
+                });
             }
         }
         action
@@ -1592,6 +1781,20 @@ fn hunk_header(line: &str) -> Option<(usize, usize, usize, usize, &str)> {
 /// Pair changed lines for word highlights, then build each side's highlight text.
 fn finish_file(file: &mut DiffFile) {
     let n = file.items.len();
+    file.block_of = vec![None; n];
+    let mut i = 0;
+    while i < n {
+        if file.kind(i).is_none_or(|kind| kind == Kind::Context) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while file.kind(i).is_some_and(|kind| kind != Kind::Context) {
+            file.block_of[i] = Some(file.blocks.len());
+            i += 1;
+        }
+        file.blocks.push(start..i);
+    }
     let mut i = 0;
     while i < n {
         if file.kind(i) != Some(Kind::Removed) {
@@ -1731,6 +1934,27 @@ fn changed_ranges(text: &str, tokens: &[Range<usize>], keep: &[bool]) -> Vec<Ran
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocks_know_both_sides_and_where_they_start() {
+        let model = parse(
+            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,6 +1,7 @@\n a\n-b\n+B\n+B2\n c\n-d\n e\n f\n+g\n",
+        );
+        let file = &model.files[0];
+        assert_eq!(file.blocks.len(), 3);
+        let modified = file.block(0);
+        assert_eq!((modified.old_start, modified.new_start), (2, 2));
+        assert_eq!(modified.old_lines, ["b"]);
+        assert_eq!(modified.new_lines, ["B", "B2"]);
+        // A deletion has no new lines: it would be reinserted after new line 4 ("c").
+        let deleted = file.block(1);
+        assert_eq!((deleted.old_start, deleted.new_start), (4, 5));
+        assert_eq!(deleted.old_lines, ["d"]);
+        assert!(deleted.new_lines.is_empty());
+        let appended = file.block(2);
+        assert_eq!((appended.old_start, appended.new_start), (7, 7));
+        assert_eq!(appended.new_lines, ["g"]);
+    }
 
     fn lines(file: &DiffFile) -> Vec<(Kind, Option<usize>, Option<usize>, &str)> {
         file.items

@@ -123,16 +123,15 @@ impl OxiApp {
             .as_ref()
             .is_some_and(|path| path == &self.conv.editor.documents[index].path);
         let disk_git_line_changes = self
-            .conv
-            .git
-            .line_changes
-            .get(&relative_path)
+            .git_gutter_line_changes(&relative_path)
             .cloned()
             .unwrap_or_default();
         // Git itself only sees the saved file. When editing changes the number of lines,
         // project those disk-based markers onto the in-memory buffer so the gutter follows
         // inserted/deleted newlines without doing Git work on every keystroke.
-        let git_line_changes = if self.conv.editor.documents[index].is_dirty() {
+        let git_line_changes = if let Some(markers) = self.quick_diff_markers(index) {
+            markers
+        } else if self.conv.editor.documents[index].is_dirty() {
             // Splits both texts into lines: once per edit (the cache is reset with the text),
             // not on every frame.
             let document = &mut self.conv.editor.documents[index];
@@ -197,6 +196,14 @@ impl OxiApp {
                             );
                             let document = &mut self.conv.editor.documents[index];
                             let editor_id = ui.make_persistent_id(("workspace_text_editor", index));
+                            if self.conv.editor.text_edit_ids.get(&document.path)
+                                != Some(&editor_id)
+                            {
+                                self.conv
+                                    .editor
+                                    .text_edit_ids
+                                    .insert(document.path.clone(), editor_id);
+                            }
                             // Sublime's editing commands (Cmd+/, Cmd+D, Cmd+L, ...) run before
                             // TextEdit so it never sees their keys.
                             let command = super::editor_commands::handle_editor_commands(
@@ -686,6 +693,7 @@ impl OxiApp {
                                     let color = match change.kind {
                                         crate::git::GitLineKind::Added => c_diff_add_bg(),
                                         crate::git::GitLineKind::Modified => c_warning_bg(),
+                                        crate::git::GitLineKind::Deleted => continue,
                                     };
                                     change_painter.rect_filled(highlight_rect, 0.0, color);
                                 }
@@ -880,6 +888,23 @@ impl OxiApp {
                     let color = match change.kind {
                         crate::git::GitLineKind::Added => c_diff_add_fg(),
                         crate::git::GitLineKind::Modified => c_warning_fg(),
+                        crate::git::GitLineKind::Deleted => {
+                            // Removed lines sit between rows: a wedge on this row's top edge.
+                            let top = y - line_height * 0.5;
+                            let x = gutter_rect.left();
+                            ui.painter().with_clip_rect(gutter_clip).add(
+                                egui::Shape::convex_polygon(
+                                    vec![
+                                        egui::pos2(x, top - 4.0),
+                                        egui::pos2(x + 5.0, top),
+                                        egui::pos2(x, top + 4.0),
+                                    ],
+                                    c_diff_del_fg(),
+                                    egui::Stroke::NONE,
+                                ),
+                            );
+                            egui::Color32::TRANSPARENT
+                        }
                     };
                     ui.painter().with_clip_rect(gutter_clip).rect_filled(
                         egui::Rect::from_center_size(
@@ -902,6 +927,14 @@ impl OxiApp {
                     },
                 );
             }
+
+            self.quick_diff_ui(
+                ui,
+                index,
+                gutter_rect,
+                &scroll_output.inner.0,
+                &git_line_changes,
+            );
 
             // ScrollArea deliberately ignores the wheel while TextEdit owns a selection drag.
             // Restore that expected editor behavior and also auto-scroll when the pointer approaches
@@ -1003,7 +1036,7 @@ impl OxiApp {
 
 /// Invalidate every per-revision cache after the text changed. Returns the old minimap, which
 /// keeps being shown until the new one is laid out.
-fn mark_document_edited(
+pub(super) fn mark_document_edited(
     document: &mut crate::app::state::EditorDocument,
 ) -> Option<super::MinimapGeometry> {
     document.content_revision = document.content_revision.wrapping_add(1);

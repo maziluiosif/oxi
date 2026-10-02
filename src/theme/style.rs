@@ -83,6 +83,8 @@ pub const ICON_TERMINAL: &str = "\u{f120}";
 pub const ICON_GIT: &str = "\u{ea68}";
 /// Rotate / refresh (`nf-fa-refresh`).
 pub const ICON_REFRESH: &str = "\u{f021}";
+/// Font Awesome `undo`.
+pub const ICON_UNDO: &str = "\u{f0e2}";
 /// Arrow pointing up — send message button (`nf-fa-arrow-up`).
 pub const ICON_SEND: &str = "\u{f062}";
 /// Filled stop square — stop streaming (`nf-fa-stop`).

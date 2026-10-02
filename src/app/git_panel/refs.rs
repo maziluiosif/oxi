@@ -134,7 +134,7 @@ impl OxiApp {
             });
     }
 
-    fn render_commit_row(&mut self, ui: &mut Ui, commit: &crate::git::GitCommit) {
+    pub(super) fn render_commit_row(&mut self, ui: &mut Ui, commit: &crate::git::GitCommit) {
         let full_w = ui.available_width();
         let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 40.0), Sense::click());
         let hovered = response.hovered();

@@ -622,6 +622,19 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.app().conv.editor.diff_tab_active = true;
         rec.wait_for_git_diff("stats.py");
         rec.still("diff-split");
+        // Hovering a change shows its block actions (Stage / Revert).
+        let scale = rec.harness.ctx.pixels_per_point();
+        let line = rec
+            .harness
+            .query_all_by_label_contains("mid = len(ordered)")
+            .map(|node| node.rect())
+            .next();
+        if let Some(line) = line {
+            rec.harness
+                .hover_at((line.center().to_vec2() / scale).to_pos2());
+            rec.harness.run_steps(4);
+            rec.still("diff-block-actions");
+        }
         rec.profile("diff split idle", false);
         rec.app().conv.git_open = false;
         rec.harness.run_steps(4);
@@ -651,6 +664,79 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             rec.app().conv.git_tab = crate::app::git_panel::GitTab::History;
             rec.harness.run_steps(4);
             rec.still("git-history-selected");
+            rec.app().conv.git_tab = crate::app::git_panel::GitTab::Changes;
+        }
+        // Branch compare: a base branch one commit back, plus the uncommitted edit.
+        if let Ok(repo) = git2::Repository::discover(&project)
+            && let Ok(head) = repo.head().and_then(|head| head.peel_to_commit())
+        {
+            let base = head.parent(0).unwrap_or_else(|_| head.clone());
+            let _ = repo.branch("base-demo", &base, true);
+            rec.app().conv.git_tab = crate::app::git_panel::GitTab::Compare;
+            for _ in 0..200 {
+                rec.harness.run_steps(1);
+                if rec.app().conv.git_compare.data.is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            rec.harness.run_steps(4);
+            rec.still("git-compare");
+            let target = rec.app().conv.git_compare.data.as_ref().and_then(|data| {
+                let file = data.files.iter().find(|f| f.status != 'D')?;
+                Some((data.base.clone(), file.path.clone()))
+            });
+            if let Some((base, path)) = target {
+                rec.app().request(crate::git::GitOp::ShowCompareDiff {
+                    base: base.clone(),
+                    path: path.clone(),
+                    old_path: None,
+                });
+                rec.app().conv.diff_view_open = true;
+                rec.app().conv.editor.diff_tab_active = true;
+                rec.wait_for_git_diff(&crate::git::compare_diff_title(&base, &path));
+                rec.still("diff-compare");
+                rec.app().open_changed_file(&path);
+                rec.harness.run_steps(4);
+                rec.still("editor-compare-gutter");
+                // Clicking a gutter marker peeks at the lines the change replaced.
+                if let Some(index) = rec.app().conv.editor.active {
+                    rec.app().open_quick_diff(index, 13);
+                }
+                rec.harness.run_steps(4);
+                rec.still("editor-quick-diff");
+                // Revert from the peek: one undoable buffer edit, and the marker goes away.
+                let ctx = rec.harness.ctx.clone();
+                let app = rec.app();
+                if let (Some(index), Some(edit)) = (
+                    app.conv.editor.active,
+                    app.conv
+                        .editor
+                        .quick_diff
+                        .as_ref()
+                        .map(|q| q.revert_edit(0)),
+                ) {
+                    app.edit_document_block(&ctx, index, &edit).unwrap();
+                    let document = &app.conv.editor.documents[index];
+                    let reverted = document
+                        .content
+                        .contains("return ordered[len(ordered) // 2]")
+                        && document.is_dirty();
+                    let markers = app.quick_diff_markers(index).unwrap_or_default();
+                    println!(
+                        "CHECK quick diff revert: {reverted}, markers left {}",
+                        markers.len()
+                    );
+                    assert!(reverted && markers.is_empty(), "quick diff revert failed");
+                    let document = &mut app.conv.editor.documents[index];
+                    document.content = document.saved_content.clone();
+                    document.dirty = false;
+                    document.content_revision += 1;
+                }
+                if let Some(quick) = rec.app().conv.editor.quick_diff.as_mut() {
+                    quick.close_peek();
+                }
+            }
             rec.app().conv.git_tab = crate::app::git_panel::GitTab::Changes;
         }
         rec.app().close_editor_git_diff();

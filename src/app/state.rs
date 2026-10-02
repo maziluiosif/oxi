@@ -127,6 +127,11 @@ pub struct EditorState {
     /// Document opened explicitly from GitPanel. Only this document receives full-row Git
     /// highlighting; normal editor/Explorer/file-picker opens retain gutter-only markers.
     pub git_full_highlight_path: Option<PathBuf>,
+    /// The `TextEdit` id each open document was last drawn with, so edits made from outside
+    /// the editor (diff block reverts) join its undo history.
+    pub text_edit_ids: std::collections::HashMap<PathBuf, eframe::egui::Id>,
+    /// The gutter's change peek and live markers (see `file_explorer::quick_diff`).
+    pub quick_diff: Option<super::file_explorer::QuickDiff>,
     /// Select and reveal this byte range after opening a definition target.
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
@@ -600,6 +605,8 @@ pub struct ConversationState {
     pub git: crate::git::GitState,
     pub git_commit_message: String,
     pub git_new_branch: String,
+    /// Branch comparison shown by the Compare tab (see [`crate::git::compare`]).
+    pub git_compare: crate::app::git_panel::CompareView,
     /// Destructive action awaiting confirmation in the shared modal (delete chat /
     /// workspace / model, git discard). At most one at a time, app-wide.
     pub confirm_prompt: Option<ConfirmAction>,

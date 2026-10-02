@@ -275,3 +275,95 @@ fn system_git_pushes_and_fetches_through_a_local_remote() {
     assert_eq!(remote_head, Some(head));
     assert_eq!(tracking, Some(head));
 }
+
+#[test]
+fn compare_lists_branch_commits_and_work_tree_changes_since_the_merge_base() {
+    let repo = TestRepo::new();
+    let base = current_branch(&repo.repo);
+    checkout_branch(&repo.repo, "feature", true).unwrap();
+    std::fs::write(repo.root.join("added.txt"), "one\ntwo\n").unwrap();
+    stage(&repo.repo, &["added.txt".into()]).unwrap();
+    commit(&repo.repo, "add file").unwrap();
+    // Uncommitted work counts too, so the compared files stay editable in place.
+    std::fs::write(repo.root.join("file.txt"), "changed\n").unwrap();
+
+    let result = compare(repo.cwd(), "");
+    assert_eq!(result.error, None);
+    assert_eq!(result.base, base);
+    assert_eq!(result.bases, vec![base.clone()]);
+    assert_eq!(result.commits.len(), 1);
+    assert_eq!(result.commits[0].message, "add file");
+    let files: Vec<_> = result
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.status, f.added, f.deleted))
+        .collect();
+    assert_eq!(files, [("added.txt", 'A', 2, 0), ("file.txt", 'M', 1, 1)]);
+    assert_eq!(result.line_changes["added.txt"].len(), 2);
+    assert_eq!(
+        result.line_changes["file.txt"][0].kind,
+        GitLineKind::Modified
+    );
+
+    let text = compare::compare_file_diff(&repo.repo, &base, "file.txt", None).unwrap();
+    assert!(text.contains("-original") && text.contains("+changed"));
+    let state = view_diff(
+        repo.cwd(),
+        GitOp::ShowCompareDiff {
+            base: base.clone(),
+            path: "added.txt".into(),
+            old_path: None,
+        },
+    );
+    assert_eq!(
+        state.diff.unwrap().0,
+        compare_diff_title(&base, "added.txt")
+    );
+    assert_eq!(state.current_diff_path.as_deref(), Some("added.txt"));
+}
+
+#[test]
+fn block_edits_stage_and_revert_single_changes() {
+    let repo = TestRepo::new();
+    std::fs::write(repo.root.join("file.txt"), "one\ntwo\nthree\n").unwrap();
+    stage(&repo.repo, &["file.txt".into()]).unwrap();
+    commit(&repo.repo, "three lines").unwrap();
+    std::fs::write(repo.root.join("file.txt"), "ONE\ntwo\nTHREE\n").unwrap();
+
+    // Stage only the first change.
+    hunk::apply_block(
+        repo.cwd(),
+        &BlockEdit {
+            path: "file.txt".into(),
+            target: BlockTarget::Index,
+            start: 1,
+            expected: vec!["one".into()],
+            replacement: vec!["ONE".into()],
+        },
+    )
+    .unwrap();
+    let staged = show_diff(&repo.repo, "file.txt", true);
+    assert!(staged.contains("+ONE") && !staged.contains("+THREE"));
+
+    // Revert the other one in the work tree.
+    hunk::apply_block(
+        repo.cwd(),
+        &BlockEdit {
+            path: "file.txt".into(),
+            target: BlockTarget::WorkTree,
+            start: 3,
+            expected: vec!["THREE".into()],
+            replacement: vec!["three".into()],
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("file.txt")).unwrap(),
+        "ONE\ntwo\nthree\n"
+    );
+    assert!(
+        show_diff(&repo.repo, "file.txt", false)
+            .lines()
+            .all(|l| !l.starts_with('+'))
+    );
+}
