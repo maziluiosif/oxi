@@ -14,6 +14,10 @@ impl TestRepo {
             rand::random::<u64>()
         ));
         let repo = Repository::init(&root).unwrap();
+        // `commit` needs an author; CI machines have no global Git identity.
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Oxi Test").unwrap();
+        config.set_str("user.email", "oxi@example.com").unwrap();
         std::fs::write(root.join("file.txt"), "original\n").unwrap();
         let mut index = repo.index().unwrap();
         index.add_path(Path::new("file.txt")).unwrap();
