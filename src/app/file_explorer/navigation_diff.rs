@@ -2,55 +2,12 @@
 
 use std::path::PathBuf;
 
-use eframe::egui::{self, ScrollArea, Ui};
+use eframe::egui::{self, Ui};
 
 use super::super::OxiApp;
-use super::{editor_logic::char_index_to_byte, support::language_for_path};
+use super::editor_logic::char_index_to_byte;
 
 impl OxiApp {
-    pub(super) fn go_to_rust_definition(&mut self, cursor_byte: usize) {
-        let Some(document) = self.conv.editor.active_document() else {
-            return;
-        };
-        if language_for_path(&document.path) != "rs" {
-            return;
-        }
-        let root = PathBuf::from(&self.active_workspace().root_path);
-        let current_path = document.path.clone();
-        let current_source = document.content.clone();
-        let open_buffers = self
-            .conv
-            .editor
-            .documents
-            .iter()
-            .map(|document| (document.path.clone(), document.content.clone()))
-            .collect::<Vec<_>>();
-        match crate::rust_goto::find_definition(
-            &root,
-            &current_path,
-            &current_source,
-            cursor_byte,
-            &open_buffers,
-        ) {
-            Some(location) => {
-                self.conv
-                    .editor
-                    .navigation_back
-                    .push((current_path, cursor_byte..cursor_byte));
-                self.conv.editor.navigation_forward.clear();
-                self.open_editor_file(location.path.clone());
-                self.conv.editor.navigation_target = Some((location.path, location.byte_range));
-                // Jumping to a definition opens/reuses a tab without focus: hand focus back
-                // so the caret is live at the target selection, ready to keep editing.
-                self.conv.editor.focus_editor_next_frame = true;
-                self.conv.editor.error = None;
-            }
-            None => {
-                self.conv.editor.error = Some("Rust definition not found.".into());
-            }
-        }
-    }
-
     pub(super) fn navigate_editor_history(&mut self, forward: bool) {
         let target = if forward {
             self.conv.editor.navigation_forward.pop()
@@ -94,55 +51,94 @@ impl OxiApp {
             self.close_editor_git_diff();
             return;
         }
-        let Some((title, diff_text)) = self.conv.git.diff.clone() else {
+        if let Some(action) = self.show_git_diff_view(ui) {
+            self.apply_diff_action(action);
+        }
+    }
+
+    /// Sync and draw the git diff view; shared by the editor tab and the in-chat viewer.
+    pub(crate) fn show_git_diff_view(
+        &mut self,
+        ui: &mut Ui,
+    ) -> Option<crate::ui::diff_view::DiffAction> {
+        let (title, diff_text) = self.conv.git.diff.as_ref()?;
+        let source = if title.starts_with("Commit ") {
+            ""
+        } else if title.starts_with("Staged: ") {
+            "Staged"
+        } else {
+            "Working Tree"
+        };
+        crate::ui::diff_view::DiffView::sync(&mut self.conv.git_diff_view, diff_text);
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        let can_open = |path: &str| root.join(path).is_file();
+        self.conv
+            .git_diff_view
+            .as_mut()?
+            .show(ui, source, &can_open)
+    }
+
+    pub(crate) fn apply_diff_action(&mut self, action: crate::ui::diff_view::DiffAction) {
+        let crate::ui::diff_view::DiffAction::OpenFile { path, line } = action;
+        let path = PathBuf::from(&self.active_workspace().root_path).join(path);
+        self.conv.editor.show_diff = false;
+        self.open_editor_file_only(path);
+        let Some(document) = self.conv.editor.active_document() else {
             return;
         };
-        // No internal header: the tab strip already labels/closes this diff, so the colored,
-        // read-only body flows straight under the tabs and reads as part of the editor.
-        ui.add_space(4.0);
-
-        let wrap_width = ui.available_width().max(200.0);
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(&title, &mut hasher);
-        std::hash::Hash::hash(&diff_text, &mut hasher);
-        let key = (std::hash::Hasher::finish(&hasher), wrap_width.to_bits());
-        let cached = self
-            .conv
-            .diff_job_cache
-            .as_ref()
-            .is_some_and(|(hash, width, _)| (*hash, *width) == key);
-        if !cached {
-            let job = crate::ui::diff::diff_layout_job(&diff_text, wrap_width);
-            self.conv.diff_job_cache = Some((key.0, key.1, job));
+        let document_path = document.path.clone();
+        if let Some(line) = line {
+            let byte = line_start_byte(&document.content, line.saturating_sub(1));
+            self.conv.editor.navigation_target = Some((document_path.clone(), byte..byte));
         }
-        ScrollArea::vertical()
-            .id_salt("editor_git_diff_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if let Some((_, _, job)) = &self.conv.diff_job_cache {
-                    ui.add(egui::Label::new(job.clone()).selectable(true));
-                }
-            });
+        self.conv.editor.git_full_highlight_path = Some(document_path);
+        self.conv.editor.focus_editor_next_frame = true;
     }
 
     pub(super) fn render_editor_diff(&mut self, ui: &mut Ui) {
         let Some(document) = self.conv.editor.active_document() else {
             return;
         };
-        let name = document.path.display().to_string();
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        let name = document
+            .path
+            .strip_prefix(&root)
+            .unwrap_or(&document.path)
+            .to_string_lossy()
+            .replace('\\', "/");
         let diff = crate::agent::tools::make_unified_diff(
             &name,
             &document.saved_content,
             &document.content,
         );
-        ScrollArea::both().show(ui, |ui| {
-            if diff.is_empty() {
-                ui.label("No unsaved changes.");
-            } else {
-                let job = crate::ui::diff::diff_layout_job(&diff, f32::INFINITY);
-                ui.add(egui::Label::new(job).selectable(true));
+        if diff.is_empty() {
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new("No unsaved changes.").color(crate::theme::c_text_muted()),
+                );
+                if ui.button("Back to editor").clicked() {
+                    self.conv.editor.show_diff = false;
+                }
+            });
+            return;
+        }
+        crate::ui::diff_view::DiffView::sync(&mut self.conv.unsaved_diff_view, &diff);
+        let Some(view) = self.conv.unsaved_diff_view.as_mut() else {
+            return;
+        };
+        if let Some(crate::ui::diff_view::DiffAction::OpenFile { line, .. }) =
+            view.show(ui, "Unsaved changes", &|_| true)
+        {
+            // The "file" is the open buffer itself: return to it at the clicked line.
+            self.conv.editor.show_diff = false;
+            if let (Some(line), Some(document)) = (line, self.conv.editor.active_document()) {
+                let byte = line_start_byte(&document.content, line.saturating_sub(1));
+                self.conv.editor.navigation_target = Some((document.path.clone(), byte..byte));
             }
-        });
+            self.conv.editor.focus_editor_next_frame = true;
+        }
     }
 
     pub(super) fn reveal_active_file(&mut self) {
@@ -168,4 +164,9 @@ impl OxiApp {
         self.conv.sidebar_mode = super::super::state::SidebarMode::Explorer;
         self.conv.sidebar_open = true;
     }
+}
+
+/// Byte offset where 0-based `line` starts (end of text past the last line).
+fn line_start_byte(content: &str, line: usize) -> usize {
+    content.split_inclusive('\n').take(line).map(str::len).sum()
 }

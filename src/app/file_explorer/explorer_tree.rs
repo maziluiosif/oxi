@@ -317,66 +317,32 @@ impl OxiApp {
             let indent = depth as f32 * 14.0;
             if entry.is_dir {
                 let expanded = self.conv.explorer_expanded.contains(&path);
-                let git_status = self.git_status_for_directory(root, &path);
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 22.0),
                     egui::Sense::click(),
                 );
-                if !ui.is_rect_visible(rect) {
-                    // Scrolled out of view: keep the row's space, skip its layout. Consume the
-                    // auto id its label scope would have taken, so later rows keep their ids
-                    // (and an open context menu stays open) as rows scroll in and out.
-                    ui.skip_ahead_auto_ids(1);
-                    if expanded {
-                        self.render_explorer_directory(ui, root, &path, ignored, depth + 1);
-                    }
-                    continue;
+                if ui.is_rect_visible(rect) {
+                    let git_status = self.git_status_for_directory(root, &path);
+                    paint_explorer_row(ui, rect, response.hovered(), false);
+                    paint_explorer_entry(
+                        ui,
+                        rect,
+                        indent,
+                        Some(if expanded {
+                            ICON_ANGLE_DOWN
+                        } else {
+                            ICON_CHEVRON_RIGHT
+                        }),
+                        if expanded {
+                            ICON_FOLDER_OPEN
+                        } else {
+                            ICON_FOLDER
+                        },
+                        explorer_entry_color(c_text(), git_ignored),
+                        name,
+                        git_status,
+                    );
                 }
-                paint_explorer_row(ui, rect, response.hovered(), false);
-                ui.scope_builder(
-                    egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(4.0, 0.0))),
-                    |ui| {
-                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 3.0;
-                            ui.add_space(indent);
-                            let chevron = if expanded {
-                                ICON_ANGLE_DOWN
-                            } else {
-                                ICON_CHEVRON_RIGHT
-                            };
-                            let folder = if expanded {
-                                ICON_FOLDER_OPEN
-                            } else {
-                                ICON_FOLDER
-                            };
-                            ui.label(crate::ui::chrome::icon_glyph_rich(
-                                chevron,
-                                FS_TINY,
-                                c_text_faint(),
-                            ));
-                            ui.label(crate::ui::chrome::icon_label_job(
-                                folder,
-                                name,
-                                FS_SMALL,
-                                explorer_entry_color(c_text(), git_ignored),
-                            ));
-                            if let Some(status) = git_status {
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    // Keep clear of the floating scrollbar, which is
-                                    // painted over the row's right edge.
-                                    ui.add_space(10.0);
-                                    ui.label(
-                                        RichText::new(status)
-                                            .monospace()
-                                            .size(FS_TINY)
-                                            .strong()
-                                            .color(git_status_color(status)),
-                                    );
-                                });
-                            }
-                        });
-                    },
-                );
                 if response.clicked() {
                     if expanded {
                         self.conv.explorer_expanded.remove(&path);
@@ -404,49 +370,26 @@ impl OxiApp {
                     egui::vec2(ui.available_width(), 22.0),
                     egui::Sense::click(),
                 );
-                if !ui.is_rect_visible(rect) {
-                    ui.skip_ahead_auto_ids(1);
-                    continue;
+                if ui.is_rect_visible(rect) {
+                    let git_status = self.git_status_for_path(root, &path);
+                    paint_explorer_row(ui, rect, response.hovered(), selected);
+                    let (icon, color) = file_icon(&path);
+                    let color = if selected {
+                        crate::theme::blend_color(color, c_text_strong(), 0.28)
+                    } else {
+                        color
+                    };
+                    paint_explorer_entry(
+                        ui,
+                        rect,
+                        indent,
+                        None,
+                        icon,
+                        explorer_entry_color(color, git_ignored),
+                        name,
+                        git_status,
+                    );
                 }
-                let git_status = self.git_status_for_path(root, &path);
-                paint_explorer_row(ui, rect, response.hovered(), selected);
-                let (icon, color) = file_icon(&path);
-                ui.scope_builder(
-                    egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(4.0, 0.0))),
-                    |ui| {
-                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.x = 3.0;
-                            ui.add_space(indent + 14.0);
-                            ui.label(crate::ui::chrome::icon_label_job(
-                                icon,
-                                name,
-                                FS_SMALL,
-                                explorer_entry_color(
-                                    if selected {
-                                        crate::theme::blend_color(color, c_text_strong(), 0.28)
-                                    } else {
-                                        color
-                                    },
-                                    git_ignored,
-                                ),
-                            ));
-                            if let Some(status) = git_status {
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    // Keep clear of the floating scrollbar, which is
-                                    // painted over the row's right edge.
-                                    ui.add_space(10.0);
-                                    ui.label(
-                                        RichText::new(status)
-                                            .monospace()
-                                            .size(FS_TINY)
-                                            .strong()
-                                            .color(git_status_color(status)),
-                                    );
-                                });
-                            }
-                        });
-                    },
-                );
                 if self
                     .conv
                     .editor
@@ -457,7 +400,9 @@ impl OxiApp {
                     response.scroll_to_me(Some(Align::Center));
                     self.conv.editor.explorer_reveal_pending = None;
                 }
-                let response = response.on_hover_text(path.display().to_string());
+                let response = response.on_hover_ui(|ui| {
+                    ui.label(super::support::display_path(root, &path));
+                });
                 if response.clicked() {
                     self.open_editor_file(path.clone());
                     self.conv.editor.focus_editor_next_frame = true;
@@ -637,11 +582,79 @@ fn paint_explorer_row(ui: &Ui, rect: egui::Rect, hovered: bool, selected: bool) 
     }
 }
 
-fn git_status_color(status: char) -> egui::Color32 {
+/// Paint one tree row's chevron, icon, name and Git status letter straight into `rect`.
+///
+/// Rows are painted rather than laid out: a long file name in a child layout used to grow
+/// the parent's region, widening every row below it, so their highlights ran past the
+/// sidebar edge and their status letters were pushed out of view.
+#[allow(clippy::too_many_arguments)]
+fn paint_explorer_entry(
+    ui: &Ui,
+    rect: egui::Rect,
+    indent: f32,
+    chevron: Option<&str>,
+    icon: &str,
+    color: egui::Color32,
+    name: &str,
+    git_status: Option<char>,
+) {
+    // Chevron slot: files reserve it too, so their icons line up with sibling folders'.
+    const CHEVRON_W: f32 = 14.0;
+    // Keep the status letter clear of the floating scrollbar painted over the right edge.
+    const SCROLLBAR_GAP: f32 = 10.0;
+    let painter = ui.painter_at(rect);
+    let center_y = rect.center().y;
+    let mut x = rect.left() + 4.0 + indent;
+    if let Some(chevron) = chevron {
+        painter.text(
+            egui::pos2(x + CHEVRON_W * 0.5, center_y),
+            egui::Align2::CENTER_CENTER,
+            chevron,
+            egui::FontId::new(FS_TINY, crate::theme::icon_font()),
+            c_text_faint(),
+        );
+    }
+    x += CHEVRON_W + 2.0;
+    let icon_rect = painter.text(
+        egui::pos2(x, center_y),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        egui::FontId::new(FS_SMALL, crate::theme::icon_font()),
+        color,
+    );
+    x = icon_rect.right() + 5.0;
+
+    let mut name_right = rect.right() - 4.0;
+    if let Some(status) = git_status {
+        let status_rect = painter.text(
+            egui::pos2(rect.right() - SCROLLBAR_GAP - 4.0, center_y),
+            egui::Align2::RIGHT_CENTER,
+            status,
+            egui::FontId::monospace(FS_TINY),
+            git_status_color(status),
+        );
+        name_right = status_rect.left() - 6.0;
+    }
+
+    let mut job = egui::text::LayoutJob::single_section(
+        name.to_owned(),
+        egui::TextFormat::simple(egui::FontId::proportional(FS_SMALL), color),
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width((name_right - x).max(0.0));
+    let galley = painter.layout_job(job);
+    painter.galley(
+        egui::pos2(x, center_y - galley.size().y * 0.5),
+        galley,
+        color,
+    );
+}
+
+pub(crate) fn git_status_color(status: char) -> egui::Color32 {
     match status {
         '?' | 'A' => c_success(),
         'D' => c_danger(),
         'U' => c_error_fg(),
+        'R' | 'C' => c_accent(),
         _ => c_warning_fg(),
     }
 }

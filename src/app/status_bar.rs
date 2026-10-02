@@ -85,17 +85,17 @@ impl OxiApp {
                                 crate::app::state::SettingsExitAction::ToggleTerminal,
                             );
                         }
-                        let changes_on = self.conv.git_open && self.conv.git_tab == GitTab::Changes;
-                        if crate::ui::chrome::icon_button_plain(ui, ICON_GIT, 20.0, changes_on)
-                            .on_hover_text(if changes_on {
+                        let git_on = self.conv.git_open;
+                        if crate::ui::chrome::icon_button_plain(ui, ICON_GIT, 20.0, git_on)
+                            .on_hover_text(if git_on {
                                 "Hide git panel (Cmd/Ctrl+Shift+B)"
                             } else {
-                                "Open git changes (Cmd/Ctrl+Shift+B)"
+                                "Open git panel (Cmd/Ctrl+Shift+B)"
                             })
                             .clicked()
                         {
                             self.request_settings_exit(
-                                crate::app::state::SettingsExitAction::ToggleGitChanges,
+                                crate::app::state::SettingsExitAction::ToggleGitPanel,
                             );
                         }
 

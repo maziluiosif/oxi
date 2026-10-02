@@ -8,10 +8,12 @@ use crate::git::{GitOp, GitState};
 use super::super::OxiApp;
 
 impl OxiApp {
-    pub(crate) fn toggle_git_panel_tab(&mut self, tab: super::GitTab) {
+    /// Toggles the git panel. `None` toggles it on whatever tab it shows; `Some(tab)` switches
+    /// an open panel to `tab` and only hides it when `tab` is already showing.
+    pub(crate) fn toggle_git_panel_tab(&mut self, tab: Option<super::GitTab>) {
         self.close_settings_page();
 
-        if self.conv.git_open && self.conv.git_tab == tab {
+        if self.conv.git_open && tab.is_none_or(|tab| self.conv.git_tab == tab) {
             self.conv.git_open = false;
             self.conv.settings.git_open = false;
             self.focus_active_view_next_frame();
@@ -22,7 +24,9 @@ impl OxiApp {
             return;
         }
 
-        self.conv.git_tab = tab;
+        if let Some(tab) = tab {
+            self.conv.git_tab = tab;
+        }
         if !self.conv.git_open {
             self.conv.git_open = true;
             self.conv.settings.git_open = true;

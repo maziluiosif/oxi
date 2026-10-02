@@ -67,15 +67,6 @@ impl TokenUsage {
     pub fn total_input(&self) -> u64 {
         self.input_tokens + self.cache_read_input_tokens + self.cache_creation_input_tokens
     }
-
-    /// Fraction of the prompt served from cache, in percent (0 when unknown).
-    pub fn cache_hit_pct(&self) -> u64 {
-        let total = self.total_input();
-        if total == 0 {
-            return 0;
-        }
-        self.cache_read_input_tokens * 100 / total
-    }
 }
 
 #[derive(Debug)]

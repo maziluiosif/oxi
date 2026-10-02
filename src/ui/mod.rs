@@ -2,6 +2,7 @@
 
 pub mod chrome;
 pub mod diff;
+pub mod diff_view;
 pub mod image_viewer;
 pub mod messages;
 pub mod preview_expand;

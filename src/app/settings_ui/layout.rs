@@ -71,7 +71,14 @@ impl OxiApp {
             SettingsExitAction::ToggleSidebar => {
                 let chats_on = self.conv.sidebar_open
                     && self.conv.sidebar_mode == crate::app::state::SidebarMode::Chats;
-                self.conv.sidebar_open = !chats_on;
+                let chat_covered = self.conv.editor.active.is_some() || self.conv.diff_view_open;
+                if chats_on && chat_covered {
+                    // The chat list is already showing but an editor/diff tab covers the chat:
+                    // bring the chat forward instead of hiding the list.
+                    self.reveal_chat_view();
+                } else {
+                    self.conv.sidebar_open = !chats_on;
+                }
                 if !chats_on {
                     self.conv.sidebar_mode = crate::app::state::SidebarMode::Chats;
                     self.reveal_chat_view();
@@ -91,11 +98,9 @@ impl OxiApp {
                 self.focus_active_view_next_frame();
             }
             SettingsExitAction::ToggleTerminal => self.toggle_terminal(),
-            SettingsExitAction::ToggleGitChanges => {
-                self.toggle_git_panel_tab(crate::app::git_panel::GitTab::Changes)
-            }
+            SettingsExitAction::ToggleGitPanel => self.toggle_git_panel_tab(None),
             SettingsExitAction::ToggleGitBranches => {
-                self.toggle_git_panel_tab(crate::app::git_panel::GitTab::Branches)
+                self.toggle_git_panel_tab(Some(crate::app::git_panel::GitTab::Branches))
             }
         }
     }

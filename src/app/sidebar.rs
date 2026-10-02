@@ -586,7 +586,7 @@ impl OxiApp {
         ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_min_width(inner.width());
             let lead_w = if running { 0.0 } else { 14.0 };
-            let time_w = if running { 40.0 } else { 34.0 };
+            let mut time_w: f32 = if running { 40.0 } else { 34.0 };
             let spin_reserve = if running { 14.0 } else { 0.0 };
             let sx = ui.spacing().item_spacing.x;
             // Space is always reserved for the time label so the title never
@@ -602,6 +602,24 @@ impl OxiApp {
                     self.conv.workspaces[wi].sessions[si].modified,
                 ))
             };
+            // Nudged left off the flush-right edge (~2 monospace chars)
+            // so it doesn't sit exactly under the trash icon's center.
+            const TEXT_NUDGE: f32 = 7.0;
+            // Gap kept between the title's "…" and the time label.
+            const TIME_GAP: f32 = 6.0;
+            let time_galley = time_label.map(|s| {
+                ui.painter().layout_no_wrap(
+                    s,
+                    FontId::new(FS_TINY, FontFamily::Monospace),
+                    c_text_muted(),
+                )
+            });
+            // Long labels ("12m 34s" while running, "120d") are wider than the default
+            // slot; widen it so the truncated title stops before the label instead of
+            // running underneath it.
+            if let Some(galley) = &time_galley {
+                time_w = time_w.max(galley.size().x + TEXT_NUDGE + TIME_GAP);
+            }
             let fixed = lead_w
                 + if running { 0.0 } else { BULLET_GAP }
                 + if running { SPINNER_GAP } else { 0.0 }
@@ -676,19 +694,11 @@ impl OxiApp {
             // rather than placed in the sequential layout, so it lines up
             // pixel-for-pixel with the hover-only trash button that swaps
             // into this same spot.
-            if let Some(ref s) = time_label {
-                let time_rect = egui::Rect::from_min_max(
-                    egui::pos2(inner.right() - time_w, inner.top()),
-                    egui::pos2(inner.right(), inner.bottom()),
-                );
-                // Nudged left off the flush-right edge (~2 monospace chars)
-                // so it doesn't sit exactly under the trash icon's center.
-                const TEXT_NUDGE: f32 = 7.0;
-                ui.painter().text(
-                    time_rect.right_center() - egui::vec2(TEXT_NUDGE, 0.0),
-                    egui::Align2::RIGHT_CENTER,
-                    s,
-                    FontId::new(FS_TINY, FontFamily::Monospace),
+            if let Some(galley) = time_galley {
+                let anchor = egui::pos2(inner.right() - TEXT_NUDGE, inner.center().y);
+                ui.painter().galley(
+                    anchor - egui::vec2(galley.size().x, galley.size().y / 2.0),
+                    galley,
                     c_text_muted(),
                 );
             }
@@ -855,32 +865,24 @@ impl OxiApp {
                         let column_center_w =
                             crate::theme::chat_column_center_width(ui.available_width(), &style);
 
-                        const HEADER_H: f32 = 38.0;
-                        const HEADER_GAP: f32 = 6.0;
                         let show_diff = self.conv.diff_view_open && self.conv.git.diff.is_some();
-                        self.render_chat_header(ui, column_center_w);
-                        ui.add_space(HEADER_GAP);
 
                         // Floating composer always stays available — even over a diff —
                         // so you can discuss the change without leaving the view.
                         const COMPOSER_GAP: f32 = 8.0;
                         let composer_overlay_h =
                             (self.conv.composer_measured_full_h + COMPOSER_GAP).max(88.0);
-                        let conversation_h =
-                            (ui.available_height() - HEADER_H - HEADER_GAP).max(48.0);
+                        let conversation_h = ui.available_height().max(48.0);
                         let chat_rect = ui.max_rect();
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width(), conversation_h),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 if show_diff {
-                                    if let Some((title, diff_text)) = self.conv.git.diff.clone() {
-                                        self.render_diff_view(
-                                            ui,
-                                            &title,
-                                            &diff_text,
-                                            column_center_w,
-                                        );
+                                    if let Some(title) =
+                                        self.conv.git.diff.as_ref().map(|(title, _)| title.clone())
+                                    {
+                                        self.render_diff_view(ui, &title, column_center_w);
                                     }
                                 } else {
                                     self.render_conversation(

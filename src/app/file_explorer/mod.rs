@@ -4,8 +4,10 @@ use super::OxiApp;
 use crate::theme::c_warning_fg;
 use eframe::egui::{self, RichText, Ui};
 
+mod code_navigation;
 mod documents;
 mod editor_body;
+mod editor_commands;
 mod editor_logic;
 mod editor_paint;
 mod editor_tabs;
@@ -26,16 +28,20 @@ mod syntax_window;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use code_navigation::CodeNavState;
+pub(crate) use file_picker::PickerOutline;
 pub(crate) use find_replace::{FIND_FIELD_ID, FindCache};
 pub(crate) use minimap::MinimapGeometry;
-pub(crate) use support::{FindOptions, FindResults, find_matches};
+pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
 
-pub(crate) use explorer_tree::ExplorerCache;
+pub(crate) use explorer_tree::{ExplorerCache, git_status_color};
 pub(crate) use layout_cache::EditorLayoutCache;
 pub(crate) use media_view::MediaKind;
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
+        self.poll_code_navigation();
+        self.conv.editor.editor_area = Some((ui.ctx().cumulative_frame_nr(), ui.max_rect()));
         self.render_editor_tabs(ui);
         if self.conv.editor.diff_tab_active
             && self.conv.diff_view_open

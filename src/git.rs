@@ -27,6 +27,9 @@ use git2::{
 };
 
 const MAX_DIFF_CHARS: usize = 200_000;
+/// Single-file diffs include every unchanged line, so they get a larger budget.
+const MAX_FILE_DIFF_CHARS: usize = 2_000_000;
+const FULL_FILE_CONTEXT: u32 = 1_000_000;
 
 #[derive(Debug, Clone, Default)]
 pub struct GitEntry {
@@ -325,8 +328,18 @@ fn make_diff<'a>(
     staged: bool,
     path: Option<&str>,
 ) -> Result<Diff<'a>, String> {
+    make_diff_with_context(repo, staged, path, 3)
+}
+
+fn make_diff_with_context<'a>(
+    repo: &'a Repository,
+    staged: bool,
+    path: Option<&str>,
+    context_lines: u32,
+) -> Result<Diff<'a>, String> {
     let mut opts = DiffOptions::new();
-    opts.include_untracked(true)
+    opts.context_lines(context_lines)
+        .include_untracked(true)
         .recurse_untracked_dirs(true)
         .show_untracked_content(true);
     if let Some(path) = path {
@@ -343,6 +356,10 @@ fn make_diff<'a>(
 }
 
 fn diff_text(diff: &Diff<'_>) -> Result<String, String> {
+    diff_text_limited(diff, MAX_DIFF_CHARS)
+}
+
+fn diff_text_limited(diff: &Diff<'_>, max_chars: usize) -> Result<String, String> {
     let mut bytes = Vec::new();
     diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
         if matches!(line.origin(), '+' | '-' | ' ') {
@@ -352,12 +369,14 @@ fn diff_text(diff: &Diff<'_>) -> Result<String, String> {
         true
     })
     .map_err(err)?;
-    Ok(truncate(&String::from_utf8_lossy(&bytes), MAX_DIFF_CHARS))
+    Ok(truncate(&String::from_utf8_lossy(&bytes), max_chars))
 }
 
+/// One file's diff with the whole file as context: the diff view folds unchanged regions
+/// itself and can expand them, like an editor's diff view.
 fn show_diff(repo: &Repository, path: &str, staged: bool) -> String {
-    make_diff(repo, staged, Some(path))
-        .and_then(|d| diff_text(&d))
+    make_diff_with_context(repo, staged, Some(path), FULL_FILE_CONTEXT)
+        .and_then(|d| diff_text_limited(&d, MAX_FILE_DIFF_CHARS))
         .unwrap_or_else(|e| e)
 }
 
