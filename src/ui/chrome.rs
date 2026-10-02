@@ -715,6 +715,9 @@ fn icon_text_button_core(
         Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(size, sense);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled() && enabled, label)
+    });
     let hovered = enabled && response.hovered();
     let fill = if hovered { look.hover_fill } else { look.fill };
     let stroke = if hovered {

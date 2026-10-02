@@ -67,18 +67,6 @@ impl QuickDiff {
         self.peek = None;
     }
 
-    #[cfg(test)]
-    pub(crate) fn revert_edit(&self, hunk: usize) -> crate::git::BlockEdit {
-        let hunk = &self.hunks[hunk];
-        crate::git::BlockEdit {
-            path: String::new(),
-            target: crate::git::BlockTarget::WorkTree,
-            start: hunk.new_start,
-            expected: hunk.new_lines.clone(),
-            replacement: hunk.old_lines.clone(),
-        }
-    }
-
     /// The hunk whose marker is on `line`.
     fn hunk_at(&self, line: usize) -> Option<usize> {
         let last_line = self

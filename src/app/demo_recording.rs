@@ -705,18 +705,27 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
                 }
                 rec.harness.run_steps(4);
                 rec.still("editor-quick-diff");
-                // Revert from the peek: one undoable buffer edit, and the marker goes away.
-                let ctx = rec.harness.ctx.clone();
+                // Revert from the peek, clicked for real: the edit lands mid-render, which once
+                // dropped the minimap geometry the editor still had to paint (a panic).
+                let scale = rec.harness.ctx.pixels_per_point();
+                let button = rec
+                    .harness
+                    .query_all_by_label("Revert")
+                    .map(|node| node.rect())
+                    .next();
+                assert!(button.is_some(), "peek Revert button not found");
+                if let Some(button) = button {
+                    // Press and release over the button: a real pointer click.
+                    let at = (button.center().to_vec2() / scale).to_pos2();
+                    rec.harness.hover_at(at);
+                    rec.harness.run_steps(1);
+                    rec.harness.drag_at(at);
+                    rec.harness.run_steps(1);
+                    rec.harness.drop_at(at);
+                }
+                rec.harness.run_steps(4);
                 let app = rec.app();
-                if let (Some(index), Some(edit)) = (
-                    app.conv.editor.active,
-                    app.conv
-                        .editor
-                        .quick_diff
-                        .as_ref()
-                        .map(|q| q.revert_edit(0)),
-                ) {
-                    app.edit_document_block(&ctx, index, &edit).unwrap();
+                if let Some(index) = app.conv.editor.active {
                     let document = &app.conv.editor.documents[index];
                     let reverted = document
                         .content

@@ -928,14 +928,6 @@ impl OxiApp {
                 );
             }
 
-            self.quick_diff_ui(
-                ui,
-                index,
-                gutter_rect,
-                &scroll_output.inner.0,
-                &git_line_changes,
-            );
-
             // ScrollArea deliberately ignores the wheel while TextEdit owns a selection drag.
             // Restore that expected editor behavior and also auto-scroll when the pointer approaches
             // the top/bottom edge while extending the selection.
@@ -1026,6 +1018,16 @@ impl OxiApp {
                 state.store(ui.ctx(), scroll_output.id);
                 ui.ctx().request_repaint();
             }
+
+            // Last: a Revert from the peek edits the document, which drops the caches the
+            // rendering above relies on (the minimap's geometry).
+            self.quick_diff_ui(
+                ui,
+                index,
+                gutter_rect,
+                &scroll_output.inner.0,
+                &git_line_changes,
+            );
         });
         self.conv.editor.editor_selection_chars = editor_selection;
         if let Some(byte) = goto_definition_byte {
