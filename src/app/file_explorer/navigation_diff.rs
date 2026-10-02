@@ -62,12 +62,15 @@ impl OxiApp {
         ui: &mut Ui,
     ) -> Option<crate::ui::diff_view::DiffAction> {
         let (title, diff_text) = self.conv.git.diff.as_ref()?;
+        let block_actions = git_diff_kind(title).block_actions();
         let source = if title.starts_with("Commit ") {
-            ""
+            String::new()
         } else if title.starts_with("Staged: ") {
-            "Staged"
+            "Staged".to_owned()
+        } else if let Some(base) = super::editor_tabs::compare_base(title) {
+            format!("Since {base}")
         } else {
-            "Working Tree"
+            "Working Tree".to_owned()
         };
         crate::ui::diff_view::DiffView::sync(&mut self.conv.git_diff_view, diff_text);
         let root = PathBuf::from(&self.active_workspace().root_path);
@@ -75,11 +78,17 @@ impl OxiApp {
         self.conv
             .git_diff_view
             .as_mut()?
-            .show(ui, source, &can_open)
+            .show(ui, &source, &can_open, block_actions)
     }
 
     pub(crate) fn apply_diff_action(&mut self, action: crate::ui::diff_view::DiffAction) {
-        let crate::ui::diff_view::DiffAction::OpenFile { path, line } = action;
+        let (path, line) = match action {
+            crate::ui::diff_view::DiffAction::OpenFile { path, line } => (path, line),
+            crate::ui::diff_view::DiffAction::Block { action, block } => {
+                self.apply_git_block(action, block);
+                return;
+            }
+        };
         let path = PathBuf::from(&self.active_workspace().root_path).join(path);
         self.conv.editor.show_diff = false;
         self.open_editor_file_only(path);
@@ -128,9 +137,21 @@ impl OxiApp {
         let Some(view) = self.conv.unsaved_diff_view.as_mut() else {
             return;
         };
-        if let Some(crate::ui::diff_view::DiffAction::OpenFile { line, .. }) =
-            view.show(ui, "Unsaved changes", &|_| true)
-        {
+        let action = view.show(
+            ui,
+            "Unsaved changes",
+            &|_| true,
+            &[crate::ui::diff_view::BlockAction::Revert],
+        );
+        if let Some(crate::ui::diff_view::DiffAction::Block { block, .. }) = action {
+            // Back to the saved lines, in the buffer (undoable), not on disk.
+            if let Some(index) = self.conv.editor.active {
+                let edit = revert_edit(block, crate::git::BlockTarget::WorkTree);
+                if let Err(error) = self.edit_document_block(ui.ctx(), index, &edit) {
+                    self.conv.editor.error = Some(error);
+                }
+            }
+        } else if let Some(crate::ui::diff_view::DiffAction::OpenFile { line, .. }) = action {
             // The "file" is the open buffer itself: return to it at the clicked line.
             self.conv.editor.show_diff = false;
             if let (Some(line), Some(document)) = (line, self.conv.editor.active_document()) {
@@ -163,6 +184,124 @@ impl OxiApp {
         }
         self.conv.sidebar_mode = super::super::state::SidebarMode::Explorer;
         self.conv.sidebar_open = true;
+    }
+}
+
+impl OxiApp {
+    /// A per-block action from the git diff view, run by the git worker.
+    fn apply_git_block(
+        &mut self,
+        action: crate::ui::diff_view::BlockAction,
+        block: crate::ui::diff_view::DiffBlock,
+    ) {
+        use crate::git::{BlockEdit, BlockTarget};
+        use crate::ui::diff_view::BlockAction;
+        let edit = match action {
+            BlockAction::Revert => revert_edit(block, BlockTarget::WorkTree),
+            BlockAction::Unstage => revert_edit(block, BlockTarget::Index),
+            BlockAction::Stage => BlockEdit {
+                path: block.path,
+                target: BlockTarget::Index,
+                start: block.old_start,
+                expected: block.old_lines,
+                replacement: block.new_lines,
+            },
+        };
+        if edit.target == BlockTarget::WorkTree {
+            let path = PathBuf::from(&self.active_workspace().root_path).join(&edit.path);
+            let dirty = self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .any(|document| document.path == path && document.is_dirty());
+            if dirty {
+                self.conv.git.error = Some(format!(
+                    "{} has unsaved edits in the editor; save it first",
+                    edit.path
+                ));
+                return;
+            }
+        }
+        self.request(crate::git::GitOp::ApplyBlock(edit));
+    }
+
+    /// Splice a block edit into an open document as one undoable step.
+    pub(crate) fn edit_document_block(
+        &mut self,
+        ctx: &egui::Context,
+        index: usize,
+        edit: &crate::git::BlockEdit,
+    ) -> Result<(), String> {
+        let Some(document) = self.conv.editor.documents.get_mut(index) else {
+            return Ok(());
+        };
+        let updated = crate::git::splice_lines(&document.content, edit)?;
+        let caret_byte = line_start_byte(&updated, edit.start.saturating_sub(1));
+        let caret = egui::text::CCursor::new(updated[..caret_byte].chars().count());
+        let id = self.conv.editor.text_edit_ids.get(&document.path).copied();
+        if let Some(id) = id
+            && let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id)
+        {
+            let mut undoer = state.undoer();
+            let before = state.cursor.char_range().unwrap_or_default();
+            undoer.add_undo(&(before, document.content.clone()));
+            let after = egui::text::CCursorRange::one(caret);
+            undoer.add_undo(&(after, updated.clone()));
+            state.set_undoer(undoer);
+            state.cursor.set_char_range(Some(after));
+            state.store(ctx, id);
+        }
+        document.content = updated;
+        let _ = super::editor_body::mark_document_edited(document);
+        Ok(())
+    }
+}
+
+/// Which git diff the view shows, from its title.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GitDiffKind {
+    Commit,
+    Staged,
+    WorkTree,
+    Compare,
+}
+
+fn git_diff_kind(title: &str) -> GitDiffKind {
+    if title.starts_with("Commit ") {
+        GitDiffKind::Commit
+    } else if title.starts_with("Staged: ") {
+        GitDiffKind::Staged
+    } else if title.starts_with(crate::git::COMPARE_TITLE_PREFIX) {
+        GitDiffKind::Compare
+    } else {
+        GitDiffKind::WorkTree
+    }
+}
+
+impl GitDiffKind {
+    fn block_actions(self) -> &'static [crate::ui::diff_view::BlockAction] {
+        use crate::ui::diff_view::BlockAction;
+        match self {
+            Self::Commit => &[],
+            Self::Staged => &[BlockAction::Unstage],
+            Self::WorkTree => &[BlockAction::Stage, BlockAction::Revert],
+            Self::Compare => &[BlockAction::Revert],
+        }
+    }
+}
+
+/// Put a block's old lines back in place of its new ones, in `target`.
+fn revert_edit(
+    block: crate::ui::diff_view::DiffBlock,
+    target: crate::git::BlockTarget,
+) -> crate::git::BlockEdit {
+    crate::git::BlockEdit {
+        path: block.path,
+        target,
+        start: block.new_start,
+        expected: block.new_lines,
+        replacement: block.old_lines,
     }
 }
 

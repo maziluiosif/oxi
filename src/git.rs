@@ -16,6 +16,14 @@ use network::{fetch, pull, push};
 
 #[path = "git/system.rs"]
 mod system;
+
+#[path = "git/compare.rs"]
+mod compare;
+pub use compare::{CompareFile, GitCompare, compare};
+
+#[path = "git/hunk.rs"]
+mod hunk;
+pub use hunk::{BlockEdit, BlockTarget, TextHunk, base_text, splice_lines, text_hunks};
 pub use system::version as system_git_version;
 
 #[cfg(test)]
@@ -54,6 +62,8 @@ pub struct GitCommit {
 pub enum GitLineKind {
     Added,
     Modified,
+    /// Lines were removed just above this one (only from the editor's live comparison).
+    Deleted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,8 +109,19 @@ pub enum GitOp {
     Checkout(String),
     NewBranch(String),
     ShowCommit(String),
-    ShowDiff { path: String, staged: bool },
+    ShowDiff {
+        path: String,
+        staged: bool,
+    },
+    /// A file's change since the merge base with `base` (see [`compare`]).
+    ShowCompareDiff {
+        base: String,
+        path: String,
+        old_path: Option<String>,
+    },
     ClearDiff,
+    /// Revert, stage or unstage one change block; the open diff view stays open.
+    ApplyBlock(BlockEdit),
     Pull,
     Push,
     Fetch,
@@ -135,13 +156,16 @@ impl GitSender {
     pub fn send(&self, op: GitOp) -> Result<(), mpsc::SendError<GitOp>> {
         let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         let (target, generation) = match &op {
-            GitOp::ShowDiff { .. } | GitOp::ShowCommit(_) | GitOp::ClearDiff => {
+            GitOp::ShowDiff { .. }
+            | GitOp::ShowCompareDiff { .. }
+            | GitOp::ShowCommit(_)
+            | GitOp::ClearDiff => {
                 shared.generation += 1;
                 shared.view = (!matches!(op, GitOp::ClearDiff)).then(|| op.clone());
                 (&self.diff, shared.generation)
             }
             // Re-reads the current view when it runs.
-            GitOp::AutoRefresh => (&self.main, 0),
+            GitOp::AutoRefresh | GitOp::ApplyBlock(_) => (&self.main, 0),
             other => {
                 if let GitOp::SetCwd(path) = other {
                     shared.cwd = path.clone();
@@ -213,13 +237,21 @@ fn git_worker(
             ctx.request_repaint();
             continue;
         }
-        if matches!(op, GitOp::AutoRefresh) {
+        if matches!(op, GitOp::AutoRefresh | GitOp::ApplyBlock(_)) {
+            let block_error = match &op {
+                GitOp::ApplyBlock(edit) => hunk::apply_block(&cwd, edit).err(),
+                _ => None,
+            };
             let (view, generation) = {
                 let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
                 (shared.view.clone(), shared.generation)
             };
             let mut state = auto_refresh(&cwd, view.as_ref());
             state.view_generation = generation;
+            if block_error.is_some() {
+                state.error = block_error;
+                state.last_op = Some("apply block".into());
+            }
             let _ = tx.send(state);
         } else {
             let _ = tx.send(GitState {
@@ -301,9 +333,32 @@ fn view_diff(cwd: &str, op: GitOp) -> GitState {
                 ..Default::default()
             },
         },
+        GitOp::ShowCompareDiff {
+            base,
+            path,
+            old_path,
+        } => match compare::compare_file_diff(&repo, &base, &path, old_path.as_deref()) {
+            Ok(text) => GitState {
+                diff: Some((compare_diff_title(&base, &path), text)),
+                current_diff_path: Some(path),
+                current_diff_staged: None,
+                ..Default::default()
+            },
+            Err(error) => GitState {
+                error: Some(error),
+                ..Default::default()
+            },
+        },
         _ => GitState::default(),
     }
 }
+
+/// Diff-view title of a branch-compare file diff; the panel recognizes it by the prefix.
+pub fn compare_diff_title(base: &str, path: &str) -> String {
+    format!("{COMPARE_TITLE_PREFIX}{base}: {path}")
+}
+
+pub const COMPARE_TITLE_PREFIX: &str = "Compare with ";
 
 fn auto_refresh(cwd: &str, diff_view: Option<&GitOp>) -> GitState {
     let mut state = handle_op(cwd, diff_view.cloned().unwrap_or(GitOp::Refresh));
@@ -321,7 +376,11 @@ fn label_op(op: &GitOp) -> &'static str {
         GitOp::Checkout(_) => "checkout",
         GitOp::NewBranch(_) => "new branch",
         GitOp::ShowCommit(_) => "show",
-        GitOp::ShowDiff { .. } | GitOp::ClearDiff | GitOp::CollectCommitDiff => "diff",
+        GitOp::ShowDiff { .. }
+        | GitOp::ShowCompareDiff { .. }
+        | GitOp::ClearDiff
+        | GitOp::CollectCommitDiff => "diff",
+        GitOp::ApplyBlock(_) => "apply block",
         GitOp::Pull => "pull",
         GitOp::Push => "push",
         GitOp::Fetch => "fetch",
@@ -450,19 +509,20 @@ fn log_entries(repo: &Repository) -> Vec<GitCommit> {
     walk.take(60)
         .filter_map(Result::ok)
         .filter_map(|oid| repo.find_commit(oid).ok())
-        .map(|c| {
-            let secs = c.time().seconds();
-            let date = chrono::DateTime::from_timestamp(secs, 0)
-                .map(|d| d.format("%Y-%m-%d").to_string())
-                .unwrap_or_default();
-            GitCommit {
-                hash: c.id().to_string(),
-                date,
-                author: c.author().name().unwrap_or("Unknown").to_owned(),
-                message: c.summary().ok().flatten().unwrap_or("").to_owned(),
-            }
-        })
+        .map(|c| commit_entry(&c))
         .collect()
+}
+
+fn commit_entry(c: &git2::Commit<'_>) -> GitCommit {
+    let date = chrono::DateTime::from_timestamp(c.time().seconds(), 0)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    GitCommit {
+        hash: c.id().to_string(),
+        date,
+        author: c.author().name().unwrap_or("Unknown").to_owned(),
+        message: c.summary().ok().flatten().unwrap_or("").to_owned(),
+    }
 }
 
 fn head_tree(repo: &Repository) -> Option<git2::Tree<'_>> {
@@ -659,10 +719,26 @@ fn handle_op(cwd: &str, op: GitOp) -> GitState {
             GitOp::Unstage(paths) => unstage(&repo, &paths)?,
             GitOp::Discard(paths) => discard(&repo, &paths)?,
             GitOp::Commit(message) => commit(&repo, &message)?,
+            GitOp::ApplyBlock(edit) => hunk::apply_block(cwd, &edit)?,
             GitOp::Checkout(branch) => checkout_branch(&repo, &branch, false)?,
             GitOp::NewBranch(branch) => checkout_branch(&repo, &branch, true)?,
             GitOp::ShowDiff { path, staged } => {
                 return Ok(Some(snapshot(&repo, Some((path, staged)), None, None)));
+            }
+            GitOp::ShowCompareDiff {
+                base,
+                path,
+                old_path,
+            } => {
+                let text = compare::compare_file_diff(&repo, &base, &path, old_path.as_deref())?;
+                let mut state = snapshot(
+                    &repo,
+                    None,
+                    Some((compare_diff_title(&base, &path), text)),
+                    None,
+                );
+                state.current_diff_path = Some(path);
+                return Ok(Some(state));
             }
             GitOp::ClearDiff => return Ok(Some(snapshot(&repo, None, None, None))),
             GitOp::ShowCommit(hash) => {

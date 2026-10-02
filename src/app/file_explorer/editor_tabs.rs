@@ -279,7 +279,9 @@ impl OxiApp {
         }
         let path = self.conv.git.current_diff_path.as_deref().unwrap_or("diff");
         let file = path.rsplit_once('/').map_or(path, |(_, file)| file);
-        if self.conv.git.current_diff_staged == Some(true) {
+        if let Some(base) = compare_base(title) {
+            format!("{file} (vs {base})")
+        } else if self.conv.git.current_diff_staged == Some(true) {
             format!("{file} (Staged)")
         } else {
             format!("{file} (Working Tree)")
@@ -299,12 +301,20 @@ impl OxiApp {
         if title.starts_with("Commit ") {
             return title.to_owned();
         }
-        if self.conv.git.current_diff_staged == Some(true) {
+        if let Some(base) = compare_base(title) {
+            format!("{path} · Changes since {base}")
+        } else if self.conv.git.current_diff_staged == Some(true) {
             format!("{path} · Staged changes")
         } else {
             format!("{path} · Working tree changes")
         }
     }
+}
+
+/// The base branch of a branch-compare diff title.
+pub(crate) fn compare_base(title: &str) -> Option<&str> {
+    let rest = title.strip_prefix(crate::git::COMPARE_TITLE_PREFIX)?;
+    rest.split_once(": ").map(|(base, _)| base)
 }
 
 struct EditorTab {
