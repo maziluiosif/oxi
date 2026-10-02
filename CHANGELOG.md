@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-02
+
+### Added
+- Improved code navigation capabilities
+- Enhanced editor commands
+- Improved diff views
+
+
 ## [1.5.0] - 2026-10-01
 
 ### Added
@@ -835,7 +843,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/maziluiosif/oxi/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/maziluiosif/oxi/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/maziluiosif/oxi/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/maziluiosif/oxi/compare/v1.2.0...v1.3.0
