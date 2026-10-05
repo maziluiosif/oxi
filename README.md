@@ -2,7 +2,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/website-maziluiosif.github.io%2Foxi-e26a2c)](https://maziluiosif.github.io/oxi/)
 
-**Project page: [maziluiosif.github.io/oxi](https://maziluiosif.github.io/oxi/)** · **[Download a release](https://github.com/maziluiosif/oxi/releases)** · [Build from source](#build-and-run-from-source)
+**Project page: [maziluiosif.github.io/oxi](https://maziluiosif.github.io/oxi/)** · **[Quick install](#quick-install-recommended)** · [Download a release](https://github.com/maziluiosif/oxi/releases) · [Build from source](#build-and-run-from-source)
 
 **oxi** is a native, local-first coding agent. One Rust binary, no Electron, ~110 MB idle.
 
@@ -17,6 +17,30 @@
 ![oxi running tests, reading a file and showing its edit as a diff](assets/screenshots/agent-run.png)
 
 ## Install
+
+### Quick install (recommended)
+
+**macOS (Apple Silicon) and Linux (x86_64):**
+
+```bash
+curl -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
+```
+
+**Windows (x86_64), from PowerShell:**
+
+```powershell
+irm https://maziluiosif.github.io/oxi/install.ps1 | iex
+```
+
+The script downloads the latest release, verifies it against the release's `SHA256SUMS`, and installs it. There is nothing to unblock afterwards: files fetched this way do not get the macOS quarantine flag or the Windows Mark-of-the-Web, so neither Gatekeeper nor SmartScreen stops the app. Run the same command again to update.
+
+- **macOS:** installs `oxi.app` into `/Applications` (or `~/Applications` if that is not writable) and links the `oxi` command into `~/.local/bin`.
+- **Linux:** installs the `oxi` binary into `~/.local/bin`.
+- **Windows:** installs `oxi.exe` into `%LOCALAPPDATA%\Programs\oxi`, adds it to your user `PATH`, and creates a Start menu shortcut.
+
+Set `OXI_VERSION=v1.8.0` to install a specific release. On macOS and Linux, `OXI_BIN_DIR` and `OXI_APP_DIR` change the install locations; on Windows, `OXI_INSTALL_DIR` does. Read the scripts first if you like: [install.sh](docs/install.sh), [install.ps1](docs/install.ps1).
+
+Run `oxi` from a project directory to open it as the first workspace.
 
 ### Build and run from source
 
@@ -63,7 +87,7 @@ target/release/oxi
 
 ### Download a prebuilt release
 
-If you would rather not compile, precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to every [GitHub release](https://github.com/maziluiosif/oxi/releases). Download the archive for your platform, extract it, and run the app.
+The [quick install](#quick-install-recommended) script is the easiest way to get a prebuilt release. If you would rather download manually, precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to every [GitHub release](https://github.com/maziluiosif/oxi/releases). Download the archive for your platform, extract it, and run the app.
 
 #### macOS: clear the quarantine flag
 

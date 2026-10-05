@@ -485,15 +485,24 @@
       <div class="section-head">
         <div class="eyebrow">Install</div>
         <h2>Get it in a minute</h2>
-        <p>Install the Homebrew cask, download a prebuilt archive, or build from source.</p>
+        <p>One command on macOS, Linux, or Windows. Or use Homebrew, a prebuilt archive, or build from source.</p>
       </div>
       <div class="install">
         <div class="tabs" role="tablist" aria-label="Install method">
-          <button class="tab" role="tab" aria-selected="true" aria-controls="p-brew" id="t-brew">Homebrew</button>
+          <button class="tab" role="tab" aria-selected="true" aria-controls="p-quick" id="t-quick">Quick install</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="p-brew" id="t-brew" tabindex="-1">Homebrew</button>
           <button class="tab" role="tab" aria-selected="false" aria-controls="p-release" id="t-release" tabindex="-1">Prebuilt release</button>
           <button class="tab" role="tab" aria-selected="false" aria-controls="p-source" id="t-source" tabindex="-1">From source</button>
         </div>
-        <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew">
+        <div class="panel" role="tabpanel" id="p-quick" aria-labelledby="t-quick">
+          <div class="code"><span class="c"># macOS (Apple Silicon) and Linux (x86_64)</span>
+<span class="p">curl</span> -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
+
+<span class="c"># Windows (x86_64), in PowerShell</span>
+<span class="p">irm</span> https://maziluiosif.github.io/oxi/install.ps1 | iex</div>
+          <p class="install-note">Downloads the latest release, checks it against <code>SHA256SUMS</code>, and installs it. Nothing to unblock afterwards: Gatekeeper and SmartScreen only flag browser downloads. Run it again to update.</p>
+        </div>
+        <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew" hidden>
           <div class="code"><span class="p">brew</span> tap maziluiosif/tap
 <span class="p">brew</span> install --cask oxi
 
