@@ -26,6 +26,7 @@ class ReleaseChangelogTests(unittest.TestCase):
             result,
             {
                 "bump": "minor",
+                "highlight": "",
                 "sections": {
                     "Added": ["Add reversible tools"],
                     "Fixed": ["Prevent startup crash"],
@@ -41,16 +42,34 @@ class ReleaseChangelogTests(unittest.TestCase):
         result = release.fallback_notes("- improve settings layout")
         self.assertEqual(
             result,
-            {"bump": "patch", "sections": {"Changed": ["Improve settings layout"]}},
+            {
+                "bump": "patch",
+                "highlight": "",
+                "sections": {"Changed": ["Improve settings layout"]},
+            },
         )
 
     def test_parse_llm_json_accepts_fenced_response(self) -> None:
         result = release.parse_llm_json(
-            '```json\n{"bump":"minor","sections":{"Added":["New tool"]}}\n```'
+            '```json\n{"bump":"minor","highlight":"Hi.","sections":{"Added":["New tool"]}}\n```'
         )
         self.assertEqual(
-            result, {"bump": "minor", "sections": {"Added": ["New tool"]}}
+            result,
+            {"bump": "minor", "highlight": "Hi.", "sections": {"Added": ["New tool"]}},
         )
+
+    def test_release_notes_lead_with_highlight_and_end_with_install(self) -> None:
+        notes = release.render_release_notes(
+            {
+                "bump": "minor",
+                "highlight": "Faster diffs.",
+                "sections": {"Fixed": ["Crash fixed"], "Added": ["New tool"]},
+            }
+        )
+        self.assertTrue(notes.startswith("Faster diffs.\n"))
+        self.assertLess(notes.index("### ✨ New"), notes.index("### 🐛 Fixed"))
+        self.assertIn("install.sh | sh", notes)
+        self.assertIn("install.ps1 | iex", notes)
 
     def test_main_skips_history_only_changes(self) -> None:
         with mock.patch.object(release, "current_version", return_value="1.2.3"), mock.patch.object(
