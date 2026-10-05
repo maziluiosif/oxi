@@ -142,7 +142,9 @@ jobs:
     name: macos-check
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: macos-latest
+    # Trusted runs use the maintainer's self-hosted Mac (label `oxi-mac`); hosted macOS arm64
+    # runners often queue for 15+ minutes. Pull requests from forks never reach that machine.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'macos-latest' || fromJSON('["self-hosted","oxi-mac"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -153,7 +155,9 @@ jobs:
         with:
           components: clippy
 
+      # The self-hosted Mac keeps its build directory between runs, so it needs no cache.
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           key: macos-check
 
