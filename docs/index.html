@@ -230,7 +230,7 @@
         <a href="#performance">Performance</a>
         <a href="#install">Install</a>
         <a href="https://github.com/maziluiosif/oxi">GitHub</a>
-        <a class="nav-cta" href="https://github.com/maziluiosif/oxi/releases/latest">Download</a>
+        <a class="nav-cta" href="#install">Get oxi</a>
       </nav>
     </div>
   </header>
@@ -246,7 +246,7 @@
         box over SSH. LM Studio, Ollama, hosted APIs, and agent CLIs over ACP work too.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases/latest">Download the latest release</a>
+        <a class="btn btn-primary" href="#install">Install oxi</a>
         <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi">Star on GitHub</a>
       </div>
       <p class="hero-note">macOS (Apple Silicon) · Linux (x86_64) · Windows (x86_64) · MIT licensed</p>
@@ -485,7 +485,7 @@
       <div class="section-head">
         <div class="eyebrow">Install</div>
         <h2>Get it in a minute</h2>
-        <p>One command on macOS, Linux, or Windows. Or use Homebrew, a prebuilt archive, or build from source.</p>
+        <p>One command on macOS, Linux, or Windows.</p>
       </div>
       <div class="install">
         <div class="tabs" role="tablist" aria-label="Install method">
@@ -500,31 +500,28 @@
 
 <span class="c"># Windows (x86_64), in PowerShell</span>
 <span class="p">irm</span> https://maziluiosif.github.io/oxi/install.ps1 | iex</div>
-          <p class="install-note">Downloads the latest release, checks it against <code>SHA256SUMS</code>, and installs it. Nothing to unblock afterwards: Gatekeeper and SmartScreen only flag browser downloads. Run it again to update.</p>
+          <p class="install-note">Run it again to update. Then run <code>oxi</code> in a project folder, or open it from your apps menu.</p>
         </div>
         <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew" hidden>
           <div class="code"><span class="p">brew</span> tap maziluiosif/tap
 <span class="p">brew</span> install --cask oxi
 
-<span class="c"># macOS only: the build is ad-hoc signed but not notarized,</span>
-<span class="c"># so clear the quarantine flag once after installing</span>
+<span class="c"># macOS only, once after installing</span>
 <span class="p">xattr</span> -cr /Applications/oxi.app</div>
         </div>
         <div class="panel" role="tabpanel" id="p-release" aria-labelledby="t-release" hidden>
-          <div class="code"><span class="c"># download and extract the archive for your platform, then on macOS:</span>
+          <div class="code"><span class="c"># macOS: after moving oxi.app to /Applications</span>
 <span class="p">xattr</span> -cr /Applications/oxi.app
-<span class="p">open</span> /Applications/oxi.app
 
-<span class="c"># every release ships SHA256SUMS; verify your download with</span>
-<span class="p">shasum</span> -a 256 -c SHA256SUMS --ignore-missing</div>
-          <p class="install-note">Archives for macOS (Apple Silicon), Linux (x86_64), and Windows (x86_64) are attached to every <a href="https://github.com/maziluiosif/oxi/releases">GitHub release</a>.</p>
+<span class="c"># Windows: first launch, click More info → Run anyway</span></div>
+          <p class="install-note">Get the archive for your platform from <a href="https://github.com/maziluiosif/oxi/releases/latest">the latest release</a>.</p>
         </div>
         <div class="panel" role="tabpanel" id="p-source" aria-labelledby="t-source" hidden>
           <div class="code"><span class="c"># needs Rust 1.92 or newer, plus native C/C++ build tools</span>
 <span class="p">git</span> clone https://github.com/maziluiosif/oxi
 <span class="p">cd</span> oxi
 <span class="p">cargo</span> run --release</div>
-          <p class="install-note">Install Rust with <a href="https://rustup.rs">rustup</a>. On Windows you also need LLVM, CMake, and the Visual Studio C++ build tools; the <a href="https://github.com/maziluiosif/oxi#windows-prerequisites">README</a> has the details.</p>
+          <p class="install-note">Install Rust with <a href="https://rustup.rs">rustup</a>. On Windows you also need LLVM, CMake, and the Visual Studio C++ build tools; see the <a href="https://github.com/maziluiosif/oxi#windows-prerequisites">README</a>.</p>
         </div>
       </div>
     </div>
@@ -538,7 +535,7 @@
         Download a build, or compile it yourself in a few minutes.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases/latest">Download oxi</a>
+        <a class="btn btn-primary" href="#install">Install oxi</a>
         <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi#readme">Read the docs</a>
       </div>
     </div>
