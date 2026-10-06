@@ -107,7 +107,11 @@ pub fn run_cli_update(version: Option<String>) -> i32 {
 
 /// The install script variable that points at the running install, and its value.
 fn install_dir_override() -> Option<(&'static str, std::path::PathBuf)> {
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let exe = std::env::current_exe().ok()?;
+    // Follow the `~/.local/bin/oxi` symlink to the real install. Not on Windows: there the result
+    // is a `\\?\C:\…` verbatim path, which PowerShell's path cmdlets reject.
+    #[cfg(not(windows))]
+    let exe = exe.canonicalize().ok()?;
     if exe.components().any(|c| c.as_os_str() == "target") {
         return None;
     }
