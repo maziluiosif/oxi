@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-10-06
+
+### Fixed
+- **Editor:** Quick diff now correctly compares files regardless of line ending style (CRLF vs LF).
+- **Editor:** Tab hover highlight now fills the complete strip height for better visual consistency.
+
+
 ## [1.9.1] - 2026-10-06
 
 ### Fixed
@@ -894,7 +901,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.9.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.9.2...HEAD
+[1.9.2]: https://github.com/maziluiosif/oxi/compare/v1.9.1...v1.9.2
 [1.9.1]: https://github.com/maziluiosif/oxi/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/maziluiosif/oxi/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/maziluiosif/oxi/compare/v1.7.0...v1.8.0
