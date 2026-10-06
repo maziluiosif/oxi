@@ -281,6 +281,13 @@ async fn npm_output(args: &[&str], cwd: &Path, timeout: Duration) -> Result<Stri
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // No console on a Windows GUI process: without CREATE_NO_WINDOW every update check flashes
+    // a terminal window.
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     if let Some(path) = shell_path().await {
         cmd.env("PATH", path);
     }
