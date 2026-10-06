@@ -357,6 +357,12 @@ pub fn spawn_llama_server(
     cmd.stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log2));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd.spawn().map_err(|e| {
         if runtime_path.trim().is_empty() {
             format!("Could not start bundled/PATH llama-server: {e}. Use Install runtime or set llama-server path. Log: {}", runtime_log_path().display())

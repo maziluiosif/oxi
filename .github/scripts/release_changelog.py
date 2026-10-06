@@ -13,7 +13,7 @@ Outputs (written to $GITHUB_OUTPUT):
 Side effects when released:
   - CHANGELOG.md updated (new section inserted under [Unreleased])
   - Cargo.toml / Cargo.lock version bumped
-  - release_notes.md written (body for the GitHub release)
+  - release_notes.md written (user-facing body for the GitHub release)
 """
 
 from __future__ import annotations
@@ -107,22 +107,34 @@ def call_llm(commits: str, files: list[str]) -> dict:
         raise RuntimeError("OPENROUTER_API_KEY is not set")
 
     system = (
-        "You are a release-notes generator for the open-source Rust desktop app "
-        "'oxi'. You receive the raw git commits merged since the last release. "
-        "Group the user-facing changes into Keep a Changelog categories and "
-        "recommend a Semantic Versioning bump.\n\n"
+        "You write release notes for 'oxi', an open-source desktop coding agent "
+        "that runs local or hosted models and has a built-in editor, Git panel "
+        "and terminal. You receive the raw git commits merged since the last "
+        "release. The notes are read by people who use the app, not by its "
+        "developers. Group the changes into Keep a Changelog categories, write "
+        "a short highlight, and recommend a Semantic Versioning bump.\n\n"
         "Rules:\n"
         "- bump = 'major' if there is any breaking/removed public behaviour, "
         "'minor' if there are new features, otherwise 'patch'.\n"
-        "- Only include changes that matter to users or contributors. Merge "
-        "duplicate or noisy commits; drop pure CI/formatting churn unless it is "
-        "notable.\n"
-        "- Write concise, present-tense bullet points. Do NOT invent changes.\n"
+        "- Only include changes a user would notice. Drop CI, tests, refactors, "
+        "formatting, dependency bumps and docs unless they change what users "
+        "see or do. Merge duplicate or related commits into one bullet.\n"
+        "- Describe what the user can now do or what got better, in plain "
+        "words, not how it was implemented. No internal names (threads, "
+        "workers, pathspecs, structs, function names). Bad: 'Git diffs run on "
+        "a dedicated worker thread'. Good: 'Diffs open without freezing the "
+        "app on large repositories'.\n"
+        "- Start each bullet with the area in bold when it helps, e.g. "
+        "'**Git:** Compare any two branches side by side'. One sentence each.\n"
+        "- highlight: one or two friendly sentences, under 40 words, saying "
+        "what this release is about. No hype words like 'exciting' or "
+        "'powerful'.\n"
+        "- Do NOT invent changes.\n"
         "- Use only these categories: Added, Changed, Deprecated, Removed, "
         "Fixed, Security. Omit empty ones.\n"
         "- Mark breaking changes by ending the bullet with ' **(breaking)**'.\n\n"
         "Respond with ONLY a JSON object of the form:\n"
-        '{"bump":"patch","sections":{"Added":["..."],"Fixed":["..."]}}'
+        '{"bump":"patch","highlight":"...","sections":{"Added":["..."],"Fixed":["..."]}}'
     )
     user = f"Changed files:\n{chr(10).join(files)}\n\nCommits:\n{commits}"
 
@@ -185,7 +197,8 @@ def parse_llm_json(content: str) -> dict:
         for cat in CATEGORIES
     }
     sections = {k: v for k, v in sections.items() if v}
-    return {"bump": bump, "sections": sections}
+    highlight = str(obj.get("highlight", "")).strip()
+    return {"bump": bump, "highlight": highlight, "sections": sections}
 
 
 def fallback_notes(commits: str) -> dict:
@@ -237,7 +250,7 @@ def fallback_notes(commits: str) -> dict:
         bump = "major"
     if not sections:
         sections = {"Changed": ["Internal maintenance and dependency updates"]}
-    return {"bump": bump, "sections": sections}
+    return {"bump": bump, "highlight": "", "sections": sections}
 
 
 def render_section(version: str, sections: dict) -> str:
@@ -247,6 +260,49 @@ def render_section(version: str, sections: dict) -> str:
             lines.append(f"### {cat}")
             lines.extend(f"- {item}" for item in sections[cat])
             lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# Friendlier headings for the GitHub release page; CHANGELOG.md keeps Keep a Changelog names.
+RELEASE_HEADINGS = {
+    "Added": "✨ New",
+    "Changed": "⚡ Improved",
+    "Deprecated": "⚠️ Deprecated",
+    "Removed": "🧹 Removed",
+    "Fixed": "🐛 Fixed",
+    "Security": "🔒 Security",
+}
+
+
+def render_release_notes(result: dict) -> str:
+    """Body of the GitHub release (and the release pull request preview)."""
+    site = "https://maziluiosif.github.io/oxi"
+    lines: list[str] = []
+    if result.get("highlight"):
+        lines += [result["highlight"], ""]
+    for cat in CATEGORIES:
+        if cat in result["sections"]:
+            lines.append(f"### {RELEASE_HEADINGS[cat]}")
+            lines.extend(f"- {item}" for item in result["sections"][cat])
+            lines.append("")
+    lines += [
+        "### Install or update",
+        "",
+        "macOS (Apple Silicon) and Linux (x86_64):",
+        "",
+        "```sh",
+        f"curl -fsSL {site}/install.sh | sh",
+        "```",
+        "",
+        "Windows (x86_64), in PowerShell:",
+        "",
+        "```powershell",
+        f"irm {site}/install.ps1 | iex",
+        "```",
+        "",
+        "Or download an archive below. Full history in "
+        f"[CHANGELOG.md](https://github.com/{REPO}/blob/master/CHANGELOG.md).",
+    ]
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -333,9 +389,9 @@ def main() -> None:
 
     version = requested_version(prev, commits) or bump_version(prev, result["bump"])
     section = render_section(version, result["sections"])
-    body = update_changelog(version, tag.lstrip("v") if tag else None, section)
+    update_changelog(version, tag.lstrip("v") if tag else None, section)
     update_cargo(prev, version)
-    Path("release_notes.md").write_text(body, encoding="utf-8")
+    Path("release_notes.md").write_text(render_release_notes(result), encoding="utf-8")
 
     print(f"Released v{version} (bump={result['bump']}, from v{prev})")
     set_output("released", "true")

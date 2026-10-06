@@ -130,7 +130,7 @@
     .shot-caption { color: var(--muted); font-size: 0.85rem; margin-top: 14px; }
 
     /* Sections */
-    section { padding: 80px 0; }
+    section { padding: 88px 0; }
     section.soft { background: var(--bg-soft); }
     .section-head { text-align: center; max-width: 680px; margin: 0 auto 48px; }
     .section-head h2 { font-size: clamp(1.7rem, 4vw, 2.45rem); letter-spacing: -0.025em; margin: 0 0 12px; line-height: 1.15; }
@@ -139,17 +139,12 @@
 
     /* Feature grid */
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px; }
-    .card {
-      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px;
-      transition: border-color .15s ease, transform .15s ease;
-    }
-    .card:hover { border-color: color-mix(in srgb, var(--rust) 50%, var(--border)); transform: translateY(-3px); }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
     .card h3 { margin: 0 0 8px; font-size: 1.08rem; letter-spacing: -0.01em; }
     .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
-    .card .new { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); border-radius: 999px; padding: 1px 8px; margin-left: 6px; vertical-align: 2px; }
 
     /* Performance stats */
-    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
     .stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 22px 20px; }
     .stat .value { font-size: 2.3rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; color: var(--text); }
     .stat .value small { font-size: 1.05rem; font-weight: 700; color: var(--muted); margin-left: 3px; }
@@ -211,8 +206,8 @@
 
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
-      .btn, .card { transition: none; }
-      .btn:hover, .card:hover { transform: none; }
+      .btn { transition: none; }
+      .btn:hover { transform: none; }
     }
   </style>
 </head>
@@ -227,10 +222,9 @@
       <nav class="nav-links">
         <a href="#how">How it works</a>
         <a href="#features">Features</a>
-        <a href="#performance">Performance</a>
         <a href="#install">Install</a>
         <a href="https://github.com/maziluiosif/oxi">GitHub</a>
-        <a class="nav-cta" href="https://github.com/maziluiosif/oxi/releases/latest">Download</a>
+        <a class="nav-cta" href="#install">Get oxi</a>
       </nav>
     </div>
   </header>
@@ -238,15 +232,15 @@
   <!-- HERO -->
   <div class="hero">
     <div class="wrap">
-      <span class="badge"><span class="dot"></span> Built in <b>Rust + egui</b> · one native binary · ~110 MB idle</span>
+      <span class="badge"><span class="dot"></span> Native Rust app · free and open source</span>
       <h1>Run <span class="grad">any model</span>,<br>keep everything local</h1>
       <p class="subtitle">
-        A fast desktop coding agent that manages your models for you. Pick a GGUF from HuggingFace
-        and oxi downloads it, installs <code>llama-server</code>, and runs it on this machine or a GPU
-        box over SSH. LM Studio, Ollama, hosted APIs, and agent CLIs over ACP work too.
+        A fast desktop coding agent. Pick a model and oxi downloads it and runs it for you,
+        on your machine or a GPU box. Or plug in Ollama, LM Studio, a hosted API, or the
+        Claude Code, Cursor or Codex subscription you already have.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases/latest">Download the latest release</a>
+        <a class="btn btn-primary" href="#install">Install oxi</a>
         <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi">Star on GitHub</a>
       </div>
       <p class="hero-note">macOS (Apple Silicon) · Linux (x86_64) · Windows (x86_64) · MIT licensed</p>
@@ -317,45 +311,33 @@
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Why oxi</div>
-        <h2>Built for people who run their own models</h2>
-        <p>Most polished coding tools assume you will use their cloud and their subscription. oxi assumes you would rather bring your own model and keep your work on your machine.</p>
+        <h2>Your model, your machine</h2>
+        <p>Most coding tools assume their cloud and their subscription. oxi lets you bring your own.</p>
       </div>
       <div class="grid">
         <div class="card">
-          <h3>Light and fast</h3>
-          <p>Rust and egui in a single binary, with no bundled browser engine. Around 110 MB of RAM at idle.</p>
-        </div>
-        <div class="card">
-          <h3>It manages the models <span class="new">Improved</span></h3>
-          <p>A step-by-step setup finds GGUF files on HuggingFace, installs <code>llama-server</code>, and starts a model in one click.</p>
-        </div>
-        <div class="card">
-          <h3>Local, remote, or hosted</h3>
-          <p>Run the model here, on a GPU box over SSH, or point oxi at LM Studio, Ollama, or a hosted API.</p>
+          <h3>It runs the models for you</h3>
+          <p>Find a GGUF on HuggingFace, click Run. oxi installs <code>llama-server</code> and starts the model, here or on a GPU box over SSH.</p>
         </div>
         <div class="card">
           <h3>Use a subscription you already have</h3>
-          <p>Drive Claude Code, Cursor, or Codex CLI inside oxi over ACP, or sign in to ChatGPT and Codex directly.</p>
+          <p>Drive Claude Code, Cursor, or Codex inside oxi over ACP, or sign in to ChatGPT directly.</p>
         </div>
         <div class="card">
           <h3>Editor and Git built in</h3>
-          <p>A multi-tab editor with syntax highlighting and minimap, a source-control panel, inline diffs, and a workspace terminal.</p>
+          <p>Tabs, minimap, go to definition, inline diffs, hunk staging, branch compare, and a terminal.</p>
         </div>
         <div class="card">
-          <h3>Never lose an edit <span class="new">New</span></h3>
-          <p>oxi asks before closing unsaved tabs or quitting, and never silently overwrites a file that changed on disk.</p>
+          <h3>Light and fast</h3>
+          <p>One native binary, no bundled browser. Around 110 MB of RAM at idle.</p>
         </div>
         <div class="card">
-          <h3>Workspace-aware tools</h3>
-          <p>Read, write, edit, grep, find, codebase search, Git inspection, verification commands, MCP servers, and web search.</p>
-        </div>
-        <div class="card">
-          <h3>Web search without an API key</h3>
-          <p>Search through Bing, DuckDuckGo, or a <code>SearXNG</code> instance you host. No key to paste, nothing to pay per query.</p>
+          <h3>Make it yours</h3>
+          <p>Edit the system prompt, add MCP servers, search the web without an API key, and dictate with local Whisper.</p>
         </div>
         <div class="card">
           <h3>Nothing phones home</h3>
-          <p>Settings, chats, tool runs, and models stay local. Keys go to the OS keychain, and no account is required.</p>
+          <p>Chats, settings, and models stay on your machine. Keys go to the OS keychain. No account needed.</p>
         </div>
       </div>
     </div>
@@ -367,16 +349,12 @@
       <div class="section-head">
         <div class="eyebrow">Performance</div>
         <h2>Fast is the point</h2>
-        <p>oxi is native from top to bottom, and it gets measured. These numbers come from the real UI rendering a real workspace.</p>
+        <p>Measured on the real UI rendering a real workspace.</p>
       </div>
       <div class="stats">
         <div class="stat">
           <div class="value">~1<small>ms</small></div>
           <div class="label">to draw a frame of a long conversation</div>
-        </div>
-        <div class="stat">
-          <div class="value">46<small>ms</small></div>
-          <div class="label">to list about 200 chats at launch</div>
         </div>
         <div class="stat">
           <div class="value">17<small>ms</small></div>
@@ -391,37 +369,12 @@
           <div class="label">of memory at idle</div>
         </div>
       </div>
-      <p class="stats-note">Release build on Apple Silicon (v0.26).</p>
-    </div>
-  </section>
-
-  <!-- PROMPTS -->
-  <section id="control">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="eyebrow">Prompts</div>
-        <h2>The system prompt is yours to edit</h2>
-        <p>oxi ships with a coding-agent prompt, but it is only a template. Rewrite it and the agent becomes whatever you need.</p>
-      </div>
-      <div class="grid">
-        <div class="card">
-          <h3>Editable system prompt</h3>
-          <p>One template with a <code>{tools_list}</code> placeholder. Keep the coding defaults or replace them, and <code>@</code>-mention files and folders into a message.</p>
-        </div>
-        <div class="card">
-          <h3>Not only for coding</h3>
-          <p>Point it at a repo as a coding assistant, or repurpose it as a reviewer, researcher, or writing partner.</p>
-        </div>
-        <div class="card">
-          <h3>Local voice dictation</h3>
-          <p>Dictate with local Whisper models. They load only when you transcribe and unload again when idle.</p>
-        </div>
-      </div>
+      <p class="stats-note">Release build on Apple Silicon.</p>
     </div>
   </section>
 
   <!-- PROVIDERS -->
-  <section class="soft">
+  <section>
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Providers</div>
@@ -447,12 +400,12 @@
   </section>
 
   <!-- THEMES -->
-  <section id="themes">
+  <section id="themes" class="soft">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Themes</div>
         <h2>Five built-in themes</h2>
-        <p>Each theme restyles the whole app: chrome, transcript, syntax highlighting, and the editor. Custom themes load from a JSON spec.</p>
+        <p>Each one restyles the whole app, editor included. Or load your own from JSON.</p>
       </div>
       <div class="gallery">
         <figure>
@@ -480,57 +433,49 @@
   </section>
 
   <!-- INSTALL -->
-  <section id="install" class="soft">
+  <section id="install">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Install</div>
         <h2>Get it in a minute</h2>
-        <p>Install the Homebrew cask, download a prebuilt archive, or build from source.</p>
+        <p>One command on macOS, Linux, or Windows.</p>
       </div>
       <div class="install">
         <div class="tabs" role="tablist" aria-label="Install method">
-          <button class="tab" role="tab" aria-selected="true" aria-controls="p-brew" id="t-brew">Homebrew</button>
+          <button class="tab" role="tab" aria-selected="true" aria-controls="p-quick" id="t-quick">Quick install</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="p-brew" id="t-brew" tabindex="-1">Homebrew</button>
           <button class="tab" role="tab" aria-selected="false" aria-controls="p-release" id="t-release" tabindex="-1">Prebuilt release</button>
           <button class="tab" role="tab" aria-selected="false" aria-controls="p-source" id="t-source" tabindex="-1">From source</button>
         </div>
-        <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew">
+        <div class="panel" role="tabpanel" id="p-quick" aria-labelledby="t-quick">
+          <div class="code"><span class="c"># macOS (Apple Silicon) and Linux (x86_64)</span>
+<span class="p">curl</span> -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
+
+<span class="c"># Windows (x86_64), in PowerShell</span>
+<span class="p">irm</span> https://maziluiosif.github.io/oxi/install.ps1 | iex</div>
+          <p class="install-note">Run it again to update. Then run <code>oxi</code> in a project folder, or open it from your apps menu.</p>
+        </div>
+        <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew" hidden>
           <div class="code"><span class="p">brew</span> tap maziluiosif/tap
 <span class="p">brew</span> install --cask oxi
 
-<span class="c"># macOS only: the build is ad-hoc signed but not notarized,</span>
-<span class="c"># so clear the quarantine flag once after installing</span>
+<span class="c"># macOS only, once after installing</span>
 <span class="p">xattr</span> -cr /Applications/oxi.app</div>
         </div>
         <div class="panel" role="tabpanel" id="p-release" aria-labelledby="t-release" hidden>
-          <div class="code"><span class="c"># download and extract the archive for your platform, then on macOS:</span>
+          <div class="code"><span class="c"># macOS: after moving oxi.app to /Applications</span>
 <span class="p">xattr</span> -cr /Applications/oxi.app
-<span class="p">open</span> /Applications/oxi.app
 
-<span class="c"># every release ships SHA256SUMS; verify your download with</span>
-<span class="p">shasum</span> -a 256 -c SHA256SUMS --ignore-missing</div>
-          <p class="install-note">Archives for macOS (Apple Silicon), Linux (x86_64), and Windows (x86_64) are attached to every <a href="https://github.com/maziluiosif/oxi/releases">GitHub release</a>.</p>
+<span class="c"># Windows: first launch, click More info → Run anyway</span></div>
+          <p class="install-note">Get the archive for your platform from <a href="https://github.com/maziluiosif/oxi/releases/latest">the latest release</a>.</p>
         </div>
         <div class="panel" role="tabpanel" id="p-source" aria-labelledby="t-source" hidden>
           <div class="code"><span class="c"># needs Rust 1.92 or newer, plus native C/C++ build tools</span>
 <span class="p">git</span> clone https://github.com/maziluiosif/oxi
 <span class="p">cd</span> oxi
 <span class="p">cargo</span> run --release</div>
-          <p class="install-note">Install Rust with <a href="https://rustup.rs">rustup</a>. On Windows you also need LLVM, CMake, and the Visual Studio C++ build tools; the <a href="https://github.com/maziluiosif/oxi#windows-prerequisites">README</a> has the details.</p>
+          <p class="install-note">Install Rust with <a href="https://rustup.rs">rustup</a>. On Windows you also need LLVM, CMake, and the Visual Studio C++ build tools; see the <a href="https://github.com/maziluiosif/oxi#windows-prerequisites">README</a>.</p>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- FINAL CTA -->
-  <section style="text-align:center;">
-    <div class="wrap">
-      <h2 style="font-size: clamp(1.8rem,4vw,2.6rem); letter-spacing:-0.02em; margin:0 0 14px;">Try it on your own repo</h2>
-      <p style="color:var(--muted); max-width:560px; margin:0 auto 30px; font-size:1.05rem;">
-        Download a build, or compile it yourself in a few minutes.
-      </p>
-      <div class="cta-row">
-        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases/latest">Download oxi</a>
-        <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi#readme">Read the docs</a>
       </div>
     </div>
   </section>

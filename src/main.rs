@@ -70,6 +70,10 @@ fn app_icon() -> IconData {
 }
 
 fn main() -> eframe::Result<()> {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("update") {
+        std::process::exit(update::run_cli_update(args.next()));
+    }
     install_panic_hook();
     // Warm slow first-use work on background threads while the window is created.
     secrets::prefetch_unified();

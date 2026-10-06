@@ -23,25 +23,68 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Docs, screenshots and Markdown don't need a Rust build on three OSes. Decide once here;
+  # skipped jobs and steps still count as passing for the required `ci` check.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Detect code changes
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$BEFORE" ;;
+            *) base="" ;;
+          esac
+          # Dispatched runs (releases), new branches and unknown bases always build.
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=$(git diff --name-only "$base" HEAD | grep -vE '^(docs/|assets/screenshots/)|\.md$|^LICENSE$|^\.github/(ISSUE_TEMPLATE/|PULL_REQUEST_TEMPLATE\.md$)' || true)
+          if [ -n "$code" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Only docs changed; skipping the Rust build."
+          fi
+
   # Required status check on dev: keep the job id `ci`.
   ci:
+    needs: changes
     runs-on: ubuntu-latest
+    env:
+      RUST: ${{ needs.changes.outputs.rust }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
 
       - name: Install Rust toolchain
+        if: env.RUST == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
       - name: Install Linux system dependencies
+        if: env.RUST == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev
 
       - uses: Swatinem/rust-cache@v2
+        if: env.RUST == 'true'
 
       - name: Validate GitHub Actions workflows
         uses: raven-actions/actionlint@v2
@@ -63,15 +106,20 @@ jobs:
           find . -type f -name '*.sh' -not -path './.git/*' -exec bash -n {} +
 
       - name: cargo fmt --check
+        if: env.RUST == 'true'
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
+        if: env.RUST == 'true'
         run: cargo clippy --all-targets -- -D warnings
 
       - name: cargo test
+        if: env.RUST == 'true'
         run: cargo test
 
   audit:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -92,7 +140,11 @@ jobs:
   # keychain, bundling); check it here instead of first compiling it in a release build.
   macos-check:
     name: macos-check
-    runs-on: macos-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    # Trusted runs use the maintainer's self-hosted Mac (label `oxi-mac`); hosted macOS arm64
+    # runners often queue for 15+ minutes. Pull requests from forks never reach that machine.
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'macos-latest' || fromJSON('["self-hosted","oxi-mac"]') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -103,7 +155,9 @@ jobs:
         with:
           components: clippy
 
+      # The self-hosted Mac keeps its build directory between runs, so it needs no cache.
       - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
         with:
           key: macos-check
 
@@ -115,6 +169,8 @@ jobs:
 
   windows-check:
     name: windows-check
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

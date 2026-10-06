@@ -45,11 +45,13 @@ jobs:
         run: |
           version="${{ steps.gen.outputs.version }}"
           {
-            echo "Merging this pull request publishes **v${version}** for macOS, Linux and Windows."
-            echo
-            echo "Release notes preview (regenerated at release time, so wording may differ slightly):"
+            echo "# oxi v${version}"
             echo
             cat release_notes.md
+            echo
+            echo "---"
+            echo
+            echo "_Merging publishes v${version} for macOS, Linux and Windows. The notes are regenerated at release time, so wording may differ slightly._"
           } > body.md
           pr=$(gh pr list --base master --head dev --state open --json number --jq '.[0].number')
           if [ -n "$pr" ]; then

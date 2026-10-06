@@ -2,119 +2,101 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/website-maziluiosif.github.io%2Foxi-e26a2c)](https://maziluiosif.github.io/oxi/)
 
-**Project page: [maziluiosif.github.io/oxi](https://maziluiosif.github.io/oxi/)** · **[Download a release](https://github.com/maziluiosif/oxi/releases)** · [Build from source](#build-and-run-from-source)
+# oxi
 
-**oxi** is a native, local-first coding agent. One Rust binary, no Electron, ~110 MB idle.
+A native, local-first coding agent. One Rust binary, no Electron, ~110 MB idle.
 
-- **Light and fast:** Rust + egui, a single native binary with no bundled browser engine.
-- **Runs your models for you:** search HuggingFace for GGUF, download it, install a matching `llama-server`, start and stop it, all from the UI, either on this machine or on a GPU box over SSH. It also talks to LM Studio and Ollama.
-- **Or use the subscription you already pay for:** drive Claude Code, Cursor, or Codex CLI in-app over ACP, sign in to ChatGPT/Codex directly, or point it at any hosted API.
-- **Voice dictation built in:** local Whisper, no cloud round-trip.
-- **Web search with no API key:** the agent searches through Bing, DuckDuckGo, or your own self-hosted SearXNG. No search API to sign up for, no key to paste, no per-query billing.
+- **Run models locally:** pick a GGUF from HuggingFace and oxi downloads it, installs `llama-server` and runs it, on this machine or on a GPU box over SSH. LM Studio and Ollama work too.
+- **Or use what you already pay for:** Claude Code, Cursor and Codex CLI over ACP, ChatGPT/Codex sign-in, or any hosted API.
+- **A real workspace:** file explorer, code editor, Git panel and terminal next to the chat.
+- **No extra keys:** web search through DuckDuckGo, Bing or your own SearXNG, and local Whisper voice dictation.
 
 ![oxi demo](assets/demo/demo.gif)
 
-![oxi running tests, reading a file and showing its edit as a diff](assets/screenshots/agent-run.png)
-
 ## Install
 
-### Build and run from source
+**macOS (Apple Silicon) and Linux (x86_64):**
 
-Requirements:
+```bash
+curl -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
+```
 
-- **Rust 1.92 or newer** (the crate uses edition 2024). Install it with [rustup](https://rustup.rs), then confirm with `rustc --version`.
-- a desktop environment supported by `eframe`
-- native C/C++ build tools, required by the local Whisper voice-dictation dependency
+**Windows (x86_64), in PowerShell:**
+
+```powershell
+irm https://maziluiosif.github.io/oxi/install.ps1 | iex
+```
+
+To update, run `oxi update` (or `oxi update v1.8.0` for a specific release), or the same install command again. Then start oxi from your apps menu, or run `oxi` inside a project folder to open it as your workspace.
+
+<details>
+<summary>Other ways to install</summary>
+
+### Homebrew (macOS, Linux)
+
+```bash
+brew tap maziluiosif/tap
+brew install --cask oxi
+xattr -cr /Applications/oxi.app   # macOS only, once after installing
+```
+
+### Manual download
+
+Get the archive for your platform from [Releases](https://github.com/maziluiosif/oxi/releases) and extract it. On macOS, move `oxi.app` to `/Applications` and run `xattr -cr /Applications/oxi.app` once, because the app is not notarized by Apple. On Windows, click **More info → Run anyway** the first time.
+
+### Install options
+
+The install scripts accept a few environment variables:
+
+| Variable | Effect |
+|---|---|
+| `OXI_VERSION` | Install a specific release, e.g. `v1.8.0` |
+| `OXI_BIN_DIR` | macOS/Linux: where the `oxi` command goes (default `~/.local/bin`) |
+| `OXI_APP_DIR` | macOS: where `oxi.app` goes (default `/Applications`) |
+| `OXI_INSTALL_DIR` | Windows: install folder (default `%LOCALAPPDATA%\Programs\oxi`) |
+
+</details>
+
+<details>
+<summary>Build from source</summary>
+
+You need **Rust 1.92+** ([rustup](https://rustup.rs)) and C/C++ build tools.
+
+```bash
+git clone https://github.com/maziluiosif/oxi
+cd oxi
+cargo run --release
+```
 
 #### Windows prerequisites
-
-Install LLVM/libclang and CMake from PowerShell:
 
 ```powershell
 winget install --id LLVM.LLVM -e
 winget install --id Kitware.CMake -e
 ```
 
-You also need Visual Studio Build Tools with the **Desktop development with C++** workload (MSVC and a Windows SDK). After installing these dependencies, open a new terminal and verify them:
-
-```powershell
-cmake --version
-Test-Path "C:\Program Files\LLVM\bin\libclang.dll"
-```
-
-If the second command returns `True` but the build cannot find `libclang`, configure its location permanently and for the current terminal:
+Also install Visual Studio Build Tools with the **Desktop development with C++** workload. If the build can't find `libclang`, set:
 
 ```powershell
 [Environment]::SetEnvironmentVariable("LIBCLANG_PATH", "C:\Program Files\LLVM\bin", "User")
-$env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
 ```
 
-Then build and run the application:
+</details>
 
-```bash
-cargo run --release
-```
+## What it does
 
-Binary output:
+![oxi running tests, reading a file and showing its edit as a diff](assets/screenshots/agent-run.png)
 
-```bash
-target/release/oxi
-```
+- **Agent with workspace tools:** reads, searches and edits code, runs checks, looks at Git diffs, searches the web and calls your MCP servers. File changes and shell commands can ask for approval first.
+- **Plan mode:** type `/plan` to let the agent investigate without changing anything, then click **Implement plan**.
+- **Editor:** multiple tabs, syntax highlighting, minimap, find and replace, Git changes inline.
+- **Git panel:** stage, commit, branch, pull and push, with AI commit messages.
+- **Terminal:** a shell rooted in your workspace.
+- **Sessions:** chats are saved per workspace and stay on your machine.
+- **Voice dictation:** local Whisper, nothing leaves your computer.
+- **Themes:** Dark, Light, Midnight, Sublime and Sublime 4.
 
-### Download a prebuilt release
-
-If you would rather not compile, precompiled archives for macOS (arm64), Linux (x86_64), and Windows (x86_64) are attached to every [GitHub release](https://github.com/maziluiosif/oxi/releases). Download the archive for your platform, extract it, and run the app.
-
-#### macOS: clear the quarantine flag
-
-The macOS bundle is ad-hoc signed for integrity but is **not** Apple-notarized, so anything you download from a browser gets Gatekeeper's quarantine attribute and macOS will refuse to open it ("app is damaged" / "unidentified developer"). Move the extracted app to `/Applications` and clear that attribute once:
-
-```bash
-xattr -cr /Applications/oxi.app
-open /Applications/oxi.app
-```
-
-For a standalone binary rather than the `.app` bundle, use `xattr -c /path/to/oxi`. Only do this for software you trust, and do not disable Gatekeeper globally.
-
-### Homebrew
-
-The tap distributes the same precompiled release as a Homebrew Cask and is updated automatically on every release.
-
-```bash
-brew tap maziluiosif/tap
-brew install --cask oxi
-```
-
-This installs `oxi.app` into `/Applications` and exposes the `oxi` command, which launches the app from any directory and uses that directory as the first workspace.
-
-On macOS, because the build is not notarized, run the quarantine step once after installing:
-
-```bash
-xattr -cr /Applications/oxi.app
-```
-
-On Linux x86_64 no extra step is needed.
-
-If you previously installed the old formula, migrate once with `brew uninstall --formula oxi` before running the Cask command above.
-
-## Why oxi
-
-- **Any model, no lock-in:** hosted APIs (OpenAI, Azure, OpenRouter, GPT Codex, OpenCode Go, Anthropic-compatible), local servers (LM Studio, Ollama), oxi-managed HuggingFace GGUF models via `llama-server`, or agent CLIs over ACP (Claude Code, Cursor, Codex). Switch providers from one control.
-- **Local-first by design:** settings, sessions, tool execution, SSH credentials, OAuth tokens, local models, and voice models stay on your machine. No account required to use your own models.
-- **Local & self-hosted friendly:** run GGUF models oxi downloads for you, connect to an LM Studio/Ollama server, or tunnel to a GPU box over SSH with no external `ssh` binary needed.
-- **Native, not Electron:** Rust + egui, a single binary, no bundled browser engine. Low idle RAM (see below).
-- **Workspace file explorer + code editor:** a multi-tab editor with syntax highlighting, minimap, find/replace, external-change detection, and Git changes opened inline, not just a chat window.
-- **Workspace-aware agent tools:** inspect and search code, read/write/edit/delete/move files, create directories, inspect Git state/diffs, run verification commands, call MCP servers, and search/fetch web content.
-- **Keyless web search:** `web_search` scrapes Bing RSS or DuckDuckGo directly, or queries a SearXNG instance you host yourself. Unlike tools that require a paid Brave, Tavily, or Google CSE key, this works out of the box and costs nothing.
-- **Built-in developer surfaces:** source-control panel, diffs, commit-message generation, and a workspace-rooted terminal.
-- **User-controlled prompting:** editable agent prompt, `@`-mention files/folders into a message, and a separate commit-message prompt.
-- **Local voice dictation:** optional microphone dictation using local Whisper models.
-
-![oxi RAM usage](assets/screenshots/resource_ussage.png)
-
-## Screenshots
-
-| Review in the editor | Guided local models |
+| Review in the editor | Local models |
 |---|---|
 | ![oxi editor with changed lines highlighted next to the Git panel](assets/screenshots/editor-git.png) | ![oxi Local HF setup with the runtime installed and a model running](assets/screenshots/local-models.png) |
 
@@ -122,443 +104,54 @@ If you previously installed the old formula, migrate once with `brew uninstall -
 |---|---|
 | ![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png) | ![oxi Dark theme](assets/screenshots/theme-dark.png) |
 
-The demo and these screenshots are rendered from the real UI by `scripts/render-demo.sh`.
+## Models and providers
 
-## Main capabilities
+Pick a provider in Settings or from the model picker in the composer.
 
-### Workspace-oriented chats
-
-On startup, oxi uses the current working directory as the first workspace. Additional workspace folders can be added from the UI and are persisted in settings.
-
-Each workspace has:
-
-- its own chat sessions
-- its own active/new chat state
-- its own composer draft and pending image attachments
-- local tool execution rooted in that workspace directory
-- Git and terminal operations rooted in that workspace when selected
-
-### Sessions and local history
-
-Chat sessions are persisted as `.jsonl` files per workspace. Saved sessions are shown in the sidebar, sorted by modification time, and loaded lazily when opened.
-
-Session storage preserves:
-
-- user/assistant messages
-- structured assistant blocks
-- thinking text
-- tool calls and tool output
-- diffs from file operations
-- image attachments
-- generated session metadata such as titles
-
-If no saved sessions exist, oxi starts with an in-memory `New chat`.
-
-### Local built-in tools
-
-The agent can call these tools when enabled in Settings:
-
-| Tool | Purpose |
+| Provider | |
 |---|---|
-| `read` | Read a text file, optionally by line range |
-| `write` | Write or overwrite a file, creating parent directories |
-| `edit` | Replace exact text in a file |
-| `delete` | Delete a file or an empty directory |
-| `move` | Move or rename a file or empty directory |
-| `mkdir` | Create one directory whose parent already exists |
-| `bash` | Run a non-mutating verification command in the workspace directory |
-| `grep` | Search regex text in files under the workspace |
-| `find` | Find files matching a glob pattern |
-| `ls` | List directory entries |
-| `codebase_search` | Rank code and matching lines for a natural-language query |
-| `git_status` | Show the workspace's staged, unstaged, and untracked changes |
-| `git_diff` | Show staged/unstaged or revision-based Git diffs |
-| `web_search` | Search the web through Bing RSS, DuckDuckGo, or a configured SearXNG instance, with no API key |
-| `web_fetch` | Fetch a URL and return readable text |
-| `diagnostics` | Run workspace checks and summarize file/line diagnostics |
-| `todo_write` | Update the task checklist shown above the composer |
-| `scratchpad` | Append to or rewrite the global autosaved scratchpad |
-| `task` | Delegate a read-only investigation to an agent on the same provider/model |
-| `mcp_<server>_<tool>` | Call tools exposed by enabled stdio or Streamable HTTP MCP servers |
+| **Local HF** | oxi downloads a GGUF and runs `llama-server` for you |
+| **Remote HF** | Same, on another machine over SSH |
+| **LM Studio, Ollama, llama.cpp** | Your own local or LAN server, optionally over SSH |
+| **Claude Code, Cursor, Codex** | Uses your existing subscription through ACP |
+| **GPT Codex** | Sign in with ChatGPT, or use an OpenAI key |
+| **OpenAI, Azure, OpenRouter, OpenCode Go, Anthropic-compatible** | Hosted APIs with your key |
+| **Router** | Picks one of your providers per task, and switches if one runs out of quota |
 
-Tool behavior:
+With Router you can also just say it in the chat: *"use Codex for this"* or *"from now on use Claude Code"*.
 
-- path-based tools reject paths that escape the workspace root
-- `scratchpad` accepts `mode: "append" | "rewrite"` and `content`; append concatenates exactly, including supplied newlines, while an empty rewrite clears the notes
-- scratchpad changes sync with the editor, use the file-mutation approval setting, and are blocked in Plan mode; they are global and are not restored by **Edit & retry** or **Regenerate**
-- built-in tools are available to HTTP providers (including GPT Codex); ACP adapters manage their own tool sets
-- `write` can create new files under the workspace
-- `edit` requires each `oldText` to match exactly once unless `replaceAll` is set
-- `delete` is non-recursive, while `move` refuses to overwrite destinations and `mkdir` creates one level at a time
-- built-in filesystem mutations are journaled per turn so **Edit & retry** can restore them when no conflicting user change occurred
-- `read` is capped per call
-- `grep` / `find` skip common large folders such as `.git`, `target`, and `node_modules`
-- `grep`, `find`, and `ls` have result caps
-- `web_fetch` only accepts `http://` / `https://` URLs and strips HTML to plain text
-- web tools are read-only and do not require approval
-- filesystem mutations (`write`, `edit`, `delete`, `move`, `mkdir`) and `bash` can require explicit approval, controlled separately in Settings
-- simple `bash` commands can be always allowed by prefix (e.g. `cargo test`, `git status`) from the approval prompt or Settings → Agent; commands with pipes, `;`, `&&`, redirection, `$`, quotes or globs still ask
-- MCP tools always require approval because their side effects are not known in advance
-- `write` and `edit` generate unified diffs for the UI
-- `bash` has a configurable timeout cap, defaulting to 300 seconds
-- `bash` includes a small deny-list for obviously risky command substrings, but this is not a sandbox; the approval prompt is the real safety boundary
+<details>
+<summary>Default URLs and environment variables</summary>
 
-### Planning and task tracking
-
-Type `/plan` in the composer to toggle Plan mode, or `/plan <task>` to turn it on and send the task; while it is on, a **Plan** pill next to the model picker turns it off. Built-in Plan mode permits read-only tools and blocks filesystem mutations, shell/diagnostics commands and MCP calls. ACP runs also receive the planning instructions, and direct client file writes are refused. When the plan is ready, **Implement plan** starts implementation with the plan still in the conversation; **Keep planning** continues the investigation. The handoff is hidden while editing a previous prompt.
-
-The agent can maintain a checklist with `todo_write`; progress appears above the composer and is preserved in the saved chat. HTTP-provider agents can use `task` for read-only investigations with separate contexts. Delegated token usage is included in the parent conversation totals.
-
-### MCP connections and Activity log
-
-Configure MCP servers in Settings with either a stdio command or a Streamable HTTP URL. Connections persist across agent runs, support paginated tools and resources, and reconnect after a server exits or expires its HTTP session. Environment secrets and bearer tokens use the OS credential store.
-
-Open **Activity** from the status bar and enable recording to inspect provider requests/responses, retries, tool results, and ACP/MCP traffic. Recording is off by default; credentials are redacted, entries are bounded, and the log stays in memory.
-
-### Streaming coding UI
-
-Assistant output is rendered as structured blocks rather than plain text only. The app supports:
-
-- streaming responses
-- thinking blocks
-- grouped tool activity for exploration-style runs
-- compact tool pills
-- diff rendering for file writes/edits
-- markdown final answers
-- image attachments in the transcript
-- stop/cancel while a response is streaming
-- `@`-mention files and folders in the composer to inject their contents into the message
-- unseen-completion flagging when an agent run finishes in a chat you are not currently viewing
-- heuristic long-history trimming before provider requests
-
-### Git panel
-
-oxi includes a right-side source-control panel backed by the `git` CLI. The worker runs in the selected workspace and updates the UI without blocking it.
-
-Current Git features include:
-
-- status for staged and unstaged changes
-- branch list and checkout
-- new branch creation
-- commit history
-- per-file and per-commit diff viewing
-- stage / unstage / discard
-- commit
-- fetch / pull / push
-- AI commit-message generation from the current diff
-
-The commit-message generator can use the active provider or a provider/model pinned in Settings, with its own editable system prompt.
-
-### File explorer and code editor
-
-oxi is more than a chat window: it includes a workspace file explorer and a multi-tab text editor so you can read and edit code next to the agent.
-
-- **Explorer tree:** browse the active workspace, with Git status coloring on entries and dimming for Git-ignored paths.
-- **Context-menu file operations:** create, rename, and delete files/folders from the tree, and reveal a path in the OS file manager.
-- **Multi-tab editor:** open several files at once, each in its own tab, with syntax highlighting.
-- **Minimap:** a scrollable overview of the current file; you can scroll while hovering over it.
-- **Find / replace:** in-file search and replace with match highlighting.
-- **External-change detection:** oxi notices when a file changes on disk (e.g. after an agent edit) and keeps the view in sync.
-- **Git changes inline:** open a Git diff as an editor tab, with files staying open and editable beside it.
-
-### Embedded terminal
-
-A bottom terminal panel hosts a live PTY shell rooted at the active workspace. It is resizable, hideable, persisted in settings, and can be restarted from the panel header.
-
-### Voice dictation
-
-Voice dictation is optional and fully local:
-
-- microphone capture uses `cpal`
-- transcription uses `whisper-rs` / whisper.cpp bindings
-- voice models are downloaded from `ggerganov/whisper.cpp` on HuggingFace
-- available model sizes range from Tiny to Large v3, including English-only and multilingual variants
-- the Whisper model is loaded lazily only when transcribing
-- by default, the model is unloaded after each transcription so idle dictation does not keep extra memory resident
-- language can be set explicitly or left as `auto`
-
-## Providers
-
-Settings keep one configuration per provider kind. The active provider can be switched from Settings or from the composer provider control.
-
-With **Router (auto)** selected, explicit instructions such as `Use Codex for this task` or `Folosește Claude Code pentru asta` take priority over automatic scoring. `From now on use Claude Code` / `De acum folosește Claude Code` keeps that preference for the chat, including after reopening or compaction. `Use only Codex` prevents fallback to another provider; `De acum folosește Router` restores automatic selection. Provider names in comparisons, quotations, or fenced code do not select a provider.
-
-Requests to generate an image (`Generate an image of…`, `Fă-mi un logo…`) always go to **Codex (ACP)**, the only agent that can create images, unless the same message names another provider. Automatic failover does not move these turns elsewhere.
-
-When automatic failover is enabled, a recognized quota or rate-limit failure can continue the same request with another eligible API or ACP provider. The router makes at most two switches and never retries the same provider within a request. A new ACP session receives conversation history plus bounded partial answers and tool reports from the failed attempts, and is told to inspect the workspace before continuing. Plan mode, approval policies, and cancellation remain active. Unfinished tool calls or unresolved approvals stop automatic continuation; unrelated errors stop the request. The route displayed above the answer identifies the replacement provider and the quota failure.
-
-Supported provider kinds:
-
-| Provider | Notes |
-|---|---|
-| OpenAI | OpenAI-compatible chat completions |
-| Azure OpenAI | Azure deployment endpoint style |
-| OpenRouter | OpenRouter chat completions with optional referer/title headers |
-| GPT Codex | ChatGPT/Codex OAuth mode or OpenAI API-key fallback |
-| OpenCode Go | OpenCode Go subscription endpoint; backend shape depends on model family |
-| Custom Anthropic | User-configured Anthropic Messages-compatible endpoint |
-| LM Studio | Local/LAN OpenAI-compatible server |
-| llama.cpp / local server | A separately managed OpenAI-compatible local server |
-| Ollama | Local/LAN OpenAI-compatible server at `/v1` |
-| Local HF | oxi-managed GGUF model + local `llama-server` runtime |
-| Remote HF | oxi-managed GGUF model + `llama-server` runtime on an SSH-tunneled host |
-| Claude Code (ACP) | oxi acts as an Agent Client Protocol client and spawns the `claude-code-acp` subprocess |
-| Cursor (ACP) | Cursor CLI's built-in ACP server (`agent acp`) |
-| Codex (ACP) | OpenAI Codex CLI through the official ACP adapter |
-
-### Auto router
-
-Select **Router** to choose among your configured providers each turn. For automatic choices, by default,
-Jev (`typesafe/jev-1.13`) classifies the task as light, standard or heavy using the
-[OpenRouter Decisions API](https://openrouter.ai/docs/guides/community/jev-tutorial).
-Set an OpenRouter API key in Settings → Providers or `OPENROUTER_API_KEY`; the
-OpenRouter chat model does not need to be selected. oxi then ranks your providers
-locally using the selected strategy, quotas, costs and conversation continuity.
-
-Classification sends the current message (up to 16 KB) and limited recent text
-context (up to 8 KB); images, thinking and tool outputs are excluded. Calls have a
-five-second timeout, count toward the monthly pay-per-use budget, and are reused
-when a turn fails over. Missing credentials, API errors and low-confidence results
-use a conservative local fallback (at least standard). You can disable Jev under
-Settings → Providers → Router to use only the local rules. Helper completions such
-as titles and commit messages use local routing without an extra Jev request.
-
-### Provider defaults
-
-| Provider | Default base URL | Default model |
+| Provider | Default base URL | Key from environment |
 |---|---|---|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
-| Azure OpenAI | `https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT` | `gpt-4o-mini` |
-| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` |
-| GPT Codex | `https://api.openai.com/v1` for API-key fallback | `gpt-4o-mini` |
-| OpenCode Go | `https://opencode.ai/zen/go` | `kimi-k2.7-code` |
-| Custom Anthropic | `http://localhost:8000` | `claude-sonnet-4-5` |
-| LM Studio | `http://localhost:1234/v1` | `local-model` |
-| llama.cpp / local server | `http://localhost:8080/v1` | `local-model` |
-| Ollama | `http://localhost:11434/v1` | `qwen2.5-coder:7b` |
-| Local HF | `http://127.0.0.1:18080/v1` | `local-hf-model` |
-| Remote HF | `http://127.0.0.1:18080/v1` (via SSH tunnel) | `local-hf-model` |
-| Claude Code (ACP) | not HTTP-based | `sonnet` informational default |
-| Cursor (ACP) | not HTTP-based | provider default |
-| Codex (ACP) | not HTTP-based | provider default |
+| OpenAI | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| Azure OpenAI | `https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT` | `AZURE_OPENAI_API_KEY` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| GPT Codex | OAuth, or `https://api.openai.com/v1` with a key | `OPENAI_API_KEY` |
+| OpenCode Go | `https://opencode.ai/zen/go` | `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY` |
+| Custom Anthropic | `http://localhost:8000` | `CUSTOM_ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEY` |
+| LM Studio | `http://localhost:1234/v1` | `LMSTUDIO_API_KEY` (optional) |
+| llama.cpp | `http://localhost:8080/v1` | `LLAMA_API_KEY` (optional) |
+| Ollama | `http://localhost:11434/v1` | `OLLAMA_API_KEY` (optional) |
+| Local HF / Remote HF | `http://127.0.0.1:18080/v1` | none |
 
-### Auth fallback environment variables
+ChatGPT sign-in needs port `1455` free for the login callback. The Router's task classifier uses OpenRouter if a key is set, and falls back to local rules otherwise; you can turn it off in Settings → Providers → Router.
 
-| Purpose | Variable(s) |
-|---|---|
-| OpenAI auth | `OPENAI_API_KEY` |
-| Azure OpenAI auth | `AZURE_OPENAI_API_KEY` |
-| OpenRouter auth | `OPENROUTER_API_KEY` |
-| OpenRouter referer | `OPENROUTER_HTTP_REFERER` |
-| OpenRouter title | `OPENROUTER_TITLE` |
-| Codex API-key fallback auth | `OPENAI_API_KEY` |
-| OpenCode Go auth | `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY` |
-| Custom Anthropic auth | `CUSTOM_ANTHROPIC_API_KEY`, `ANTHROPIC_API_KEY` |
-| LM Studio auth, optional | `LMSTUDIO_API_KEY` |
-| llama.cpp auth, optional | `LLAMA_API_KEY` |
-| Ollama auth, optional | `OLLAMA_API_KEY` |
+</details>
 
-API keys saved through the UI are stored in the OS credential store, not in `settings.json`.
+## Your data
 
-## Local and remote models
+Everything stays on your machine. Settings live in your config folder (e.g. `~/.config/oxi/settings.json` on Linux). API keys, sign-in tokens and SSH passwords go to the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never into the settings file.
 
-### LM Studio, llama.cpp and Ollama
+If a workspace has an `AGENTS.md` at its root, oxi adds it to the agent's instructions.
 
-Create an LM Studio, **llama.cpp / local server**, or Ollama provider config, point the base URL at your runtime, and use **Load available models** in the UI to choose a model that is actually loaded/pulled. The llama.cpp profile defaults to `http://localhost:8080/v1`; Settings highlights missing URL schemes, missing `/v1` prefixes and accidentally pasted `/chat/completions` suffixes.
+## Good to know
 
-LM Studio, llama.cpp and Ollama API keys are optional because local servers usually ignore bearer tokens. oxi will use the profile value, then the relevant environment variable, then an empty key.
+- Approval prompts are the real safety boundary. Shell commands and MCP tools are not sandboxed.
+- Only point SSH tunnels at machines you control.
+- Image input depends on whether your model supports images.
 
-### Local HF and Remote HF
+## Contributing
 
-The **Local HF** and **Remote HF** providers let oxi manage GGUF models directly:
-
-- search HuggingFace for GGUF repositories
-- list available `.gguf` files
-- download selected models into oxi's data directory
-- install a matching `llama-server` runtime
-- start/stop the `llama-server` process
-- talk to it through the OpenAI-compatible `/v1` API
-
-The two providers differ only in *where* the managed runtime runs:
-
-- **Local HF** runs the oxi-managed `llama-server` on this machine.
-- **Remote HF** runs the same oxi-managed workflow (install runtime, download GGUF, start/stop, tunnel chat) on another host over SSH. It is always remote; there is no local/remote toggle.
-
-Remote HF is a dedicated provider now. If you previously configured **Local HF** with an SSH compute target, oxi migrates that setup to **Remote HF** automatically on first launch.
-
-### Remote compute over SSH
-
-![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png)
-
-SSH compute targets connect oxi to a model runtime on another machine through an SSH tunnel:
-
-- **LM Studio and Ollama** expose a **Local / Remote (SSH)** toggle. *Local* connects directly to the provider's base URL; *Remote (SSH)* forwards a local port to a runtime already listening on `127.0.0.1` on the remote host.
-- **Remote HF** is SSH-only and additionally manages the runtime for you (install, download, start/stop) on the remote host.
-
-Implementation notes:
-
-- SSH uses `russh`; no external `ssh` binary is required
-- password authentication is supported
-- one tunnel is reused per provider and reconnects lazily
-- SSH passwords are stored in the OS keychain
-- host keys use trust-on-first-use pinning; a changed key is rejected until accepted/reset by the user
-- the Settings UI exposes host, SSH port, user, remote runtime port, password, and connection testing
-
-## OAuth flows
-
-### ChatGPT / Codex OAuth
-
-GPT Codex supports a PKCE OAuth flow:
-
-- oxi opens the browser for login
-- it listens on `http://localhost:1455/auth/callback`
-- access and refresh tokens are stored in the OS credential store
-- access tokens are refreshed automatically before expiry
-- callback port `1455` must be available
-
-If OAuth is not used, GPT Codex can fall back to OpenAI-compatible chat completions with an API key.
-
-## Attachments
-
-The UI supports image attachments through:
-
-- file picker
-- drag and drop
-- paste from clipboard
-
-Supported image formats:
-
-- PNG
-- JPEG
-- GIF
-- WebP
-
-Images are stored in session history and rendered in the transcript. They are converted to OpenAI-style `image_url` blocks when history is prepared, but actual compatibility depends on the selected provider/model.
-
-## Settings and local data
-
-Settings are stored under the platform config directory, for example:
-
-- `~/.config/oxi/settings.json` on many Linux systems
-- the platform-equivalent config directory on macOS and Windows
-
-Secrets are not stored in `settings.json`:
-
-- provider API keys
-- OAuth tokens
-- SSH passwords
-
-They are stored in the OS credential store:
-
-- macOS Keychain
-- Windows Credential Manager
-- Secret Service over D-Bus on Linux
-
-Other local data includes:
-
-- chat sessions per workspace
-- downloaded Local HF models and runtime files
-- downloaded Whisper voice models
-- local manifests for downloaded models
-- optional crash log at `<config_dir>/oxi/crash.log`
-
-On Unix, `settings.json` is written with `0600` permissions as defense in depth for non-secret configuration.
-
-## System prompts
-
-oxi stores an editable main agent system prompt.
-
-Supported placeholder:
-
-- `{tools_list}`: replaced with the enabled tool names
-
-At runtime, the prompt builder also appends:
-
-- root-level `AGENTS.md` project instructions, when present and enabled in Settings
-- current date
-- current working directory
-
-`AGENTS.md` loading is intentionally simple: oxi reads only `<workspace>/AGENTS.md`, caps it at 64 KiB, and labels it clearly as project instructions in the system prompt.
-
-There is also a separate editable system prompt for AI commit-message generation.
-
-## Web search
-
-The agent can search the web without any search API key. There is no Brave, Tavily, Serper, or Google CSE account to create, no key to paste into settings, and no per-query cost. The `web_search` tool queries public endpoints directly, or your own SearXNG instance if you prefer to keep queries in-house.
-
-Backends:
-
-- **DuckDuckGo:** the default. Zero config, parses the HTML results endpoint. DuckDuckGo rate-limits bursts of queries with a bot-challenge page; when that happens the search falls back to Bing and says so in the result.
-- **Bing:** zero config, reads Bing's public RSS search feed, capped at around 10 results per query.
-- **SearXNG:** point oxi at the URL of a SearXNG instance you host. The instance must have the JSON output format enabled. This keeps every query on infrastructure you control and lets you pick which upstream engines are used.
-
-Pick the backend in Settings. `web_fetch` is a separate tool that pulls readable text out of an HTTP(S) URL, also without a key. Both web tools are read-only and run without an approval prompt.
-
-## Appearance
-
-Settings include theme and density controls. Built-in themes are managed by the theme catalog, and UI density is applied through egui zoom so text and spacing scale together. A custom theme can also be loaded from a JSON spec.
-
-Built-in themes: **Dark**, **Light**, **Midnight**, **Sublime**, and **Sublime 4** (`mariana`). Each theme restyles the whole app consistently: chrome, transcript, syntax highlighting, and the editor.
-
-| Sublime 4 | Sublime |
-|---|---|
-| ![oxi Sublime 4 theme](assets/screenshots/theme-mariana.png) | ![oxi Sublime theme](assets/screenshots/theme-sublime.png) |
-
-| Midnight | Light |
-|---|---|
-| ![oxi Midnight theme](assets/screenshots/theme-midnight.png) | ![oxi Light theme](assets/screenshots/theme-light.png) |
-
-## Architecture
-
-High-level source layout:
-
-- `src/main.rs`: native `eframe` entry point, window setup, panic logging
-- `src/app/`: app state, sidebar, composer, settings page, session/workspace behavior, Git/terminal panels
-- `src/app/file_explorer/`: workspace file explorer, multi-tab code editor, minimap, find/replace, and inline Git-diff tabs
-- `src/agent/`: agent runner, prompts, provider adapters, history conversion/trimming, approvals, tool execution
-- `src/agent/tools/`: filesystem, shell/search, codebase-search, Git inspection, web, and reversible-turn tool implementations
-- `src/git.rs`: background Git worker and typed Git operations
-- `src/terminal.rs`: PTY terminal session
-- `src/local_models.rs`: HuggingFace GGUF downloads and local `llama-server` runtime management
-- `src/local_models_remote.rs`: remote SSH helpers for Local HF
-- `src/voice_engine.rs`: local microphone capture and Whisper transcription
-- `src/voice_models.rs`: Whisper model catalog/downloads
-- `src/oauth/`: Codex OAuth and token persistence
-- `src/compute/`: SSH tunnels and credential storage
-- `src/session_store/`: session loading/saving and storage path handling
-- `src/settings/`: persistent settings and provider config model
-- `src/theme/`: theme catalog, palette, formatting, and style helpers
-- `src/ui/`: shared UI chrome helpers
-
-Important runtime behavior:
-
-- the current working directory becomes the initial workspace
-- agent runs happen off the UI thread with a Tokio runtime
-- Git operations run on a background worker thread
-- the terminal is spawned lazily when the panel opens
-- voice transcription runs on its own background thread
-- settings are loaded on startup and saved through the Settings page or relevant toggles
-- tools execute locally against the selected workspace root
-- conversation history is converted to provider-specific payloads before requests are sent
-
-## Current limitations and safety notes
-
-- `bash` safety checks are best-effort and not a sandbox
-- built-in filesystem tools can modify files inside the selected workspace; MCP tools and `bash` may have broader side effects and are not sandboxed
-- Git panel actions can modify the repository, including discard/commit/checkout/pull/push
-- Remote SSH tunnels should only be pointed at hosts you control
-- long conversation trimming uses approximate budgets, not exact tokenizer accounting
-- image input support depends on backend/model compatibility
-- Local HF runtime support depends on the platform/runtime artifacts available for `llama.cpp`
-- voice dictation requires a usable microphone input device and a downloaded Whisper model
-
-## Development checks
-
-The CI workflow runs:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo audit
-cargo test
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for building, tests, code layout and PR conventions.
