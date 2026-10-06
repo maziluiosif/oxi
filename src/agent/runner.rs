@@ -144,6 +144,7 @@ fn spawn_agent_attempt(
                 );
             let outcome = run_acp_turn(
                 &cfg,
+                settings.mcp_servers.clone(),
                 &acp,
                 acp_session_key,
                 cwd.clone(),
@@ -318,6 +319,7 @@ fn first_line(s: &str) -> &str {
 #[allow(clippy::too_many_arguments)]
 async fn run_acp_turn(
     cfg: &ProviderConfig,
+    mcp_servers: Vec<crate::settings::McpServerConfig>,
     acp: &crate::agent::acp::AcpManager,
     acp_session_key: String,
     cwd: PathBuf,
@@ -358,6 +360,7 @@ async fn run_acp_turn(
         env,
         model: cfg.model_id.clone(),
         effort: cfg.effort.clone(),
+        mcp_servers,
         text,
         history,
         images,

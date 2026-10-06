@@ -563,6 +563,7 @@ impl OxiApp {
             pending_texts: Vec::new(),
             modified: std::time::SystemTime::now(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
         }
     }

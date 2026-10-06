@@ -1,6 +1,7 @@
 //! Voice dictation and context-usage controls.
 
 use super::*;
+use crate::settings::LlmProviderKind;
 
 impl OxiApp {
     /// Round mic button: idle → click starts recording (lazy-loads the whisper model on
@@ -140,11 +141,24 @@ impl OxiApp {
 
     pub(super) fn render_context_indicator(&self, ui: &mut Ui) {
         let cfg = self.conv.settings.active_config();
-        let max_tokens = cfg.effective_context_window(self.conv.settings.context_window_default);
         let key = self.active_session_key();
-        let used_chars = self.estimated_active_context_chars();
-        let cpt = self.calibrated_chars_per_token(key) as f64;
-        let used_tokens = ((used_chars as f64) / cpt).ceil().max(0.0) as usize;
+        // An ACP agent keeps its own context (system prompt, tools, compaction), so its own
+        // reading beats anything estimated from oxi's transcript.
+        let reported = self
+            .session_by_key(key)
+            .agent_context
+            .filter(|(provider, _, size)| cfg.is_acp() && *provider == cfg.provider && *size > 0);
+        let (used_tokens, max_tokens) = match reported {
+            Some((_, used, size)) => (used as usize, size as usize),
+            None => {
+                let max_tokens =
+                    cfg.effective_context_window(self.conv.settings.context_window_default);
+                let used_chars = self.estimated_active_context_chars();
+                let cpt = self.calibrated_chars_per_token(key) as f64;
+                let used_tokens = ((used_chars as f64) / cpt).ceil().max(0.0) as usize;
+                (used_tokens, max_tokens)
+            }
+        };
         let pct = if max_tokens == 0 {
             0.0
         } else {
@@ -176,9 +190,81 @@ impl OxiApp {
         );
         // Show the context tooltip immediately; egui's default hover tooltip delay feels
         // sluggish for this tiny status indicator in the composer.
-        if resp.hovered() {
-            resp.show_tooltip_text(hover);
+        if !resp.hovered() {
+            return;
         }
+        let kind = self.conv.settings.active_provider;
+        let Some(usage) = self.subscription_usage_lines(ui.ctx(), kind) else {
+            resp.show_tooltip_text(hover);
+            return;
+        };
+        resp.show_tooltip_ui(|ui| {
+            ui.label(hover);
+            ui.add_space(4.0);
+            for (text, color) in usage {
+                ui.label(RichText::new(text).size(FS_SMALL).color(color));
+            }
+        });
+    }
+
+    /// Subscription windows (5h / weekly) for providers whose usage oxi can read, shown under
+    /// the context reading. Hovering kicks off a probe; [`quota::refresh`] throttles itself.
+    fn subscription_usage_lines(
+        &self,
+        ctx: &egui::Context,
+        kind: LlmProviderKind,
+    ) -> Option<Vec<(String, Color32)>> {
+        use crate::router::quota;
+        let router = &self.conv.settings.router;
+        let enabled = match kind {
+            LlmProviderKind::ClaudeCodeAcp => router.read_claude_code_usage,
+            LlmProviderKind::CodexAcp => router.read_codex_cli_usage,
+            LlmProviderKind::GptCodex => true,
+            _ => return None,
+        };
+        if !enabled {
+            return Some(vec![(
+                "Turn on subscription usage in Settings → Router to see the 5h and weekly limits"
+                    .into(),
+                c_text_faint(),
+            )]);
+        }
+        // Only ask every half minute: the refresh repaints when done, which would otherwise
+        // respawn it every frame while the pointer rests here.
+        let id = egui::Id::new("context_tooltip_quota_refresh");
+        let t = ctx.input(|i| i.time);
+        let last = ctx.data(|d| d.get_temp::<f64>(id));
+        if !quota::is_refreshing() && last.is_none_or(|l| t - l >= 30.0) {
+            ctx.data_mut(|d| d.insert_temp(id, t));
+            let settings = self.conv.settings.clone();
+            let ctx = ctx.clone();
+            if let Ok(rt) = crate::runtime::runtime() {
+                rt.spawn(async move {
+                    quota::refresh(&settings, false).await;
+                    ctx.request_repaint();
+                });
+            }
+        }
+        let Some(snap) = quota::snapshot(kind) else {
+            return Some(vec![("Reading subscription usage…".into(), c_text_faint())]);
+        };
+        let now = quota::now_secs();
+        let mut lines: Vec<_> = snap
+            .windows
+            .iter()
+            .map(|w| {
+                let color = if snap.limit_reached && w.model_scope.is_none() {
+                    c_error_fg()
+                } else {
+                    c_text_muted()
+                };
+                (w.summary(now), color)
+            })
+            .collect();
+        if let Some(err) = snap.error {
+            lines.push((format!("Usage: {err}"), c_error_fg()));
+        }
+        Some(lines)
     }
 
     /// Output speed of the running turn (or the last finished one) beside the context ring.

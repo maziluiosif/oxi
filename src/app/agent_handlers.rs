@@ -292,7 +292,11 @@ impl OxiApp {
                     message.route = Some(note);
                 }
             }
-            AgentEvent::SubagentUsage(usage) => {
+            AgentEvent::ContextUsage { used, size } => {
+                let provider = self.ensure_session_config(key).provider;
+                self.session_mut_by_key(key).agent_context = Some((provider, used, size));
+            }
+            AgentEvent::SubagentUsage(usage) | AgentEvent::ExternalUsage(usage) => {
                 self.record_usage(key, &usage);
                 let run = self.run_state_mut(key);
                 run.turn_usage.add(&usage);

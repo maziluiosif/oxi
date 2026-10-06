@@ -6,15 +6,22 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 
 use base64::Engine as _;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::agent::events::AgentEvent;
 use crate::model::{ToolLocation, ToolMetadata, ToolStatus, ToolUpdate};
+
+/// Tool call id of the synthetic `todo_write` block that mirrors the agent's plan.
+const PLAN_TOOL_CALL_ID: &str = "acp-plan";
 
 /// Translate one ACP `session/update` payload into oxi [`AgentEvent`]s.
 #[derive(Default)]
 pub(super) struct UpdateState {
     tools: HashMap<String, ToolAccumulator>,
+    /// The turn's answer text so far, to tell whether a plan was already written out.
+    message: String,
+    /// The checklist last shown, so repeated identical updates are not re-sent.
+    last_checklist: Option<Value>,
 }
 
 #[derive(Default)]
@@ -22,6 +29,10 @@ struct ToolAccumulator {
     fields: serde_json::Map<String, Value>,
     content: ToolContent,
     emitted_images: HashSet<String>,
+    /// Command output streamed through the `_meta.terminal_output_delta` extension.
+    terminal: String,
+    /// The plan of an `ExitPlanMode`-style call was already shown as text.
+    plan_emitted: bool,
 }
 
 impl UpdateState {
@@ -31,6 +42,7 @@ impl UpdateState {
             Some("agent_message_chunk") => {
                 let content = update.get("content");
                 if let Some(text) = content.and_then(content_block_text) {
+                    self.message.push_str(&text);
                     let _ = tx.send(AgentEvent::TextDelta(text));
                 } else if let Some(md) = content.and_then(content_block_image_markdown) {
                     let _ = tx.send(AgentEvent::TextDelta(md));
@@ -42,6 +54,19 @@ impl UpdateState {
                 }
             }
             Some("tool_call" | "tool_call_update") => self.emit_tool(update, tx),
+            Some("plan") => {
+                if let Some(entries) = update.get("entries").and_then(Value::as_array) {
+                    self.emit_checklist(entries, tx);
+                }
+            }
+            Some("usage_update") => {
+                if let (Some(used), Some(size)) = (
+                    update.get("used").and_then(Value::as_u64),
+                    update.get("size").and_then(Value::as_u64),
+                ) {
+                    let _ = tx.send(AgentEvent::ContextUsage { used, size });
+                }
+            }
             _ => {}
         }
     }
@@ -72,7 +97,36 @@ impl UpdateState {
         if let Some(content) = update.get("content").filter(|v| v.is_array()) {
             tool.content = extract_tool_content(content);
         }
+        let limit = crate::agent::tools::MAX_TOOL_OUTPUT_CHARS;
+        // Command output arrives in chunks under `_meta` (see `spawn_conn`'s capabilities).
+        // Past the display limit the rest is dropped; `limit * 4` bytes always covers it.
+        for key in ["terminal_output_delta", "terminal_output"] {
+            if let Some(data) = update["_meta"][key]["data"].as_str()
+                && tool.terminal.len() <= limit * 4
+            {
+                tool.terminal.push_str(data);
+            }
+        }
         let field = |key| tool.fields.get(key).and_then(Value::as_str).unwrap_or("");
+        let named = |name: &str| field("title") == name || field("name") == name;
+        // oxi's own checklist tool (see `todo_mcp`) drives the native checklist, not a tool row.
+        if [field("title"), field("name")]
+            .into_iter()
+            .any(super::todo_mcp::names_todo_tool)
+        {
+            let todos = tool
+                .fields
+                .get("rawInput")
+                .and_then(|i| i["todos"].as_array());
+            if let Some(todos) = todos.cloned() {
+                self.emit_checklist(&todos, tx);
+            }
+            return;
+        }
+        // Claude Code loading deferred tool schemas is bookkeeping, not work worth a row.
+        if named("ToolSearch") {
+            return;
+        }
         let kind = field("kind");
         let status = match field("status") {
             "in_progress" => ToolStatus::InProgress,
@@ -109,7 +163,11 @@ impl UpdateState {
             other => other,
         }
         .to_owned();
-        let output = if tool.content.text.is_empty() {
+        let output = if !tool.content.text.is_empty() {
+            tool.content.text.clone()
+        } else if !tool.terminal.is_empty() {
+            tool.terminal.clone()
+        } else {
             tool.fields
                 .get("rawOutput")
                 .map(|v| {
@@ -118,10 +176,17 @@ impl UpdateState {
                         .unwrap_or_else(|| serde_json::to_string_pretty(v).unwrap_or_default())
                 })
                 .unwrap_or_default()
-        } else {
-            tool.content.text.clone()
         };
-        let limit = crate::agent::tools::MAX_TOOL_OUTPUT_CHARS;
+        // A plan handed over for approval (Claude's `ExitPlanMode`) only lives in the tool's
+        // input; show it as text so it reads like the plan it is, even when the call is refused.
+        // Codex already streams its plan as answer text.
+        let plan = (kind == "switch_mode" && !tool.plan_emitted)
+            .then(|| tool.fields.get("rawInput")?.get("plan")?.as_str())
+            .flatten()
+            .map(str::trim)
+            .filter(|p| !p.is_empty() && !self.message.contains(p))
+            .map(|p| format!("\n\n{p}\n\n"));
+        tool.plan_emitted |= plan.is_some();
         let output_truncated = output.chars().count() > limit;
         let _ = tx.send(AgentEvent::ToolUpdate(Box::new(ToolUpdate {
             tool_call_id: id.to_owned(),
@@ -137,6 +202,47 @@ impl UpdateState {
                 let _ = tx.send(AgentEvent::TextDelta(md.clone()));
             }
         }
+        if let Some(plan) = plan {
+            let _ = tx.send(AgentEvent::TextDelta(plan));
+        }
+    }
+
+    /// Mirror the agent's task list (an ACP `plan`, or a call to oxi's `todo_write` MCP tool;
+    /// either carries the whole list) as a `todo_write` call, so it drives the same checklist
+    /// as oxi's own agent.
+    fn emit_checklist(&mut self, entries: &[Value], tx: &Sender<AgentEvent>) {
+        let todos: Vec<Value> = entries
+            .iter()
+            .filter_map(|e| {
+                let content = e.get("content")?.as_str()?.trim();
+                let status = e
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .filter(|s| matches!(*s, "in_progress" | "completed"))
+                    .unwrap_or("pending");
+                (!content.is_empty()).then(|| json!({ "content": content, "status": status }))
+            })
+            .collect();
+        let args = json!({ "todos": todos });
+        if self.last_checklist.as_ref() == Some(&args) {
+            return;
+        }
+        self.last_checklist = Some(args.clone());
+        let _ = tx.send(AgentEvent::ToolUpdate(Box::new(ToolUpdate {
+            tool_call_id: PLAN_TOOL_CALL_ID.to_owned(),
+            name: "todo_write".to_owned(),
+            output: crate::agent::tools::tool_todo_write(&args).unwrap_or_default(),
+            args: Some(args),
+            diff: None,
+            output_truncated: false,
+            metadata: ToolMetadata {
+                title: String::new(),
+                kind: "think".to_owned(),
+                name: Some("todo_write".to_owned()),
+                locations: Vec::new(),
+                status: ToolStatus::Completed,
+            },
+        })));
     }
 }
 

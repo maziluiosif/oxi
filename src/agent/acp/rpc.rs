@@ -11,6 +11,7 @@ use tokio::process::ChildStdin;
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use super::client_fs::fs_read_text;
+use super::modes::SharedModes;
 use super::permissions::PermReq;
 use super::{Pending, PromptCtx, commands};
 use crate::agent::activity_log::{self, ActivityKind};
@@ -70,6 +71,7 @@ pub(super) async fn read_loop(
     prompt_ctx: Arc<AsyncMutex<Option<PromptCtx>>>,
     stdin: Arc<AsyncMutex<ChildStdin>>,
     alive: Arc<AtomicBool>,
+    modes: SharedModes,
     commands_key: CommandsKey,
 ) {
     let mut lines = BufReader::new(stdout).lines();
@@ -109,7 +111,7 @@ pub(super) async fn read_loop(
                 }
             }
         }
-        dispatch(&line, &pending, &prompt_ctx, &stdin, &commands_key).await;
+        dispatch(&line, &pending, &prompt_ctx, &stdin, &modes, &commands_key).await;
     }
     flush_chunks(&mut chunks, &mut chunk_count);
     alive.store(false, Ordering::SeqCst);
@@ -136,6 +138,7 @@ pub(super) async fn dispatch(
     pending: &Pending,
     prompt_ctx: &Arc<AsyncMutex<Option<PromptCtx>>>,
     stdin: &Arc<AsyncMutex<ChildStdin>>,
+    modes: &SharedModes,
     commands_key: &CommandsKey,
 ) {
     let v: Value = match serde_json::from_str(line) {
@@ -149,17 +152,27 @@ pub(super) async fn dispatch(
             handle_agent_request(method, id, params, stdin, prompt_ctx).await;
         } else if method == "session/update" {
             let update = &v["params"]["update"];
-            // Usually sent right after session setup, before any prompt, so it is handled
-            // regardless of whether a turn is in flight.
-            if update["sessionUpdate"].as_str() == Some("available_commands_update")
-                && let Some(list) = commands::parse_update(update)
-            {
-                commands::store(&commands_key.command_line, &commands_key.cwd, list);
-            } else if let Some(ctx) = prompt_ctx.lock().await.as_mut() {
-                ctx.emit_notification(&v["params"]);
+            // Commands usually arrive right after session setup and modes can change between
+            // turns, so both are handled regardless of whether a turn is in flight.
+            match update["sessionUpdate"].as_str() {
+                Some("available_commands_update") => {
+                    if let Some(list) = commands::parse_update(update) {
+                        commands::store(&commands_key.command_line, &commands_key.cwd, list);
+                    }
+                }
+                Some("config_option_update" | "current_mode_update") => {
+                    modes
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .apply_notification(update);
+                }
+                _ => {
+                    if let Some(ctx) = prompt_ctx.lock().await.as_mut() {
+                        ctx.emit_notification(&v["params"]);
+                    }
+                }
             }
         }
-        // Other notifications (current_mode_update, …) are ignored.
     } else if let Some(id) = v.get("id").and_then(|x| x.as_i64()) {
         let waiter = pending.lock().await.remove(&id);
         if let Some(w) = waiter {

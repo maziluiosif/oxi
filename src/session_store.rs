@@ -52,6 +52,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             pending_texts: Vec::new(),
             modified: session.modified,
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
         })
         .collect()
@@ -253,6 +254,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: Some(WireCache {
                 fingerprint: "v1:sha256:abcd".into(),
                 messages: vec![json!({"role":"system","content":"s"})],
@@ -290,6 +292,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
             modified: SystemTime::now(),
         };
@@ -321,6 +324,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
             modified: SystemTime::now(),
         };
@@ -387,6 +391,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
             modified: SystemTime::now(),
         };
@@ -437,6 +442,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
             modified: SystemTime::now(),
         };

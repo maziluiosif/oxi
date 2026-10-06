@@ -194,6 +194,9 @@ pub struct Session {
     /// only (not persisted), used to calibrate the context trim budget and the composer
     /// context indicator. `None` until the first turn reports usage.
     pub chars_per_token: Option<f32>,
+    /// Context occupancy last reported by an ACP agent for this chat: provider, tokens in use,
+    /// window size. In-memory only; the composer indicator prefers it over oxi's estimate.
+    pub agent_context: Option<(LlmProviderKind, u64, u64)>,
     /// Derived, dispensable provider-native history persisted for prompt-cache hits. The
     /// transcript in `messages` is authoritative and can rebuild this cache at any time.
     pub wire_cache: Option<WireCache>,

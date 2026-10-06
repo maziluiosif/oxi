@@ -50,6 +50,7 @@ impl OxiApp {
             std::path::PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
         let env = cfg.acp_env();
         let command_line = cfg.effective_acp_command();
+        let mcp_servers = self.conv.settings.mcp_servers.clone();
         let acp = self.acp.clone();
 
         let (tx, rx) = std::sync::mpsc::channel::<ModelFetchMsg>();
@@ -73,6 +74,7 @@ impl OxiApp {
                     env,
                     model: cfg.model_id.clone(),
                     effort: cfg.effort.clone(),
+                    mcp_servers,
                 }));
                 let _ = tx.send(ModelFetchMsg {
                     provider: kind,

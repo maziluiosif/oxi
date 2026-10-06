@@ -44,7 +44,33 @@ pub fn parse_todos(args: &Value) -> Option<Vec<TodoItem>> {
         .collect()
 }
 
-pub(super) fn tool_todo_write(args: &Value) -> Result<String, String> {
+/// The `todo_write` function definition (name, description, JSON schema) shared by oxi's own
+/// agent and the MCP server ACP agents get.
+pub(crate) fn todo_write_definition() -> Value {
+    serde_json::json!({
+        "name": "todo_write",
+        "description": "Create or update your checklist for the current task; the user sees it live. Send the complete list every time (it replaces the previous one). Use it for work with 3+ steps: write all steps up front, keep exactly one item in_progress, and mark items completed as soon as they are done. Skip it for trivial one-step requests.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": { "type": "string", "description": "Short imperative step, e.g. \"Fix the parser bug\"" },
+                            "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+                        },
+                        "required": ["content", "status"]
+                    }
+                }
+            },
+            "required": ["todos"]
+        }
+    })
+}
+
+pub(crate) fn tool_todo_write(args: &Value) -> Result<String, String> {
     let todos = parse_todos(args).ok_or_else(|| {
         "`todos` must be an array of { content: non-empty string, status: pending | in_progress | completed }"
             .to_string()
