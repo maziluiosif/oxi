@@ -175,10 +175,15 @@ pub(super) fn pick_option(options: &[Value], wanted_kinds: &[&str]) -> Option<St
 pub(super) fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
     let kind = tool.get("kind").and_then(|k| k.as_str()).unwrap_or("");
     let title = tool.get("title").and_then(|t| t.as_str()).unwrap_or("");
+    // Same names as oxi's own tools, so the approval settings mean the same thing for both.
     let name = match kind {
         "execute" => "bash".to_string(),
         "edit" | "delete" | "move" => "edit".to_string(),
-        "" => {
+        "read" => "read".to_string(),
+        "search" => "grep".to_string(),
+        "fetch" => "web_fetch".to_string(),
+        "think" => "task".to_string(),
+        "" | "other" => {
             if title.is_empty() {
                 "tool".to_string()
             } else {

@@ -145,6 +145,31 @@ fn permission_name_maps_kind() {
     assert_eq!(name, "edit");
 }
 
+#[test]
+fn approval_settings_cover_acp_tools_like_oxi_tools() {
+    let off = ApprovalPolicy::disabled();
+    let on = ApprovalPolicy {
+        write_edit: true,
+        bash: true,
+    };
+    for kind in ["read", "search", "fetch", "think"] {
+        let (name, _) = permission_name_args(&json!({"kind":kind,"title":"x"}));
+        assert!(!on.requires_approval(&name), "{kind} is read-only");
+    }
+    for kind in ["execute", "edit", "delete", "move"] {
+        let (name, _) = permission_name_args(&json!({"kind":kind,"title":"x"}));
+        assert!(on.requires_approval(&name), "{kind} asks when switched on");
+        assert!(
+            !off.requires_approval(&name),
+            "{kind} runs when switched off"
+        );
+    }
+    // External tools ask like oxi's own MCP tools, under their own name.
+    let (name, _) = permission_name_args(&json!({"kind":"other","title":"mcp__gh__create_issue"}));
+    assert_eq!(name, "mcp__gh__create_issue");
+    assert!(off.requires_approval(&name));
+}
+
 /// End-to-end smoke test against the real adapter. Ignored by default (spawns `npx`, needs a
 /// logged-in Claude Code, and calls the API). Run with:
 ///   cargo test acp_end_to_end_applies_model -- --ignored --nocapture
