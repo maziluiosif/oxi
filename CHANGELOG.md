@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-10-06
+
+### Fixed
+- **Update:** App updates on Windows now work correctly with installation paths containing special characters
+
+
 ## [1.9.0] - 2026-10-06
 
 ### Added
@@ -888,7 +894,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.9.1...HEAD
+[1.9.1]: https://github.com/maziluiosif/oxi/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/maziluiosif/oxi/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/maziluiosif/oxi/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/maziluiosif/oxi/compare/v1.6.0...v1.7.0
