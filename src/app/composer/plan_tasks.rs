@@ -125,6 +125,7 @@ impl OxiApp {
             let key = self.active_session_key();
             let run = self.run_state_mut(key);
             run.plan_mode = false;
+            self.save_settings_quietly();
             self.conv.focus_chat_input_next_frame = true;
         }
     }
@@ -156,6 +157,7 @@ impl OxiApp {
             let run = self.run_state_mut(key);
             run.plan_mode = false;
             run.last_turn_planned = false;
+            self.save_settings_quietly();
             let draft = std::mem::take(&mut self.conv.input);
             self.conv.input = if draft.trim().is_empty() {
                 "Implement the plan above.".to_string()
@@ -332,6 +334,7 @@ mod tests {
             started_at: None,
             worked_duration: None,
             route: None,
+            changes: None,
         }
     }
 

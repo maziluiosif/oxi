@@ -52,6 +52,8 @@ mod mcp_servers;
 
 #[path = "acp/modes.rs"]
 mod modes;
+#[path = "acp/terminals.rs"]
+mod terminals;
 
 #[path = "acp/todo_mcp.rs"]
 pub mod todo_mcp;
@@ -104,6 +106,8 @@ pub struct AcpPrompt {
     pub history: String,
     /// Image attachments on the latest user message (`mime`, bytes).
     pub images: Vec<(String, Vec<u8>)>,
+    /// Files and folders `@`-mentioned in the latest message, sent as ACP resources.
+    pub resources: Vec<PathBuf>,
     /// Where translated agent events are delivered.
     pub event_tx: StdSender<AgentEvent>,
     /// Back-channel carrying the user's approval decisions.
@@ -312,12 +316,18 @@ struct ConnHandles {
     needs_history: Arc<AtomicBool>,
     /// The agent's session modes, kept current by the reader task.
     modes: SharedModes,
+    /// The agent accepts embedded `resource` blocks (`promptCapabilities.embeddedContext`).
+    embedded_context: bool,
+    /// Held for a whole prompt turn. A prompt sent right after Stop waits here until the
+    /// cancelled turn has wound down, instead of having its context cleared by it.
+    turn_lock: Arc<AsyncMutex<()>>,
 }
 
 /// The event/approval context for the in-flight prompt, shared with the reader task so it can
 /// route notifications and forward permission requests.
 struct PromptCtx {
     session_id: String,
+    cwd: PathBuf,
     plan_mode: bool,
     updates: UpdateState,
     event_tx: StdSender<AgentEvent>,
@@ -491,7 +501,7 @@ async fn spawn_conn(
         "protocolVersion": PROTOCOL_VERSION,
         "clientCapabilities": {
             "fs": { "readTextFile": true, "writeTextFile": true },
-            "terminal": false,
+            "terminal": true,
             // Command output as appended chunks on the tool call (Claude Code and Codex). Codex
             // sends command output only this way.
             "_meta": { "terminal_output_delta": true }
@@ -576,6 +586,8 @@ async fn spawn_conn(
         available_models,
         needs_history: Arc::new(AtomicBool::new(needs_history)),
         modes,
+        embedded_context: caps["promptCapabilities"]["embeddedContext"].as_bool() == Some(true),
+        turn_lock: Arc::new(AsyncMutex::new(())),
     };
     Ok(Conn {
         command_line: command_line.to_string(),
@@ -796,6 +808,7 @@ async fn run_prompt(
         text,
         history,
         images,
+        resources,
         event_tx,
         mut approval_rx,
         approval_policy,
@@ -805,9 +818,15 @@ async fn run_prompt(
         ..
     } = req;
 
+    let _turn = handles.turn_lock.clone().lock_owned().await;
+    if cancel.load(Ordering::SeqCst) {
+        let _ = reply.send(Ok(()));
+        return;
+    }
     let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermReq>();
     *handles.prompt_ctx.lock().await = Some(PromptCtx {
         session_id: handles.session_id.clone(),
+        cwd: cwd.clone(),
         plan_mode,
         updates: UpdateState::default(),
         event_tx: event_tx.clone(),
@@ -844,7 +863,7 @@ async fn run_prompt(
     };
     let prompt_params = json!({
         "sessionId": handles.session_id,
-        "prompt": build_prompt_blocks(&text, &images),
+        "prompt": build_prompt_blocks(&text, &images, &resource_blocks(&resources, handles.embedded_context)),
     });
     let id = handles.next_id.fetch_add(1, Ordering::SeqCst);
     let (rtx, mut rrx) = oneshot::channel::<Result<Value, String>>();
@@ -963,8 +982,42 @@ fn with_history(history: &str, text: &str) -> String {
     )
 }
 
+/// Text files up to this size are embedded in the prompt; bigger ones are linked.
+const EMBED_RESOURCE_MAX_BYTES: u64 = 64 * 1024;
+
+/// ACP blocks for `@`-mentioned paths: small text files embedded (when the agent accepts
+/// embedded context), everything else as a `resource_link` the agent can open itself.
+fn resource_blocks(paths: &[PathBuf], embedded_context: bool) -> Vec<Value> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            let uri = url::Url::from_file_path(path).ok()?.to_string();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned());
+            let meta = std::fs::metadata(path).ok()?;
+            if embedded_context
+                && meta.is_file()
+                && meta.len() <= EMBED_RESOURCE_MAX_BYTES
+                && let Ok(text) = std::fs::read_to_string(path)
+            {
+                return Some(json!({
+                    "type": "resource",
+                    "resource": { "uri": uri, "mimeType": "text/plain", "text": text }
+                }));
+            }
+            let mut link = json!({ "type": "resource_link", "uri": uri, "name": name });
+            if meta.is_file() {
+                link["size"] = json!(meta.len());
+            }
+            Some(link)
+        })
+        .collect()
+}
+
 /// Build the ACP prompt content blocks for a user turn.
-fn build_prompt_blocks(text: &str, images: &[(String, Vec<u8>)]) -> Value {
+fn build_prompt_blocks(text: &str, images: &[(String, Vec<u8>)], resources: &[Value]) -> Value {
     let mut blocks = Vec::new();
     if !text.trim().is_empty() {
         blocks.push(json!({ "type": "text", "text": text }));
@@ -973,6 +1026,7 @@ fn build_prompt_blocks(text: &str, images: &[(String, Vec<u8>)]) -> Value {
         let b64 = base64::engine::general_purpose::STANDARD.encode(data);
         blocks.push(json!({ "type": "image", "mimeType": mime, "data": b64 }));
     }
+    blocks.extend(resources.iter().cloned());
     if blocks.is_empty() {
         blocks.push(json!({ "type": "text", "text": "" }));
     }

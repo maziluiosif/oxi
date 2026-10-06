@@ -151,6 +151,11 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         },
     };
 
+    if std::env::var_os("OXI_ACP_REVIEW").is_some() {
+        review_acp_ui(&mut rec);
+        return;
+    }
+
     let gallery = rec.out.is_none();
     // 1. The model is already downloaded and running: the guided Local HF setup.
     rec.harness.run_steps(4);
@@ -1619,6 +1624,7 @@ fn message(role: MsgRole, text: &str, blocks: Vec<AssistantBlock>) -> ChatMessag
         started_at: None,
         worked_duration: None,
         route: None,
+        changes: None,
     }
 }
 
@@ -1634,4 +1640,82 @@ fn seed_local_model(app: &mut OxiApp) {
         bytes: 4_683_074_240,
     }];
     app.conv.local_models.running_model_id = Some(id);
+}
+
+/// A focused GPU review using the demo's isolated settings and workspace.
+fn review_acp_ui(rec: &mut Recorder<'_>) {
+    let first_root = rec.project.to_string_lossy().into_owned();
+    let second_root = rec.project.join("second-workspace");
+    std::fs::create_dir_all(&second_root).unwrap();
+    {
+        let app = rec.app();
+        app.set_active_session_provider(LlmProviderKind::ClaudeCodeAcp);
+        app.set_active_session_model("workspace-one-model".into());
+        let key = app.active_session_key();
+        app.run_state_mut(key).plan_mode = true;
+        app.save_settings_quietly();
+        app.conv.workspaces.push(super::Workspace {
+            root_path: second_root.to_string_lossy().into_owned(),
+            sessions: vec![OxiApp::blank_session("Second workspace")],
+            active: 0,
+            sidebar_folded: false,
+            pinned: vec![],
+            folded_groups: vec![],
+            worktree: None,
+        });
+        let second = app.conv.workspaces.len() - 1;
+        app.select_workspace(second);
+        app.set_active_session_model("workspace-two-model".into());
+        let key = app.active_session_key();
+        app.run_state_mut(key).plan_mode = false;
+        app.save_settings_quietly();
+        app.select_workspace(0);
+        assert_eq!(
+            app.conv.settings.active_config().model_id,
+            "workspace-one-model"
+        );
+        assert!(app.run_state(app.active_session_key()).unwrap().plan_mode);
+        app.new_chat();
+        assert!(app.run_state(app.active_session_key()).unwrap().plan_mode);
+        assert_eq!(
+            app.conv.settings.acp_workspace_preferences[&first_root]
+                .config
+                .model_id,
+            "workspace-one-model"
+        );
+    }
+    let mut command =
+        portable_pty::CommandBuilder::new(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" });
+    if cfg!(windows) {
+        command.args(["/C", "echo ACP terminal ready"]);
+    } else {
+        command.args([
+            "-c",
+            "printf 'ACP terminal ready\nLive output is shown here.\n'",
+        ]);
+    }
+    let (terminal, _process) =
+        crate::terminal::TerminalSession::spawn_command(&rec.harness.ctx, command, 1024).unwrap();
+    let (tx, rx) = mpsc::channel();
+    tx.send(AgentEvent::AcpTerminal(crate::terminal::PendingTerminal(
+        std::sync::Arc::new(std::sync::Mutex::new(Some(terminal))),
+    )))
+    .unwrap();
+    {
+        let app = rec.app();
+        let key = app.active_session_key();
+        app.run_state_mut(key).agent_rx = Some(rx);
+        app.conv.sidebar_open = false;
+    }
+    rec.harness.run_steps(5);
+    assert!(rec.app().conv.terminal_open);
+    assert_eq!(rec.app().terminals.len(), 1);
+    for scale in [1.0, 1.25, 1.5] {
+        rec.harness.set_pixels_per_point(scale);
+        for width in [760.0, 420.0] {
+            rec.harness.set_size(egui::vec2(width, 620.0));
+            rec.harness.run_steps(3);
+            rec.still(&format!("acp-terminal-{width}-{scale}"));
+        }
+    }
 }

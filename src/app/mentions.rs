@@ -9,6 +9,8 @@ use crate::agent::tools::resolve_under_cwd;
 const MENTION_FILE_MAX_BYTES: usize = 32 * 1024;
 /// Max files listed when mentioning a directory.
 const MENTION_DIR_MAX_ENTRIES: usize = 80;
+/// Separates the user's text from the context [`expand_at_mentions`] appended to it.
+const MENTION_CONTEXT_MARKER: &str = "\n\n---\nAttached context from @mentions:\n";
 
 /// Expand `@path` tokens (paths relative to `cwd`) into the message text with
 /// attached file/folder contents. Unresolved mentions are left as-is.
@@ -67,10 +69,40 @@ pub fn expand_at_mentions(text: &str, cwd: &Path) -> String {
         return out;
     }
 
-    out.push_str("\n\n---\nAttached context from @mentions:\n");
+    out.push_str(MENTION_CONTEXT_MARKER);
     for block in injected {
         out.push_str(&block);
         out.push('\n');
+    }
+    out
+}
+
+/// The user's text without the context [`expand_at_mentions`] appended to it.
+pub fn strip_mention_context(text: &str) -> &str {
+    text.split(MENTION_CONTEXT_MARKER).next().unwrap_or(text)
+}
+
+/// Files and folders mentioned as `@path` in `text` that exist under `cwd`, in order, without
+/// duplicates. Same token rules as [`expand_at_mentions`].
+pub fn mentioned_paths(text: &str, cwd: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('@') {
+        let after = &rest[at + 1..];
+        let end = after
+            .find(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ')' | ']' | '"' | '\''))
+            .unwrap_or(after.len());
+        let token = &after[..end];
+        rest = &after[end..];
+        if token.is_empty() || token.contains('@') {
+            continue;
+        }
+        if let Ok(abs) = resolve_under_cwd(cwd, token)
+            && abs.exists()
+            && !out.contains(&abs)
+        {
+            out.push(abs);
+        }
     }
     out
 }
@@ -119,6 +151,30 @@ fn format_dir_listing(token: &str, abs: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mentioned_paths_round_trip_with_expansion() {
+        let root = std::env::temp_dir().join(format!("oxi-mention-paths-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.rs"), "fn a() {}").unwrap();
+        let root = root.canonicalize().unwrap();
+        let text = "look at @src/a.rs and @src, mail me@x.org, @missing.rs";
+        let expanded = expand_at_mentions(text, &root);
+        assert_eq!(strip_mention_context(&expanded), text);
+        let paths = mentioned_paths(strip_mention_context(&expanded), &root);
+        let names: Vec<_> = paths
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(names, ["src/a.rs", "src"]);
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn leaves_plain_text_alone() {

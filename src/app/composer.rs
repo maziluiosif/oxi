@@ -360,6 +360,7 @@ impl OxiApp {
                         // === Agent checklist and plan hand-off ===
                         self.render_task_panel(ui);
                         self.render_plan_ready_bar(ui);
+                        self.render_queue_panel(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
                         if self.conv.editing_last_prompt.is_some() {
@@ -561,7 +562,17 @@ impl OxiApp {
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let active_session_streaming = self.active_waiting_response();
-            let (fill, fg, enabled, icon, hover) = if active_session_streaming {
+            // While streaming, a typed message is queued instead of replacing Stop.
+            let queue_instead = active_session_streaming && can_send;
+            let (fill, fg, enabled, icon, hover) = if queue_instead {
+                (
+                    c_accent(),
+                    crate::theme::c_on_accent(),
+                    true,
+                    ICON_SEND,
+                    "Queue message — sent when the current response finishes",
+                )
+            } else if active_session_streaming {
                 (
                     c_accent(),
                     crate::theme::c_on_accent(),
@@ -603,7 +614,9 @@ impl OxiApp {
                 .on_hover_text(hover)
                 .clicked();
             if clicked {
-                if active_session_streaming {
+                if queue_instead {
+                    self.send_message();
+                } else if active_session_streaming {
                     self.send_abort();
                 } else if can_send {
                     self.send_message();

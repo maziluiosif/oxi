@@ -187,17 +187,22 @@ pub(super) fn compare_file_diff(
     path: &str,
     old_path: Option<&str>,
 ) -> Result<String, String> {
-    let base_oid = resolve(repo, base)?;
-    let head_oid = repo
-        .head()
-        .and_then(|head| head.peel_to_commit())
-        .map_err(err)?
-        .id();
-    let merge_base = repo.merge_base(head_oid, base_oid).map_err(err)?;
-    let tree = repo
-        .find_commit(merge_base)
-        .and_then(|c| c.tree())
-        .map_err(err)?;
+    // An agent turn's snapshot is compared directly, without a merge base.
+    let tree = match base.strip_prefix(super::checkpoint::TURN_BASE_PREFIX) {
+        Some(id) => super::checkpoint::find_tree(repo, id)?,
+        None => {
+            let base_oid = resolve(repo, base)?;
+            let head_oid = repo
+                .head()
+                .and_then(|head| head.peel_to_commit())
+                .map_err(err)?
+                .id();
+            let merge_base = repo.merge_base(head_oid, base_oid).map_err(err)?;
+            repo.find_commit(merge_base)
+                .and_then(|c| c.tree())
+                .map_err(err)?
+        }
+    };
     let mut opts = DiffOptions::new();
     opts.context_lines(FULL_FILE_CONTEXT)
         .include_untracked(true)

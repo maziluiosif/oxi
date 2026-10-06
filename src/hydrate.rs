@@ -48,6 +48,7 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     started_at: None,
                     worked_duration: None,
                     route: None,
+                    changes: None,
                 });
             }
             "assistant" => {
@@ -77,6 +78,10 @@ pub fn messages_from_get_messages(data: &Value) -> Vec<ChatMessage> {
                     started_at: None,
                     worked_duration,
                     route,
+                    changes: m
+                        .get("changes")
+                        .and_then(|c| serde_json::from_value(c.clone()).ok())
+                        .map(Box::new),
                 });
             }
             "toolResult" => {
@@ -273,6 +278,7 @@ fn merge_tool_result(out: &mut Vec<ChatMessage>, m: &Value) {
         started_at: None,
         worked_duration: None,
         route: None,
+        changes: None,
     });
 }
 

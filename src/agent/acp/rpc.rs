@@ -75,6 +75,7 @@ pub(super) async fn read_loop(
     commands_key: CommandsKey,
 ) {
     let mut lines = BufReader::new(stdout).lines();
+    let terminals = super::terminals::Terminals::default();
     // Streaming text arrives as one `session/update` per token chunk; logging each would push
     // everything else out of the activity log, so consecutive chunks become one entry.
     let mut chunks = String::new();
@@ -111,9 +112,40 @@ pub(super) async fn read_loop(
                 }
             }
         }
-        dispatch(&line, &pending, &prompt_ctx, &stdin, &modes, &commands_key).await;
+        // Waiting for a terminal must not block session updates or later kill requests.
+        let request: Option<Value> = serde_json::from_str(&line).ok();
+        if let Some(request) = request.filter(|v| {
+            v["method"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("terminal/"))
+                && !v["id"].is_null()
+        }) {
+            let terminals = terminals.clone();
+            let prompt_ctx = prompt_ctx.clone();
+            let stdin = stdin.clone();
+            tokio::spawn(async move {
+                let method = request["method"].as_str().unwrap();
+                let params = &request["params"];
+                let result = if method == "terminal/create" {
+                    let context = prompt_ctx.lock().await;
+                    context
+                        .as_ref()
+                        .ok_or_else(|| "No active ACP prompt".to_string())
+                        .and_then(|ctx| terminals.create(params, ctx))
+                } else {
+                    terminals.request(method, params).await
+                };
+                match result {
+                    Ok(result) => reply_ok(&stdin, request["id"].clone(), result).await,
+                    Err(error) => reply_err(&stdin, request["id"].clone(), -32000, &error).await,
+                }
+            });
+        } else {
+            dispatch(&line, &pending, &prompt_ctx, &stdin, &modes, &commands_key).await;
+        }
     }
     flush_chunks(&mut chunks, &mut chunk_count);
+    terminals.close();
     alive.store(false, Ordering::SeqCst);
     let mut p = pending.lock().await;
     for (_, tx) in p.drain() {

@@ -126,6 +126,8 @@ impl OxiApp {
             c.key.session_idx += 1;
         }
 
+        self.restore_active_session_config();
+
         // Surface the new chat no matter what was showing: hide any open editor/history diff so
         // the transcript is in front, and if the sidebar is browsing files, flip it back to the
         // chat list so the new chat is visible there too.
@@ -160,6 +162,7 @@ impl OxiApp {
             return;
         }
         let sessions = Self::initial_workspace_sessions(&path, self.conn.no_session);
+        let worktree = crate::git::worktree::info(std::path::Path::new(&path));
         self.conv.workspaces.push(Workspace {
             root_path: path,
             sessions,
@@ -167,6 +170,7 @@ impl OxiApp {
             sidebar_folded: false,
             pinned: Vec::new(),
             folded_groups: Vec::new(),
+            worktree,
         });
         self.select_workspace(self.conv.workspaces.len() - 1);
         self.sync_workspaces_to_settings();

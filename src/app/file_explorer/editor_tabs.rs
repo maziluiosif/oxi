@@ -282,7 +282,7 @@ impl OxiApp {
         let path = self.conv.git.current_diff_path.as_deref().unwrap_or("diff");
         let file = path.rsplit_once('/').map_or(path, |(_, file)| file);
         if let Some(base) = compare_base(title) {
-            format!("{file} (vs {base})")
+            format!("{file} (vs {})", crate::git::checkpoint::base_label(base))
         } else if self.conv.git.current_diff_staged == Some(true) {
             format!("{file} (Staged)")
         } else {
@@ -304,7 +304,10 @@ impl OxiApp {
             return title.to_owned();
         }
         if let Some(base) = compare_base(title) {
-            format!("{path} · Changes since {base}")
+            format!(
+                "{path} · Changes since {}",
+                crate::git::checkpoint::base_label(base)
+            )
         } else if self.conv.git.current_diff_staged == Some(true) {
             format!("{path} · Staged changes")
         } else {

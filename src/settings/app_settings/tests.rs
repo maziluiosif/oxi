@@ -414,3 +414,45 @@ fn system_git_settings_roundtrip() {
     assert!(back.git_use_system_cli);
     assert_eq!(back.git_executable, "/opt/homebrew/bin/git");
 }
+
+#[test]
+fn acp_preferences_are_separate_per_workspace_and_survive_restart() {
+    let mut settings = AppSettings::default();
+    for (root, provider, model, plan_mode) in [
+        (
+            "/workspace/one",
+            LlmProviderKind::ClaudeCodeAcp,
+            "first",
+            true,
+        ),
+        ("/workspace/two", LlmProviderKind::CodexAcp, "second", false),
+    ] {
+        let mut config = crate::model::SessionConfig::from_provider(settings.provider(provider));
+        config.model_id = model.into();
+        config.effort = "high".into();
+        settings
+            .acp_workspace_preferences
+            .insert(root.into(), AcpWorkspacePreference { config, plan_mode });
+    }
+    let serialized = serde_json::to_string(&settings).unwrap();
+    let restored: AppSettings = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(
+        restored.acp_workspace_preferences,
+        settings.acp_workspace_preferences
+    );
+    assert_eq!(
+        restored.acp_workspace_preferences["/workspace/one"]
+            .config
+            .model_id,
+        "first"
+    );
+    assert!(restored.acp_workspace_preferences["/workspace/one"].plan_mode);
+    assert!(!restored.acp_workspace_preferences["/workspace/two"].plan_mode);
+    let mut legacy = serde_json::to_value(AppSettings::default()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("acp_workspace_preferences");
+    let legacy: AppSettings = serde_json::from_value(legacy).unwrap();
+    assert!(legacy.acp_workspace_preferences.is_empty());
+}

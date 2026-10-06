@@ -78,6 +78,24 @@ impl OxiApp {
                     "Remove".to_string(),
                 )
             }
+            ConfirmAction::RemoveWorktree { wi } => {
+                let branch = self
+                    .conv
+                    .workspaces
+                    .get(*wi)
+                    .and_then(|w| w.worktree.as_ref())
+                    .map(|w| w.branch.clone())
+                    .unwrap_or_default();
+                (
+                    "Remove work tree?".to_string(),
+                    format!(
+                        "The work tree folder and branch \u{201c}{branch}\u{201d} will be \
+                         deleted, including changes that were not merged."
+                    ),
+                    Some("This action cannot be undone.".to_string()),
+                    "Remove".to_string(),
+                )
+            }
             ConfirmAction::GitDiscard { paths } => {
                 let body = if let [path] = paths.as_slice() {
                     format!("This will permanently discard changes in {path}.")
@@ -125,6 +143,7 @@ impl OxiApp {
                 }
             }
             ConfirmAction::DeleteWorkspace { wi } => self.delete_workspace(wi),
+            ConfirmAction::RemoveWorktree { wi } => self.remove_worktree(wi),
             ConfirmAction::GitDiscard { paths } => {
                 self.request(crate::git::GitOp::Discard(paths));
             }

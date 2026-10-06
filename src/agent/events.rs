@@ -79,6 +79,8 @@ pub enum AgentOutcome {
 #[derive(Debug)]
 pub enum AgentEvent {
     AgentStart,
+    /// A command PTY to attach to this workspace's terminal panel.
+    AcpTerminal(crate::terminal::PendingTerminal),
     TextStart,
     TextDelta(String),
     /// Extended reasoning / thinking content from models that support it.
@@ -130,6 +132,9 @@ pub enum AgentEvent {
     /// The Router picked the provider/model for this turn (sent before any output, and again
     /// if the turn fails over to another provider).
     Routed(Box<crate::model::RouteNote>),
+    /// What the turn changed in the workspace (git snapshots before and after it). Sent just
+    /// before [`AgentEvent::Finished`] by turns that snapshot the work tree (ACP).
+    TurnChanges(Box<crate::model::TurnChanges>),
     /// The only terminal event for a run.
     Finished(AgentOutcome),
 }

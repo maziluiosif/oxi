@@ -207,6 +207,21 @@ impl OxiApp {
         }
         match ev {
             AgentEvent::AgentStart => {}
+            AgentEvent::AcpTerminal(pending) => {
+                if let Some(terminal) = pending.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    if key.workspace_idx == self.conv.active_workspace {
+                        self.terminals.push(terminal);
+                        self.active_terminal = self.terminals.len() - 1;
+                        self.conv.terminal_open = true;
+                    } else {
+                        let root = self.conv.workspaces[key.workspace_idx].root_path.clone();
+                        self.parked_terminals
+                            .entry(root)
+                            .or_default()
+                            .push(terminal);
+                    }
+                }
+            }
             AgentEvent::TextStart => {
                 self.on_text_block_start(key);
             }
@@ -250,6 +265,7 @@ impl OxiApp {
                     summary,
                     allow_prefix,
                 });
+                self.notify_attention(ctx, key, super::notify::Attention::Approval);
             }
             AgentEvent::ToolOutput {
                 tool_call_id,
@@ -320,7 +336,18 @@ impl OxiApp {
                     self.session_mut_by_key(key).chars_per_token = Some(cpt);
                 }
             }
+            AgentEvent::TurnChanges(changes) => {
+                if let Some(message) = self.last_assistant_mut(key) {
+                    message.changes = Some(changes);
+                }
+            }
             AgentEvent::Finished(outcome) => {
+                let succeeded = matches!(&outcome, AgentOutcome::Success { .. });
+                let attention = match &outcome {
+                    AgentOutcome::Success { .. } => Some(super::notify::Attention::Finished),
+                    AgentOutcome::Failed { .. } => Some(super::notify::Attention::Failed),
+                    AgentOutcome::Cancelled => None,
+                };
                 let completion_unseen = !matches!(&outcome, AgentOutcome::Cancelled)
                     && (key != self.active_session_key() || !self.active_chat_is_visible(ctx));
                 match outcome {
@@ -338,6 +365,15 @@ impl OxiApp {
                 }
                 self.finish_assistant_stream(key);
                 self.run_state_mut(key).completion_unseen = completion_unseen;
+                if succeeded {
+                    self.send_next_queued(key);
+                }
+                // A queued follow-up keeps the chat busy; notify once the queue is drained.
+                if let Some(attention) = attention
+                    && !self.run_state(key).is_some_and(|r| r.waiting_response)
+                {
+                    self.notify_attention(ctx, key, attention);
+                }
             }
         }
     }

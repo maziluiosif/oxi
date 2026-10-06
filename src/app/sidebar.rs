@@ -140,7 +140,10 @@ impl OxiApp {
             }
             let active_si = self.conv.workspaces[wi].active;
             let n_sessions = self.conv.workspaces[wi].sessions.len();
-            let root_label = workspace_sidebar_label(&self.conv.workspaces[wi].root_path);
+            let root_label = match &self.conv.workspaces[wi].worktree {
+                Some(info) => super::worktrees::worktree_label(info),
+                None => workspace_sidebar_label(&self.conv.workspaces[wi].root_path),
+            };
             let folded = self.conv.workspaces[wi].sidebar_folded;
             ui.add_space(1.0);
 
@@ -225,18 +228,55 @@ impl OxiApp {
                 self.conv.workspaces[wi].sidebar_folded = !folded;
                 self.sync_workspaces_to_settings();
             }
-            // The cwd workspace (index 0) is always present, so it gets no delete option.
-            if wi != 0 {
-                let ws_running = (0..n_sessions).any(|si| self.session_row_is_running(wi, si));
-                response.context_menu(|ui| {
+            let ws_running = (0..n_sessions).any(|si| self.session_row_is_running(wi, si));
+            let worktree = self.conv.workspaces[wi].worktree.clone();
+            response.context_menu(|ui| {
+                match &worktree {
+                    None => {
+                        if ui
+                            .button("New chat in a work tree")
+                            .on_hover_text(
+                                "Make a new branch in its own folder and chat there, so the agent's changes stay off this checkout until you merge them",
+                            )
+                            .clicked()
+                        {
+                            self.start_worktree_chat(wi);
+                            ui.close();
+                        }
+                    }
+                    Some(info) => {
+                        let merge = ui
+                            .add_enabled(
+                                !ws_running,
+                                egui::Button::new(format!("Merge into {}", info.main_branch)),
+                            )
+                            .on_hover_text(
+                                "Commit everything in this work tree and merge its branch into the main checkout",
+                            );
+                        if merge.clicked() {
+                            self.merge_worktree(wi);
+                            ui.close();
+                        }
+                        let remove =
+                            ui.add_enabled(!ws_running, egui::Button::new("Remove work tree…"));
+                        if remove.clicked() {
+                            self.request_confirm(super::state::ConfirmAction::RemoveWorktree {
+                                wi,
+                            });
+                            ui.close();
+                        }
+                    }
+                }
+                // The cwd workspace (index 0) is always present, so it gets no delete option.
+                if wi != 0 {
                     let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
                     if ws_running {
                         resp.on_disabled_hover_text("A chat in this workspace is still running");
                     } else if resp.clicked() {
                         self.request_confirm(super::state::ConfirmAction::DeleteWorkspace { wi });
                     }
-                });
-            }
+                }
+            });
             ui.add_space(1.0);
             if sidebar_changed {
                 return;

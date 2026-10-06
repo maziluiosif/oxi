@@ -136,12 +136,24 @@ fn spawn_agent_attempt(
         // it entirely here — no system prompt, wire history, or tool definitions from oxi —
         // then return before the HTTP-provider machinery below.
         if cfg.is_acp() {
-            undo_journal
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .mark_non_reversible(
-                    "The ACP agent manages its own tools, so this response cannot be restored safely.",
-                );
+            // The agent edits files with its own tools, so the turn is made reversible by
+            // snapshotting the work tree around it (git repositories only).
+            let checkpoint_cwd = cwd.clone();
+            let before = tokio::task::spawn_blocking(move || {
+                crate::git::checkpoint::snapshot(&checkpoint_cwd)
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            {
+                let mut journal = undo_journal.lock().unwrap_or_else(|e| e.into_inner());
+                match before {
+                    Ok(snapshot) => journal.set_checkpoint_before(snapshot),
+                    Err(_) => journal.mark_non_reversible(
+                        "The ACP agent edits files itself; responses can only be restored in a git repository.",
+                    ),
+                }
+            }
             let outcome = run_acp_turn(
                 &cfg,
                 settings.mcp_servers.clone(),
@@ -164,6 +176,26 @@ fn spawn_agent_attempt(
                 && crate::router::quota::is_quota_error(error)
             {
                 crate::router::quota::start_cooldown(cfg.provider, QUOTA_COOLDOWN);
+            }
+            let checkpoint_cwd = cwd.clone();
+            let after = tokio::task::spawn_blocking(move || {
+                crate::git::checkpoint::snapshot(&checkpoint_cwd)
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            let changes = {
+                let mut journal = undo_journal.lock().unwrap_or_else(|e| e.into_inner());
+                match after {
+                    Ok(snapshot) => journal.set_checkpoint_after(snapshot.tree),
+                    Err(e) => {
+                        journal.mark_non_reversible(format!("Could not snapshot the workspace: {e}"));
+                        None
+                    }
+                }
+            };
+            if let Some(changes) = changes {
+                let _ = tx.send(AgentEvent::TurnChanges(Box::new(changes)));
             }
             let _ = tx.send(AgentEvent::Finished(outcome));
             return;
@@ -336,7 +368,16 @@ async fn run_acp_turn(
         .rposition(|m| m.role == crate::model::MsgRole::User);
     let last_user = last_user_idx.map(|i| &chat_for_history[i]);
     let history = acp_history_transcript(&chat_for_history[..last_user_idx.unwrap_or(0)]);
-    let text = last_user.map(|m| m.user_prompt_text()).unwrap_or_default();
+    // `@`-mentions travel as ACP resources instead of the context oxi inlines for other
+    // providers, so the agent sees real files (and opens big ones itself).
+    let (text, resources) = last_user
+        .map(|m| {
+            let mut raw = m.clone();
+            raw.text = crate::app::mentions::strip_mention_context(&m.text).to_string();
+            let resources = crate::app::mentions::mentioned_paths(&raw.text, &cwd);
+            (raw.user_prompt_text(), resources)
+        })
+        .unwrap_or_default();
     let images: Vec<(String, Vec<u8>)> = last_user
         .map(|m| {
             m.attachments
@@ -364,6 +405,7 @@ async fn run_acp_turn(
         text,
         history,
         images,
+        resources,
         event_tx: tx.clone(),
         approval_rx,
         approval_policy,

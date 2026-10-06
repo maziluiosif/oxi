@@ -848,6 +848,20 @@ fn error_hint(error: &str) -> Option<&'static str> {
     }
 }
 
+fn terminal_command_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("oxi_open_command_in_terminal")
+}
+
+/// Ask the app to type `command` into a new terminal tab (picked up once per frame).
+pub(crate) fn request_terminal_command(ctx: &eframe::egui::Context, command: &str) {
+    ctx.data_mut(|d| d.insert_temp(terminal_command_id(), command.to_owned()));
+}
+
+/// The command a transcript widget asked to open in the terminal, if any.
+pub(crate) fn take_terminal_command(ctx: &eframe::egui::Context) -> Option<String> {
+    ctx.data_mut(|d| d.remove_temp::<String>(terminal_command_id()))
+}
+
 #[cfg(test)]
 mod answer_render_tests {
     use super::{error_hint, floor_char_boundary, split_error_tail};

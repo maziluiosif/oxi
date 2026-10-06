@@ -68,7 +68,7 @@ impl OxiApp {
         } else if title.starts_with("Staged: ") {
             "Staged".to_owned()
         } else if let Some(base) = super::editor_tabs::compare_base(title) {
-            format!("Since {base}")
+            format!("Since {}", crate::git::checkpoint::base_label(base))
         } else {
             "Working Tree".to_owned()
         };

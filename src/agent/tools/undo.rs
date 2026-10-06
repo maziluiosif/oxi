@@ -100,9 +100,40 @@ struct UndoEntry {
 pub struct TurnUndoJournal {
     entries: HashMap<PathBuf, UndoEntry>,
     non_reversible_reason: Option<String>,
+    /// Work tree snapshots around the turn, for agents whose file changes oxi doesn't see one
+    /// by one (ACP). When set, restoring puts back the `before` tree for the turn's paths.
+    checkpoint: Option<WorkTreeCheckpoint>,
+}
+
+#[derive(Clone, Debug)]
+struct WorkTreeCheckpoint {
+    repo: PathBuf,
+    before: String,
+    after: Option<String>,
 }
 
 impl TurnUndoJournal {
+    /// Record the snapshot taken before the turn started.
+    pub fn set_checkpoint_before(&mut self, snapshot: crate::git::checkpoint::Snapshot) {
+        self.checkpoint = Some(WorkTreeCheckpoint {
+            repo: snapshot.repo,
+            before: snapshot.tree,
+            after: None,
+        });
+    }
+
+    /// Record the snapshot taken after the turn; returns the turn's changes when the work tree
+    /// differs from before.
+    pub fn set_checkpoint_after(&mut self, tree: String) -> Option<crate::model::TurnChanges> {
+        let checkpoint = self.checkpoint.as_mut()?;
+        checkpoint.after = Some(tree.clone());
+        (checkpoint.before != tree).then(|| crate::model::TurnChanges {
+            repo: checkpoint.repo.to_string_lossy().into_owned(),
+            before: checkpoint.before.clone(),
+            after: tree,
+        })
+    }
+
     pub fn record_before(&mut self, path: &Path) -> Result<(), String> {
         if self.entries.contains_key(path) {
             return Ok(());
@@ -135,14 +166,24 @@ impl TurnUndoJournal {
     }
 
     pub fn unavailable_reason(&self) -> Option<&str> {
-        self.non_reversible_reason.as_deref()
+        if let Some(reason) = self.non_reversible_reason.as_deref() {
+            return Some(reason);
+        }
+        match &self.checkpoint {
+            Some(c) if c.after.is_none() => Some("the response has not finished yet"),
+            _ => None,
+        }
     }
 
     /// Restore only when every tracked path still equals the state left by the agent. This avoids
     /// silently overwriting edits made by the user after the response completed.
     pub fn restore(&self, workspace: &Path) -> Result<(), String> {
-        if let Some(reason) = &self.non_reversible_reason {
-            return Err(reason.clone());
+        if let Some(reason) = self.unavailable_reason() {
+            return Err(reason.to_string());
+        }
+        if let Some(c) = &self.checkpoint {
+            let after = c.after.as_deref().unwrap_or_default();
+            return crate::git::checkpoint::restore(&c.repo, &c.before, after, None);
         }
         for (path, entry) in &self.entries {
             let current = FileState::read(path)?;

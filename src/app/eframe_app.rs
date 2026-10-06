@@ -51,6 +51,10 @@ impl eframe::App for OxiApp {
         self.consume_dropped_files(ctx);
         self.drain_agent(ctx);
         self.drain_models(ctx);
+        self.drain_worktree_ops(ctx);
+        if let Some(command) = crate::ui::messages::take_terminal_command(ctx) {
+            self.open_command_in_terminal(ctx, &command);
+        }
         self.drain_local_models(ctx);
         self.drain_voice(ctx);
         self.drain_voice_models(ctx);
@@ -277,6 +281,7 @@ impl OxiApp {
             goto_line,
             stop,
             escape,
+            selection_to_chat,
         ) = ctx.input(|i| {
             (
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::N),
@@ -307,6 +312,7 @@ impl OxiApp {
                     && i.key_pressed(Key::G),
                 i.modifiers.matches_exact(cmd) && i.key_pressed(Key::Period),
                 i.key_pressed(Key::Escape),
+                i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::L),
             )
         });
 
@@ -364,6 +370,9 @@ impl OxiApp {
                 .editor
                 .active_document()
                 .is_some_and(|document| document.media.is_none());
+        if selection_to_chat && editing {
+            self.add_editor_selection_to_chat();
+        }
         if goto_symbol && editing {
             self.open_file_picker_with("@");
         } else if goto_line && editing {

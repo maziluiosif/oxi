@@ -30,10 +30,20 @@ pub const ALL_TOOL_NAMES: [&str; 19] = [
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AcpWorkspacePreference {
+    pub config: crate::model::SessionConfig,
+    #[serde(default)]
+    pub plan_mode: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     /// Which provider the composer currently talks to.
     #[serde(default)]
     pub active_provider: LlmProviderKind,
+    /// Last ACP model, effort and planning choice in each workspace.
+    #[serde(default)]
+    pub acp_workspace_preferences: BTreeMap<String, AcpWorkspacePreference>,
     /// One config per provider kind. Serialized as a JSON object keyed by
     /// [`LlmProviderKind::slug`]; [`AppSettings::normalize`] guarantees every kind has an
     /// entry, so lookups through [`AppSettings::provider`] are infallible.
@@ -71,6 +81,10 @@ pub struct AppSettings {
     /// prompt. Only simple commands match; see [`crate::agent::approval::bash_command_allowlisted`].
     #[serde(default)]
     pub bash_allowlist: Vec<String>,
+    /// Desktop notification (and a dock/taskbar nudge) when a response finishes or the agent
+    /// asks for approval while oxi is in the background.
+    #[serde(default = "default_true")]
+    pub notify_in_background: bool,
     /// Legacy single approval switch. Migrated in [`AppSettings::normalize`] and no longer saved.
     #[serde(default, skip_serializing)]
     pub require_approval: Option<bool>,
@@ -273,6 +287,7 @@ impl Default for AppSettings {
             .collect();
         Self {
             active_provider: LlmProviderKind::OpenAi,
+            acp_workspace_preferences: BTreeMap::new(),
             providers,
             system_prompt: crate::agent::prompt::DEFAULT_AGENT_SYSTEM_PROMPT.to_string(),
             include_agents_md: default_include_agents_md(),
@@ -283,6 +298,7 @@ impl Default for AppSettings {
             require_write_edit_approval: default_require_approval(),
             require_bash_approval: default_require_approval(),
             bash_allowlist: Vec::new(),
+            notify_in_background: true,
             require_approval: None,
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),
@@ -332,3 +348,7 @@ pub use types::{
 
 #[cfg(test)]
 mod tests;
+
+fn default_true() -> bool {
+    true
+}

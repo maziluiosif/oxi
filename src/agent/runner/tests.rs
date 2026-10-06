@@ -117,6 +117,7 @@ fn chat_msg(
         started_at: None,
         worked_duration: None,
         route: None,
+        changes: None,
     }
 }
 

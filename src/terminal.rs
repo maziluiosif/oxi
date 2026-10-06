@@ -87,6 +87,7 @@ const SCROLLBACK: usize = 5000;
 
 /// A live PTY session plus its parsed screen state.
 pub struct TerminalSession {
+    pub(crate) process: Option<TerminalProcess>,
     parser: Arc<Mutex<vt100::Parser>>,
     /// Writes here are forwarded to the shell's stdin. Shared with the reader thread so it can
     /// answer terminal status queries emitted by Windows ConPTY.
@@ -120,18 +121,6 @@ impl TerminalSession {
     ) -> Result<Self, String> {
         #[cfg(not(windows))]
         let _ = windows_terminal;
-        let rows = rows.max(1);
-        let cols = cols.max(1);
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| format!("openpty: {e}"))?;
-
         let cwd = shell_cwd(cwd);
         #[cfg(windows)]
         let mut cmd = match windows_terminal {
@@ -176,6 +165,36 @@ impl TerminalSession {
         #[cfg(windows)]
         cmd.env("PROMPT", "$P$G ");
 
+        Self::spawn_builder(ctx, cmd, rows, cols, None)
+    }
+
+    pub(crate) fn spawn_command(
+        ctx: &egui::Context,
+        cmd: CommandBuilder,
+        limit: usize,
+    ) -> Result<(Self, TerminalProcess), String> {
+        let process = TerminalProcess::new(limit);
+        let terminal = Self::spawn_builder(ctx, cmd, 24, 100, Some(process.clone()))?;
+        Ok((terminal, process))
+    }
+
+    fn spawn_builder(
+        ctx: &egui::Context,
+        cmd: CommandBuilder,
+        rows: u16,
+        cols: u16,
+        process: Option<TerminalProcess>,
+    ) -> Result<Self, String> {
+        let rows = rows.max(1);
+        let cols = cols.max(1);
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| format!("openpty: {e}"))?;
         let _child = pair
             .slave
             .spawn_command(cmd)
@@ -201,6 +220,7 @@ impl TerminalSession {
         let writer_rd = writer.clone();
         let alive_rd = alive.clone();
         let ctx = ctx.clone();
+        let capture = process.clone();
         std::thread::Builder::new()
             .name("oxi-pty-reader".to_string())
             .spawn(move || {
@@ -210,6 +230,9 @@ impl TerminalSession {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
+                            if let Some(capture) = &capture {
+                                capture.append(&buf[..n]);
+                            }
                             let cursor = if let Ok(mut p) = parser_rd.lock() {
                                 p.process(&buf[..n]);
                                 Some(p.screen().cursor_position())
@@ -257,14 +280,25 @@ impl TerminalSession {
         let mut child = _child;
         #[cfg(unix)]
         let shell_pid = child.process_id();
+        if let Some(process) = &process {
+            *process.killer.lock().unwrap_or_else(|e| e.into_inner()) = Some(child.clone_killer());
+        }
+        let exit = process.clone();
         std::thread::Builder::new()
             .name("oxi-pty-waiter".to_string())
             .spawn(move || {
-                let _ = child.wait();
+                let result = child.wait();
+                if let Some(exit) = exit {
+                    *exit.exit.lock().unwrap_or_else(|e| e.into_inner()) = Some(match result {
+                        Ok(status) => serde_json::json!({"exitCode": status.exit_code(), "signal": status.signal()}),
+                        Err(_) => serde_json::json!({"exitCode": null, "signal": null}),
+                    });
+                }
             })
             .ok();
 
         Ok(Self {
+            process,
             parser,
             writer,
             master: pair.master,
@@ -291,6 +325,9 @@ impl TerminalSession {
         if !self.is_alive() {
             return false;
         }
+        if self.process.is_some() {
+            return true;
+        }
         #[cfg(unix)]
         {
             match (self.master.process_group_leader(), self.shell_pid) {
@@ -302,6 +339,11 @@ impl TerminalSession {
         {
             true
         }
+    }
+
+    /// Type `text` at the shell prompt without running it.
+    pub fn type_text(&mut self, text: &str) {
+        self.send(text.as_bytes());
     }
 
     /// Send raw bytes to the shell.
@@ -924,5 +966,137 @@ mod tests {
             }),
             "Ctrl+C left it busy"
         );
+    }
+}
+
+/// ACP owns the process lifecycle; the terminal panel owns its interactive view.
+#[derive(Clone)]
+pub(crate) struct TerminalProcess {
+    output: Arc<Mutex<Vec<u8>>>,
+    truncated: Arc<AtomicBool>,
+    limit: usize,
+    exit: Arc<Mutex<Option<serde_json::Value>>>,
+    killer: Arc<Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>>,
+}
+
+impl std::fmt::Debug for TerminalProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminalProcess").finish_non_exhaustive()
+    }
+}
+
+impl TerminalProcess {
+    fn new(limit: usize) -> Self {
+        Self {
+            output: Arc::default(),
+            truncated: Arc::default(),
+            limit,
+            exit: Arc::default(),
+            killer: Arc::default(),
+        }
+    }
+
+    fn append(&self, bytes: &[u8]) {
+        let mut output = self.output.lock().unwrap_or_else(|e| e.into_inner());
+        output.extend_from_slice(bytes);
+        if output.len() > self.limit {
+            let mut remove = output.len() - self.limit;
+            while remove < output.len() && output[remove] & 0xc0 == 0x80 {
+                remove += 1;
+            }
+            output.drain(..remove);
+            self.truncated.store(true, Ordering::SeqCst);
+        }
+    }
+
+    pub(crate) fn output(&self) -> serde_json::Value {
+        let bytes = self.output.lock().unwrap_or_else(|e| e.into_inner());
+        let mut result = serde_json::json!({
+            "output": String::from_utf8_lossy(&bytes),
+            "truncated": self.truncated.load(Ordering::SeqCst),
+        });
+        if let Some(exit) = self.exit_status() {
+            result["exitStatus"] = exit;
+        }
+        result
+    }
+
+    pub(crate) fn exit_status(&self) -> Option<serde_json::Value> {
+        self.exit.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub(crate) fn kill(&self) -> Result<(), String> {
+        if self.exit_status().is_some() {
+            return Ok(());
+        }
+        if let Some(killer) = self
+            .killer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            killer.kill().map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingTerminal(pub(crate) Arc<Mutex<Option<TerminalSession>>>);
+
+impl std::fmt::Debug for PendingTerminal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingTerminal").finish_non_exhaustive()
+    }
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        if let Some(process) = &self.process {
+            let _ = process.kill();
+        }
+    }
+}
+
+#[cfg(test)]
+mod acp_process_tests {
+    use super::*;
+
+    #[test]
+    fn truncation_keeps_unicode_boundaries_and_accepts_split_reads() {
+        let process = TerminalProcess::new(5);
+        process.append("aaș".as_bytes());
+        process.append("țbb".as_bytes());
+        assert_eq!(process.output()["output"], "țbb");
+        assert_eq!(process.output()["truncated"], true);
+        let process = TerminalProcess::new(10);
+        process.append(&[0xc8]);
+        process.append(&[0x99]);
+        assert_eq!(process.output()["output"], "ș");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_pty_captures_output_exit_and_can_be_interrupted() {
+        let ctx = egui::Context::default();
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "printf terminal-output; exit 7"]);
+        let (terminal, process) = TerminalSession::spawn_command(&ctx, command, 1024).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while process.exit_status().is_none() || terminal.is_alive() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(process.output()["output"], "terminal-output");
+        assert_eq!(process.exit_status().unwrap()["exitCode"], 7);
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exec sleep 30"]);
+        let (_terminal, process) = TerminalSession::spawn_command(&ctx, command, 1024).unwrap();
+        process.kill().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while process.exit_status().is_none() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }

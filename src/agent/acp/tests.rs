@@ -192,6 +192,7 @@ fn acp_end_to_end_applies_model() {
             .to_string(),
         history: String::new(),
         images: Vec::new(),
+        resources: Vec::new(),
         event_tx: ev_tx,
         approval_rx: appr_rx,
         approval_policy: ApprovalPolicy::disabled(),
@@ -250,12 +251,40 @@ fn parse_models_empty_when_absent() {
 
 #[test]
 fn build_prompt_blocks_includes_text_and_image() {
-    let blocks = build_prompt_blocks("hello", &[("image/png".to_string(), vec![1, 2, 3])]);
+    let blocks = build_prompt_blocks("hello", &[("image/png".to_string(), vec![1, 2, 3])], &[]);
     let arr = blocks.as_array().unwrap();
     assert_eq!(arr[0]["type"], "text");
     assert_eq!(arr[0]["text"], "hello");
     assert_eq!(arr[1]["type"], "image");
     assert_eq!(arr[1]["mimeType"], "image/png");
+}
+
+#[test]
+fn mentioned_paths_become_embedded_or_linked_resources() {
+    let dir = std::env::temp_dir().join(format!("oxi-acp-resources-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let file = dir.join("note.md");
+    std::fs::write(&file, "# hi").unwrap();
+    let paths = [file.clone(), dir.join("sub")];
+
+    let embedded = resource_blocks(&paths, true);
+    assert_eq!(embedded[0]["type"], "resource");
+    assert_eq!(embedded[0]["resource"]["text"], "# hi");
+    assert!(
+        embedded[0]["resource"]["uri"]
+            .as_str()
+            .unwrap()
+            .starts_with("file://")
+    );
+    assert_eq!(embedded[1]["type"], "resource_link");
+    assert_eq!(embedded[1]["name"], "sub");
+
+    let linked = resource_blocks(&paths, false);
+    assert_eq!(linked[0]["type"], "resource_link");
+    assert_eq!(linked[0]["size"], 4);
+    let blocks = build_prompt_blocks("see @note.md", &[], &linked);
+    assert_eq!(blocks.as_array().unwrap().len(), 3);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -421,6 +450,7 @@ fn acp_metadata_diff_and_valid_long_args_survive_session_roundtrip() {
         started_at: None,
         worked_duration: None,
         route: None,
+        changes: None,
     };
     message.finish_streaming();
     let entries = crate::session_store::chat_message_to_json_entries(&message);
@@ -473,6 +503,7 @@ fn notifications_are_scoped_to_the_active_session() {
     let (perm_tx, _) = mpsc::unbounded_channel();
     let mut ctx = PromptCtx {
         session_id: "active".into(),
+        cwd: std::env::temp_dir(),
         plan_mode: false,
         updates: UpdateState::default(),
         event_tx: tx,
@@ -496,6 +527,7 @@ fn client_fs_writes_respect_plan_mode_and_session_identity() {
     let (perm_tx, _) = mpsc::unbounded_channel();
     let mut ctx = PromptCtx {
         session_id: "active".into(),
+        cwd: std::env::temp_dir(),
         plan_mode: true,
         updates: UpdateState::default(),
         event_tx: tx,
@@ -808,6 +840,7 @@ fn acp_live_features() {
         text,
         history: String::new(),
         images: Vec::new(),
+        resources: Vec::new(),
         event_tx: ev_tx,
         approval_rx: appr_rx,
         approval_policy: ApprovalPolicy::disabled(),

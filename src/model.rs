@@ -124,6 +124,16 @@ pub enum AssistantBlock {
     },
 }
 
+/// Workspace snapshots (git tree ids) taken right before and after one assistant turn, so the
+/// turn's file changes can be reviewed and reverted. Persisted with the message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnChanges {
+    /// Work tree of the repository the trees were written to.
+    pub repo: String,
+    pub before: String,
+    pub after: String,
+}
+
 #[derive(Clone)]
 pub struct ChatMessage {
     pub role: MsgRole,
@@ -149,6 +159,8 @@ pub struct ChatMessage {
     pub worked_duration: Option<std::time::Duration>,
     /// Assistant only: the Router's choice for this turn (`None` for a directly chosen model).
     pub route: Option<Box<RouteNote>>,
+    /// Assistant only: what the turn changed in the workspace, when a snapshot was possible.
+    pub changes: Option<Box<TurnChanges>>,
 }
 
 impl ChatMessage {
