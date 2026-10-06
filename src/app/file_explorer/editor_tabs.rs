@@ -42,7 +42,9 @@ impl OxiApp {
             .inner_margin(Margin::symmetric(6, 0))
             .show(ui, |ui| {
                 ui.set_height(34.0);
-                ui.horizontal(|ui| {
+                // Not `ui.horizontal`: that caps the row at `interact_size.y`, so the tabs would
+                // stop short of the strip's lower edge and a hovered tab would float above it.
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if !sidebar_open {
                         // The macOS traffic lights sit over the window's top-left corner.
@@ -80,7 +82,7 @@ impl OxiApp {
                         .max_width(tab_strip_width)
                         .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
+                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
                                 for (index, document) in
                                     self.conv.editor.documents.iter().enumerate()
@@ -329,7 +331,7 @@ struct EditorTab {
 fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool) -> EditorTab {
     const PADDING_LEFT: f32 = 12.0;
     const CLOSE_SLOT: f32 = 26.0;
-    const TOP_INSET: f32 = 5.0;
+    const TOP_INSET: f32 = 8.0;
     let font = FontId::proportional(FS_SMALL);
     let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap(label.to_owned(), font, c_text()));
     let width = (galley.rect.width() + PADDING_LEFT + CLOSE_SLOT).max(72.0);
@@ -357,7 +359,7 @@ fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool)
     if active {
         // Reach past the strip's lower edge so the tab and the editor read as one surface.
         let mut fill = body;
-        fill.max.y += RADIUS_ROW as f32 + 4.0;
+        fill.max.y += 3.0;
         ui.painter().rect_filled(fill, top_rounded, c_bg_main());
     } else if hovered {
         // Well short of the active tab's color, and inset from the neighbours, so a hovered tab
@@ -376,14 +378,14 @@ fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool)
     ui.painter().galley(
         egui::pos2(
             body.left() + PADDING_LEFT,
-            body.center().y - galley.size().y / 2.0,
+            rect.center().y - galley.size().y / 2.0,
         ),
         galley,
         text_color,
     );
 
     let close_rect = egui::Rect::from_center_size(
-        egui::pos2(body.right() - CLOSE_SLOT / 2.0, body.center().y),
+        egui::pos2(body.right() - CLOSE_SLOT / 2.0, rect.center().y),
         egui::vec2(18.0, 18.0),
     );
     let close = ui.interact(close_rect, id.with("close"), egui::Sense::click());

@@ -244,8 +244,15 @@ impl OxiApp {
             return;
         };
         let hunk = &quick.hunks[current];
-        let anchor = hunk_line(hunk) + hunk.new_lines.len().saturating_sub(1);
-        let Some(&(_, center)) = visible.iter().find(|(line, _)| *line == anchor) else {
+        // Under the change's last line on screen: a change taller than the viewport still
+        // gets its peek instead of one anchored below the fold.
+        let first = hunk_line(hunk);
+        let last = first + hunk.new_lines.len().saturating_sub(1);
+        let Some(&(_, center)) = visible
+            .iter()
+            .filter(|(line, _)| (first..=last).contains(line))
+            .max_by_key(|(line, _)| *line)
+        else {
             return;
         };
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
