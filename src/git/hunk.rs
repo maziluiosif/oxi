@@ -185,8 +185,12 @@ pub fn base_text(cwd: &str, relative: &str, compare_base: Option<&str>) -> Resul
     String::from_utf8(blob.content().to_vec()).map_err(|_| format!("{relative} is not UTF-8 text"))
 }
 
-/// Line changes from `old` to `new`, without context.
+/// Line changes from `old` to `new`, without context. Line endings don't count: a base blob
+/// stored with LF against a CRLF checkout (Git for Windows' `autocrlf`) is not a change on
+/// every line.
 pub fn text_hunks(old: &str, new: &str) -> Vec<TextHunk> {
+    let old = old.replace("\r\n", "\n");
+    let new = new.replace("\r\n", "\n");
     let mut opts = git2::DiffOptions::new();
     opts.context_lines(0);
     let Ok(patch) =
@@ -236,6 +240,21 @@ mod tests {
             expected: expected.iter().map(|s| s.to_string()).collect(),
             replacement: replacement.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn text_hunks_ignore_line_endings() {
+        let hunks = text_hunks("a\nb\nc\n", "a\r\nB\r\nc\r\n");
+        assert_eq!(
+            hunks,
+            vec![TextHunk {
+                old_start: 2,
+                old_lines: vec!["b".into()],
+                new_start: 2,
+                new_lines: vec!["B".into()],
+            }]
+        );
+        assert!(text_hunks("a\nb\n", "a\r\nb\r\n").is_empty());
     }
 
     #[test]
