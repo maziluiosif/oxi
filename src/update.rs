@@ -76,6 +76,89 @@ pub async fn fetch_latest_release(client: &reqwest::Client) -> Result<ReleaseInf
     })
 }
 
+/// Install scripts served from GitHub Pages (`docs/`); `oxi update` reruns them.
+#[cfg(not(windows))]
+const INSTALL_SH_URL: &str = "https://maziluiosif.github.io/oxi/install.sh";
+#[cfg(windows)]
+const INSTALL_PS1_URL: &str = "https://maziluiosif.github.io/oxi/install.ps1";
+
+/// `oxi update [version]`: reinstall from the install script, in place of the running binary.
+/// Returns the process exit code.
+pub fn run_cli_update(version: Option<String>) -> i32 {
+    let mut env: Vec<(&str, String)> = Vec::new();
+    if let Some(v) = version {
+        env.push(("OXI_VERSION", v));
+    }
+    // Update where this binary lives rather than the script's default location, unless the user
+    // already chose one or this is a `cargo` build.
+    if let Some((key, dir)) = install_dir_override()
+        && std::env::var_os(key).is_none()
+    {
+        env.push((key, dir.to_string_lossy().into_owned()));
+    }
+    match spawn_installer(&env) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("oxi: error: could not run the installer: {e}");
+            1
+        }
+    }
+}
+
+/// The install script variable that points at the running install, and its value.
+fn install_dir_override() -> Option<(&'static str, std::path::PathBuf)> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    if exe.components().any(|c| c.as_os_str() == "target") {
+        return None;
+    }
+    if cfg!(target_os = "macos") {
+        // `<dir>/oxi.app/Contents/MacOS/oxi`
+        let app = exe.ancestors().nth(3)?;
+        if app.extension()? != "app" {
+            return None;
+        }
+        Some(("OXI_APP_DIR", app.parent()?.to_path_buf()))
+    } else if cfg!(windows) {
+        Some(("OXI_INSTALL_DIR", exe.parent()?.to_path_buf()))
+    } else {
+        Some(("OXI_BIN_DIR", exe.parent()?.to_path_buf()))
+    }
+}
+
+#[cfg(not(windows))]
+fn spawn_installer(env: &[(&str, String)]) -> std::io::Result<i32> {
+    let status = std::process::Command::new("sh")
+        .args(["-c", &format!("curl -fsSL {INSTALL_SH_URL} | sh")])
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .status()?;
+    Ok(status.code().unwrap_or(1))
+}
+
+/// oxi.exe is a GUI-subsystem binary: the terminal that launched it does not wait for it and has
+/// no console to print to, so the installer runs in its own console window. oxi exits right away,
+/// which also frees `oxi.exe` for the script to overwrite.
+#[cfg(windows)]
+fn spawn_installer(env: &[(&str, String)]) -> std::io::Result<i32> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    let script = format!(
+        "try {{ irm {INSTALL_PS1_URL} | iex }} catch {{ Write-Host \"oxi: error: $_\" -ForegroundColor Red }}; \
+         Read-Host 'Press Enter to close' | Out-Null"
+    );
+    std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()?;
+    Ok(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

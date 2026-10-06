@@ -27,7 +27,7 @@ curl -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
 irm https://maziluiosif.github.io/oxi/install.ps1 | iex
 ```
 
-Run the same command again to update. Then start oxi from your apps menu, or run `oxi` inside a project folder to open it as your workspace.
+To update, run `oxi update` (or `oxi update v1.8.0` for a specific release), or the same install command again. Then start oxi from your apps menu, or run `oxi` inside a project folder to open it as your workspace.
 
 <details>
 <summary>Other ways to install</summary>
