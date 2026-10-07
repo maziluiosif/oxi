@@ -637,19 +637,30 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.app().conv.editor.diff_tab_active = true;
         rec.wait_for_git_diff("stats.py");
         rec.still("diff-split");
-        // Hovering a change shows its block actions (Stage / Revert).
-        let scale = rec.harness.ctx.pixels_per_point();
-        let line = rec
-            .harness
-            .query_all_by_label_contains("mid = len(ordered)")
-            .map(|node| node.rect())
-            .next();
-        if let Some(line) = line {
+        // Hovering a change shows its block actions (Stage / Revert). Diff text is painted,
+        // not labels, so the `mid = len(ordered)` line is addressed by position.
+        let mid_line = egui::pos2(360.0, 168.0);
+        rec.harness.hover_at(mid_line);
+        rec.harness.run_steps(4);
+        rec.still("diff-block-actions");
+        // Drag-select from inside that line down two lines, like in the editor.
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let select_to = egui::pos2(470.0, 203.0);
+        rec.harness.event(button(mid_line, true));
+        rec.harness.step();
+        for i in 1..=6 {
             rec.harness
-                .hover_at((line.center().to_vec2() / scale).to_pos2());
-            rec.harness.run_steps(4);
-            rec.still("diff-block-actions");
+                .event(egui::Event::PointerMoved(mid_line.lerp(select_to, i as f32 / 6.0)));
+            rec.harness.step();
         }
+        rec.harness.event(button(select_to, false));
+        rec.harness.run_steps(2);
+        rec.still("diff-selection");
         rec.profile("diff split idle", false);
         rec.app().conv.git_open = false;
         rec.harness.run_steps(4);

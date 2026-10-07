@@ -3,14 +3,15 @@
 //! collapsible unchanged regions, change navigation (F7 / Shift+F7) and an overview ruler.
 //!
 //! Rows have fixed heights and only the visible ones are laid out, so whole-file diffs stay
-//! cheap. Text is rendered as selectable labels — all left-pane rows before the right pane — so
-//! a drag selection copies one side only.
+//! cheap. Text selection works like the editor's: it stays inside one pane, is painted as one
+//! continuous shape and supports double/triple click, Shift+click, select all and copy.
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::sync::Arc;
 
-use eframe::egui::text::{LayoutJob, TextWrapping};
+use eframe::egui::text::{CCursor, LayoutJob, TextWrapping};
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Layout, Rect, Sense, Shape, Stroke, TextFormat, Ui,
     UiBuilder, pos2, vec2,
@@ -202,6 +203,21 @@ enum Row {
     },
 }
 
+/// Text selected in one pane: 0 = old (split left), 1 = new (split right), 2 = inline.
+/// Positions are `(row, char)`; the char is clamped to the line when used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TextSelection {
+    pane: usize,
+    anchor: (usize, usize),
+    cursor: (usize, usize),
+}
+
+impl TextSelection {
+    fn sorted(&self) -> ((usize, usize), (usize, usize)) {
+        (self.anchor.min(self.cursor), self.anchor.max(self.cursor))
+    }
+}
+
 /// One contiguous block of changed rows, for navigation and the overview ruler.
 #[derive(Clone, Copy, Debug)]
 struct Change {
@@ -280,6 +296,7 @@ pub struct DiffView {
     viewport_h: f32,
     pending_scroll: Option<f32>,
     reveal_first_change: bool,
+    selection: Option<TextSelection>,
 }
 
 impl DiffView {
@@ -340,6 +357,7 @@ impl DiffView {
             viewport_h: 0.0,
             pending_scroll: same_target.then_some(scroll_y),
             reveal_first_change: !same_target,
+            selection: None,
         });
     }
 
@@ -463,6 +481,8 @@ impl DiffView {
     fn ensure_layout(&mut self, split: bool) {
         let key = (split, self.collapse_unchanged, self.fold_state_hash());
         if self.layout_key != Some(key) {
+            // Selections are row positions; they don't survive the rows changing.
+            self.selection = None;
             self.layout = build_rows(
                 &self.model,
                 split,
@@ -694,9 +714,22 @@ impl DiffView {
             }
         }
 
-        let painter = ui.painter().clone();
         let numbers_w = self.digits as f32 * char_w;
-        let mut right_labels = Vec::new();
+        // Added before the rows' own widgets (gutters, folds, headers), so those stay on top.
+        let text_area = Rect::from_min_max(
+            pos2(origin.x, origin.y + viewport.min.y),
+            pos2(origin.x + width, origin.y + viewport.max.y),
+        );
+        let select = ui.interact(
+            text_area,
+            ui.id().with("diff_text_selection"),
+            Sense::click_and_drag(),
+        );
+        self.handle_selection(ui, &select, origin, width, numbers_w, text_area);
+
+        let painter = ui.painter().clone();
+        let mut texts: Vec<(Arc<egui::Galley>, egui::Pos2, Rect)> = Vec::new();
+        let mut selection_runs: Vec<Vec<Rect>> = vec![Vec::new()];
         for &(index, row, rect) in &visible {
             match row {
                 Row::Commit => {
@@ -773,6 +806,9 @@ impl DiffView {
                         let f = &self.model.files[file];
                         let Some(line) = item.and_then(|i| f.line(i)) else {
                             paint_hatch(&painter, pane);
+                            if self.selection.is_some_and(|sel| sel.pane == side) {
+                                selection_runs.push(Vec::new());
+                            }
                             continue;
                         };
                         let number = if side == 0 { line.old_no } else { line.new_no };
@@ -782,17 +818,17 @@ impl DiffView {
                         if let Some(a) = gutter_click(ui, pane, numbers_w, open, (index, side)) {
                             action = Some(a);
                         }
-                        let label = PendingLabel {
-                            id: (file, item.unwrap_or_default(), side),
-                            text_left: pane.left() + numbers_w + 2.0 * GUTTER_PAD + SIGN_W,
+                        let text_left = pane.left() + numbers_w + 2.0 * GUTTER_PAD + SIGN_W;
+                        self.place_line_text(
+                            ui,
+                            (index, side),
+                            line_job(f, line, side),
+                            line.text.chars().count(),
                             pane,
-                            job: line_job(f, line, side),
-                        };
-                        if side == 0 {
-                            label.add(ui, self.scroll_x);
-                        } else {
-                            right_labels.push(label);
-                        }
+                            text_left,
+                            &mut texts,
+                            &mut selection_runs,
+                        );
                     }
                     painter.vline(
                         rect.left() + half + 0.5,
@@ -821,18 +857,40 @@ impl DiffView {
                         action = Some(a);
                     }
                     let side = usize::from(line.kind != Kind::Removed);
-                    PendingLabel {
-                        id: (file, item, 2),
-                        text_left: pane.left() + inline_numbers + 2.0 * GUTTER_PAD + SIGN_W,
+                    let text_left = pane.left() + inline_numbers + 2.0 * GUTTER_PAD + SIGN_W;
+                    self.place_line_text(
+                        ui,
+                        (index, 2),
+                        line_job(f, line, side),
+                        line.text.chars().count(),
                         pane,
-                        job: line_job(f, line, side),
-                    }
-                    .add(ui, self.scroll_x);
+                        text_left,
+                        &mut texts,
+                        &mut selection_runs,
+                    );
                 }
             }
+            // Non-line rows (headers, folds, gaps) break the selection shape.
+            if !matches!(row, Row::Split { .. } | Row::Inline { .. }) {
+                selection_runs.push(Vec::new());
+            }
         }
-        for label in right_labels {
-            label.add(ui, self.scroll_x);
+        // Selection under the text, clipped to the selected pane's text column.
+        if let Some(sel) = self.selection {
+            let column = self.pane_text_column(sel.pane, origin.x, width, numbers_w);
+            let clip = Rect::from_x_y_ranges(column, text_area.y_range());
+            let selection_painter = painter.with_clip_rect(clip.intersect(painter.clip_rect()));
+            for run in selection_runs.iter().filter(|run| !run.is_empty()) {
+                selection_painter.add(crate::ui::text_selection::selection_shape(
+                    run,
+                    editor_selection_fill(),
+                ));
+            }
+        }
+        for (galley, pos, clip) in texts {
+            painter
+                .with_clip_rect(clip.intersect(painter.clip_rect()))
+                .galley(pos, galley, c_text());
         }
         if !block_actions.is_empty()
             && let Some(a) = self.block_buttons(ui, &visible, block_actions)
@@ -856,6 +914,252 @@ impl DiffView {
             }
         }
         action
+    }
+
+    /// Queue one line's text for painting and add its selected span to the selection shape.
+    #[allow(clippy::too_many_arguments)]
+    fn place_line_text(
+        &self,
+        ui: &Ui,
+        (row, pane_index): (usize, usize),
+        job: Option<LayoutJob>,
+        chars: usize,
+        pane: Rect,
+        text_left: f32,
+        texts: &mut Vec<(Arc<egui::Galley>, egui::Pos2, Rect)>,
+        selection_runs: &mut Vec<Vec<Rect>>,
+    ) {
+        let galley = job.map(|job| ui.painter().layout_job(job));
+        let x = text_left - self.scroll_x;
+        if let Some(sel) = self.selection.filter(|sel| sel.pane == pane_index) {
+            let (start, end) = sel.sorted();
+            if start != end && (start.0..=end.0).contains(&row) {
+                let x_of = |col: usize| {
+                    galley
+                        .as_ref()
+                        .map_or(0.0, |g| g.pos_from_cursor(CCursor::new(col)).min.x)
+                };
+                let from = if row == start.0 { start.1.min(chars) } else { 0 };
+                let left = x_of(from);
+                let right = if row == end.0 {
+                    x_of(end.1.min(chars))
+                } else {
+                    // Past the end, like the editor's newline marker.
+                    galley.as_ref().map_or(0.0, |g| g.size().x) + pane.height() * 0.5
+                };
+                if right > left {
+                    selection_runs.last_mut().expect("never empty").push(Rect::from_min_max(
+                        pos2(x + left, pane.top()),
+                        pos2(x + right, pane.bottom()),
+                    ));
+                } else {
+                    selection_runs.push(Vec::new());
+                }
+            }
+        }
+        if let Some(galley) = galley {
+            let pos = pos2(x, pane.center().y - galley.size().y / 2.0);
+            let clip = Rect::from_min_max(pos2(text_left, pane.top()), pane.max);
+            texts.push((galley, pos, clip));
+        }
+    }
+
+    /// Horizontal extent of a pane's text column, in the rows' coordinates.
+    fn pane_text_column(
+        &self,
+        pane: usize,
+        left: f32,
+        width: f32,
+        numbers_w: f32,
+    ) -> egui::Rangef {
+        let half = (width / 2.0).floor();
+        let (pane_left, pane_right, numbers) = match pane {
+            0 => (left, left + half, numbers_w),
+            1 => (left + half + 1.0, left + width, numbers_w),
+            _ => (left, left + width, 2.0 * numbers_w + 8.0),
+        };
+        egui::Rangef::new(pane_left + numbers + 2.0 * GUTTER_PAD + SIGN_W, pane_right)
+    }
+
+    /// The line `pane` shows on `row`, with the side its highlighting comes from.
+    fn pane_line(&self, row: usize, pane: usize) -> Option<(&DiffFile, &Line, usize)> {
+        match (*self.layout.rows.get(row)?, pane) {
+            (Row::Split { file, left, .. }, 0) => {
+                let f = &self.model.files[file];
+                Some((f, f.line(left?)?, 0))
+            }
+            (Row::Split { file, right, .. }, 1) => {
+                let f = &self.model.files[file];
+                Some((f, f.line(right?)?, 1))
+            }
+            (Row::Inline { file, item }, 2) => {
+                let f = &self.model.files[file];
+                let line = f.line(item)?;
+                Some((f, line, usize::from(line.kind != Kind::Removed)))
+            }
+            _ => None,
+        }
+    }
+
+    /// `(row, char)` under `pos` in `pane`; above or below the rows snaps to the ends.
+    fn text_pos_at(
+        &self,
+        ui: &Ui,
+        origin: egui::Pos2,
+        width: f32,
+        numbers_w: f32,
+        pane: usize,
+        pos: egui::Pos2,
+    ) -> (usize, usize) {
+        let rows = self.layout.rows.len();
+        let y = pos.y - origin.y;
+        if rows == 0 || y < 0.0 {
+            return (0, 0);
+        }
+        if y >= self.layout.total {
+            return (rows - 1, usize::MAX);
+        }
+        let row = self.layout.ys.partition_point(|&top| top <= y).saturating_sub(1);
+        let Some((f, line, side)) = self.pane_line(row, pane) else {
+            return (row, 0);
+        };
+        let Some(job) = line_job(f, line, side) else {
+            return (row, 0);
+        };
+        let galley = ui.painter().layout_job(job);
+        let text_x = self.pane_text_column(pane, origin.x, width, numbers_w).min - self.scroll_x;
+        let col = galley
+            .cursor_from_pos(vec2(pos.x - text_x, galley.size().y / 2.0))
+            .index;
+        (row, col.into())
+    }
+
+    fn handle_selection(
+        &mut self,
+        ui: &Ui,
+        response: &egui::Response,
+        origin: egui::Pos2,
+        width: f32,
+        numbers_w: f32,
+        area: Rect,
+    ) {
+        let split = self.layout_key.is_some_and(|(split, _, _)| split);
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
+        let (pointer, pressed, shift) = ui.input(|i| {
+            (
+                i.pointer.interact_pos(),
+                i.pointer.primary_pressed(),
+                i.modifiers.shift,
+            )
+        });
+        if pressed
+            && response.is_pointer_button_down_on()
+            && let Some(pos) = pointer
+        {
+            response.request_focus();
+            let pane = if !split {
+                2
+            } else if pos.x < origin.x + (width / 2.0).floor() {
+                0
+            } else {
+                1
+            };
+            let at = self.text_pos_at(ui, origin, width, numbers_w, pane, pos);
+            self.selection = Some(match self.selection {
+                Some(sel) if shift && sel.pane == pane => TextSelection { cursor: at, ..sel },
+                _ => TextSelection {
+                    pane,
+                    anchor: at,
+                    cursor: at,
+                },
+            });
+        } else if response.dragged()
+            && let (Some(pos), Some(sel)) = (pointer, self.selection)
+        {
+            let at = self.text_pos_at(ui, origin, width, numbers_w, sel.pane, pos);
+            self.selection = Some(TextSelection { cursor: at, ..sel });
+            // Dragging past the top/bottom edge keeps scrolling, like the editor.
+            let dy = if pos.y < area.top() {
+                area.top() - pos.y
+            } else if pos.y > area.bottom() {
+                area.bottom() - pos.y
+            } else {
+                0.0
+            };
+            if dy != 0.0 {
+                ui.scroll_with_delta_animation(
+                    vec2(0.0, dy.clamp(-40.0, 40.0)),
+                    egui::style::ScrollAnimation::none(),
+                );
+                ui.ctx().request_repaint();
+            }
+        }
+
+        if let Some(sel) = self.selection
+            && (response.double_clicked() || response.triple_clicked())
+            && let Some((_, line, _)) = self.pane_line(sel.cursor.0, sel.pane)
+        {
+            let row = sel.cursor.0;
+            let (from, to) = if response.triple_clicked() {
+                (0, line.text.chars().count())
+            } else {
+                word_at(&line.text, sel.cursor.1)
+            };
+            self.selection = Some(TextSelection {
+                pane: sel.pane,
+                anchor: (row, from),
+                cursor: (row, to),
+            });
+        }
+
+        if response.has_focus() {
+            let (copy, select_all) = ui.input_mut(|i| {
+                (
+                    i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
+                    i.consume_key(egui::Modifiers::COMMAND, egui::Key::A),
+                )
+            });
+            if select_all && !self.layout.rows.is_empty() {
+                let pane = self
+                    .selection
+                    .map_or(if split { 1 } else { 2 }, |sel| sel.pane);
+                self.selection = Some(TextSelection {
+                    pane,
+                    anchor: (0, 0),
+                    cursor: (self.layout.rows.len() - 1, usize::MAX),
+                });
+            }
+            if copy && let Some(text) = self.selected_text() {
+                ui.ctx().copy_text(text);
+            }
+        }
+    }
+
+    /// The selected text, one line per row of the pane that has a line.
+    fn selected_text(&self) -> Option<String> {
+        let sel = self.selection?;
+        let (start, end) = sel.sorted();
+        if start == end {
+            return None;
+        }
+        let mut lines = Vec::new();
+        for row in start.0..=end.0.min(self.layout.rows.len().saturating_sub(1)) {
+            let Some((_, line, _)) = self.pane_line(row, sel.pane) else {
+                continue;
+            };
+            let from = if row == start.0 { start.1 } else { 0 };
+            let to = if row == end.0 { end.1 } else { usize::MAX };
+            lines.push(
+                line.text
+                    .chars()
+                    .skip(from)
+                    .take(to.saturating_sub(from))
+                    .collect::<String>(),
+            );
+        }
+        Some(lines.join("\n"))
     }
 
     /// The changed-lines block a row shows, if any.
@@ -968,11 +1272,14 @@ impl DiffView {
         let f = &self.model.files[file];
         let collapsed = self.collapsed_files.contains(&file);
         let response = ui.interact(rect, ui.id().with(("diff_file", file)), Sense::click());
+        // `hovered()` turns false while the pointer is on the open button drawn over the header,
+        // which would hide that button again; track the pointer over the whole header instead.
+        let hot = ui.rect_contains_pointer(rect);
         let painter = ui.painter();
         painter.rect_filled(
             rect,
             0.0,
-            if response.hovered() {
+            if hot {
                 c_row_hover()
             } else {
                 c_bg_elevated()
@@ -1038,7 +1345,7 @@ impl DiffView {
             c_text(),
         );
         let mut right = rect.right() - GUTTER_PAD;
-        if response.hovered() && f.new_path.as_deref().is_some_and(can_open) {
+        if hot && f.new_path.as_deref().is_some_and(can_open) {
             let open_rect =
                 Rect::from_center_size(pos2(right - 10.0, rect.center().y), vec2(22.0, 22.0));
             let open = ui
@@ -1161,36 +1468,32 @@ fn row_file(row: Row) -> Option<usize> {
     }
 }
 
-/// A line's text, added after its row chrome; right-pane labels are deferred so selection
-/// order runs down one pane at a time.
-struct PendingLabel {
-    id: (usize, usize, usize),
-    text_left: f32,
-    pane: Rect,
-    job: Option<LayoutJob>,
-}
-
-impl PendingLabel {
-    fn add(self, ui: &mut Ui, scroll_x: f32) {
-        let Some(job) = self.job else { return };
-        let clip = Rect::from_min_max(pos2(self.text_left, self.pane.top()), self.pane.max);
-        let rect = Rect::from_min_size(
-            pos2(self.text_left - scroll_x, self.pane.top()),
-            vec2(1.0e5, self.pane.height()),
-        );
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .id_salt(("diff_line", self.id))
-                .max_rect(rect)
-                .layout(Layout::left_to_right(Align::Center)),
-        );
-        child.set_clip_rect(clip.intersect(ui.clip_rect()));
-        child.add(
-            egui::Label::new(job)
-                .selectable(true)
-                .wrap_mode(egui::TextWrapMode::Extend),
-        );
+/// Char range of the word (or run of spaces/punctuation) at char `col`, for double-click.
+fn word_at(text: &str, col: usize) -> (usize, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return (0, 0);
     }
+    let class = |c: char| {
+        if c.is_alphanumeric() || c == '_' {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
+    };
+    let at = col.min(chars.len() - 1);
+    let kind = class(chars[at]);
+    let from = chars[..at]
+        .iter()
+        .rposition(|&c| class(c) != kind)
+        .map_or(0, |i| i + 1);
+    let to = chars[at..]
+        .iter()
+        .position(|&c| class(c) != kind)
+        .map_or(chars.len(), |i| at + i);
+    (from, to)
 }
 
 /// Row tint, line numbers and the +/− sign for one pane of a line row.
@@ -2023,6 +2326,42 @@ mod tests {
             lines(&model.files[0])[0],
             (Kind::Added, None, Some(1), "hi")
         );
+    }
+
+    #[test]
+    fn double_click_word_spans_one_character_class() {
+        let text = "let foo_bar = x.len();";
+        assert_eq!(word_at(text, 5), (4, 11));
+        assert_eq!(word_at(text, 3), (3, 4));
+        assert_eq!(word_at(text, 15), (15, 16));
+        assert_eq!(word_at(text, 99), (19, 22));
+        assert_eq!(word_at("", 0), (0, 0));
+    }
+
+    #[test]
+    fn selected_text_stays_in_one_pane() {
+        let mut slot = None;
+        DiffView::sync(
+            &mut slot,
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,3 @@\n keep one\n-old two\n+new two\n keep three\n",
+        );
+        let view = slot.as_mut().unwrap();
+        view.ensure_layout(true);
+        let first = (0..view.layout.rows.len())
+            .find(|&row| view.pane_line(row, 1).is_some())
+            .unwrap();
+        view.selection = Some(TextSelection {
+            pane: 1,
+            anchor: (first, 5),
+            cursor: (first + 2, 4),
+        });
+        assert_eq!(view.selected_text().as_deref(), Some("one\nnew two\nkeep"));
+        view.selection = Some(TextSelection {
+            pane: 0,
+            anchor: (first + 1, 0),
+            cursor: (first + 1, usize::MAX),
+        });
+        assert_eq!(view.selected_text().as_deref(), Some("old two"));
     }
 
     #[test]
