@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Editor:** File diffs (working tree, staged, branch compare, agent turn, unsaved changes) open in the editor tab itself: the file stays editable, side by side or inline, with word highlights, an overview ruler and Stage / Discard (or Unstage) on hovering a change. Clicking a gutter marker opens the diff at that change.
+
+### Removed
+- **Editor:** The gutter's quick diff peek and the separate unsaved-changes and in-chat diff views; commit diffs keep the patch view.
+
 ## [1.10.0] - 2026-10-07
 
 ### Added

@@ -170,6 +170,9 @@ impl OxiApp {
             latest = Some(state);
         }
         if let Some(state) = latest {
+            if !state.busy {
+                self.conv.git_ui.epoch += 1;
+            }
             self.conv.git = state;
             ctx.request_repaint();
         }

@@ -85,9 +85,7 @@ impl OxiApp {
                 // rather than falling back to the in-chat diff view. This makes the editor the
                 // default home for every diff, whether or not a file was already open.
                 let editor_open = self.conv.editor.active_document().is_some()
-                    || (self.conv.editor.diff_tab_active
-                        && self.conv.diff_view.open
-                        && self.conv.git.diff.is_some());
+                    || (self.conv.diff_view.open && self.conv.git.diff.is_some());
                 Frame::new()
                     .fill(c_bg_main())
                     .inner_margin(Margin {
@@ -118,10 +116,6 @@ impl OxiApp {
                         let column_center_w =
                             crate::theme::chat_column_center_width(ui.available_width(), &style);
 
-                        let show_diff = self.conv.diff_view.open && self.conv.git.diff.is_some();
-
-                        // Floating composer always stays available — even over a diff —
-                        // so you can discuss the change without leaving the view.
                         const COMPOSER_GAP: f32 = 8.0;
                         let composer_overlay_h =
                             (self.conv.composer.measured_full_h + COMPOSER_GAP).max(88.0);
@@ -131,20 +125,12 @@ impl OxiApp {
                             egui::vec2(ui.available_width(), conversation_h),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
-                                if show_diff {
-                                    if let Some(title) =
-                                        self.conv.git.diff.as_ref().map(|(title, _)| title.clone())
-                                    {
-                                        self.render_diff_view(ui, &title, column_center_w);
-                                    }
-                                } else {
-                                    self.render_conversation(
-                                        ui,
-                                        column_center_w,
-                                        conversation_h,
-                                        composer_overlay_h,
-                                    );
-                                }
+                                self.render_conversation(
+                                    ui,
+                                    column_center_w,
+                                    conversation_h,
+                                    composer_overlay_h,
+                                );
                             },
                         );
 

@@ -19,6 +19,7 @@ fn document(path: PathBuf) -> EditorDocument {
         viewport_width_bits: None,
         viewport_anchor_line: 0,
         media: None,
+        diff: None,
     }
 }
 

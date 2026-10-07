@@ -467,14 +467,20 @@ impl OxiApp {
         let file = &data.files[index];
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
-        let selected = self.conv.diff_view.open
-            && self.conv.git.current_diff_path.as_deref() == Some(file.path.as_str())
-            && self
-                .conv
-                .git
-                .diff
-                .as_ref()
-                .is_some_and(|(title, _)| title.starts_with(crate::git::COMPARE_TITLE_PREFIX));
+        let selected = match self.active_diff_target() {
+            Some((path, crate::app::file_explorer::DiffSource::Compare { base, .. })) => {
+                path == file.path && *base == data.base
+            }
+            Some(_) => false,
+            None => {
+                self.conv.diff_view.open
+                    && self.conv.editor.diff_tab_active
+                    && self.conv.git.current_diff_path.as_deref() == Some(file.path.as_str())
+                    && self.conv.git.diff.as_ref().is_some_and(|(title, _)| {
+                        title.starts_with(crate::git::COMPARE_TITLE_PREFIX)
+                    })
+            }
+        };
         let uncommitted = self
             .conv
             .git
@@ -617,13 +623,19 @@ impl OxiApp {
         if open_clicked || (response.double_clicked() && can_open) {
             self.open_changed_file(&file.path);
         } else if response.clicked() {
-            self.request(GitOp::ShowCompareDiff {
+            let source = crate::app::file_explorer::DiffSource::Compare {
                 base: data.base.clone(),
-                path: file.path.clone(),
                 old_path: file.old_path.clone(),
-            });
-            self.conv.diff_view.open = true;
-            self.conv.editor.diff_tab_active = true;
+            };
+            if !self.open_diff_editor(&file.path, source, None) {
+                self.request(GitOp::ShowCompareDiff {
+                    base: data.base.clone(),
+                    path: file.path.clone(),
+                    old_path: file.old_path.clone(),
+                });
+                self.conv.diff_view.open = true;
+                self.conv.editor.diff_tab_active = true;
+            }
         }
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

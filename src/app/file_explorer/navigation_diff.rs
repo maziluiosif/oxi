@@ -1,4 +1,4 @@
-//! Editor definition/history navigation and diff views.
+//! Editor definition/history navigation and the git patch view (commits, deleted files).
 
 use std::path::PathBuf;
 
@@ -105,7 +105,6 @@ impl OxiApp {
         line: Option<usize>,
     ) -> Option<PathBuf> {
         let wanted = std::fs::canonicalize(&path).ok()?;
-        self.conv.editor.show_diff = false;
         self.open_editor_file_only(path);
         let document = self
             .conv
@@ -119,64 +118,6 @@ impl OxiApp {
         }
         self.conv.editor.focus_editor_next_frame = true;
         Some(document_path)
-    }
-
-    pub(super) fn render_editor_diff(&mut self, ui: &mut Ui) {
-        let Some(document) = self.conv.editor.active_document() else {
-            return;
-        };
-        let root = PathBuf::from(&self.active_workspace().root_path);
-        let name = document
-            .path
-            .strip_prefix(&root)
-            .unwrap_or(&document.path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        let diff = crate::agent::tools::make_unified_diff(
-            &name,
-            &document.saved_content,
-            &document.content,
-        );
-        if diff.is_empty() {
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                ui.label(
-                    egui::RichText::new("No unsaved changes.").color(crate::theme::c_text_muted()),
-                );
-                if ui.button("Back to editor").clicked() {
-                    self.conv.editor.show_diff = false;
-                }
-            });
-            return;
-        }
-        crate::ui::diff_view::DiffView::sync(&mut self.conv.diff_view.unsaved, &diff);
-        let Some(view) = self.conv.diff_view.unsaved.as_mut() else {
-            return;
-        };
-        let action = view.show(
-            ui,
-            "Unsaved changes",
-            &|_| true,
-            &[crate::ui::diff_view::BlockAction::Revert],
-        );
-        if let Some(crate::ui::diff_view::DiffAction::Block { block, .. }) = action {
-            // Back to the saved lines, in the buffer (undoable), not on disk.
-            if let Some(index) = self.conv.editor.active {
-                let edit = revert_edit(block, crate::git::BlockTarget::WorkTree);
-                if let Err(error) = self.edit_document_block(ui.ctx(), index, &edit) {
-                    self.conv.editor.error = Some(error);
-                }
-            }
-        } else if let Some(crate::ui::diff_view::DiffAction::OpenFile { line, .. }) = action {
-            // The "file" is the open buffer itself: return to it at the clicked line.
-            self.conv.editor.show_diff = false;
-            if let (Some(line), Some(document)) = (line, self.conv.editor.active_document()) {
-                let byte = line_start_byte(&document.content, line.saturating_sub(1));
-                self.conv.editor.navigation_target = Some((document.path.clone(), byte..byte));
-            }
-            self.conv.editor.focus_editor_next_frame = true;
-        }
     }
 
     pub(super) fn reveal_active_file(&mut self) {

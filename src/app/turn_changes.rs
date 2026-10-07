@@ -156,17 +156,24 @@ impl OxiApp {
                 }
             }
             Some(CardAction::OpenDiff(path)) => {
-                self.request(GitOp::ShowCompareDiff {
-                    base: format!(
-                        "{}{}",
-                        crate::git::checkpoint::TURN_BASE_PREFIX,
-                        changes.before
-                    ),
-                    path,
+                let base = format!(
+                    "{}{}",
+                    crate::git::checkpoint::TURN_BASE_PREFIX,
+                    changes.before
+                );
+                let source = crate::app::file_explorer::DiffSource::Compare {
+                    base: base.clone(),
                     old_path: None,
-                });
-                self.conv.diff_view.open = true;
-                self.conv.editor.diff_tab_active = true;
+                };
+                if !self.open_diff_editor(&path, source, None) {
+                    self.request(GitOp::ShowCompareDiff {
+                        base,
+                        path,
+                        old_path: None,
+                    });
+                    self.conv.diff_view.open = true;
+                    self.conv.editor.diff_tab_active = true;
+                }
             }
             Some(CardAction::RevertFile(path)) => {
                 self.revert_turn_changes(changes, &key, Some(path));
