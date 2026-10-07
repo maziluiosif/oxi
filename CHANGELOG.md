@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-07
+
+### Added
+- **Composer:** Agent-advertised config options (mode, model, effort, fast mode) render as searchable dropdown menus
+- **Composer:** Searchable SelectMenu dropdown with groups and upward-opening popup
+- **Notifications:** macOS notifications now open oxi when clicked
+- **ACP:** Native checklist support via built-in MCP server, works on all models including those with disabled todo tools
+- **ACP:** Plan mode syncs with agent session modes
+- **ACP:** MCP servers (stdio and HTTP) passed to agent from oxi's configuration
+- **ACP:** Agent's context occupancy, turn usage, and subscription windows shown in context tooltip
+- **Chat:** Queue follow-ups while streaming, support chat forks, and attach editor selections
+- **Chat:** Open commands directly in terminals
+- **Workspace:** Serialize work tree creation and unfold parent in sidebar
+- **Workspace:** Worktree chat creation, merging, and removal
+- **Workspace:** Persist workspace ACP preferences and notify users in background
+
+### Changed
+- **ACP:** Snapshot changes for review and support per-file or full-turn revert
+- **ACP:** Reset sessions when retrying or rewriting chat history
+
+### Fixed
+- **Editor:** Right-click selection preserved when adding to chat
+- **Composer:** Finished checklists stay with the turn that wrote them instead of reappearing on next prompt
+- **ACP:** Permission requests for read, search, fetch, and think tools now respect approval settings
+- **Chat:** Queued message's new run no longer cancelled by finished run's receiver
+
+
 ## [1.9.2] - 2026-10-06
 
 ### Fixed
@@ -901,7 +928,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.9.2...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/maziluiosif/oxi/compare/v1.9.2...v1.10.0
 [1.9.2]: https://github.com/maziluiosif/oxi/compare/v1.9.1...v1.9.2
 [1.9.1]: https://github.com/maziluiosif/oxi/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/maziluiosif/oxi/compare/v1.8.0...v1.9.0
