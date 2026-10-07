@@ -169,7 +169,7 @@ mod tests {
                 p.strip_prefix(&root)
                     .unwrap()
                     .to_string_lossy()
-                    .into_owned()
+                    .replace('\\', "/")
             })
             .collect();
         assert_eq!(names, ["src/a.rs", "src"]);

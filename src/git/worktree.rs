@@ -279,6 +279,9 @@ mod tests {
         let mut config = repo.config().unwrap();
         config.set_str("user.name", "Oxi Test").unwrap();
         config.set_str("user.email", "oxi@example.com").unwrap();
+        // Windows runners default to core.autocrlf=true, which would turn the
+        // merged checkout into CRLF.
+        config.set_bool("core.autocrlf", false).unwrap();
         std::fs::write(root.join("a.txt"), "one\n").unwrap();
         commit_all(&repo, "initial").unwrap_or_else(|_| {
             // First commit has no parent.
