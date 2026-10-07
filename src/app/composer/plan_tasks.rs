@@ -101,7 +101,7 @@ impl OxiApp {
     /// keeps the agent read-only and asks for a plan; it stays on for the chat until switched
     /// off, by clicking the pill or with `/plan` again.
     pub(super) fn render_plan_toggle(&mut self, ui: &mut Ui, compact: bool) {
-        if !self.plan_mode_on() {
+        if !self.plan_mode_on() || self.agent_shows_plan_mode() {
             return;
         }
         let color = c_accent();

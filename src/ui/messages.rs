@@ -271,6 +271,10 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
 }
 
 fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttachment]) {
+    let image_count = attachments
+        .iter()
+        .filter(|a| matches!(a, UserAttachment::Image { .. }))
+        .count();
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = eframe::egui::vec2(6.0, 6.0);
         for (i, att) in attachments.iter().enumerate() {
@@ -288,25 +292,36 @@ fn render_user_attachments(ui: &mut Ui, msg_idx: usize, attachments: &[UserAttac
                 }
                 UserAttachment::Image { mime, data } => {
                     if let Some(tex) = user_image_texture(ui, msg_idx, i, data) {
-                        // Thumbnail: max 320px, maintain aspect ratio
+                        // One image shows large; several share the bubble as a grid of smaller
+                        // thumbnails. Never wider than the bubble.
+                        let max = if image_count > 1 { 180.0 } else { 320.0 };
                         let mut sz = tex.size_vec2();
-                        let max = 320.0;
                         let m = sz.x.max(sz.y);
                         if m > max {
                             sz *= max / m;
                         }
-                        // Wrap in a subtle rounded frame
-                        Frame::new()
-                            .corner_radius(CornerRadius::same(RADIUS_CHIP))
-                            .stroke(Stroke::new(1.0, c_border()))
-                            .show(ui, |ui| {
-                                let resp = ui
-                                    .add(Image::new((tex.id(), sz)).sense(egui::Sense::click()))
-                                    .on_hover_cursor(egui::CursorIcon::ZoomIn);
-                                if resp.clicked() {
-                                    crate::ui::image_viewer::open(ui.ctx(), data);
-                                }
-                            });
+                        let room = ui.max_rect().width();
+                        if sz.x > room && room > 0.0 {
+                            sz *= room / sz.x;
+                        }
+                        // Allocated at its final size so the row wraps: a `Frame` is placed
+                        // before its size is known, so many images ran off the right of the
+                        // bubble and pushed the whole chat column sideways.
+                        let (rect, resp) = ui.allocate_exact_size(sz, egui::Sense::click());
+                        let radius = CornerRadius::same(RADIUS_CHIP);
+                        Image::new((tex.id(), sz))
+                            .corner_radius(radius)
+                            .paint_at(ui, rect);
+                        ui.painter().rect_stroke(
+                            rect,
+                            radius,
+                            Stroke::new(1.0, c_border()),
+                            egui::StrokeKind::Inside,
+                        );
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::ZoomIn);
+                        if resp.clicked() {
+                            crate::ui::image_viewer::open(ui.ctx(), data);
+                        }
                     } else {
                         // Fallback badge when texture loading fails
                         Frame::new()

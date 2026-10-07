@@ -29,6 +29,8 @@ pub(super) struct ModeState {
     /// The user put the agent into plan mode themselves (an agent slash command), so regular
     /// turns leave it there.
     user_plan: bool,
+    /// (oxi session key, launch command) the options are published under for the composer.
+    owner: Option<(String, String)>,
 }
 
 pub(super) type SharedModes = Arc<Mutex<ModeState>>;
@@ -78,11 +80,29 @@ impl ModeState {
         }
     }
 
+    /// Publish the options for the composer under this session, now and on every change.
+    pub(super) fn published_as(mut self, session_key: &str, command_line: &str) -> Self {
+        self.owner = Some((session_key.to_owned(), command_line.to_owned()));
+        self.publish();
+        self
+    }
+
+    fn publish(&self) {
+        if let Some((key, command_line)) = &self.owner {
+            super::config_options::publish(key, command_line, &self.config_options);
+        }
+    }
+
+    fn set_options(&mut self, options: Value) {
+        self.config_options = options;
+        self.publish();
+    }
+
     pub(super) fn apply_notification(&mut self, update: &Value) {
         match update["sessionUpdate"].as_str() {
             Some("config_option_update") => {
                 if let Some(options) = update.get("configOptions").filter(|v| v.is_array()) {
-                    self.config_options = options.clone();
+                    self.set_options(options.clone());
                 }
             }
             Some("current_mode_update") => {
@@ -197,8 +217,11 @@ pub(super) async fn sync_plan_mode(
         .map(|res| {
             let mut state = lock();
             match res.get("configOptions").filter(|v| v.is_array()) {
-                Some(options) => state.config_options = options.clone(),
-                None => set_config_value(&mut state.config_options, id, &value),
+                Some(options) => state.set_options(options.clone()),
+                None => {
+                    set_config_value(&mut state.config_options, id, &json!(value));
+                    state.publish();
+                }
             }
         }),
         PlanSwitch::Legacy { .. } => request(
@@ -229,18 +252,83 @@ pub(super) async fn sync_plan_mode(
     }
 }
 
-fn set_config_value(options: &mut Value, id: &str, value: &str) {
+/// Set one of the agent's config options because the user picked a value in the composer.
+pub(super) async fn set_user_option(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    next_id: &Arc<std::sync::atomic::AtomicI64>,
+    pending: &Pending,
+    session_id: &str,
+    modes: &SharedModes,
+    id: &str,
+    value: Value,
+) -> Result<(), String> {
+    let res = request(
+        stdin,
+        next_id,
+        pending,
+        "session/set_config_option",
+        config_value_params(session_id, id, &value),
+    )
+    .await;
+    let mut state = modes.lock().unwrap_or_else(|e| e.into_inner());
+    match res {
+        Ok(res) => {
+            match res.get("configOptions").filter(|v| v.is_array()) {
+                Some(options) => state.set_options(options.clone()),
+                None => {
+                    set_config_value(&mut state.config_options, id, &value);
+                    state.publish();
+                }
+            }
+            // A mode the user picked is theirs: plan stays on for regular turns, anything else
+            // ends what oxi had switched.
+            if state.plan_switch().is_some_and(
+                |s| matches!(&s, PlanSwitch::Config { id: plan_id, .. } if plan_id == id),
+            ) {
+                state.restore = None;
+                state.user_plan = value.as_str() == Some(PLAN);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Put the agent's actual value back in the composer.
+            state.publish();
+            Err(e)
+        }
+    }
+}
+
+/// `session/set_config_option` params; boolean values must be tagged `type: "boolean"`, or
+/// the agent rejects them as an invalid select value.
+fn config_value_params(session_id: &str, id: &str, value: &Value) -> Value {
+    let mut params = json!({ "sessionId": session_id, "configId": id, "value": value });
+    if value.is_boolean() {
+        params["type"] = json!("boolean");
+    }
+    params
+}
+
+fn set_config_value(options: &mut Value, id: &str, value: &Value) {
     if let Some(option) = options
         .as_array_mut()
         .and_then(|opts| opts.iter_mut().find(|o| o["id"].as_str() == Some(id)))
     {
-        option["currentValue"] = json!(value);
+        option["currentValue"] = value.clone();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boolean_option_values_are_tagged() {
+        let on = config_value_params("s", "fast_mode", &json!(true));
+        assert_eq!(on["type"], "boolean");
+        assert_eq!(on["value"], true);
+        let model = config_value_params("s", "model", &json!("opus"));
+        assert!(model.get("type").is_none());
+    }
 
     fn claude_options(current: &str) -> Value {
         json!([

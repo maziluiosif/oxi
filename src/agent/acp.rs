@@ -41,6 +41,9 @@ mod client_fs;
 
 #[path = "acp/commands.rs"]
 mod commands;
+
+#[path = "acp/config_options.rs"]
+pub mod config_options;
 use client_fs::fs_write_text;
 pub use commands::{AcpSlashCommand, available as available_commands};
 
@@ -57,7 +60,7 @@ mod terminals;
 
 #[path = "acp/todo_mcp.rs"]
 pub mod todo_mcp;
-use modes::{ModeState, SharedModes, sync_plan_mode};
+use modes::{ModeState, SharedModes, set_user_option, sync_plan_mode};
 
 #[path = "acp/permissions.rs"]
 mod permissions;
@@ -160,9 +163,26 @@ enum AcpCommand {
         req: AcpWarm,
         reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
+    SetOption {
+        req: AcpSetOption,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     Close {
         session_key: String,
     },
+}
+
+/// The user picked a value for one of the agent's config options in the composer.
+pub struct AcpSetOption {
+    pub session_key: String,
+    pub command_line: String,
+    pub config_id: String,
+    /// A string for select options, a bool for boolean ones.
+    pub value: Value,
+    /// When the option is the model or the effort: oxi's setting it now corresponds to, so the
+    /// next prompt keeps this subprocess instead of relaunching for a "changed" model.
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// Cheap to clone; every clone talks to the same background ACP-management task.
@@ -231,10 +251,17 @@ impl AcpManager {
                                 let _ = reply.send(ensured.map(|h| h.available_models));
                             });
                         }
+                        AcpCommand::SetOption { req, reply } => {
+                            let conns = conns.clone();
+                            tokio::spawn(async move {
+                                let _ = reply.send(set_option(&conns, req).await);
+                            });
+                        }
                         AcpCommand::Close { session_key } => {
                             // Dropping the Conn kills the subprocess (kill_on_drop).
                             conns.lock().await.remove(&session_key);
                             sessions::forget(&session_key);
+                            config_options::forget(&session_key);
                         }
                     }
                 }
@@ -266,6 +293,20 @@ impl AcpManager {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(AcpCommand::Warm {
+                req,
+                reply: reply_tx,
+            })
+            .map_err(|_| "ACP manager is not running".to_string())?;
+        reply_rx
+            .await
+            .map_err(|_| "ACP manager dropped the request".to_string())?
+    }
+
+    /// Set one of the agent's config options on the session's live subprocess.
+    pub async fn set_option(&self, req: AcpSetOption) -> Result<(), String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(AcpCommand::SetOption {
                 req,
                 reply: reply_tx,
             })
@@ -381,6 +422,38 @@ async fn ensure_conn(
         .await
         .insert(spec.session_key.to_string(), conn);
     Ok(handles)
+}
+
+async fn set_option(
+    conns: &Arc<AsyncMutex<HashMap<String, Conn>>>,
+    req: AcpSetOption,
+) -> Result<(), String> {
+    let handles = {
+        let mut map = conns.lock().await;
+        let Some(conn) = map
+            .get_mut(&req.session_key)
+            .filter(|c| c.alive.load(Ordering::SeqCst) && c.command_line == req.command_line)
+        else {
+            return Err("the agent is not running".into());
+        };
+        if let Some(model) = req.model {
+            conn.model = model;
+        }
+        if let Some(effort) = req.effort {
+            conn.effort = effort;
+        }
+        conn.handles.clone()
+    };
+    set_user_option(
+        &handles.stdin,
+        &handles.next_id,
+        &handles.pending,
+        &handles.session_id,
+        &handles.modes,
+        &req.config_id,
+        req.value,
+    )
+    .await
 }
 
 /// `PATH` for tool subprocesses launched from a GUI session (login-shell `PATH` merged with
@@ -502,6 +575,8 @@ async fn spawn_conn(
         "clientCapabilities": {
             "fs": { "readTextFile": true, "writeTextFile": true },
             "terminal": true,
+            // Fast mode and similar switches arrive as `type: "boolean"` options.
+            "session": { "configOptions": { "boolean": {} } },
             // Command output as appended chunks on the tool call (Claude Code and Codex). Codex
             // sends command output only this way.
             "_meta": { "terminal_output_delta": true }
@@ -575,7 +650,8 @@ async fn spawn_conn(
     *modes.lock().unwrap_or_else(|e| e.into_inner()) = ModeState::new(
         config_options,
         res.get("modes").cloned().unwrap_or(Value::Null),
-    );
+    )
+    .published_as(session_key, command_line);
 
     let handles = ConnHandles {
         stdin,

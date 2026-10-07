@@ -19,6 +19,12 @@ impl OxiApp {
     /// Create a work tree off workspace `wi`'s repository in the background, then open a chat
     /// in it.
     pub(crate) fn start_worktree_chat(&mut self, wi: usize) {
+        if !self.conv.worktree_ops.is_empty() {
+            self.notify_composer("A work tree operation is already in progress…");
+            return;
+        }
+        self.conv.workspaces[wi].sidebar_folded = false;
+        self.sync_workspaces_to_settings();
         let root = PathBuf::from(&self.conv.workspaces[wi].root_path);
         self.spawn_worktree_op(move || {
             WorktreeResult::Created(crate::git::worktree::create(&root))
@@ -107,6 +113,15 @@ impl OxiApp {
         let path = path.to_string_lossy().into_owned();
         let sessions = Self::initial_workspace_sessions(&path, self.conn.no_session);
         let worktree = crate::git::worktree::info(std::path::Path::new(&path));
+        if let Some(info) = &worktree {
+            for ws in &mut self.conv.workspaces {
+                if ws.worktree.is_none()
+                    && std::path::Path::new(&ws.root_path).starts_with(&info.main_root)
+                {
+                    ws.sidebar_folded = false;
+                }
+            }
+        }
         self.conv.workspaces.push(Workspace {
             root_path: path,
             sessions,

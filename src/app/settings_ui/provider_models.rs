@@ -15,6 +15,10 @@ impl OxiApp {
     /// instead of falling back to just the current model id.
     pub(crate) fn ensure_active_models_fetched(&mut self, ctx: &egui::Context) {
         let kind = self.conv.settings.active_provider;
+        if self.new_chat_needs_acp_warm(kind) {
+            self.spawn_acp_warm(ctx, kind);
+            return;
+        }
         // Already fetched, in flight, or failed? Then nothing to do — don't auto-retry every
         // frame (a failed retry would re-launch the ACP subprocess on each repaint). The manual
         // refresh button clears the error and re-fetches.
@@ -24,6 +28,37 @@ impl OxiApp {
             return;
         }
         self.spawn_model_fetch(ctx, kind);
+    }
+
+    /// The agent's config options are published per chat, so a new chat needs its own warm
+    /// agent even though the provider's model list was already loaded by another chat. Only
+    /// idle, empty chats: their first prompt reuses the subprocess, while warming every old
+    /// chat that is merely viewed would leave idle agents behind. One warm at a time, and none
+    /// after a failed one (the manual refresh button clears the error).
+    fn new_chat_needs_acp_warm(&self, kind: LlmProviderKind) -> bool {
+        let cfg = self.conv.settings.provider(kind);
+        if !cfg.is_acp() {
+            return false;
+        }
+        if self
+            .conv
+            .fetched_models
+            .get(&kind)
+            .is_some_and(|f| f.loading || f.error.is_some())
+        {
+            return false;
+        }
+        let key = self.active_session_key();
+        if !self.session_by_key(key).messages.is_empty()
+            || self.run_state(key).is_some_and(|r| r.agent_rx.is_some())
+        {
+            return false;
+        }
+        crate::agent::acp::config_options::options(
+            &self.acp_session_key(key),
+            &cfg.effective_acp_command(),
+        )
+        .is_none()
     }
 
     /// Warm the Claude Code (ACP) subprocess for the active session in the background and load
@@ -41,11 +76,7 @@ impl OxiApp {
 
         let cfg = self.conv.settings.provider(kind).clone();
         let key = self.active_session_key();
-        let session_file = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
-            .session_file
-            .clone();
-        let acp_session_key = session_file
-            .unwrap_or_else(|| format!("mem:{}:{}", key.workspace_idx, key.session_idx));
+        let acp_session_key = self.acp_session_key(key);
         let cwd =
             std::path::PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
         let env = cfg.acp_env();

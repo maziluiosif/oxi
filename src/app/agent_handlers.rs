@@ -57,6 +57,19 @@ impl OxiApp {
                         self.apply_agent_event(ctx, key, ev);
                         processed += 1;
                         repainted = true;
+                        // The event started another run (the finished turn sent the next
+                        // queued message): that run owns the session now. Drop this finished
+                        // run's receiver, or its disconnect would cancel the new run and mark
+                        // it "stopped unexpectedly", and putting it back would hide the new
+                        // run's events.
+                        if self
+                            .flow
+                            .sessions
+                            .get(&key)
+                            .is_some_and(|state| state.agent_rx.is_some())
+                        {
+                            break;
+                        }
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
                         if let Some(state) = self.flow.sessions.get_mut(&key) {

@@ -130,476 +130,554 @@ impl OxiApp {
     fn render_sidebar_session_list(&mut self, ui: &mut Ui) {
         // Workspace headers sit a step above the chat rows' default size, matching
         // the app-wide type scale (theme.rs) so it still tracks the UI density zoom.
-        const FS_WORKSPACE: f32 = FS_SMALL + 1.5;
         let q = self.conv.sidebar_search.trim().to_lowercase();
         let mut sidebar_changed = false;
 
-        for wi in 0..self.conv.workspaces.len() {
+        for (wi, parent) in sidebar_workspace_order(&self.conv.workspaces) {
             if sidebar_changed {
                 return;
             }
-            let active_si = self.conv.workspaces[wi].active;
-            let n_sessions = self.conv.workspaces[wi].sessions.len();
-            let root_label = match &self.conv.workspaces[wi].worktree {
-                Some(info) => super::worktrees::worktree_label(info),
-                None => workspace_sidebar_label(&self.conv.workspaces[wi].root_path),
-            };
-            let folded = self.conv.workspaces[wi].sidebar_folded;
-            ui.add_space(1.0);
-
-            const ROW_H: f32 = 22.0;
-            const PLUS_W: f32 = 22.0;
-            const GLYPH_W: f32 = 18.0;
-            let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
-            // `rect_contains_pointer` instead of `response.hovered()`: the in-place "+"
-            // below steals hover from the row response, which would flicker the fill.
-            let row_hovered = ui.rect_contains_pointer(rect);
-            if row_hovered {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                ui.painter()
-                    .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
+            let parent_folded =
+                parent.is_some_and(|pi| self.conv.workspaces[pi].sidebar_folded) && q.is_empty();
+            if parent_folded && !self.sidebar_workspace_needs_visibility(wi, ui.ctx()) {
+                continue;
             }
-            // Leading glyph: folder open/closed at rest, fold chevron on hover.
-            let glyph = match (row_hovered, folded) {
-                (true, true) => ICON_CHEVRON_RIGHT,
-                (true, false) => ICON_ANGLE_DOWN,
-                (false, true) => ICON_FOLDER,
-                (false, false) => ICON_FOLDER_OPEN,
-            };
-            ui.painter().text(
-                egui::pos2(rect.left() + 4.0 + GLYPH_W * 0.5, rect.center().y),
-                egui::Align2::CENTER_CENTER,
-                glyph,
-                FontId::new(FS_TINY, icon_font()),
-                c_sidebar_section(),
-            );
-            let label_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.left() + 4.0 + GLYPH_W + 4.0, rect.top()),
-                egui::pos2(rect.right() - PLUS_W - 2.0, rect.bottom()),
-            );
-            ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect), |ui| {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&root_label)
-                                .size(FS_WORKSPACE)
-                                .color(c_sidebar_section()),
-                        )
-                        .truncate()
-                        .halign(Align::LEFT)
-                        .selectable(false),
+            ui.horizontal(|ui| {
+                if parent.is_some() {
+                    let (guide, _) = ui.allocate_exact_size(egui::vec2(16.0, 22.0), Sense::hover());
+                    ui.painter().line_segment(
+                        [
+                            guide.left_top() + egui::vec2(8.0, 0.0),
+                            guide.left_bottom() + egui::vec2(8.0, 0.0),
+                        ],
+                        Stroke::new(1.0, c_border_subtle()),
                     );
+                    ui.painter().line_segment(
+                        [
+                            guide.left_center() + egui::vec2(8.0, 0.0),
+                            guide.right_center(),
+                        ],
+                        Stroke::new(1.0, c_border_subtle()),
+                    );
+                }
+                ui.vertical(|ui| {
+                    sidebar_changed =
+                        self.render_sidebar_workspace(ui, wi, parent, parent_folded, &q);
                 });
             });
-            // Hover-only "+" at the right edge, painted + interacted in place (never
-            // allocated) so its appearance can't shift the layout.
-            let mut plus_hovered = false;
-            let mut plus_clicked = false;
-            if row_hovered {
-                let plus_rect = egui::Rect::from_min_max(
-                    egui::pos2(rect.right() - PLUS_W - 2.0, rect.top()),
-                    egui::pos2(rect.right() - 2.0, rect.bottom()),
-                );
-                let plus_resp = ui
-                    .interact(plus_rect, ui.id().with(("ws_plus", wi)), Sense::click())
-                    .on_hover_text("New chat in this workspace (Cmd/Ctrl+N)");
-                plus_hovered = plus_resp.hovered();
-                plus_clicked = plus_resp.clicked();
-                ui.painter().text(
-                    plus_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    ICON_PLUS,
-                    FontId::new(FS_TINY, icon_font()),
-                    if plus_hovered {
-                        c_accent()
-                    } else {
-                        c_text_faint()
-                    },
-                );
-            }
-            if plus_clicked {
-                if wi != self.conv.active_workspace {
-                    self.select_workspace(wi);
-                }
-                self.new_chat();
-                sidebar_changed = true;
-            } else if response.clicked() && !plus_hovered {
-                self.conv.workspaces[wi].sidebar_folded = !folded;
-                self.sync_workspaces_to_settings();
-            }
-            let ws_running = (0..n_sessions).any(|si| self.session_row_is_running(wi, si));
-            let worktree = self.conv.workspaces[wi].worktree.clone();
-            response.context_menu(|ui| {
-                match &worktree {
-                    None => {
-                        if ui
-                            .button("New chat in a work tree")
-                            .on_hover_text(
-                                "Make a new branch in its own folder and chat there, so the agent's changes stay off this checkout until you merge them",
-                            )
-                            .clicked()
-                        {
-                            self.start_worktree_chat(wi);
-                            ui.close();
-                        }
-                    }
-                    Some(info) => {
-                        let merge = ui
-                            .add_enabled(
-                                !ws_running,
-                                egui::Button::new(format!("Merge into {}", info.main_branch)),
-                            )
-                            .on_hover_text(
-                                "Commit everything in this work tree and merge its branch into the main checkout",
-                            );
-                        if merge.clicked() {
-                            self.merge_worktree(wi);
-                            ui.close();
-                        }
-                        let remove =
-                            ui.add_enabled(!ws_running, egui::Button::new("Remove work tree…"));
-                        if remove.clicked() {
-                            self.request_confirm(super::state::ConfirmAction::RemoveWorktree {
-                                wi,
-                            });
-                            ui.close();
-                        }
-                    }
-                }
-                // The cwd workspace (index 0) is always present, so it gets no delete option.
-                if wi != 0 {
-                    let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
-                    if ws_running {
-                        resp.on_disabled_hover_text("A chat in this workspace is still running");
-                    } else if resp.clicked() {
-                        self.request_confirm(super::state::ConfirmAction::DeleteWorkspace { wi });
-                    }
-                }
-            });
-            ui.add_space(1.0);
-            if sidebar_changed {
-                return;
-            }
-            // Folding hides the normal chat list. The chat currently open in the main view,
-            // in-progress chats, and chats that need attention remain visible.
-            let mut visible_sessions = 0usize;
-            let mut row_advance: Option<f32> = None;
-            let order = sidebar_session_order(&self.conv.workspaces[wi]);
-            let mut group_counts = std::collections::HashMap::new();
-            for (_, group) in &order {
-                *group_counts.entry(*group).or_insert(0usize) += 1;
-            }
-            let searching = !q.is_empty();
-            let mut last_group = None;
-            let mut hidden_by_group_fold = false;
-            for (si, group) in order {
-                if sidebar_changed {
-                    return;
-                }
-                if self.conv.workspaces[wi].sessions.get(si).is_none() {
-                    return;
-                }
-                // While searching, every match is listed and date groups ignore their fold.
-                let group_folded = !folded
-                    && !searching
-                    && self.conv.workspaces[wi]
-                        .folded_groups
-                        .iter()
-                        .any(|key| key == group.key());
-                // Headers of a folded group still show (that is how it unfolds); while searching
-                // only groups with a match get one.
-                if !folded && !searching && last_group != Some(group) {
-                    last_group = Some(group);
-                    if sidebar_group_header(ui, group, group_folded, group_counts[&group]) {
-                        let list = &mut self.conv.workspaces[wi].folded_groups;
-                        if group_folded {
-                            list.retain(|key| key != group.key());
-                        } else {
-                            list.push(group.key().to_string());
-                        }
-                        self.sync_workspaces_to_settings();
-                        sidebar_changed = true;
-                        continue;
-                    }
-                }
-                if folded || group_folded {
-                    let key = self.session_key(wi, si);
-                    let globally_selected = wi == self.conv.active_workspace && si == active_si;
-                    let running = self.session_row_is_running(wi, si);
-                    let needs_attention = self.run_state(key).is_some_and(|run| {
-                        run.completion_unseen
-                            || (run.pending_approval.is_some()
-                                && (key != self.active_session_key()
-                                    || !self.active_chat_is_visible(ui.ctx())))
-                    });
-                    if !globally_selected && !running && !needs_attention {
-                        hidden_by_group_fold |= group_folded;
-                        continue;
-                    }
-                }
-                if searching && !self.session_matches_search(wi, si, &q) {
-                    continue;
-                }
-                visible_sessions += 1;
-                if !folded && searching && last_group != Some(group) {
-                    last_group = Some(group);
-                    sidebar_group_header(ui, group, false, group_counts[&group]);
-                }
-                // Rows are all the same height: once one has been measured, a row scrolled out
-                // of view only reserves its space. Long histories otherwise cost a full layout
-                // of every row on every frame (~1.5 ms at 400 chats).
-                if let Some(advance) = row_advance
-                    && self.conv.renaming_session != Some((wi, si))
-                    && !ui.is_rect_visible(egui::Rect::from_min_size(
-                        ui.cursor().min,
-                        egui::vec2(ui.available_width(), advance),
-                    ))
-                {
-                    ui.add_space(advance);
-                    continue;
-                }
-                let row_top = ui.cursor().min.y;
-                let session = &self.conv.workspaces[wi].sessions[si];
-                let row_title = sidebar_session_title_display(&session.title);
-                ui.horizontal(|ui| {
-                    ui.add_space(7.0);
-                    ui.vertical(|ui| {
-                        let row_w = ui.available_width();
-                        // Explicit id: rows scrolled out of view are skipped, and a
-                        // `push_id` child's widget ids would shift with every skipped row
-                        // (egui salts them with the parent's child count), dropping the
-                        // rename field's focus or an open context menu while scrolling.
-                        let row_id = egui::Id::new(("sidebar_session_row", wi, si));
-                        ui.scope_builder(egui::UiBuilder::new().id(row_id), |ui| {
-                            let selected = wi == self.conv.active_workspace && si == active_si;
-                            let running = self.session_row_is_running(wi, si);
-                            let has_error = !running && self.session_row_has_error(wi, si);
-                            let key = self.session_key(wi, si);
-                            let run_state = self.run_state(key);
-                            let needs_approval = run_state.is_some_and(|run| {
-                                run.pending_approval.is_some()
-                                    && (key != self.active_session_key()
-                                        || !self.active_chat_is_visible(ui.ctx()))
-                            });
-                            let completion_unseen =
-                                run_state.is_some_and(|run| run.completion_unseen);
-                            let needs_attention = needs_approval || completion_unseen;
-                            let title = row_title.clone();
-                            const ROW_INNER_H: f32 = 22.0;
-                            const ROW_VMARGIN: f32 = 4.0;
-                            let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(row_w, row_outer_h),
-                                Sense::click(),
-                            );
-                            // Keep the row hovered while the pointer is over an
-                            // overlapping action such as the hover-only trash button.
-                            let hovered = ui.rect_contains_pointer(rect);
-                            if hovered {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            // Only a pending approval pulses (it blocks the run); an unseen
-                            // completion keeps a static highlight. Animate only in a focused
-                            // window, and ask for frames only while a pulse is on screen.
-                            let attention_pulse = if needs_approval
-                                && ui.input(|input| input.focused)
-                            {
-                                ui.ctx()
-                                    .request_repaint_after(std::time::Duration::from_millis(50));
-                                let time = ui.input(|input| input.time);
-                                (0.5 + 0.5 * (time * 3.6).sin()) as f32
-                            } else if needs_attention {
-                                0.6
-                            } else {
-                                0.0
-                            };
-                            let fill = if needs_attention {
-                                blend_color(
-                                    if selected {
-                                        c_row_active()
-                                    } else {
-                                        c_info_bg()
-                                    },
-                                    c_accent(),
-                                    0.10 + attention_pulse * 0.14,
-                                )
-                            } else if selected {
-                                c_row_active()
-                            } else if hovered {
-                                c_row_hover()
-                            } else {
-                                Color32::TRANSPARENT
-                            };
-                            ui.painter()
-                                .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
-                            if needs_attention {
-                                ui.painter().rect_stroke(
-                                    rect,
-                                    CornerRadius::same(RADIUS_ROW),
-                                    Stroke::new(
-                                        1.0,
-                                        c_accent().gamma_multiply(0.45 + attention_pulse * 0.55),
-                                    ),
-                                    egui::StrokeKind::Inside,
-                                );
-                            }
-                            if self.conv.renaming_session == Some((wi, si)) {
-                                let edit = egui::TextEdit::singleline(&mut self.conv.rename_draft)
-                                    .font(egui::TextStyle::Small)
-                                    .desired_width(rect.width() - 8.0);
-                                let resp = ui.put(rect.shrink2(egui::vec2(4.0, 2.0)), edit);
-                                resp.request_focus();
-                                let enter = resp.lost_focus()
-                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                                if enter {
-                                    let draft = self.conv.rename_draft.clone();
-                                    self.rename_session(si, draft);
-                                    self.conv.renaming_session = None;
-                                    sidebar_changed = true;
-                                } else if escape || (resp.lost_focus() && !enter) {
-                                    self.conv.renaming_session = None;
-                                }
-                            } else {
-                                if response.clicked() {
-                                    self.select_session_in_workspace(wi, si);
-                                }
-                                response.context_menu(|ui| {
-                                    if let Some(file) =
-                                        self.conv.workspaces[wi].sessions[si].session_file.clone()
-                                    {
-                                        let pinned =
-                                            self.conv.workspaces[wi].pinned.contains(&file);
-                                        let label = if pinned { "Unpin chat" } else { "Pin chat" };
-                                        if ui.button(label).clicked() {
-                                            let list = &mut self.conv.workspaces[wi].pinned;
-                                            if pinned {
-                                                list.retain(|f| f != &file);
-                                            } else {
-                                                list.push(file);
-                                            }
-                                            self.sync_workspaces_to_settings();
-                                        }
-                                    }
-                                    if wi == self.conv.active_workspace && !running {
-                                        if ui.button("Rename chat").clicked() {
-                                            self.conv.renaming_session = Some((wi, si));
-                                            self.conv.rename_draft =
-                                                self.conv.workspaces[wi].sessions[si].title.clone();
-                                        }
-                                        if ui.button("Export as Markdown…").clicked() {
-                                            self.select_session_in_workspace(wi, si);
-                                            self.export_active_session_markdown();
-                                        }
-                                        if ui.button("Delete chat").clicked() {
-                                            self.request_confirm(
-                                                super::state::ConfirmAction::DeleteSession {
-                                                    wi,
-                                                    si,
-                                                },
-                                            );
-                                        }
-                                    }
-                                });
-                                // Hover-only delete button, mirroring the context-menu action.
-                                // `rect_contains_pointer`, not `response.hovered()`: the
-                                // trash button interacted below overlaps this rect and
-                                // would otherwise steal hover from the row response,
-                                // flickering show/hide every other frame.
-                                let can_delete = wi == self.conv.active_workspace && !running;
-                                let show_trash = can_delete && ui.rect_contains_pointer(rect);
-                                self.render_session_row_inner(
-                                    ui,
-                                    rect,
-                                    wi,
-                                    si,
-                                    running,
-                                    has_error,
-                                    selected,
-                                    needs_approval,
-                                    completion_unseen,
-                                    title,
-                                    show_trash,
-                                );
+        }
+    }
 
-                                if show_trash {
-                                    // Flush against the same right edge the time label
-                                    // sits at, so it swaps in instead of crowding it.
-                                    const TIME_W: f32 = 34.0;
-                                    let trash_rect = egui::Rect::from_min_max(
-                                        egui::pos2(rect.right() - 3.0 - TIME_W, rect.top() + 2.0),
-                                        egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
-                                    );
-                                    // Backing fill keeps the icon legible over long titles.
-                                    ui.painter().rect_filled(
-                                        trash_rect,
-                                        CornerRadius::same(RADIUS_ROW),
-                                        if selected {
-                                            c_row_active()
+    fn render_sidebar_workspace(
+        &mut self,
+        ui: &mut Ui,
+        wi: usize,
+        parent: Option<usize>,
+        parent_folded: bool,
+        q: &str,
+    ) -> bool {
+        const FS_WORKSPACE: f32 = FS_SMALL + 1.5;
+        let mut sidebar_changed = false;
+        let is_main = self.conv.workspaces[wi].worktree.is_none();
+        let active_si = self.conv.workspaces[wi].active;
+        let n_sessions = self.conv.workspaces[wi].sessions.len();
+        let root_label = match &self.conv.workspaces[wi].worktree {
+            Some(info) if parent.is_some() => info.branch.clone(),
+            Some(info) => super::worktrees::worktree_label(info),
+            None => workspace_sidebar_label(&self.conv.workspaces[wi].root_path),
+        };
+        let folded = self.conv.workspaces[wi].sidebar_folded || parent_folded;
+        ui.add_space(1.0);
+
+        const ROW_H: f32 = 22.0;
+        const PLUS_W: f32 = 22.0;
+        const GLYPH_W: f32 = 18.0;
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
+        // `rect_contains_pointer` instead of `response.hovered()`: the in-place "+"
+        // below steals hover from the row response, which would flicker the fill.
+        let row_hovered = ui.rect_contains_pointer(rect);
+        if row_hovered {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
+        }
+        // Leading glyph: folder open/closed at rest, fold chevron on hover.
+        let glyph = match (row_hovered || parent.is_some(), folded) {
+            (true, true) => ICON_CHEVRON_RIGHT,
+            (true, false) => ICON_ANGLE_DOWN,
+            (false, true) => ICON_FOLDER,
+            (false, false) => ICON_FOLDER_OPEN,
+        };
+        ui.painter().text(
+            egui::pos2(rect.left() + 4.0 + GLYPH_W * 0.5, rect.center().y),
+            egui::Align2::CENTER_CENTER,
+            glyph,
+            FontId::new(FS_TINY, icon_font()),
+            c_sidebar_section(),
+        );
+        let label_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 4.0 + GLYPH_W + 4.0, rect.top()),
+            egui::pos2(
+                rect.right() - PLUS_W * if is_main { 2.0 } else { 1.0 } - 2.0,
+                rect.bottom(),
+            ),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect), |ui| {
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&root_label)
+                            .size(FS_WORKSPACE)
+                            .color(c_sidebar_section()),
+                    )
+                    .truncate()
+                    .halign(Align::LEFT)
+                    .selectable(false),
+                );
+            });
+        });
+        let mut worktree_clicked = false;
+        let mut worktree_hovered = false;
+        if is_main {
+            let action_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.right() - PLUS_W * 2.0 - 2.0, rect.top()),
+                egui::pos2(rect.right() - PLUS_W - 2.0, rect.bottom()),
+            );
+            let action = ui
+                .interact(
+                    action_rect,
+                    ui.id().with(("ws_worktree", wi)),
+                    Sense::click(),
+                )
+                .on_hover_text("New worktree chat — create an isolated branch and start chatting");
+            worktree_clicked = action.clicked();
+            worktree_hovered = action.hovered();
+            ui.painter().text(
+                action_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                ICON_BRANCH,
+                FontId::new(FS_TINY, icon_font()),
+                if worktree_hovered {
+                    c_accent()
+                } else {
+                    c_text_muted()
+                },
+            );
+        }
+        // Hover-only "+" at the right edge, painted + interacted in place (never
+        // allocated) so its appearance can't shift the layout.
+        let mut plus_hovered = false;
+        let mut plus_clicked = false;
+        if row_hovered {
+            let plus_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.right() - PLUS_W - 2.0, rect.top()),
+                egui::pos2(rect.right() - 2.0, rect.bottom()),
+            );
+            let plus_resp = ui
+                .interact(plus_rect, ui.id().with(("ws_plus", wi)), Sense::click())
+                .on_hover_text("New chat in this workspace (Cmd/Ctrl+N)");
+            plus_hovered = plus_resp.hovered();
+            plus_clicked = plus_resp.clicked();
+            ui.painter().text(
+                plus_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                ICON_PLUS,
+                FontId::new(FS_TINY, icon_font()),
+                if plus_hovered {
+                    c_accent()
+                } else {
+                    c_text_faint()
+                },
+            );
+        }
+        if worktree_clicked {
+            self.start_worktree_chat(wi);
+            sidebar_changed = true;
+        } else if plus_clicked {
+            if wi != self.conv.active_workspace {
+                self.select_workspace(wi);
+            }
+            self.new_chat();
+            sidebar_changed = true;
+        } else if response.clicked() && !plus_hovered && !worktree_hovered {
+            self.conv.workspaces[wi].sidebar_folded = !folded;
+            if let Some(pi) = parent {
+                self.conv.workspaces[pi].sidebar_folded = false;
+            }
+            self.sync_workspaces_to_settings();
+        }
+        let ws_running = (0..n_sessions).any(|si| self.session_row_is_running(wi, si));
+        let worktree = self.conv.workspaces[wi].worktree.clone();
+        response.context_menu(|ui| {
+            match &worktree {
+                None => {
+                    if ui
+                        .button("New chat in a work tree")
+                        .on_hover_text(
+                            "Make a new branch in its own folder and chat there, so the agent's changes stay off this checkout until you merge them",
+                        )
+                        .clicked()
+                    {
+                        self.start_worktree_chat(wi);
+                        ui.close();
+                    }
+                }
+                Some(info) => {
+                    let merge = ui
+                        .add_enabled(
+                            !ws_running,
+                            egui::Button::new(format!("Merge into {}", info.main_branch)),
+                        )
+                        .on_hover_text(
+                            "Commit everything in this work tree and merge its branch into the main checkout",
+                        );
+                    if merge.clicked() {
+                        self.merge_worktree(wi);
+                        ui.close();
+                    }
+                    let remove =
+                        ui.add_enabled(!ws_running, egui::Button::new("Remove work tree…"));
+                    if remove.clicked() {
+                        self.request_confirm(super::state::ConfirmAction::RemoveWorktree {
+                            wi,
+                        });
+                        ui.close();
+                    }
+                }
+            }
+            // The cwd workspace (index 0) is always present, so it gets no delete option.
+            if wi != 0 {
+                let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
+                if ws_running {
+                    resp.on_disabled_hover_text("A chat in this workspace is still running");
+                } else if resp.clicked() {
+                    self.request_confirm(super::state::ConfirmAction::DeleteWorkspace { wi });
+                }
+            }
+        });
+        ui.add_space(1.0);
+        if sidebar_changed {
+            return true;
+        }
+        // Folding hides the normal chat list. The chat currently open in the main view,
+        // in-progress chats, and chats that need attention remain visible.
+        let mut visible_sessions = 0usize;
+        let mut row_advance: Option<f32> = None;
+        let order = sidebar_session_order(&self.conv.workspaces[wi]);
+        let mut group_counts = std::collections::HashMap::new();
+        for (_, group) in &order {
+            *group_counts.entry(*group).or_insert(0usize) += 1;
+        }
+        let searching = !q.is_empty();
+        let mut last_group = None;
+        let mut hidden_by_group_fold = false;
+        for (si, group) in order {
+            if sidebar_changed {
+                return true;
+            }
+            if self.conv.workspaces[wi].sessions.get(si).is_none() {
+                return true;
+            }
+            // While searching, every match is listed and date groups ignore their fold.
+            let group_folded = !folded
+                && !searching
+                && self.conv.workspaces[wi]
+                    .folded_groups
+                    .iter()
+                    .any(|key| key == group.key());
+            // Headers of a folded group still show (that is how it unfolds); while searching
+            // only groups with a match get one.
+            if !folded && !searching && last_group != Some(group) {
+                last_group = Some(group);
+                if sidebar_group_header(ui, group, group_folded, group_counts[&group]) {
+                    let list = &mut self.conv.workspaces[wi].folded_groups;
+                    if group_folded {
+                        list.retain(|key| key != group.key());
+                    } else {
+                        list.push(group.key().to_string());
+                    }
+                    self.sync_workspaces_to_settings();
+                    sidebar_changed = true;
+                    continue;
+                }
+            }
+            if folded || group_folded {
+                let key = self.session_key(wi, si);
+                let globally_selected = wi == self.conv.active_workspace && si == active_si;
+                let running = self.session_row_is_running(wi, si);
+                let needs_attention = self.run_state(key).is_some_and(|run| {
+                    run.completion_unseen
+                        || (run.pending_approval.is_some()
+                            && (key != self.active_session_key()
+                                || !self.active_chat_is_visible(ui.ctx())))
+                });
+                if !globally_selected && !running && !needs_attention {
+                    hidden_by_group_fold |= group_folded;
+                    continue;
+                }
+            }
+            if searching && !self.session_matches_search(wi, si, q) {
+                continue;
+            }
+            visible_sessions += 1;
+            if !folded && searching && last_group != Some(group) {
+                last_group = Some(group);
+                sidebar_group_header(ui, group, false, group_counts[&group]);
+            }
+            // Rows are all the same height: once one has been measured, a row scrolled out
+            // of view only reserves its space. Long histories otherwise cost a full layout
+            // of every row on every frame (~1.5 ms at 400 chats).
+            if let Some(advance) = row_advance
+                && self.conv.renaming_session != Some((wi, si))
+                && !ui.is_rect_visible(egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), advance),
+                ))
+            {
+                ui.add_space(advance);
+                continue;
+            }
+            let row_top = ui.cursor().min.y;
+            let session = &self.conv.workspaces[wi].sessions[si];
+            let row_title = sidebar_session_title_display(&session.title);
+            ui.horizontal(|ui| {
+                ui.add_space(7.0);
+                ui.vertical(|ui| {
+                    let row_w = ui.available_width();
+                    // Explicit id: rows scrolled out of view are skipped, and a
+                    // `push_id` child's widget ids would shift with every skipped row
+                    // (egui salts them with the parent's child count), dropping the
+                    // rename field's focus or an open context menu while scrolling.
+                    let row_id = egui::Id::new(("sidebar_session_row", wi, si));
+                    ui.scope_builder(egui::UiBuilder::new().id(row_id), |ui| {
+                        let selected = wi == self.conv.active_workspace && si == active_si;
+                        let running = self.session_row_is_running(wi, si);
+                        let has_error = !running && self.session_row_has_error(wi, si);
+                        let key = self.session_key(wi, si);
+                        let run_state = self.run_state(key);
+                        let needs_approval = run_state.is_some_and(|run| {
+                            run.pending_approval.is_some()
+                                && (key != self.active_session_key()
+                                    || !self.active_chat_is_visible(ui.ctx()))
+                        });
+                        let completion_unseen = run_state.is_some_and(|run| run.completion_unseen);
+                        let needs_attention = needs_approval || completion_unseen;
+                        let title = row_title.clone();
+                        const ROW_INNER_H: f32 = 22.0;
+                        const ROW_VMARGIN: f32 = 4.0;
+                        let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
+                        let (rect, response) =
+                            ui.allocate_exact_size(egui::vec2(row_w, row_outer_h), Sense::click());
+                        // Keep the row hovered while the pointer is over an
+                        // overlapping action such as the hover-only trash button.
+                        let hovered = ui.rect_contains_pointer(rect);
+                        if hovered {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        // Only a pending approval pulses (it blocks the run); an unseen
+                        // completion keeps a static highlight. Animate only in a focused
+                        // window, and ask for frames only while a pulse is on screen.
+                        let attention_pulse = if needs_approval && ui.input(|input| input.focused) {
+                            ui.ctx()
+                                .request_repaint_after(std::time::Duration::from_millis(50));
+                            let time = ui.input(|input| input.time);
+                            (0.5 + 0.5 * (time * 3.6).sin()) as f32
+                        } else if needs_attention {
+                            0.6
+                        } else {
+                            0.0
+                        };
+                        let fill = if needs_attention {
+                            blend_color(
+                                if selected {
+                                    c_row_active()
+                                } else {
+                                    c_info_bg()
+                                },
+                                c_accent(),
+                                0.10 + attention_pulse * 0.14,
+                            )
+                        } else if selected {
+                            c_row_active()
+                        } else if hovered {
+                            c_row_hover()
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+                        ui.painter()
+                            .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
+                        if needs_attention {
+                            ui.painter().rect_stroke(
+                                rect,
+                                CornerRadius::same(RADIUS_ROW),
+                                Stroke::new(
+                                    1.0,
+                                    c_accent().gamma_multiply(0.45 + attention_pulse * 0.55),
+                                ),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        if self.conv.renaming_session == Some((wi, si)) {
+                            let edit = egui::TextEdit::singleline(&mut self.conv.rename_draft)
+                                .font(egui::TextStyle::Small)
+                                .desired_width(rect.width() - 8.0);
+                            let resp = ui.put(rect.shrink2(egui::vec2(4.0, 2.0)), edit);
+                            resp.request_focus();
+                            let enter =
+                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                            if enter {
+                                let draft = self.conv.rename_draft.clone();
+                                self.rename_session(si, draft);
+                                self.conv.renaming_session = None;
+                                sidebar_changed = true;
+                            } else if escape || (resp.lost_focus() && !enter) {
+                                self.conv.renaming_session = None;
+                            }
+                        } else {
+                            if response.clicked() {
+                                self.select_session_in_workspace(wi, si);
+                            }
+                            response.context_menu(|ui| {
+                                if let Some(file) =
+                                    self.conv.workspaces[wi].sessions[si].session_file.clone()
+                                {
+                                    let pinned = self.conv.workspaces[wi].pinned.contains(&file);
+                                    let label = if pinned { "Unpin chat" } else { "Pin chat" };
+                                    if ui.button(label).clicked() {
+                                        let list = &mut self.conv.workspaces[wi].pinned;
+                                        if pinned {
+                                            list.retain(|f| f != &file);
                                         } else {
-                                            c_row_hover()
-                                        },
-                                    );
-                                    // Painted + interacted in place, never allocated: a
-                                    // hover-only widget that allocates nudges the layout
-                                    // every time it appears.
-                                    let trash_resp = ui
-                                        .interact(
-                                            trash_rect,
-                                            ui.id().with("row_trash"),
-                                            Sense::click(),
-                                        )
-                                        .on_hover_text("Delete chat");
-                                    ui.painter().text(
-                                        trash_rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        ICON_TRASH,
-                                        FontId::new(FS_TINY, icon_font()),
-                                        if trash_resp.hovered() {
-                                            c_accent()
-                                        } else {
-                                            c_text_faint()
-                                        },
-                                    );
-                                    if trash_resp.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                            list.push(file);
+                                        }
+                                        self.sync_workspaces_to_settings();
                                     }
-                                    if trash_resp.clicked() {
+                                }
+                                if wi == self.conv.active_workspace && !running {
+                                    if ui.button("Rename chat").clicked() {
+                                        self.conv.renaming_session = Some((wi, si));
+                                        self.conv.rename_draft =
+                                            self.conv.workspaces[wi].sessions[si].title.clone();
+                                    }
+                                    if ui.button("Export as Markdown…").clicked() {
+                                        self.select_session_in_workspace(wi, si);
+                                        self.export_active_session_markdown();
+                                    }
+                                    if ui.button("Delete chat").clicked() {
                                         self.request_confirm(
                                             super::state::ConfirmAction::DeleteSession { wi, si },
                                         );
                                     }
                                 }
-                            } // end else not renaming
-                        });
+                            });
+                            // Hover-only delete button, mirroring the context-menu action.
+                            // `rect_contains_pointer`, not `response.hovered()`: the
+                            // trash button interacted below overlaps this rect and
+                            // would otherwise steal hover from the row response,
+                            // flickering show/hide every other frame.
+                            let can_delete = wi == self.conv.active_workspace && !running;
+                            let show_trash = can_delete && ui.rect_contains_pointer(rect);
+                            self.render_session_row_inner(
+                                ui,
+                                rect,
+                                wi,
+                                si,
+                                running,
+                                has_error,
+                                selected,
+                                needs_approval,
+                                completion_unseen,
+                                title,
+                                show_trash,
+                            );
+
+                            if show_trash {
+                                // Flush against the same right edge the time label
+                                // sits at, so it swaps in instead of crowding it.
+                                const TIME_W: f32 = 34.0;
+                                let trash_rect = egui::Rect::from_min_max(
+                                    egui::pos2(rect.right() - 3.0 - TIME_W, rect.top() + 2.0),
+                                    egui::pos2(rect.right() - 3.0, rect.bottom() - 2.0),
+                                );
+                                // Backing fill keeps the icon legible over long titles.
+                                ui.painter().rect_filled(
+                                    trash_rect,
+                                    CornerRadius::same(RADIUS_ROW),
+                                    if selected {
+                                        c_row_active()
+                                    } else {
+                                        c_row_hover()
+                                    },
+                                );
+                                // Painted + interacted in place, never allocated: a
+                                // hover-only widget that allocates nudges the layout
+                                // every time it appears.
+                                let trash_resp = ui
+                                    .interact(trash_rect, ui.id().with("row_trash"), Sense::click())
+                                    .on_hover_text("Delete chat");
+                                ui.painter().text(
+                                    trash_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    ICON_TRASH,
+                                    FontId::new(FS_TINY, icon_font()),
+                                    if trash_resp.hovered() {
+                                        c_accent()
+                                    } else {
+                                        c_text_faint()
+                                    },
+                                );
+                                if trash_resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                if trash_resp.clicked() {
+                                    self.request_confirm(
+                                        super::state::ConfirmAction::DeleteSession { wi, si },
+                                    );
+                                }
+                            }
+                        } // end else not renaming
                     });
                 });
-                row_advance.get_or_insert(ui.cursor().min.y - row_top);
-                if sidebar_changed {
-                    return;
-                }
-            }
-            // A folded workspace with no exceptional rows is intentionally just its header;
-            // "No chats yet" would otherwise make folding look as if the workspace were empty.
-            if visible_sessions == 0 && !hidden_by_group_fold && (!folded || !q.is_empty()) {
-                ui.horizontal(|ui| {
-                    ui.add_space(10.0);
-                    let msg = if q.is_empty() {
-                        "No chats yet"
-                    } else {
-                        "No chats found"
-                    };
-                    ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
-                    if !q.is_empty()
-                        && crate::ui::chrome::ghost_button(ui, "Clear", false).clicked()
-                    {
-                        self.conv.sidebar_search.clear();
-                    }
-                });
-                ui.add_space(4.0);
+            });
+            row_advance.get_or_insert(ui.cursor().min.y - row_top);
+            if sidebar_changed {
+                return true;
             }
         }
+        // A folded workspace with no exceptional rows is intentionally just its header;
+        // "No chats yet" would otherwise make folding look as if the workspace were empty.
+        if visible_sessions == 0 && !hidden_by_group_fold && (!folded || !q.is_empty()) {
+            ui.horizontal(|ui| {
+                ui.add_space(10.0);
+                let msg = if q.is_empty() {
+                    "No chats yet"
+                } else {
+                    "No chats found"
+                };
+                ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
+                if !q.is_empty() && crate::ui::chrome::ghost_button(ui, "Clear", false).clicked() {
+                    self.conv.sidebar_search.clear();
+                }
+            });
+            ui.add_space(4.0);
+        }
+        sidebar_changed
+    }
+
+    fn sidebar_workspace_needs_visibility(&self, wi: usize, ctx: &egui::Context) -> bool {
+        wi == self.conv.active_workspace
+            || (0..self.conv.workspaces[wi].sessions.len()).any(|si| {
+                let key = self.session_key(wi, si);
+                self.session_row_is_running(wi, si)
+                    || self.run_state(key).is_some_and(|run| {
+                        run.completion_unseen
+                            || (run.pending_approval.is_some()
+                                && (key != self.active_session_key()
+                                    || !self.active_chat_is_visible(ctx)))
+                    })
+            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1219,6 +1297,93 @@ fn paint_composer_scrim(ui: &mut Ui, rect: egui::Rect) {
             band,
             0.0,
             Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha),
+        );
+    }
+}
+
+/// Display linked checkouts immediately after their main workspace, without changing
+/// persisted indices (running sessions and pending actions use those indices).
+fn sidebar_workspace_order(workspaces: &[super::state::Workspace]) -> Vec<(usize, Option<usize>)> {
+    let parents: Vec<_> = workspaces
+        .iter()
+        .map(|ws| {
+            ws.worktree.as_ref().and_then(|info| {
+                workspaces.iter().position(|candidate| {
+                    candidate.worktree.is_none()
+                        && std::path::Path::new(&candidate.root_path).starts_with(&info.main_root)
+                })
+            })
+        })
+        .collect();
+    let mut order = Vec::with_capacity(workspaces.len());
+    for (wi, parent) in parents.iter().enumerate() {
+        if parent.is_some() {
+            continue;
+        }
+        order.push((wi, None));
+        for (child, child_parent) in parents.iter().enumerate() {
+            if *child_parent == Some(wi) {
+                order.push((child, Some(wi)));
+            }
+        }
+    }
+    order
+}
+
+#[cfg(test)]
+mod worktree_sidebar_tests {
+    use super::super::state::Workspace;
+    use super::*;
+    use crate::git::worktree::WorktreeInfo;
+
+    fn workspace(root: &str, main_root: Option<&str>) -> Workspace {
+        Workspace {
+            root_path: root.into(),
+            sessions: Vec::new(),
+            active: 0,
+            sidebar_folded: false,
+            pinned: Vec::new(),
+            folded_groups: Vec::new(),
+            worktree: main_root.map(|main| WorktreeInfo {
+                branch: "oxi/task".into(),
+                main_root: main.into(),
+                main_branch: "dev".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn linked_workspaces_follow_their_parent_without_changing_indices() {
+        let workspaces = vec![
+            workspace("/repo-a", None),
+            workspace("/repo-b", None),
+            workspace("/trees/b", Some("/repo-b")),
+            workspace("/trees/a-one", Some("/repo-a")),
+            workspace("/trees/a-two", Some("/repo-a")),
+        ];
+        assert_eq!(
+            sidebar_workspace_order(&workspaces),
+            vec![
+                (0, None),
+                (3, Some(0)),
+                (4, Some(0)),
+                (1, None),
+                (2, Some(1)),
+            ]
+        );
+    }
+
+    #[test]
+    fn subfolder_parents_and_orphan_worktrees_remain_accessible() {
+        let workspaces = vec![
+            workspace("/trees/orphan", Some("/unopened")),
+            workspace("/repo-extra", None),
+            workspace("/trees/child", Some("/repo")),
+            workspace("/repo/src", None),
+        ];
+        assert_eq!(
+            sidebar_workspace_order(&workspaces),
+            vec![(0, None), (1, None), (3, None), (2, Some(3)),]
         );
     }
 }

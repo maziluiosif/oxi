@@ -1,6 +1,6 @@
 //! Desktop notifications for chats that need the user while oxi is in the background: a
-//! finished response or an approval prompt. Uses what each OS already ships (`osascript` on
-//! macOS, `notify-send` on Linux) plus egui's dock/taskbar attention request everywhere.
+//! finished response or an approval prompt. Notification Center on macOS, `notify-send` on
+//! Linux, plus egui's dock/taskbar attention request everywhere.
 
 use eframe::egui;
 
@@ -54,15 +54,19 @@ fn show_desktop_notification(title: String, body: String) {
         .spawn(move || {
             #[cfg(target_os = "macos")]
             {
-                let script = format!(
-                    "display notification {} with title \"oxi\" subtitle {}",
-                    applescript_string(&body),
-                    applescript_string(&title)
-                );
-                let _ = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(script)
-                    .output();
+                use mac_notification_sys::{Notification, set_application};
+                static APP: std::sync::Once = std::sync::Once::new();
+                // Posted as oxi rather than through `osascript`, whose notifications belong to
+                // Script Editor: clicking one opened Script Editor instead of oxi.
+                APP.call_once(|| {
+                    let _ = set_application(&notification_bundle_id());
+                });
+                let _ = Notification::new()
+                    .title("oxi")
+                    .subtitle(&title)
+                    .message(&body)
+                    .asynchronous(true)
+                    .send();
             }
             #[cfg(all(unix, not(target_os = "macos")))]
             {
@@ -78,30 +82,18 @@ fn show_desktop_notification(title: String, body: String) {
         });
 }
 
-/// Quote `s` as an AppleScript string literal.
-#[cfg(any(target_os = "macos", test))]
-fn applescript_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' | '\r' => out.push(' '),
-            c => out.push(c),
-        }
+/// The app a click on the notification brings forward: oxi.app when running from the bundle;
+/// otherwise (`cargo run`) the terminal that launched it, since there is no oxi app to open.
+#[cfg(target_os = "macos")]
+fn notification_bundle_id() -> String {
+    const OXI: &str = "com.maziluiosif.oxi";
+    let bundled = std::env::current_exe()
+        .is_ok_and(|exe| exe.to_string_lossy().contains(".app/Contents/MacOS/"));
+    if bundled {
+        return OXI.to_string();
     }
-    out.push('"');
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::applescript_string;
-
-    #[test]
-    fn applescript_strings_escape_quotes_and_newlines() {
-        assert_eq!(applescript_string(r#"fix "x" \ y"#), r#""fix \"x\" \\ y""#);
-        assert_eq!(applescript_string("a\nb"), "\"a b\"");
-    }
+    std::env::var("__CFBundleIdentifier")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| OXI.to_string())
 }
