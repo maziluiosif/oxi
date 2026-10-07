@@ -161,6 +161,11 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         return;
     }
 
+    if std::env::var_os("OXI_COMPOSER_REVIEW").is_some() {
+        review_composer_typing(&mut rec);
+        return;
+    }
+
     if std::env::var_os("OXI_ACP_REVIEW").is_some() {
         review_acp_ui(&mut rec);
         return;
@@ -1879,4 +1884,78 @@ fn review_composer_pickers(rec: &mut Recorder<'_>) {
     }
     rec.harness.run_steps(6);
     rec.still("chat-many-images");
+}
+
+/// Compare the actual app's GPU pixels on the input frame and the following idle frame.
+/// Run with OXI_COMPOSER_REVIEW=1 OXI_GALLERY=/tmp/oxi-composer cargo test
+/// --locked --bin oxi render_gallery -- --ignored --nocapture.
+fn review_composer_typing(rec: &mut Recorder<'_>) {
+    let input_id = egui::Id::new("composer_input");
+    for theme in ["dark", "light"] {
+        rec.app().conv.settings.theme_id = theme.into();
+        crate::theme::apply_theme(&rec.harness.ctx, theme);
+        rec.harness
+            .ctx
+            .all_styles_mut(|s| s.visuals.text_cursor.blink = false);
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            rec.app().conv.composer.input.clear();
+            rec.harness.set_pixels_per_point(scale);
+            rec.harness.ctx.memory_mut(|m| m.request_focus(input_id));
+            rec.harness.run_steps(4);
+            for (i, ch) in "hello ăîșț\n世界".chars().enumerate() {
+                if ch == '\n' {
+                    rec.harness.input_mut().modifiers = egui::Modifiers::SHIFT;
+                    rec.harness.event(Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::SHIFT,
+                    });
+                } else {
+                    rec.harness.event(Event::Text(ch.to_string()));
+                }
+                rec.harness.step();
+                rec.harness.input_mut().modifiers = egui::Modifiers::NONE;
+                let input = &rec.harness.state().conv.composer.input;
+                let text = rec
+                    .harness
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text == *input => Some(t),
+                        _ => None,
+                    })
+                    .expect("composer text shape");
+                let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                let typed = rec.harness.render().unwrap();
+                rec.harness.step();
+                let idle = rec.harness.render().unwrap();
+                let x = (rect.left() * scale).ceil() as u32;
+                let y = (rect.top() * scale).ceil() as u32;
+                let w = (rect.width() * scale).floor() as u32;
+                let h = (rect.height() * scale).floor() as u32;
+                let typed = image::imageops::crop_imm(&typed, x, y, w, h).to_image();
+                let idle = image::imageops::crop_imm(&idle, x, y, w, h).to_image();
+                let changed = typed
+                    .pixels()
+                    .zip(idle.pixels())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                if let Some(dir) = &rec.stills {
+                    typed
+                        .save(dir.join(format!("composer-{theme}-{scale}-{i}-typed.png")))
+                        .unwrap();
+                    idle.save(dir.join(format!("composer-{theme}-{scale}-{i}-idle.png")))
+                        .unwrap();
+                }
+                assert_eq!(
+                    changed, 0,
+                    "{theme}, scale {scale}, character {ch:?}: composer text changes brightness after input"
+                );
+            }
+            println!("COMPOSER GPU stable: {theme}, scale {scale}");
+        }
+    }
 }
