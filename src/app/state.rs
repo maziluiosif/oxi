@@ -133,10 +133,6 @@ pub struct EditorState {
     /// The `TextEdit` id each open document was last drawn with, so edits made from outside
     /// the editor (diff block reverts) join its undo history.
     pub text_edit_ids: std::collections::HashMap<PathBuf, eframe::egui::Id>,
-    /// The gutter's change peek and live markers (see `file_explorer::quick_diff`).
-    pub quick_diff: Option<super::file_explorer::QuickDiff>,
-    /// A clicked change marker whose Git base is still being read in the background.
-    pub quick_diff_pending: Option<super::file_explorer::PendingQuickDiff>,
     /// Select and reveal this byte range after opening a definition target.
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
@@ -147,7 +143,8 @@ pub struct EditorState {
     /// Last caret char index observed in the active editor document, resolved to a byte offset
     /// only when a navigation jump records it (avoids a per-frame walk of the whole file).
     pub navigation_cursor_char: usize,
-    pub show_diff: bool,
+    /// Diff mode shows changes in one column instead of side by side.
+    pub diff_inline: bool,
     pub file_operation: Option<FileOperation>,
     pub file_operation_name: String,
     /// Move keyboard focus into the inline file/folder name field on its next render.
@@ -227,6 +224,8 @@ pub struct EditorDocument {
     pub viewport_anchor_line: usize,
     /// Set for images, video, audio and binaries: the tab shows a preview instead of the editor.
     pub media: Option<super::file_explorer::MediaKind>,
+    /// The tab shows the document's changes against a base (see `file_explorer::diff_editor`).
+    pub diff: Option<super::file_explorer::DocumentDiff>,
 }
 
 impl EditorDocument {
@@ -640,8 +639,6 @@ pub struct DiffViewState {
     /// Parsed git diff plus its view state (layout mode, folds, scroll), rebuilt only when
     /// the diff text changes.
     pub git: Option<crate::ui::diff_view::DiffView>,
-    /// Same for the active editor document's unsaved-changes diff.
-    pub unsaved: Option<crate::ui::diff_view::DiffView>,
 }
 
 /// Chat transcript scrolling, virtualization caches and per-message UI.
@@ -710,6 +707,8 @@ pub struct GitUiState {
     pub rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
     pub last_auto_refresh: Option<Instant>,
     pub auto_refresh_pending: bool,
+    /// Counts finished Git snapshots: diff tabs re-read their base when it changes.
+    pub epoch: u64,
 }
 
 /// Update check against GitHub releases.

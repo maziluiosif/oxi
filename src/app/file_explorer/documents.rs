@@ -46,12 +46,12 @@ impl OxiApp {
             viewport_width_bits: None,
             viewport_anchor_line: 0,
             media: None,
+            diff: None,
         });
         self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
         self.conv.editor.hidden_active = None;
         self.conv.editor.diff_tab_active = false;
         self.conv.editor.markdown_preview_active = false;
-        self.conv.editor.show_diff = false;
         self.conv.editor.error = None;
         self.conv.editor.focus_editor_next_frame = true;
     }
@@ -180,10 +180,10 @@ impl OxiApp {
                     viewport_width_bits: None,
                     viewport_anchor_line: 0,
                     media,
+                    diff: None,
                 });
                 self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
                 self.conv.editor.error = None;
-                self.conv.editor.show_diff = false;
                 // An open git diff stays reachable as an editor tab; just show the file.
                 self.conv.editor.diff_tab_active = false;
                 self.conv.editor.markdown_preview_active = false;

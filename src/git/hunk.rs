@@ -158,30 +158,89 @@ pub struct TextHunk {
     pub new_lines: Vec<String>,
 }
 
-/// The file's content the editor gutter compares against: the merge base with
-/// `compare_base` (Compare tab), otherwise `HEAD`. Empty for a file the base lacks.
-pub fn base_text(cwd: &str, relative: &str, compare_base: Option<&str>) -> Result<String, String> {
+/// What the editor's diff mode compares a file against (see [`diff_texts`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffBase {
+    /// Working tree changes: the staged version (`HEAD`'s for a file not in the index).
+    Index,
+    /// Staged changes: `HEAD` against the index, both read from Git.
+    Staged,
+    /// Changes since the merge base with a branch, or since an agent turn's snapshot
+    /// (`turn:<tree>`). `old_path` is the file's name there when it was renamed.
+    Compare {
+        base: String,
+        old_path: Option<String>,
+    },
+}
+
+/// The texts a diff of `relative` is drawn from: the base, and for [`DiffBase::Staged`] the
+/// index version (the other bases compare with the editor buffer). A side the file is missing
+/// from is empty.
+pub fn diff_texts(
+    cwd: &str,
+    relative: &str,
+    base: &DiffBase,
+) -> Result<(String, Option<String>), String> {
     let repo = open_repo(cwd)?;
-    let head = repo
-        .head()
-        .and_then(|head| head.peel_to_commit())
-        .map_err(err)?;
-    let commit = match compare_base {
-        Some(base) => {
-            let base = repo
-                .revparse_single(base)
-                .and_then(|object| object.peel_to_commit())
-                .map_err(err)?;
-            let merge_base = repo.merge_base(head.id(), base.id()).map_err(err)?;
-            repo.find_commit(merge_base).map_err(err)?
+    let head_tree = || repo.head().and_then(|head| head.peel_to_tree()).ok();
+    match base {
+        DiffBase::Index => {
+            let index = repo.index().map_err(err)?;
+            let text = match index.get_path(Path::new(relative), 0) {
+                Some(entry) => blob_text(&repo, entry.id, relative)?,
+                None => match head_tree() {
+                    Some(tree) => tree_text(&repo, &tree, relative)?,
+                    None => String::new(),
+                },
+            };
+            Ok((text, None))
         }
-        None => head,
-    };
-    let tree = commit.tree().map_err(err)?;
-    let Ok(entry) = tree.get_path(Path::new(relative)) else {
-        return Ok(String::new());
-    };
-    let blob = repo.find_blob(entry.id()).map_err(err)?;
+        DiffBase::Staged => {
+            let old = match head_tree() {
+                Some(tree) => tree_text(&repo, &tree, relative)?,
+                None => String::new(),
+            };
+            let index = repo.index().map_err(err)?;
+            let new = match index.get_path(Path::new(relative), 0) {
+                Some(entry) => blob_text(&repo, entry.id, relative)?,
+                None => String::new(),
+            };
+            Ok((old, Some(new)))
+        }
+        DiffBase::Compare { base, old_path } => {
+            // An agent turn's snapshot is compared directly, without a merge base.
+            let tree = match base.strip_prefix(super::checkpoint::TURN_BASE_PREFIX) {
+                Some(id) => super::checkpoint::find_tree(&repo, id)?,
+                None => {
+                    let head = repo
+                        .head()
+                        .and_then(|head| head.peel_to_commit())
+                        .map_err(err)?;
+                    let base = repo
+                        .revparse_single(base)
+                        .and_then(|object| object.peel_to_commit())
+                        .map_err(|e| format!("Cannot resolve {base}: {}", e.message()))?;
+                    let merge_base = repo.merge_base(head.id(), base.id()).map_err(err)?;
+                    repo.find_commit(merge_base)
+                        .and_then(|commit| commit.tree())
+                        .map_err(err)?
+                }
+            };
+            let path = old_path.as_deref().unwrap_or(relative);
+            Ok((tree_text(&repo, &tree, path)?, None))
+        }
+    }
+}
+
+fn tree_text(repo: &Repository, tree: &git2::Tree<'_>, relative: &str) -> Result<String, String> {
+    match tree.get_path(Path::new(relative)) {
+        Ok(entry) => blob_text(repo, entry.id(), relative),
+        Err(_) => Ok(String::new()),
+    }
+}
+
+fn blob_text(repo: &Repository, id: git2::Oid, relative: &str) -> Result<String, String> {
+    let blob = repo.find_blob(id).map_err(err)?;
     String::from_utf8(blob.content().to_vec()).map_err(|_| format!("{relative} is not UTF-8 text"))
 }
 

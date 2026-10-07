@@ -244,7 +244,7 @@ pub(super) fn tokens(text: &str) -> Vec<Range<usize>> {
 
 /// Changed byte ranges of two similar lines (token LCS). Empty when the lines are too different
 /// for word highlights to help.
-pub(super) fn word_diff(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+pub(crate) fn word_diff(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
     let (a, b) = (tokens(old), tokens(new));
     let (n, m) = (a.len(), b.len());
     if n == 0 || m == 0 || n * m > 40_000 {

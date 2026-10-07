@@ -997,7 +997,7 @@ pub(super) fn line_job(file: &DiffFile, line: &Line, side: usize) -> Option<Layo
     Some(job)
 }
 
-pub(super) fn segment(
+pub(crate) fn segment(
     ui: &mut Ui,
     label: &str,
     selected: bool,
@@ -1026,7 +1026,7 @@ pub(super) fn segment(
     }
 }
 
-pub(super) fn toolbar_icon(ui: &mut Ui, icon: &str, hint: &str, enabled: bool) -> egui::Response {
+pub(crate) fn toolbar_icon(ui: &mut Ui, icon: &str, hint: &str, enabled: bool) -> egui::Response {
     ui.add_enabled(
         enabled,
         egui::Button::new(icon_glyph_rich(icon, FS_SMALL, c_text_muted()))

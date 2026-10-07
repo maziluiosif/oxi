@@ -11,6 +11,9 @@ pub(crate) struct EditorLayoutCache {
     pub(super) pixels_per_point_bits: u32,
     /// [`crate::theme::fonts_generation`] `geometry` was laid out with.
     pub(super) fonts_generation: u64,
+    /// [`super::diff_editor::DocumentDiff::layout_key`] `geometry` was laid out for; 0 outside
+    /// diff mode.
+    pub(super) diff_key: u64,
     pub(super) geometry: Option<Arc<egui::Galley>>,
     /// Colored layout of `syntax_lines` only (see `syntax_window`).
     pub(super) syntax: Option<Arc<egui::Galley>>,

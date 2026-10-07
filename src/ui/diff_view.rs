@@ -28,7 +28,9 @@ use crate::theme::*;
 use crate::ui::chrome::icon_glyph_rich;
 
 use paint::{commit_height, line_job};
+pub(crate) use paint::{segment, toolbar_icon};
 use parse::parse;
+pub(crate) use parse::word_diff;
 use rows::{build_rows, row_file};
 
 /// Unchanged lines kept visible around each change while unchanged regions are collapsed.
@@ -370,11 +372,6 @@ impl DiffView {
             reveal_first_change: !same_target,
             selection: None,
         });
-    }
-
-    #[cfg(test)]
-    pub fn set_inline(&mut self, inline: bool) {
-        self.inline = inline;
     }
 
     /// Path of the only file in this diff, if it shows exactly one.

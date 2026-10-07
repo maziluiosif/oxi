@@ -18,7 +18,7 @@ impl OxiApp {
         let mut close_preview = None;
         let mut save = false;
         let mut reveal = false;
-        let mut toggle_diff = false;
+        let mut diff_request: Option<(usize, Option<super::DiffSource>)> = None;
         let mut select_git_diff = false;
         let mut close_git_diff = false;
         let mut new_file = false;
@@ -105,13 +105,20 @@ impl OxiApp {
                                             .unwrap_or_default()
                                             .to_string_lossy()
                                     };
+                                    let label = match &document.diff {
+                                        Some(diff) => std::borrow::Cow::Owned(format!(
+                                            "{name} ({})",
+                                            diff.source.tab_label()
+                                        )),
+                                        None => name.clone(),
+                                    };
                                     let active = !git_diff_active
                                         && !self.conv.editor.markdown_preview_active
                                         && self.conv.editor.active == Some(index);
                                     let tab = editor_tab(
                                         ui,
                                         ui.id().with(("editor_tab", index)),
-                                        &name,
+                                        &label,
                                         active,
                                         document.is_dirty(),
                                     );
@@ -144,12 +151,29 @@ impl OxiApp {
                                             reveal = true;
                                             ui.close();
                                         }
-                                        if !document.is_scratchpad
-                                            && ui.button("Unsaved changes diff").clicked()
+                                        if document.diff.is_some() {
+                                            if ui.button("Close Diff").clicked() {
+                                                select = Some(index);
+                                                diff_request = Some((index, None));
+                                                ui.close();
+                                            }
+                                        } else if !document.is_scratchpad
+                                            && document.media.is_none()
                                         {
-                                            select = Some(index);
-                                            toggle_diff = true;
-                                            ui.close();
+                                            if ui.button("Show Git Changes").clicked() {
+                                                select = Some(index);
+                                                diff_request = Some((
+                                                    index,
+                                                    Some(super::DiffSource::WorkTree),
+                                                ));
+                                                ui.close();
+                                            }
+                                            if ui.button("Compare with Saved").clicked() {
+                                                select = Some(index);
+                                                diff_request =
+                                                    Some((index, Some(super::DiffSource::Unsaved)));
+                                                ui.close();
+                                            }
                                         }
                                         if ui.button("Close").clicked() {
                                             close = Some(index);
@@ -300,7 +324,6 @@ impl OxiApp {
             self.conv.editor.active = Some(index);
             self.conv.editor.markdown_preview_active = true;
             self.conv.editor.diff_tab_active = false;
-            self.conv.editor.show_diff = false;
             self.conv.editor.focus_editor_next_frame = false;
         }
         if let Some(index) = close_preview {
@@ -322,8 +345,10 @@ impl OxiApp {
         if reveal {
             self.reveal_active_file();
         }
-        if toggle_diff {
-            self.conv.editor.show_diff = !self.conv.editor.show_diff;
+        match diff_request {
+            Some((index, Some(source))) => self.open_document_diff(index, source),
+            Some((index, None)) => self.close_document_diff(index),
+            None => {}
         }
         if let Some(index) = close {
             self.request_close_editor_tab(index);

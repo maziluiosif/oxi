@@ -633,29 +633,28 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         }
         rec.harness.run_steps(2);
         rec.check_editor_commands();
-        // VS Code-style diff tab: working-tree file diff (split, inline), then a commit.
-        rec.app().request(crate::git::GitOp::ShowDiff {
-            path: "stats.py".into(),
-            staged: false,
-        });
-        rec.app().conv.diff_view.open = true;
-        rec.app().conv.editor.diff_tab_active = true;
-        rec.wait_for_git_diff("stats.py");
+        // Diff mode in the editor tab: a working-tree change side by side (the right side is
+        // the editable file), inline, then a commit's patch.
+        assert!(rec.app().open_diff_editor(
+            "stats.py",
+            crate::app::file_explorer::DiffSource::WorkTree,
+            None
+        ));
+        rec.wait_for_diff_editor();
         rec.still("diff-split");
-        // Hovering a change shows its block actions (Stage / Revert). Diff text is painted,
-        // not labels, so the `mid = len(ordered)` line is addressed by position.
-        let mid_line = egui::pos2(360.0, 168.0);
+        // Hovering a change shows its block actions (Stage / Discard).
+        let mid_line = rec.diff_change_point(0);
         rec.harness.hover_at(mid_line);
         rec.harness.run_steps(4);
         rec.still("diff-block-actions");
-        // Drag-select from inside that line down two lines, like in the editor.
+        // Drag-select from inside that line down two lines: it is the editor's own selection.
         let button = |pos, pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        let select_to = egui::pos2(470.0, 203.0);
+        let select_to = mid_line + egui::vec2(110.0, 35.0);
         rec.harness.event(button(mid_line, true));
         rec.harness.step();
         for i in 1..=6 {
@@ -672,22 +671,10 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.harness.run_steps(4);
         rec.still("diff-split-wide");
         rec.app().conv.git_ui.open = true;
-        rec.app()
-            .conv
-            .diff_view
-            .git
-            .as_mut()
-            .unwrap()
-            .set_inline(true);
+        rec.app().conv.editor.diff_inline = true;
         rec.harness.run_steps(4);
         rec.still("diff-inline");
-        rec.app()
-            .conv
-            .diff_view
-            .git
-            .as_mut()
-            .unwrap()
-            .set_inline(false);
+        rec.app().conv.editor.diff_inline = false;
         let hash = rec.app().conv.git.log.first().map(|c| c.hash.clone());
         if let Some(hash) = hash {
             rec.app()
@@ -728,35 +715,41 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
                     Some((data.base.clone(), file.path.clone()))
                 });
             if let Some((base, path)) = target {
-                rec.app().request(crate::git::GitOp::ShowCompareDiff {
-                    base: base.clone(),
-                    path: path.clone(),
-                    old_path: None,
-                });
-                rec.app().conv.diff_view.open = true;
-                rec.app().conv.editor.diff_tab_active = true;
-                rec.wait_for_git_diff(&crate::git::compare_diff_title(&base, &path));
+                assert!(rec.app().open_diff_editor(
+                    &path,
+                    crate::app::file_explorer::DiffSource::Compare {
+                        base: base.clone(),
+                        old_path: None,
+                    },
+                    None,
+                ));
+                rec.wait_for_diff_editor();
                 rec.still("diff-compare");
                 rec.app().open_changed_file(&path);
                 rec.harness.run_steps(4);
                 rec.still("editor-compare-gutter");
-                // Clicking a gutter marker peeks at the lines the change replaced.
+                // Clicking a gutter marker opens the diff at that change.
                 if let Some(index) = rec.app().conv.editor.active {
-                    rec.app().open_quick_diff(index, 13);
+                    let source = rec.app().gutter_diff_source();
+                    rec.app().open_document_diff(index, source);
                 }
+                rec.wait_for_diff_editor();
+                rec.app().conv.editor.diff_inline = true;
                 rec.harness.run_steps(4);
-                rec.still("editor-quick-diff");
-                // Revert from the peek, clicked for real: the edit lands mid-render, which once
-                // dropped the minimap geometry the editor still had to paint (a panic).
+                rec.still("editor-gutter-diff");
+                // Discard from the hover buttons, clicked for real: the edit lands mid-render.
+                let at = rec.diff_change_point(0);
+                rec.harness.hover_at(at);
+                rec.harness.run_steps(2);
                 let scale = rec.harness.ctx.pixels_per_point();
                 let button = rec
                     .harness
-                    .query_all_by_label("Revert")
+                    .query_all_by_label("Discard")
                     .map(|node| node.rect())
                     .next();
-                assert!(button.is_some(), "peek Revert button not found");
+                assert!(button.is_some(), "Discard button not found");
+                let original = std::fs::read_to_string(project.join(&path)).unwrap();
                 if let Some(button) = button {
-                    // Press and release over the button: a real pointer click.
                     let at = (button.center().to_vec2() / scale).to_pos2();
                     rec.harness.hover_at(at);
                     rec.harness.run_steps(1);
@@ -767,25 +760,25 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
                 rec.harness.run_steps(4);
                 let app = rec.app();
                 if let Some(index) = app.conv.editor.active {
-                    let document = &app.conv.editor.documents[index];
-                    let reverted = document
-                        .content
-                        .contains("return ordered[len(ordered) // 2]")
-                        && document.is_dirty();
-                    let markers = app.quick_diff_markers(index).unwrap_or_default();
-                    println!(
-                        "CHECK quick diff revert: {reverted}, markers left {}",
-                        markers.len()
-                    );
-                    assert!(reverted && markers.is_empty(), "quick diff revert failed");
                     let document = &mut app.conv.editor.documents[index];
-                    document.content = document.saved_content.clone();
+                    let revision = document.content_revision;
+                    let left = document
+                        .diff
+                        .as_mut()
+                        .and_then(|diff| diff.decor_at(revision, &document.content))
+                        .map_or(usize::MAX, |decor| decor.changes.len());
+                    let reverted = document.content != original;
+                    println!("CHECK diff discard: {reverted}, changes left {left}");
+                    assert!(reverted, "diff discard failed");
+                    // Put the file back for the rest of the demo.
+                    std::fs::write(project.join(&path), &original).unwrap();
+                    document.content = original.clone();
+                    document.saved_content = original;
                     document.dirty = false;
                     document.content_revision += 1;
+                    document.diff = None;
                 }
-                if let Some(quick) = rec.app().conv.editor.quick_diff.as_mut() {
-                    quick.close_peek();
-                }
+                rec.app().conv.editor.diff_inline = false;
             }
             rec.app().conv.git_ui.tab = crate::app::git_panel::GitTab::Changes;
         }
@@ -1397,6 +1390,40 @@ impl Recorder<'_> {
             app.conv.editor.active = Some(index);
         }
         self.harness.run_steps(2);
+    }
+
+    /// Wait until the active document's diff has read its base and laid out its changes.
+    fn wait_for_diff_editor(&mut self) {
+        for _ in 0..400 {
+            self.harness.step();
+            let ready = self
+                .app()
+                .conv
+                .editor
+                .active_document()
+                .and_then(|document| document.diff.as_ref())
+                .is_some_and(|diff| diff.ready());
+            if ready {
+                self.harness.run_steps(6);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the diff editor never loaded its base");
+    }
+
+    /// A point inside the first line of change `index` on the diff's new side.
+    fn diff_change_point(&mut self, index: usize) -> egui::Pos2 {
+        let diff = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .and_then(|document| document.diff.as_ref())
+            .expect("diff mode");
+        let (top, _) = diff.frame_new_span(index).expect("change on screen");
+        let clip = diff.frame_new_clip();
+        egui::pos2(clip.left() + 120.0, top + 6.0)
     }
 
     fn wait_for_git_diff(&mut self, title: &str) {

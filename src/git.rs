@@ -29,7 +29,7 @@ pub mod worktree;
 
 #[path = "git/hunk.rs"]
 mod hunk;
-pub use hunk::{BlockEdit, BlockTarget, TextHunk, base_text, splice_lines, text_hunks};
+pub use hunk::{BlockEdit, BlockTarget, DiffBase, diff_texts, splice_lines, text_hunks};
 pub use system::version as system_git_version;
 
 #[cfg(test)]
