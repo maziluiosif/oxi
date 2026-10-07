@@ -149,6 +149,7 @@ impl OxiApp {
     }
 
     fn remove_editor_path(&mut self, path: &Path) {
+        self.conv.editor.markdown_preview_active = false;
         self.conv
             .editor
             .documents

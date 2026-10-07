@@ -14,6 +14,7 @@ mod table;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{Align, FontFamily, Layout, RichText, Ui, vec2};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use std::path::Path;
 
 use crate::theme::*;
 
@@ -61,7 +62,60 @@ const LIST_GAP_AFTER_ITEM: f32 = 2.0;
 /// Must match `render_inline_until` Normal tail (`1.5`) + `render_paragraph` spacing (`4.0`): gap the preceding paragraph leaves before the next block.
 const PARA_GAP_BEFORE_NEXT_BLOCK: f32 = 1.5 + 4.0;
 
-type ParserPeek<'a> = std::iter::Peekable<Parser<'a>>;
+type ParserPeek<'a> = std::iter::Peekable<MarkdownParser<'a>>;
+
+struct MarkdownParser<'a> {
+    parser: Parser<'a>,
+    base_dir: Option<&'a Path>,
+}
+
+impl<'a> Iterator for MarkdownParser<'a> {
+    type Item = Event<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.parser.next().map(|event| match event {
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                let dest_url = self
+                    .base_dir
+                    .and_then(|base| resolve_image_uri(base, &dest_url))
+                    .map_or(dest_url, Into::into);
+                Event::Start(Tag::Image {
+                    link_type,
+                    dest_url,
+                    title,
+                    id,
+                })
+            }
+            event => event,
+        })
+    }
+}
+
+fn markdown_parser<'a>(src: &'a str, base_dir: Option<&'a Path>) -> ParserPeek<'a> {
+    MarkdownParser {
+        parser: Parser::new_ext(src, MD_OPTIONS),
+        base_dir,
+    }
+    .peekable()
+}
+
+/// Resolve Markdown URL paths without altering remote or embedded image sources.
+fn resolve_image_uri(base_dir: &Path, destination: &str) -> Option<String> {
+    if url::Url::parse(destination).is_ok() {
+        return None;
+    }
+    let base = url::Url::from_directory_path(base_dir).ok()?;
+    let resolved = base.join(destination).ok()?;
+    // egui's file loader expects a filesystem path after `file://`; it does not
+    // percent-decode URL paths. Decode spaces/Unicode before passing it to the loader.
+    let path = resolved.to_file_path().ok()?;
+    Some(format!("file://{}", path.display()))
+}
 
 /// Parser flags for assistant markdown: GFM-ish features without enabling math (avoids
 /// `$...$` being parsed as formulas and dropped by our inline renderer).
@@ -87,11 +141,17 @@ fn consume_until_end(it: &mut ParserPeek<'_>, end: TagEnd) {
 }
 
 pub fn render_markdown(ui: &mut Ui, src: &str) {
-    let wrap_w = content_wrap_width(ui);
+    render_markdown_impl(ui, src, None, content_wrap_width(ui));
+}
+
+pub(crate) fn render_markdown_for_file(ui: &mut Ui, src: &str, path: &Path) {
+    render_markdown_impl(ui, src, path.parent(), ui.available_width().max(1.0));
+}
+
+fn render_markdown_impl(ui: &mut Ui, src: &str, base_dir: Option<&Path>, wrap_w: f32) {
     ui.set_max_width(wrap_w);
 
-    let parser = Parser::new_ext(src, MD_OPTIONS);
-    let mut it = parser.peekable();
+    let mut it = markdown_parser(src, base_dir);
     let mut fence_idx = 0u32;
     while let Some(ev) = it.next() {
         match ev {

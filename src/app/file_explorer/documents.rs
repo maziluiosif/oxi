@@ -21,6 +21,7 @@ impl OxiApp {
             self.conv.editor.active = Some(index);
             self.conv.editor.hidden_active = None;
             self.conv.editor.diff_tab_active = false;
+            self.conv.editor.markdown_preview_active = false;
             self.conv.editor.focus_editor_next_frame = true;
             return;
         }
@@ -30,6 +31,7 @@ impl OxiApp {
             .and_then(|metadata| metadata.modified())
             .ok();
         self.conv.editor.documents.push(EditorDocument {
+            markdown_preview_open: false,
             path,
             is_scratchpad: true,
             saved_content: content.clone(),
@@ -48,6 +50,7 @@ impl OxiApp {
         self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
         self.conv.editor.hidden_active = None;
         self.conv.editor.diff_tab_active = false;
+        self.conv.editor.markdown_preview_active = false;
         self.conv.editor.show_diff = false;
         self.conv.editor.error = None;
         self.conv.editor.focus_editor_next_frame = true;
@@ -133,6 +136,7 @@ impl OxiApp {
         {
             self.conv.editor.active = Some(index);
             self.conv.editor.diff_tab_active = false;
+            self.conv.editor.markdown_preview_active = false;
             if reveal_in_explorer {
                 self.reveal_editor_file_in_explorer(&safe_path);
             }
@@ -161,6 +165,7 @@ impl OxiApp {
         match content {
             Ok(content) => {
                 self.conv.editor.documents.push(EditorDocument {
+                    markdown_preview_open: false,
                     path: safe_path.clone(),
                     is_scratchpad: false,
                     saved_content: content.clone(),
@@ -181,6 +186,7 @@ impl OxiApp {
                 self.conv.editor.show_diff = false;
                 // An open git diff stays reachable as an editor tab; just show the file.
                 self.conv.editor.diff_tab_active = false;
+                self.conv.editor.markdown_preview_active = false;
                 if reveal_in_explorer {
                     self.reveal_editor_file_in_explorer(&safe_path);
                 }

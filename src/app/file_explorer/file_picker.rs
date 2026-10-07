@@ -139,6 +139,8 @@ impl OxiApp {
         self.conv.editor.file_picker_preview = None;
         self.conv.editor.file_picker_previous_active = self.conv.editor.active;
         self.conv.editor.file_picker_previous_diff_active = self.conv.editor.diff_tab_active;
+        self.conv.editor.file_picker_previous_markdown_active =
+            self.conv.editor.markdown_preview_active;
         self.conv.editor.file_picker_preview_created = false;
         self.conv.editor.file_picker_project_symbols = false;
         self.conv.editor.file_picker_previewed = None;
@@ -215,6 +217,8 @@ impl OxiApp {
             .file_picker_previous_active
             .filter(|&index| index < self.conv.editor.documents.len());
         self.conv.editor.diff_tab_active = self.conv.editor.file_picker_previous_diff_active;
+        self.conv.editor.markdown_preview_active =
+            self.conv.editor.file_picker_previous_markdown_active;
         self.conv.editor.file_picker_preview = None;
         self.conv.editor.file_picker_preview_created = false;
     }

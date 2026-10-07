@@ -12,6 +12,7 @@ use super::{ParserPeek, SZ_BODY, allocate_full_width_block, set_job_wrap};
 
 struct TableCellData {
     text: String,
+    images: Vec<(String, String)>,
     is_header: bool,
 }
 
@@ -40,10 +41,7 @@ fn collect_table_data(it: &mut ParserPeek<'_>) -> Vec<Vec<TableCellData>> {
                         }
                         Some(Event::Start(Tag::TableCell)) => {
                             it.next();
-                            header.push(TableCellData {
-                                text: collect_cell_text(it),
-                                is_header: true,
-                            });
+                            header.push(collect_cell(it, true));
                         }
                         Some(_) => {
                             it.next();
@@ -78,10 +76,7 @@ fn collect_row_cells(it: &mut ParserPeek<'_>, is_header: bool) -> Vec<TableCellD
             }
             Some(Event::Start(Tag::TableCell)) => {
                 it.next();
-                cells.push(TableCellData {
-                    text: collect_cell_text(it),
-                    is_header,
-                });
+                cells.push(collect_cell(it, is_header));
             }
             Some(_) => {
                 it.next();
@@ -92,54 +87,52 @@ fn collect_row_cells(it: &mut ParserPeek<'_>, is_header: bool) -> Vec<TableCellD
     cells
 }
 
-fn collect_cell_text(it: &mut ParserPeek<'_>) -> String {
-    let mut text = String::new();
+fn collect_cell(it: &mut ParserPeek<'_>, is_header: bool) -> TableCellData {
+    let mut cell = TableCellData {
+        text: String::new(),
+        images: Vec::new(),
+        is_header,
+    };
+    let mut link = None;
+    let mut link_start = 0;
+    let mut image_start = 0;
     loop {
-        let ev = it.next();
-        match ev {
+        match it.next() {
             Some(Event::End(TagEnd::TableCell)) | None => break,
-            Some(Event::Text(t)) => text.push_str(t.as_ref()),
-            Some(Event::Code(c)) => text.push_str(c.as_ref()),
-            Some(Event::SoftBreak) => text.push(' '),
-            Some(Event::HardBreak) => text.push('\n'),
-            Some(Event::InlineHtml(t)) | Some(Event::Html(t)) => text.push_str(t.as_ref()),
+            Some(Event::Text(t) | Event::Code(t) | Event::InlineHtml(t) | Event::Html(t)) => {
+                cell.text.push_str(&t);
+            }
+            Some(Event::SoftBreak) => cell.text.push(' '),
+            Some(Event::HardBreak) => cell.text.push('\n'),
             Some(Event::Start(Tag::Link { dest_url, .. })) => {
-                let mut label = String::new();
-                loop {
-                    match it.next() {
-                        Some(Event::End(TagEnd::Link)) | None => break,
-                        Some(Event::Text(t)) => label.push_str(t.as_ref()),
-                        Some(Event::Code(c)) => label.push_str(c.as_ref()),
-                        Some(Event::SoftBreak) => label.push(' '),
-                        _ => {}
-                    }
+                link = Some(dest_url);
+                link_start = cell.text.len();
+                image_start = cell.images.len();
+            }
+            Some(Event::End(TagEnd::Link)) => {
+                if cell.text.len() == link_start
+                    && cell.images.len() == image_start
+                    && let Some(destination) = link.take()
+                {
+                    cell.text.push_str(&destination);
                 }
-                text.push_str(if label.is_empty() {
-                    dest_url.as_ref()
-                } else {
-                    &label
-                });
+                link = None;
             }
             Some(Event::Start(Tag::Image { dest_url, .. })) => {
                 let mut alt = String::new();
-                loop {
-                    match it.next() {
-                        Some(Event::End(TagEnd::Image)) | None => break,
-                        Some(Event::Text(t)) => alt.push_str(t.as_ref()),
+                for inner in it.by_ref() {
+                    match inner {
+                        Event::End(TagEnd::Image) => break,
+                        Event::Text(text) | Event::Code(text) => alt.push_str(&text),
                         _ => {}
                     }
                 }
-                text.push_str(if alt.is_empty() {
-                    dest_url.as_ref()
-                } else {
-                    &alt
-                });
+                cell.images.push((dest_url.to_string(), alt));
             }
-            Some(Event::Start(_)) | Some(Event::End(_)) => {}
             _ => {}
         }
     }
-    text
+    cell
 }
 
 pub(super) fn render_table(
@@ -191,48 +184,65 @@ pub(super) fn render_table(
                         })
                         .collect();
 
-                    let row_h = cell_jobs
-                        .iter()
-                        .map(|(_, job)| {
-                            ui.fonts_mut(|fonts| fonts.layout_job(job.clone())).size().y
-                        })
-                        .fold(0.0_f32, f32::max)
-                        .max(22.0)
-                        + CELL_PAD_Y * 2.0;
-
-                    ui.horizontal(|ui| {
+                    let mut backgrounds = Vec::new();
+                    let row = ui.horizontal_top(|ui| {
                         ui.set_width(table_w);
                         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-
                         for (col_idx, (is_header, job)) in cell_jobs.into_iter().enumerate() {
-                            let (rect, _) = ui.allocate_exact_size(
-                                vec2(cell_w, row_h),
-                                eframe::egui::Sense::hover(),
-                            );
-                            let fill = if is_header { header_bg } else { body_bg };
-
-                            ui.painter().rect_filled(rect, 0.0, fill);
-                            ui.painter().rect_stroke(
-                                rect,
-                                0.0,
-                                Stroke::new(1.0, grid),
-                                egui::StrokeKind::Middle,
-                            );
-
+                            // Reserve the background before rendering so it stays behind images/text.
+                            let background = ui.painter().add(egui::Shape::Noop);
                             let halign = match alignments.get(col_idx) {
                                 Some(Alignment::Center) => Align::Center,
                                 Some(Alignment::Right) => Align::Max,
                                 _ => Align::Min,
                             };
-                            let inner_rect = rect.shrink2(vec2(CELL_PAD_X, CELL_PAD_Y));
-                            let mut child = ui.new_child(
-                                eframe::egui::UiBuilder::new()
-                                    .max_rect(inner_rect)
-                                    .layout(Layout::top_down(halign)),
+                            let response = ui.allocate_ui_with_layout(
+                                vec2(cell_w, 0.0),
+                                Layout::top_down(halign),
+                                |ui| {
+                                    eframe::egui::Frame::new()
+                                        .inner_margin(eframe::egui::Margin::symmetric(
+                                            CELL_PAD_X as i8,
+                                            CELL_PAD_Y as i8,
+                                        ))
+                                        .show(ui, |ui| {
+                                            let inner_w = (cell_w - CELL_PAD_X * 2.0).max(24.0);
+                                            ui.set_width(inner_w);
+                                            if !job.text.is_empty() {
+                                                selectable_job(ui, job);
+                                            }
+                                            if let Some(cell) = row.get(col_idx) {
+                                                for (uri, alt) in &cell.images {
+                                                    super::inline::render_markdown_inline_image(
+                                                        ui, inner_w, uri, alt, false,
+                                                    );
+                                                }
+                                            }
+                                        });
+                                },
                             );
-                            selectable_job(&mut child, job);
+                            backgrounds.push((background, response.response.rect, is_header));
                         }
                     });
+                    for (background, mut rect, is_header) in backgrounds {
+                        rect.max.y = row.response.rect.bottom();
+                        ui.painter().set(
+                            background,
+                            egui::Shape::Vec(vec![
+                                egui::Shape::rect_filled(
+                                    rect,
+                                    0.0,
+                                    if is_header { header_bg } else { body_bg },
+                                ),
+                                egui::Shape::rect_stroke(
+                                    rect,
+                                    0.0,
+                                    Stroke::new(1.0, grid),
+                                    egui::StrokeKind::Middle,
+                                ),
+                            ]),
+                        );
+                    }
                 }
             });
     });
@@ -244,7 +254,7 @@ mod tests {
     use super::*;
 
     fn table_rows(markdown: &str) -> Vec<Vec<(String, bool)>> {
-        let mut it = pulldown_cmark::Parser::new_ext(markdown, super::super::MD_OPTIONS).peekable();
+        let mut it = super::super::markdown_parser(markdown, None);
         while let Some(event) = it.next() {
             if let Event::Start(Tag::Table(_)) = event {
                 return collect_table_data(&mut it)

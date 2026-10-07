@@ -14,6 +14,8 @@ impl OxiApp {
     pub(super) fn render_editor_tabs(&mut self, ui: &mut Ui) {
         let mut select = None;
         let mut close = None;
+        let mut select_preview = None;
+        let mut close_preview = None;
         let mut save = false;
         let mut reveal = false;
         let mut toggle_diff = false;
@@ -28,7 +30,14 @@ impl OxiApp {
         let can_go_forward = !self.conv.editor.navigation_forward.is_empty();
         let sidebar_open = self.conv.sidebar.open;
         let workspace_root = PathBuf::from(&self.active_workspace().root_path);
+        let markdown_available = !git_diff_active
+            && self
+                .conv
+                .editor
+                .active_document()
+                .is_some_and(|document| document.supports_markdown_preview());
         let tab_strip_width = (ui.available_width()
+            - if markdown_available { 74.0 } else { 0.0 }
             - 126.0
             - if sidebar_open {
                 0.0
@@ -96,8 +105,9 @@ impl OxiApp {
                                             .unwrap_or_default()
                                             .to_string_lossy()
                                     };
-                                    let active =
-                                        !git_diff_active && self.conv.editor.active == Some(index);
+                                    let active = !git_diff_active
+                                        && !self.conv.editor.markdown_preview_active
+                                        && self.conv.editor.active == Some(index);
                                     let tab = editor_tab(
                                         ui,
                                         ui.id().with(("editor_tab", index)),
@@ -146,6 +156,28 @@ impl OxiApp {
                                             ui.close();
                                         }
                                     });
+                                    if document.markdown_preview_open
+                                        && document.supports_markdown_preview()
+                                    {
+                                        let label = format!("{name} (Preview)");
+                                        let tab = editor_tab(
+                                            ui,
+                                            ui.id().with(("markdown_preview_tab", index)),
+                                            &label,
+                                            !git_diff_active
+                                                && self.conv.editor.markdown_preview_active
+                                                && self.conv.editor.active == Some(index),
+                                            false,
+                                        );
+                                        if tab.close_clicked || tab.response.middle_clicked() {
+                                            close_preview = Some(index);
+                                        } else if tab.response.clicked() {
+                                            select_preview = Some(index);
+                                        }
+                                        tab.response.on_hover_text(
+                                            "Markdown preview · includes unsaved changes",
+                                        );
+                                    }
                                 }
 
                                 // Git diff pseudo-tab: keeps the diff one click away from the
@@ -172,6 +204,14 @@ impl OxiApp {
                         });
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if markdown_available
+                            && ui
+                                .button("Preview")
+                                .on_hover_text("Open Markdown preview in a separate tab")
+                                .clicked()
+                        {
+                            select_preview = self.conv.editor.active;
+                        }
                         // Frameless like the neighbouring buttons: a boxed button here read
                         // as a stray rectangle at the end of the tab strip.
                         egui::containers::menu::MenuButton::from_button(
@@ -197,7 +237,9 @@ impl OxiApp {
                                 };
                                 if ui
                                     .selectable_label(
-                                        !git_diff_active && self.conv.editor.active == Some(index),
+                                        !git_diff_active
+                                            && !self.conv.editor.markdown_preview_active
+                                            && self.conv.editor.active == Some(index),
                                         name,
                                     )
                                     .clicked()
@@ -240,6 +282,7 @@ impl OxiApp {
             self.conv.editor.git_full_highlight_path = None;
             self.conv.editor.active = Some(index);
             self.conv.editor.diff_tab_active = false;
+            self.conv.editor.markdown_preview_active = false;
             self.conv.editor.focus_editor_next_frame = true;
             if let Some(path) = self
                 .conv
@@ -250,6 +293,21 @@ impl OxiApp {
                 .map(|document| document.path.clone())
             {
                 self.reveal_editor_file_in_explorer(&path);
+            }
+        }
+        if let Some(index) = select_preview {
+            self.conv.editor.documents[index].markdown_preview_open = true;
+            self.conv.editor.active = Some(index);
+            self.conv.editor.markdown_preview_active = true;
+            self.conv.editor.diff_tab_active = false;
+            self.conv.editor.show_diff = false;
+            self.conv.editor.focus_editor_next_frame = false;
+        }
+        if let Some(index) = close_preview {
+            self.conv.editor.documents[index].markdown_preview_open = false;
+            if self.conv.editor.active == Some(index) {
+                self.conv.editor.markdown_preview_active = false;
+                self.conv.editor.focus_editor_next_frame = true;
             }
         }
         if select_git_diff {

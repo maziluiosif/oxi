@@ -18,6 +18,7 @@ mod file_picker;
 mod find_replace;
 mod layout_cache;
 mod line_layout;
+mod markdown_preview;
 mod media_view;
 mod minimap;
 mod navigation_diff;
@@ -77,6 +78,15 @@ impl OxiApp {
             && crate::ui::chrome::dismissible_notice(ui, "editor_error", &error)
         {
             self.conv.editor.error = None;
+        }
+
+        if self.conv.editor.markdown_preview_active
+            && self.conv.editor.active_document().is_some_and(|document| {
+                document.markdown_preview_open && document.supports_markdown_preview()
+            })
+        {
+            self.render_editor_markdown_preview(ui);
+            return;
         }
 
         if self.conv.editor.find_open {

@@ -91,6 +91,8 @@ pub struct EditorState {
     /// `git.diff`; this only tracks which tab the editor shows so files stay editable
     /// while a diff is open.
     pub diff_tab_active: bool,
+    /// The preview tab for the active document is selected.
+    pub markdown_preview_active: bool,
     pub error: Option<String>,
     pub find_open: bool,
     /// Whether the bottom search panel also shows replacement controls.
@@ -165,6 +167,7 @@ pub struct EditorState {
     /// Editor tab that was active before the picker opened.
     pub file_picker_previous_active: Option<usize>,
     pub file_picker_previous_diff_active: bool,
+    pub file_picker_previous_markdown_active: bool,
     /// Whether the preview tab was created by the picker and should be removed on cancel.
     pub file_picker_preview_created: bool,
     /// Goto Symbol in Project (Cmd/Ctrl+Shift+R) instead of files. In the file mode, `@` lists
@@ -196,6 +199,8 @@ pub enum FileOperation {
 }
 
 pub struct EditorDocument {
+    /// Keep a separate live Markdown preview tab open for this document.
+    pub markdown_preview_open: bool,
     pub path: PathBuf,
     /// Global autosaved scratchpad documents are not constrained to the active workspace.
     pub is_scratchpad: bool,
@@ -225,6 +230,19 @@ pub struct EditorDocument {
 }
 
 impl EditorDocument {
+    pub(crate) fn supports_markdown_preview(&self) -> bool {
+        self.media.is_none()
+            && self
+                .path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    ["md", "markdown", "mdown", "mkd", "mkdn"]
+                        .iter()
+                        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+                })
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -235,6 +253,9 @@ impl EditorState {
     pub fn remove_document(&mut self, index: usize) {
         if index >= self.documents.len() {
             return;
+        }
+        if self.active == Some(index) {
+            self.markdown_preview_active = false;
         }
         self.documents.remove(index);
         let remaining = self.documents.len();

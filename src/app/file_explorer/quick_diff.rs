@@ -340,8 +340,9 @@ impl OxiApp {
         }
 
         let left = gutter_rect.right() + 6.0;
-        // Clear of the minimap and scrollbar on the right.
-        let width = (ui.clip_rect().right() - left - 120.0).clamp(260.0, 920.0);
+        // Let the foreground peek use the minimap's space too, leaving room for the
+        // frame margins and scrollbar so longer source lines fit without scrolling.
+        let width = (ui.clip_rect().right() - left - 24.0).clamp(260.0, 1280.0);
         let total = quick.hunks.len();
         let base_label = quick.compare_base.as_deref().unwrap_or("HEAD").to_owned();
         let mut action = None;
