@@ -120,42 +120,40 @@ impl OxiApp {
         let git_width = settings.git_width;
         let last_active_workspace_root_path = settings.last_active_workspace_root_path.clone();
         let last_active_session_file = settings.last_active_session_file.clone();
-        // Restore persisted workspaces; the cwd workspace is always present, first, and active.
-        let cwd_entry = settings
-            .workspaces
-            .iter()
-            .find(|w| w.root_path == root_path);
-        let cwd_folded = cwd_entry.is_some_and(|w| w.folded);
-        let cwd_pinned = cwd_entry.map(|w| w.pinned.clone()).unwrap_or_default();
-        let cwd_folded_groups = cwd_entry
-            .map(|w| w.folded_groups.clone())
-            .unwrap_or_default();
-        let mut workspaces = vec![Workspace {
-            root_path: root_path.clone(),
-            sessions: Self::initial_workspace_sessions(&root_path, false),
+        // Restore persisted workspaces. Launching from a project folder opens it too (first),
+        // but a GUI launch (cwd `/` or home) adds nothing, so a removed workspace stays removed.
+        let workspace_from_entry = |entry: &crate::settings::WorkspaceEntry| Workspace {
+            root_path: entry.root_path.clone(),
+            sessions: Self::initial_workspace_sessions(&entry.root_path, false),
             active: 0,
-            sidebar_folded: cwd_folded,
-            pinned: cwd_pinned,
-            folded_groups: cwd_folded_groups,
-            worktree: crate::git::worktree::info(std::path::Path::new(&root_path)),
-        }];
-        for entry in &settings.workspaces {
-            if entry.root_path == root_path {
-                continue;
-            }
-            workspaces.push(Workspace {
-                root_path: entry.root_path.clone(),
-                sessions: Self::initial_workspace_sessions(&entry.root_path, false),
-                active: 0,
-                sidebar_folded: entry.folded,
-                pinned: entry.pinned.clone(),
-                folded_groups: entry.folded_groups.clone(),
-                worktree: crate::git::worktree::info(std::path::Path::new(&entry.root_path)),
-            });
+            sidebar_folded: entry.folded,
+            pinned: entry.pinned.clone(),
+            folded_groups: entry.folded_groups.clone(),
+            worktree: crate::git::worktree::info(std::path::Path::new(&entry.root_path)),
+        };
+        let mut workspaces: Vec<Workspace> =
+            settings.workspaces.iter().map(workspace_from_entry).collect();
+        let launched_in_project =
+            cwd.parent().is_some() && dirs::home_dir().is_none_or(|home| home != cwd);
+        if launched_in_project && !workspaces.iter().any(|w| w.root_path == root_path) {
+            workspaces.insert(
+                0,
+                workspace_from_entry(&crate::settings::WorkspaceEntry {
+                    root_path: root_path.clone(),
+                    folded: false,
+                    pinned: Vec::new(),
+                    folded_groups: Vec::new(),
+                }),
+            );
+        }
+        let no_workspace = workspaces.is_empty();
+        if no_workspace {
+            workspaces.push(Self::scratch_workspace());
         }
         let active_workspace = last_active_workspace_root_path
             .as_deref()
             .and_then(|root| workspaces.iter().position(|w| w.root_path == root))
+            .or_else(|| workspaces.iter().position(|w| w.root_path == root_path))
             .unwrap_or(0);
         if let Some(session_file) = last_active_session_file.as_deref()
             && let Some(active) = workspaces[active_workspace]
@@ -181,6 +179,7 @@ impl OxiApp {
             conv: ConversationState {
                 workspaces,
                 active_workspace,
+                no_workspace,
                 input: String::new(),
                 sidebar_search: String::new(),
                 sidebar_notice: None,
@@ -576,6 +575,23 @@ impl OxiApp {
             chars_per_token: None,
             agent_context: None,
             wire_cache: None,
+        }
+    }
+
+    /// Hidden stand-in used while the user has no workspaces (see `ConversationState::no_workspace`).
+    pub(crate) fn scratch_workspace() -> Workspace {
+        let root = dirs::home_dir()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let root_path = root.to_string_lossy().to_string();
+        Workspace {
+            sessions: Self::initial_workspace_sessions(&root_path, false),
+            root_path,
+            active: 0,
+            sidebar_folded: false,
+            pinned: Vec::new(),
+            folded_groups: Vec::new(),
+            worktree: None,
         }
     }
 

@@ -524,8 +524,13 @@ pub struct TranscriptUnitHeight {
 }
 
 pub struct ConversationState {
+    /// Never empty: once the user removes every workspace, a hidden scratch workspace rooted at
+    /// the home directory takes index 0 and `no_workspace` is set.
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
+    /// The only entry in `workspaces` is the hidden scratch one: the sidebar shows an empty
+    /// state and nothing is persisted until the user opens a folder.
+    pub no_workspace: bool,
     pub input: String,
     pub sidebar_search: String,
     /// Cross-view notice shown in the Chats sidebar (for example, a blocked workspace switch).

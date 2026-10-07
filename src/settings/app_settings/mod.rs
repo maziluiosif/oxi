@@ -151,7 +151,7 @@ pub struct AppSettings {
     #[serde(default = "default_auto_title_chats")]
     pub auto_title_chats: bool,
     /// Sidebar workspaces (project folders) and their fold state, restored on startup.
-    /// The cwd workspace is always present at runtime even if missing here.
+    /// Launching from a project folder adds it at runtime even if missing here.
     #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
     /// Last active workspace root path, used to reopen the conversation the user last had open.

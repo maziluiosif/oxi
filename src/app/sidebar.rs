@@ -133,9 +133,25 @@ impl OxiApp {
         let q = self.conv.sidebar_search.trim().to_lowercase();
         let mut sidebar_changed = false;
 
+        if self.conv.no_workspace && self.conv.workspaces.len() == 1 {
+            ui.add_space(12.0);
+            ui.label(
+                egui::RichText::new("No workspaces. Open a folder to start.")
+                    .size(FS_SMALL)
+                    .color(c_text_muted()),
+            );
+            ui.add_space(6.0);
+            if ui.button("Open folder…").clicked() {
+                self.open_workspace_folder();
+            }
+            return;
+        }
         for (wi, parent) in sidebar_workspace_order(&self.conv.workspaces) {
             if sidebar_changed {
                 return;
+            }
+            if self.conv.no_workspace && wi == 0 {
+                continue;
             }
             let parent_folded =
                 parent.is_some_and(|pi| self.conv.workspaces[pi].sidebar_folded) && q.is_empty();
@@ -346,14 +362,11 @@ impl OxiApp {
                     }
                 }
             }
-            // The cwd workspace (index 0) is always present, so it gets no delete option.
-            if wi != 0 {
-                let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
-                if ws_running {
-                    resp.on_disabled_hover_text("A chat in this workspace is still running");
-                } else if resp.clicked() {
-                    self.request_confirm(super::state::ConfirmAction::DeleteWorkspace { wi });
-                }
+            let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
+            if ws_running {
+                resp.on_disabled_hover_text("A chat in this workspace is still running");
+            } else if resp.clicked() {
+                self.request_confirm(super::state::ConfirmAction::DeleteWorkspace { wi });
             }
         });
         ui.add_space(1.0);

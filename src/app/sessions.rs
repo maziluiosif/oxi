@@ -75,6 +75,11 @@ fn delete_session_file_from_disk(path: &Path) -> Result<(), String> {
 
 impl OxiApp {
     pub(crate) fn new_chat(&mut self) {
+        // With no workspace there's nowhere visible to put the chat; ask for a folder instead.
+        if self.conv.no_workspace {
+            self.open_workspace_folder();
+            return;
+        }
         // Replaced by the first prompt once the user sends it.
         let title = "New chat".to_string();
 
@@ -173,16 +178,33 @@ impl OxiApp {
             worktree,
         });
         self.select_workspace(self.conv.workspaces.len() - 1);
+        self.drop_scratch_workspace();
         self.sync_workspaces_to_settings();
+    }
+
+    /// Drops the hidden scratch workspace once a real one exists again. It stays (hidden) when
+    /// it can't go yet, e.g. a scratch chat is still running or the switch was blocked.
+    pub(crate) fn drop_scratch_workspace(&mut self) {
+        if !self.conv.no_workspace || self.conv.active_workspace == 0 {
+            return;
+        }
+        let len = self.conv.workspaces.len();
+        self.conv.no_workspace = false;
+        self.delete_workspace(0);
+        if self.conv.workspaces.len() == len {
+            self.conv.no_workspace = true;
+        }
     }
 
     /// Mirrors the runtime workspace list (paths + fold state) into settings and saves,
     /// so sidebar projects survive a restart.
     pub(crate) fn sync_workspaces_to_settings(&mut self) {
+        let skip = usize::from(self.conv.no_workspace);
         self.conv.settings.workspaces = self
             .conv
             .workspaces
             .iter()
+            .skip(skip)
             .map(|w| crate::settings::WorkspaceEntry {
                 root_path: w.root_path.clone(),
                 folded: w.sidebar_folded,
@@ -540,9 +562,9 @@ impl OxiApp {
 
     /// Removes a workspace from the sidebar. Doesn't touch its files on disk (chats
     /// live under the project's own root, so they'll reappear if it's re-added).
-    /// Index 0 is the cwd workspace and is always kept.
+    /// Removing the last one swaps in the hidden scratch workspace (see `no_workspace`).
     pub(crate) fn delete_workspace(&mut self, wi: usize) {
-        if wi == 0 || wi >= self.conv.workspaces.len() {
+        if (self.conv.no_workspace && wi == 0) || wi >= self.conv.workspaces.len() {
             return;
         }
         let running = (0..self.conv.workspaces[wi].sessions.len()).any(|si| {
@@ -564,6 +586,10 @@ impl OxiApp {
             }
         }
 
+        if self.conv.workspaces.len() == 1 {
+            self.conv.workspaces.push(Self::scratch_workspace());
+            self.conv.no_workspace = true;
+        }
         let removed = self.conv.workspaces.remove(wi);
         self.parked_terminals.remove(&removed.root_path);
 

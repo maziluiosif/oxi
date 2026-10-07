@@ -51,7 +51,10 @@ impl OxiApp {
         let Some(workspace) = self.conv.workspaces.get(wi) else {
             return;
         };
-        if wi == 0 {
+        let launch_dir = std::env::current_dir()
+            .ok()
+            .and_then(|dir| std::fs::canonicalize(dir).ok());
+        if launch_dir.is_some_and(|dir| dir.starts_with(&workspace.root_path)) {
             self.notify_composer("oxi was opened in this work tree; remove it from another window");
             return;
         }
