@@ -222,6 +222,14 @@ impl OxiApp {
                             let pixels_per_point_bits = ui.ctx().pixels_per_point().to_bits();
                             let allow_layout_cache = !has_mutating_text_input(ui);
                             let layout_cache = &mut document.layout_cache;
+                            // TextEdit moves the caret on any button press, so a right-click
+                            // would drop the selection the context menu acts on. Keep it.
+                            let selection_before_secondary_press = ui
+                                .input(|i| i.pointer.secondary_pressed())
+                                .then(|| TextEdit::load_state(ui.ctx(), editor_id))
+                                .flatten()
+                                .and_then(|state| state.cursor.char_range())
+                                .filter(|range| !range.is_empty());
                             let mut layouter =
                                 |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                                     let wrap_width_bits = wrap_width.round().to_bits();
@@ -305,6 +313,13 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
+                            if let Some(range) = selection_before_secondary_press
+                                && output.response.hovered()
+                            {
+                                output.state.cursor.set_char_range(Some(range));
+                                output.state.clone().store(ui.ctx(), output.response.id);
+                                output.cursor_range = Some(range);
+                            }
                             let scratchpad_changed = (output.response.changed() || command_edited)
                                 && document.is_scratchpad;
                             if output.response.changed() {
