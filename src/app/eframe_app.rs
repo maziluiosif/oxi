@@ -7,7 +7,8 @@ use super::OxiApp;
 
 impl eframe::App for OxiApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        if self.conv.settings_open || !ctx.memory(|m| m.has_focus(egui::Id::new("composer_input")))
+        if self.conv.settings_page.open
+            || !ctx.memory(|m| m.has_focus(egui::Id::new("composer_input")))
         {
             return;
         }
@@ -52,6 +53,7 @@ impl eframe::App for OxiApp {
         self.drain_agent(ctx);
         self.drain_models(ctx);
         self.drain_worktree_ops(ctx);
+        self.drain_chores(ctx);
         if let Some(command) = crate::ui::messages::take_terminal_command(ctx) {
             self.open_command_in_terminal(ctx, &command);
         }
@@ -74,7 +76,7 @@ impl eframe::App for OxiApp {
 
         // A focus event runs these checks again when returning to an idle background window.
         if ctx.input(|i| i.focused)
-            && (!self.conv.editor.documents.is_empty() || self.conv.git_rx.is_some())
+            && (!self.conv.editor.documents.is_empty() || self.conv.git_ui.rx.is_some())
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
@@ -118,7 +120,7 @@ impl eframe::App for OxiApp {
 
         // Bottom terminal panel (added before the CentralPanel so it claims the bottom strip and
         // the chat area fills what's left). Hidden while the settings page is open.
-        if self.conv.terminal_open && !self.conv.settings_open {
+        if self.conv.terminal_panel.open && !self.conv.settings_page.open {
             self.render_terminal_panel(ui);
         }
 
@@ -127,7 +129,7 @@ impl eframe::App for OxiApp {
         egui::CentralPanel::default()
             .frame(Frame::new().fill(c_bg_main()))
             .show(ui, |ui| {
-                if self.conv.settings_open {
+                if self.conv.settings_page.open {
                     self.render_settings_page(ui);
                 } else {
                     self.render_main_area(ui);
@@ -143,9 +145,10 @@ impl eframe::App for OxiApp {
         crate::ui::text_attachment::show(
             ui.ctx(),
             self.text_attachment_scope(),
-            &mut self.conv.pending_texts,
+            &mut self.conv.composer.pending_texts,
         );
         self.render_activity_window(ui.ctx());
+        self.route_opened_links(ui.ctx());
     }
 }
 
@@ -158,7 +161,7 @@ impl OxiApp {
 
         let composer_has_focus = ctx.memory(|m| m.has_focus(egui::Id::new("composer_input")));
         let eligible = self.conv.settings.dictation.enabled
-            && !self.conv.settings_open
+            && !self.conv.settings_page.open
             && !self.confirm_prompt_open()
             && !self.conv.voice_ui.transcribing
             && (!self.conv.voice_ui.recording || self.conv.voice_ui.hold_space_active)
@@ -183,7 +186,7 @@ impl OxiApp {
 
         if pressed && self.conv.voice_ui.hold_space_pressed_at.is_none() {
             self.conv.voice_ui.hold_space_pressed_at = Some(std::time::Instant::now());
-            self.conv.voice_ui.hold_space_draft = Some(self.conv.input.clone());
+            self.conv.voice_ui.hold_space_draft = Some(self.conv.composer.input.clone());
         }
         if down
             && !self.conv.voice_ui.hold_space_active
@@ -196,7 +199,7 @@ impl OxiApp {
             // Remove the initial/key-repeat spaces inserted by TextEdit during the threshold
             // frames, preserving whatever draft existed before Space was pressed.
             if let Some(draft) = self.conv.voice_ui.hold_space_draft.as_ref() {
-                self.conv.input.clone_from(draft);
+                self.conv.composer.input.clone_from(draft);
             }
             self.toggle_dictation();
             self.conv.voice_ui.hold_space_active = self.conv.voice_ui.recording;
@@ -204,7 +207,7 @@ impl OxiApp {
         if self.conv.voice_ui.hold_space_active
             && let Some(draft) = self.conv.voice_ui.hold_space_draft.as_ref()
         {
-            self.conv.input.clone_from(draft);
+            self.conv.composer.input.clone_from(draft);
         }
         if !down {
             if self.conv.voice_ui.hold_space_active && self.conv.voice_ui.recording {
@@ -331,17 +334,20 @@ impl OxiApp {
         if toggle_git {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleGitPanel);
         }
-        if open_file && !self.conv.settings_open && !self.conv.editor.file_picker_open {
+        if open_file && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
             self.open_file_picker();
         }
-        if open_scratchpad && !self.conv.settings_open && !self.conv.editor.file_picker_open {
+        if open_scratchpad && !self.conv.settings_page.open && !self.conv.editor.file_picker_open {
             self.open_scratchpad();
         }
-        if save_file && !self.conv.settings_open && self.conv.editor.active_document().is_some() {
+        if save_file
+            && !self.conv.settings_page.open
+            && self.conv.editor.active_document().is_some()
+        {
             self.save_editor_file();
         }
         if (find_file || find_replace)
-            && !self.conv.settings_open
+            && !self.conv.settings_page.open
             && self.conv.editor.active_document().is_some()
         {
             self.conv.editor.open_find(find_replace);
@@ -350,20 +356,20 @@ impl OxiApp {
             });
         }
         if (find_next || find_previous)
-            && !self.conv.settings_open
+            && !self.conv.settings_page.open
             && self.conv.editor.active_document().is_some()
         {
             self.conv.editor.find_step(find_next);
         }
         if goto_definition
-            && !self.conv.settings_open
+            && !self.conv.settings_page.open
             && self.conv.editor.active_document().is_some_and(|document| {
                 crate::code_nav::language_for_path(&document.path).is_some()
             })
         {
             self.conv.editor.goto_definition_requested = true;
         }
-        let editing = !self.conv.settings_open
+        let editing = !self.conv.settings_page.open
             && !self.conv.editor.file_picker_open
             && self
                 .conv
@@ -378,7 +384,10 @@ impl OxiApp {
         } else if goto_line && editing {
             self.open_file_picker_with(":");
         }
-        if goto_project_symbol && !self.conv.settings_open && !self.conv.editor.file_picker_open {
+        if goto_project_symbol
+            && !self.conv.settings_page.open
+            && !self.conv.editor.file_picker_open
+        {
             self.open_project_symbol_picker(ctx);
         }
         if stop && self.any_waiting_response() {
@@ -392,24 +401,24 @@ impl OxiApp {
             self.cancel_file_picker();
         } else if escape && self.conv.editor.find_open {
             self.conv.editor.close_find();
-        } else if escape && self.conv.settings_open {
-            if self.conv.settings_exit_prompt.is_some() {
+        } else if escape && self.conv.settings_page.open {
+            if self.conv.settings_page.exit_prompt.is_some() {
                 // Modal already up: Escape means "Stay".
-                self.conv.settings_exit_prompt = None;
+                self.conv.settings_page.exit_prompt = None;
             } else if self.settings_dirty() {
                 self.request_settings_exit(super::state::SettingsExitAction::BackToChat);
             } else {
                 self.close_settings_page();
             }
         } else if escape
-            && !self.conv.terminal_open
+            && !self.conv.terminal_panel.open
             && !self.confirm_prompt_open()
             && self.conv.editor.active_document().is_some()
         {
             // Escape in the editor collapses any selection to its primary caret while keeping
             // keyboard focus in the editing surface.
             self.conv.editor.clear_editor_selection_next_frame = true;
-        } else if escape && !self.conv.terminal_open && !self.confirm_prompt_open() {
+        } else if escape && !self.conv.terminal_panel.open && !self.confirm_prompt_open() {
             self.focus_active_view_next_frame();
         }
     }

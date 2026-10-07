@@ -7,6 +7,7 @@
 //! next save and Git refresh. The base is `HEAD`, or the merge base while the Compare tab shows.
 
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui::{self, Align, FontId, Layout, Margin, RichText, Stroke, Ui};
 
@@ -89,6 +90,15 @@ fn hunk_line(hunk: &TextHunk) -> usize {
     hunk.new_start.saturating_sub(1)
 }
 
+/// A marker click waiting for its Git base, read off the UI thread: resolving a merge base or
+/// opening a large repository can take longer than a frame.
+pub(crate) struct PendingQuickDiff {
+    path: PathBuf,
+    line: usize,
+    compare_base: Option<String>,
+    rx: Receiver<Result<String, String>>,
+}
+
 enum PeekAction {
     Revert(usize),
     Go(usize),
@@ -98,11 +108,13 @@ enum PeekAction {
 impl OxiApp {
     /// The Compare tab's base while it drives the gutter, like `git_gutter_line_changes`.
     fn quick_diff_compare_base(&self) -> Option<String> {
-        if !self.conv.git_open || self.conv.git_tab != crate::app::git_panel::GitTab::Compare {
+        if !self.conv.git_ui.open || self.conv.git_ui.tab != crate::app::git_panel::GitTab::Compare
+        {
             return None;
         }
         self.conv
-            .git_compare
+            .git_ui
+            .compare
             .data
             .as_ref()
             .filter(|data| data.error.is_none())
@@ -111,6 +123,7 @@ impl OxiApp {
 
     /// Live gutter markers for document `index`, while a quick diff is active for it.
     pub(crate) fn quick_diff_markers(&mut self, index: usize) -> Option<Vec<GitLineChange>> {
+        self.poll_quick_diff();
         let compare_base = self.quick_diff_compare_base();
         let head = self.conv.git.log.first().map(|commit| commit.hash.clone());
         let document = self.conv.editor.documents.get(index)?;
@@ -128,27 +141,91 @@ impl OxiApp {
         Some(quick.markers.clone())
     }
 
-    /// Read the base and open the peek for the change on `line`, if there is one.
-    pub(crate) fn open_quick_diff(&mut self, index: usize, line: usize) {
-        let Some(document) = self.conv.editor.documents.get(index) else {
-            return;
-        };
+    /// Where document `index` sits in the repository, for [`crate::git::base_text`].
+    fn quick_diff_source(&self, index: usize) -> Option<(PathBuf, String)> {
+        let document = self.conv.editor.documents.get(index)?;
         let root = PathBuf::from(&self.active_workspace().root_path);
-        let Ok(relative) = document.path.strip_prefix(&root) else {
+        let relative = document.path.strip_prefix(&root).ok()?;
+        Some((
+            document.path.clone(),
+            relative.to_string_lossy().replace('\\', "/"),
+        ))
+    }
+
+    /// Read the base in the background, then open the peek for the change on `line`.
+    fn request_quick_diff(&mut self, ctx: &egui::Context, index: usize, line: usize) {
+        let Some((path, relative)) = self.quick_diff_source(index) else {
             return;
         };
-        let relative = relative.to_string_lossy().replace('\\', "/");
         let compare_base = self.quick_diff_compare_base();
-        let base = match crate::git::base_text(
+        let root = self.active_workspace().root_path.clone();
+        let base = compare_base.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::git::base_text(&root, &relative, base.as_deref()));
+            ctx.request_repaint();
+        });
+        self.conv.editor.quick_diff_pending = Some(PendingQuickDiff {
+            path,
+            line,
+            compare_base,
+            rx,
+        });
+    }
+
+    /// Open the peek of a finished [`Self::request_quick_diff`].
+    fn poll_quick_diff(&mut self) {
+        let Some(pending) = self.conv.editor.quick_diff_pending.as_ref() else {
+            return;
+        };
+        let result = match pending.rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("the Git reader stopped".to_string()),
+        };
+        let Some(pending) = self.conv.editor.quick_diff_pending.take() else {
+            return;
+        };
+        match result {
+            Ok(base) => {
+                self.install_quick_diff(&pending.path, pending.line, pending.compare_base, base);
+            }
+            Err(error) => {
+                self.conv.editor.error = Some(format!("Cannot compare with Git: {error}"));
+            }
+        }
+    }
+
+    /// Read the base on the calling thread and open the peek for the change on `line`.
+    #[cfg(test)]
+    pub(crate) fn open_quick_diff(&mut self, index: usize, line: usize) {
+        let Some((path, relative)) = self.quick_diff_source(index) else {
+            return;
+        };
+        let compare_base = self.quick_diff_compare_base();
+        match crate::git::base_text(
             &self.active_workspace().root_path,
             &relative,
             compare_base.as_deref(),
         ) {
-            Ok(base) => base,
+            Ok(base) => self.install_quick_diff(&path, line, compare_base, base),
             Err(error) => {
                 self.conv.editor.error = Some(format!("Cannot compare with Git: {error}"));
-                return;
             }
+        }
+    }
+
+    fn install_quick_diff(
+        &mut self,
+        path: &std::path::Path,
+        line: usize,
+        compare_base: Option<String>,
+        base: String,
+    ) {
+        // The tab may have been closed while the base was read.
+        let Some(document) = self.conv.editor.documents.iter().find(|d| d.path == path) else {
+            return;
         };
         let mut quick = QuickDiff {
             path: document.path.clone(),
@@ -218,7 +295,7 @@ impl OxiApp {
                         quick.close_peek();
                     }
                 } else {
-                    self.open_quick_diff(index, line);
+                    self.request_quick_diff(&ui.ctx().clone(), index, line);
                 }
             }
         }

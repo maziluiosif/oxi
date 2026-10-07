@@ -129,13 +129,20 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    /// A throwaway workspace whose chats are stored inside it (via `.pi/settings.json`), so
+    /// tests never write into the real `~/.config/oxi/sessions`.
     fn temp_root(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_else(|_| Duration::from_secs(0))
             .as_nanos();
         let path = std::env::temp_dir().join(format!("oxi-{name}-{nanos}"));
-        fs::create_dir_all(&path).unwrap();
+        fs::create_dir_all(path.join(".pi")).unwrap();
+        fs::write(
+            path.join(".pi/settings.json"),
+            r#"{"sessionDir": "sessions"}"#,
+        )
+        .unwrap();
         path
     }
 

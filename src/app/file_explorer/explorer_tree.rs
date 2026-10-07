@@ -135,16 +135,17 @@ impl OxiApp {
     pub(crate) fn render_file_explorer(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
         let root = PathBuf::from(&self.active_workspace().root_path);
-        let ignored = self.conv.explorer_cache.gitignore(&root);
-        let cache = &mut self.conv.explorer_cache;
+        let ignored = self.conv.explorer.cache.gitignore(&root);
+        let cache = &mut self.conv.explorer.cache;
         cache.deepest_previous = std::mem::take(&mut cache.deepest);
         // Explorer decorations share the existing async Git worker with the source-control panel.
-        let git_was_uninitialized = self.conv.git_rx.is_none();
+        let git_was_uninitialized = self.conv.git_ui.rx.is_none();
         self.ensure_git_channels();
         if git_was_uninitialized {
             let _ = self
                 .conv
-                .git_tx
+                .git_ui
+                .tx
                 .as_ref()
                 .map(|tx| tx.send(crate::git::GitOp::Refresh));
         }
@@ -172,10 +173,11 @@ impl OxiApp {
                     .clicked()
                 {
                     self.check_external_file_changes();
-                    self.conv.explorer_cache.invalidate();
+                    self.conv.explorer.cache.invalidate();
                     let _ = self
                         .conv
-                        .git_tx
+                        .git_ui
+                        .tx
                         .as_ref()
                         .map(|tx| tx.send(crate::git::GitOp::Refresh));
                     ui.ctx().request_repaint();
@@ -220,7 +222,7 @@ impl OxiApp {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or_else(|| root.to_str().unwrap_or("workspace"));
-                let root_expanded = !self.conv.explorer_collapsed_roots.contains(&root);
+                let root_expanded = !self.conv.explorer.collapsed_roots.contains(&root);
                 let (root_rect, root_response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 22.0),
                     egui::Sense::click(),
@@ -264,9 +266,9 @@ impl OxiApp {
                 let root_response = root_response.on_hover_text(root.display().to_string());
                 if root_response.clicked() {
                     if root_expanded {
-                        self.conv.explorer_collapsed_roots.insert(root.clone());
+                        self.conv.explorer.collapsed_roots.insert(root.clone());
                     } else {
-                        self.conv.explorer_collapsed_roots.remove(&root);
+                        self.conv.explorer.collapsed_roots.remove(&root);
                     }
                 }
                 root_response.context_menu(|ui| self.render_root_context_menu(ui, &root));
@@ -284,11 +286,11 @@ impl OxiApp {
                         .show(ui, |ui| {
                             let step = explorer_indent_step(
                                 ui.available_width(),
-                                self.conv.explorer_cache.deepest_previous,
+                                self.conv.explorer.cache.deepest_previous,
                             );
                             self.render_explorer_directory(ui, &root, &root, &ignored, 1, step)
                         });
-                    if self.conv.explorer_cache.deepest != self.conv.explorer_cache.deepest_previous
+                    if self.conv.explorer.cache.deepest != self.conv.explorer.cache.deepest_previous
                     {
                         // Expanding/collapsing changed the deepest level: re-indent next frame.
                         ui.ctx().request_repaint();
@@ -332,7 +334,7 @@ impl OxiApp {
         depth: usize,
         indent_step: f32,
     ) {
-        let entries = match self.conv.explorer_cache.listing(root, directory, ignored) {
+        let entries = match self.conv.explorer.cache.listing(root, directory, ignored) {
             Ok(entries) => entries,
             Err(error) => {
                 ui.label(RichText::new(format!("Cannot read folder: {error}")).size(FS_TINY));
@@ -345,9 +347,9 @@ impl OxiApp {
             let name = &entry.name;
             let git_ignored = entry.git_ignored;
             let indent = depth as f32 * indent_step;
-            self.conv.explorer_cache.deepest = self.conv.explorer_cache.deepest.max(depth);
+            self.conv.explorer.cache.deepest = self.conv.explorer.cache.deepest.max(depth);
             if entry.is_dir {
-                let expanded = self.conv.explorer_expanded.contains(&path);
+                let expanded = self.conv.explorer.expanded.contains(&path);
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), 22.0),
                     egui::Sense::click(),
@@ -376,9 +378,9 @@ impl OxiApp {
                 }
                 if response.clicked() {
                     if expanded {
-                        self.conv.explorer_expanded.remove(&path);
+                        self.conv.explorer.expanded.remove(&path);
                     } else {
-                        self.conv.explorer_expanded.insert(path.clone());
+                        self.conv.explorer.expanded.insert(path.clone());
                     }
                 }
                 response.context_menu(|ui| self.render_path_context_menu(ui, &path, true));
@@ -524,7 +526,7 @@ impl OxiApp {
                 ui.close();
             }
             if ui.button("Open Folder...").clicked() {
-                reveal_path_in_file_manager(path);
+                crate::os_open::open_path(path);
                 ui.close();
             }
             if ui.button("Copy Path").clicked() {
@@ -554,8 +556,8 @@ impl OxiApp {
                 self.start_file_operation(FileOperation::Delete(path.to_path_buf()));
                 ui.close();
             }
-            if ui.button(reveal_label()).clicked() {
-                reveal_path_in_file_manager(path);
+            if ui.button(crate::os_open::reveal_label()).clicked() {
+                crate::os_open::reveal_path(path);
                 ui.close();
             }
             if ui.button("Copy Path").clicked() {
@@ -572,38 +574,6 @@ fn explorer_entry_color(color: egui::Color32, git_ignored: bool) -> egui::Color3
     } else {
         color
     }
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn reveal_label() -> &'static str {
-    "Reveal in Finder"
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(super) fn reveal_label() -> &'static str {
-    "Reveal in File Manager"
-}
-
-pub(super) fn reveal_path_in_file_manager(path: &Path) {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = std::process::Command::new("open");
-        command.arg("-R").arg(path);
-        command
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = std::process::Command::new("explorer");
-        command.arg(format!("/select,{}", path.display()));
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = std::process::Command::new("xdg-open");
-        command.arg(path.parent().unwrap_or(path));
-        command
-    };
-    let _ = command.spawn();
 }
 
 fn paint_explorer_row(ui: &Ui, rect: egui::Rect, hovered: bool, selected: bool) {

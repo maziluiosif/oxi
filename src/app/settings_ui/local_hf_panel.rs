@@ -39,6 +39,7 @@ impl OxiApp {
             }
             let connected = self
                 .conv
+                .settings_page
                 .ssh_test
                 .get(&kind)
                 .is_some_and(|s| matches!(s.result, Some(Ok(_))));

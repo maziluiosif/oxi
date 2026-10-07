@@ -24,10 +24,7 @@ pub struct OAuthStore {
 
 /// Legacy location from before OAuth tokens moved into the OS keychain.
 fn legacy_oauth_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
-        .join("oauth.json")
+    crate::app_dirs::config_dir().join("oauth.json")
 }
 
 pub fn load_oauth_store() -> OAuthStore {

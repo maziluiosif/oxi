@@ -65,9 +65,10 @@ impl OxiApp {
             self.acp.close(&acp_key);
         }
         self.delete_workspace(wi);
-        if let Err(e) = crate::git::worktree::remove(&root) {
-            self.notify_composer(format!("Could not remove the work tree: {e}"));
-        }
+        // Deleting the folder can take seconds (build output, node_modules).
+        self.spawn_chore("Could not remove the work tree", move || {
+            crate::git::worktree::remove(&root)
+        });
     }
 
     fn spawn_worktree_op(&mut self, op: impl FnOnce() -> WorktreeResult + Send + 'static) {
@@ -101,7 +102,7 @@ impl OxiApp {
                 }
                 WorktreeResult::Merged(Ok(summary)) => {
                     self.request(crate::git::GitOp::Refresh);
-                    self.conv.explorer_cache.invalidate();
+                    self.conv.explorer.cache.invalidate();
                     self.notify_composer(summary);
                 }
                 WorktreeResult::Merged(Err(e)) => {

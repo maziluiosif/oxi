@@ -67,23 +67,23 @@ jobs:
             libgl1-mesa-dev
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --profile dist --target ${{ matrix.target }}
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
-          bash scripts/bundle-macos.sh "target/${{ matrix.target }}/release/oxi" dist
+          bash scripts/bundle-macos.sh "target/${{ matrix.target }}/dist/oxi" dist
           tar -czf "${{ matrix.name }}.tar.gz" -C dist oxi.app
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf "${{ matrix.name }}.tar.gz" -C "target/${{ matrix.target }}/release" oxi
+        run: tar -czf "${{ matrix.name }}.tar.gz" -C "target/${{ matrix.target }}/dist" oxi
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/oxi.exe" -DestinationPath "${{ matrix.name }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/dist/oxi.exe" -DestinationPath "${{ matrix.name }}.zip"
 
       - name: Upload build
         uses: actions/upload-artifact@v7

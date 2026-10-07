@@ -28,7 +28,7 @@ impl OxiApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                     for &provider in *providers {
-                        let selected = provider == self.conv.settings_provider_tab;
+                        let selected = provider == self.conv.settings_page.provider_tab;
                         let state = chip_state(provider, &configured);
                         let response = provider_chip(
                             ui,
@@ -38,7 +38,7 @@ impl OxiApp {
                             state,
                         );
                         if response.clicked() {
-                            self.conv.settings_provider_tab = provider;
+                            self.conv.settings_page.provider_tab = provider;
                         }
                     }
                 });
@@ -46,7 +46,7 @@ impl OxiApp {
             }
         }
 
-        let provider = self.conv.settings_provider_tab;
+        let provider = self.conv.settings_page.provider_tab;
         ui.add_space(4.0);
         card_frame().show(ui, |ui| {
             // Action first (right-aligned), so the description wraps in whatever is left
@@ -138,7 +138,7 @@ impl OxiApp {
         configured: &[LlmProviderKind],
     ) {
         settings_caption(ui, "Provider");
-        let current = self.conv.settings_provider_tab;
+        let current = self.conv.settings_page.provider_tab;
         egui::ComboBox::from_id_salt("settings_provider_dropdown")
             .selected_text(dropdown_label(current, active, configured))
             .width(ui.available_width().min(360.0))
@@ -155,7 +155,7 @@ impl OxiApp {
                     );
                     for &provider in *providers {
                         ui.selectable_value(
-                            &mut self.conv.settings_provider_tab,
+                            &mut self.conv.settings_page.provider_tab,
                             provider,
                             dropdown_label(provider, active, configured),
                         );

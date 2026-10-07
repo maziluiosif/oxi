@@ -2,15 +2,19 @@
 
 mod agent;
 mod app;
+mod app_dirs;
 mod code_nav;
 mod compute;
+mod fsutil;
 mod git;
 mod hydrate;
 mod local_models;
 mod local_models_remote;
+mod logging;
 mod markdown;
 mod model;
 mod oauth;
+mod os_open;
 mod router;
 mod runtime;
 mod scratchpad;
@@ -27,35 +31,6 @@ mod voice_models;
 
 use app::OxiApp;
 use eframe::egui::IconData;
-
-/// Record panics to `<config_dir>/oxi/crash.log` before the default hook prints to stderr,
-/// so a crash in a background thread (agent/network) leaves a trace the user can find and
-/// report even if they never saw the terminal.
-fn install_panic_hook() {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let log_path = dirs::config_dir().map(|d| d.join("oxi").join("crash.log"));
-        if let Some(path) = log_path {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let entry = format!("[{timestamp}] {info}\n");
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-            {
-                use std::io::Write;
-                let _ = f.write_all(entry.as_bytes());
-            }
-        }
-        default_hook(info);
-    }));
-}
 
 fn app_icon() -> IconData {
     let image = image::load_from_memory(include_bytes!("../assets/app-icon.png"))
@@ -78,7 +53,7 @@ fn main() -> eframe::Result<()> {
         }
         _ => {}
     }
-    install_panic_hook();
+    logging::init();
     // Warm slow first-use work on background threads while the window is created.
     secrets::prefetch_unified();
     theme::prewarm_editor_highlighting();

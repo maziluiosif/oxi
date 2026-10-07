@@ -421,7 +421,10 @@ fn process_sse_line(
     let v: Value = match serde_json::from_str(data) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("[oxi] skipping malformed SSE line ({e}): {data}");
+            log::warn!(
+                "skipping malformed SSE line ({e}): {}",
+                crate::logging::excerpt(data)
+            );
             return;
         }
     };

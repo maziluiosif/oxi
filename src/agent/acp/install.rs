@@ -100,10 +100,7 @@ impl Adapter {
 }
 
 fn base_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
-        .join("acp")
+    crate::app_dirs::data_dir().join("acp")
 }
 
 /// The managed adapter a launch command refers to: `npx [-y|--yes] <package>[@tag]` with nothing
@@ -138,7 +135,7 @@ pub(super) async fn resolve_command(command_line: &str) -> String {
     if adapter.installed_bin().is_none()
         && let Err(e) = install_latest(adapter).await
     {
-        eprintln!("[acp] could not install {}: {e}", adapter.package);
+        log::warn!("could not install ACP adapter {}: {e}", adapter.package);
     }
     match adapter.installed_bin() {
         Some(bin) => shell_quote(&bin),
@@ -156,7 +153,10 @@ pub(super) async fn update_installed() {
         let lock = adapter.lock();
         let _guard = lock.lock().await;
         if let Err(e) = update(adapter).await {
-            eprintln!("[acp] background update of {} failed: {e}", adapter.package);
+            log::warn!(
+                "background update of ACP adapter {} failed: {e}",
+                adapter.package
+            );
         }
         prune(adapter);
     }
@@ -365,9 +365,7 @@ fn shell_quote(path: &Path) -> String {
 }
 
 fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
-    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    std::fs::write(&tmp, contents).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    crate::fsutil::write_atomic(path, contents.as_bytes())
 }
 
 fn touch(path: &Path) -> Result<(), String> {

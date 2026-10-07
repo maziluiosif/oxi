@@ -305,7 +305,7 @@ pub(super) async fn drain_stderr(
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         if !line.trim().is_empty() {
-            eprintln!("[acp] {line}");
+            log::info!(target: "oxi::acp::stderr", "{line}");
             activity_log::log(ActivityKind::Acp, "stderr", &line);
             let mut tail = tail.lock().unwrap_or_else(|e| e.into_inner());
             if tail.len() == STDERR_TAIL_LINES {

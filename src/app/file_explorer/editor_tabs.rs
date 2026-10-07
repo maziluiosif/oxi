@@ -22,11 +22,11 @@ impl OxiApp {
         let mut new_file = false;
         let mut navigate_back = false;
         let mut navigate_forward = false;
-        let git_diff_tab = self.conv.diff_view_open && self.conv.git.diff.is_some();
+        let git_diff_tab = self.conv.diff_view.open && self.conv.git.diff.is_some();
         let git_diff_active = git_diff_tab && self.conv.editor.diff_tab_active;
         let can_go_back = !self.conv.editor.navigation_back.is_empty();
         let can_go_forward = !self.conv.editor.navigation_forward.is_empty();
-        let sidebar_open = self.conv.sidebar_open;
+        let sidebar_open = self.conv.sidebar.open;
         let workspace_root = PathBuf::from(&self.active_workspace().root_path);
         let tab_strip_width = (ui.available_width()
             - 126.0

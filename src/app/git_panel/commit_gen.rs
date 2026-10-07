@@ -13,8 +13,8 @@ impl OxiApp {
     pub(crate) fn toggle_git_panel_tab(&mut self, tab: Option<super::GitTab>) {
         self.close_settings_page();
 
-        if self.conv.git_open && tab.is_none_or(|tab| self.conv.git_tab == tab) {
-            self.conv.git_open = false;
+        if self.conv.git_ui.open && tab.is_none_or(|tab| self.conv.git_ui.tab == tab) {
+            self.conv.git_ui.open = false;
             self.conv.settings.git_open = false;
             self.focus_active_view_next_frame();
             if let Err(e) = self.conv.settings.save() {
@@ -25,10 +25,10 @@ impl OxiApp {
         }
 
         if let Some(tab) = tab {
-            self.conv.git_tab = tab;
+            self.conv.git_ui.tab = tab;
         }
-        if !self.conv.git_open {
-            self.conv.git_open = true;
+        if !self.conv.git_ui.open {
+            self.conv.git_ui.open = true;
             self.conv.settings.git_open = true;
             if let Err(e) = self.conv.settings.save() {
                 self.run_state_mut(self.active_session_key()).stream_error =
@@ -36,7 +36,7 @@ impl OxiApp {
             }
         }
         self.ensure_git_channels();
-        let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+        let _ = self.conv.git_ui.tx.as_ref().map(|t| t.send(GitOp::Refresh));
         self.focus_active_view_next_frame();
     }
 
@@ -47,15 +47,16 @@ impl OxiApp {
     /// Tell the git worker the active workspace changed, so it re-roots and
     /// refreshes. Called from `select_workspace` / new-workspace flows.
     pub(crate) fn refresh_git_cwd(&mut self) {
-        self.conv.git_last_auto_refresh = None;
-        self.conv.git_compare = Default::default();
-        if self.conv.git_rx.is_none() {
+        self.conv.git_ui.last_auto_refresh = None;
+        self.conv.git_ui.compare = Default::default();
+        if self.conv.git_ui.rx.is_none() {
             return;
         }
         let cwd = self.active_workspace().root_path.clone();
         let _ = self
             .conv
-            .git_tx
+            .git_ui
+            .tx
             .as_ref()
             .map(|t| t.send(GitOp::SetCwd(cwd)));
     }
@@ -63,11 +64,11 @@ impl OxiApp {
     /// Make sure the git worker thread exists and is rooted at the active workspace.
     /// `ensure_git_channels` lazily creates it using the real egui context.
     pub(crate) fn ensure_git_channels(&mut self) {
-        if self.conv.git_rx.is_none() {
+        if self.conv.git_ui.rx.is_none() {
             let cwd = self.active_workspace().root_path.clone();
             let chan = crate::git::GitChannels::new(cwd, self.conv.git_ctx.clone());
-            self.conv.git_tx = Some(chan.tx);
-            self.conv.git_rx = Some(chan.rx);
+            self.conv.git_ui.tx = Some(chan.tx);
+            self.conv.git_ui.rx = Some(chan.rx);
             // Optimistic busy marker so the panel doesn't flash "not a repo" before
             // the first snapshot arrives.
             self.conv.git.busy = true;
@@ -77,28 +78,29 @@ impl OxiApp {
 
     pub(crate) fn poll_git_changes(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.focused)
-            || self.conv.git_rx.is_none()
+            || self.conv.git_ui.rx.is_none()
             || self.conv.git.busy
-            || self.conv.git_auto_refresh_pending
-            || self.conv.commit_gen_pending
+            || self.conv.git_ui.auto_refresh_pending
+            || self.conv.git_ui.commit_gen_pending
             || self
                 .conv
-                .git_last_auto_refresh
+                .git_ui
+                .last_auto_refresh
                 .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2))
         {
             return;
         }
-        if let Some(tx) = &self.conv.git_tx
+        if let Some(tx) = &self.conv.git_ui.tx
             && tx.send(GitOp::AutoRefresh).is_ok()
         {
-            self.conv.git_auto_refresh_pending = true;
-            self.conv.git_last_auto_refresh = Some(std::time::Instant::now());
+            self.conv.git_ui.auto_refresh_pending = true;
+            self.conv.git_ui.last_auto_refresh = Some(std::time::Instant::now());
         }
     }
 
     pub(crate) fn drain_git(&mut self, ctx: &egui::Context) {
         self.drain_git_compare();
-        let Some(rx) = self.conv.git_rx.as_ref() else {
+        let Some(rx) = self.conv.git_ui.rx.as_ref() else {
             return;
         };
         let mut latest: Option<GitState> = None;
@@ -108,7 +110,7 @@ impl OxiApp {
         let mut saw_final_snapshot = false;
         while let Ok(mut state) = rx.try_recv() {
             if state.last_op.as_deref() == Some("auto refresh") {
-                self.conv.git_auto_refresh_pending = false;
+                self.conv.git_ui.auto_refresh_pending = false;
                 if state.error.is_none() {
                     state.error = latest.as_ref().unwrap_or(&self.conv.git).error.clone();
                 }
@@ -172,15 +174,15 @@ impl OxiApp {
             ctx.request_repaint();
         }
         if let Some(diff) = collected_diff
-            && self.conv.commit_gen_pending
+            && self.conv.git_ui.commit_gen_pending
         {
             self.start_commit_gen(&diff);
             ctx.request_repaint();
-        } else if self.conv.commit_gen_pending && saw_final_snapshot && !self.conv.git.busy {
+        } else if self.conv.git_ui.commit_gen_pending && saw_final_snapshot && !self.conv.git.busy {
             // The diff collection finished without producing a diff (empty tree or a git
             // error): stop the "Generating…" state instead of leaving it stuck.
-            self.conv.commit_gen_pending = false;
-            self.conv.commit_gen_error = Some(
+            self.conv.git_ui.commit_gen_pending = false;
+            self.conv.git_ui.commit_gen_error = Some(
                 self.conv
                     .git
                     .error
@@ -193,7 +195,7 @@ impl OxiApp {
 
     /// Kick off the LLM completion for the commit message once the diff is in hand.
     fn start_commit_gen(&mut self, diff: &str) {
-        self.conv.commit_gen_pending = false;
+        self.conv.git_ui.commit_gen_pending = false;
         let config = crate::router::helper_config(
             &self.conv.settings,
             self.conv.settings.commit_msg_config(),
@@ -211,28 +213,29 @@ impl OxiApp {
         });
         // Stash whatever the user already typed: the stream writes into the field,
         // and a failed generation must not cost them their own draft.
-        self.conv.commit_gen_stash = Some(std::mem::take(&mut self.conv.git_commit_message));
-        self.conv.commit_gen_error = None;
-        self.conv.commit_gen_rx = Some(rx);
+        self.conv.git_ui.commit_gen_stash =
+            Some(std::mem::take(&mut self.conv.git_ui.commit_message));
+        self.conv.git_ui.commit_gen_error = None;
+        self.conv.git_ui.commit_gen_rx = Some(rx);
     }
 
     /// Put the user's pre-generation draft back after a failed/aborted generation.
     fn restore_commit_gen_stash(&mut self) {
-        if let Some(prev) = self.conv.commit_gen_stash.take() {
-            self.conv.git_commit_message = prev;
+        if let Some(prev) = self.conv.git_ui.commit_gen_stash.take() {
+            self.conv.git_ui.commit_message = prev;
         }
     }
 
     /// Drain streamed commit-message deltas into the composer. Called each frame.
     pub(crate) fn drain_commit_gen(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.conv.commit_gen_rx.as_ref() else {
+        let Some(rx) = self.conv.git_ui.commit_gen_rx.as_ref() else {
             return;
         };
         let mut done = false;
         loop {
             match rx.try_recv() {
                 Ok(crate::agent::CompleteEvent::Delta(d)) => {
-                    self.conv.git_commit_message.push_str(&d);
+                    self.conv.git_ui.commit_message.push_str(&d);
                     ctx.request_repaint();
                 }
                 Ok(crate::agent::CompleteEvent::Done(result)) => {
@@ -240,14 +243,14 @@ impl OxiApp {
                         Ok(text) => {
                             let trimmed = text.trim();
                             if !trimmed.is_empty() {
-                                self.conv.git_commit_message = trimmed.to_string();
-                                self.conv.commit_gen_stash = None;
+                                self.conv.git_ui.commit_message = trimmed.to_string();
+                                self.conv.git_ui.commit_gen_stash = None;
                             } else {
                                 self.restore_commit_gen_stash();
                             }
                         }
                         Err(e) => {
-                            self.conv.commit_gen_error = Some(e);
+                            self.conv.git_ui.commit_gen_error = Some(e);
                             self.restore_commit_gen_stash();
                         }
                     }
@@ -259,7 +262,7 @@ impl OxiApp {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     // Worker died without a terminal event: tell the user instead of
                     // silently leaving a half-written (or empty) message behind.
-                    self.conv.commit_gen_error =
+                    self.conv.git_ui.commit_gen_error =
                         Some("Generation stopped unexpectedly.".to_string());
                     self.restore_commit_gen_stash();
                     done = true;
@@ -268,13 +271,13 @@ impl OxiApp {
             }
         }
         if done {
-            self.conv.commit_gen_rx = None;
+            self.conv.git_ui.commit_gen_rx = None;
         }
     }
 
     /// True while a commit message is being collected or generated.
     pub(super) fn commit_gen_active(&self) -> bool {
-        self.conv.commit_gen_pending || self.conv.commit_gen_rx.is_some()
+        self.conv.git_ui.commit_gen_pending || self.conv.git_ui.commit_gen_rx.is_some()
     }
 
     /// Send an op to the git worker; surfaces a visible error instead of silently
@@ -282,7 +285,8 @@ impl OxiApp {
     pub(crate) fn request(&mut self, op: GitOp) {
         let sent = self
             .conv
-            .git_tx
+            .git_ui
+            .tx
             .as_ref()
             .is_some_and(|t| t.send(op).is_ok());
         if !sent {

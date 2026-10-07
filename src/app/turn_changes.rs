@@ -41,6 +41,7 @@ impl OxiApp {
         let key = cache_key(changes);
         let entry = self
             .conv
+            .transcript
             .turn_changes
             .entries
             .entry(key.clone())
@@ -150,7 +151,7 @@ impl OxiApp {
 
         match action {
             Some(CardAction::Toggle) => {
-                if let Some(entry) = self.conv.turn_changes.entries.get_mut(&key) {
+                if let Some(entry) = self.conv.transcript.turn_changes.entries.get_mut(&key) {
                     entry.expanded = !entry.expanded;
                 }
             }
@@ -164,7 +165,7 @@ impl OxiApp {
                     path,
                     old_path: None,
                 });
-                self.conv.diff_view_open = true;
+                self.conv.diff_view.open = true;
                 self.conv.editor.diff_tab_active = true;
             }
             Some(CardAction::RevertFile(path)) => {
@@ -184,10 +185,10 @@ impl OxiApp {
         );
         match result {
             Ok(()) => {
-                if let Some(entry) = self.conv.turn_changes.entries.get_mut(key) {
+                if let Some(entry) = self.conv.transcript.turn_changes.entries.get_mut(key) {
                     entry.reverted.insert(only.unwrap_or_else(|| "*".into()));
                 }
-                self.conv.explorer_cache.invalidate();
+                self.conv.explorer.cache.invalidate();
                 self.request(GitOp::Refresh);
                 self.notify_composer("Changes reverted.");
             }

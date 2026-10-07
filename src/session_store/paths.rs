@@ -71,10 +71,7 @@ pub fn agent_dir() -> PathBuf {
         }
     }
 
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".config").join("oxi")
+    crate::app_dirs::home_config_dir()
 }
 
 fn read_session_dir_setting(path: &Path) -> Option<String> {
@@ -99,14 +96,12 @@ fn resolve_session_dir(root_path: &Path, raw: &str) -> PathBuf {
 
 fn expand_tilde(raw: &str) -> PathBuf {
     if raw == "~" {
-        return std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(raw));
+        return crate::app_dirs::home_dir().unwrap_or_else(|| PathBuf::from(raw));
     }
     if let Some(rest) = raw.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
+        && let Some(home) = crate::app_dirs::home_dir()
     {
-        return PathBuf::from(home).join(rest);
+        return home.join(rest);
     }
     PathBuf::from(raw)
 }

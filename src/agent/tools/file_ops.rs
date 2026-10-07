@@ -3,7 +3,7 @@
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -71,7 +71,7 @@ pub(crate) fn cleanup_stale_spill_files() {
 fn spill_full_output(s: &str) -> Option<String> {
     let dir = std::env::temp_dir().join("oxi-tool-output");
     fs::create_dir_all(&dir).ok()?;
-    let path = unique_temp_path(&dir, "tool-output", "txt");
+    let path = crate::fsutil::unique_temp_path(&dir, "tool-output", "txt");
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -83,119 +83,6 @@ fn spill_full_output(s: &str) -> Option<String> {
     file.write_all(s.as_bytes()).ok()?;
     file.sync_all().ok()?;
     Some(path.to_string_lossy().into_owned())
-}
-
-fn unique_temp_path(dir: &Path, prefix: &str, extension: &str) -> PathBuf {
-    use rand::RngExt;
-    let random: u64 = rand::rng().random();
-    dir.join(format!(
-        "{prefix}-{}-{random:016x}.{extension}",
-        std::process::id()
-    ))
-}
-
-/// Replace a file without exposing a partially-written destination. The temporary file lives in
-/// the destination directory, so the final rename is atomic on supported local filesystems.
-fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| err("destination has no parent directory"))?;
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let tmp = unique_temp_path(parent, ".oxi-write", "tmp");
-    let existing_permissions = fs::metadata(path).ok().map(|m| m.permissions());
-    let result = (|| -> Result<(), String> {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
-        file.write_all(content).map_err(|e| e.to_string())?;
-        file.flush().map_err(|e| e.to_string())?;
-        file.sync_all().map_err(|e| e.to_string())?;
-        if let Some(permissions) = existing_permissions {
-            fs::set_permissions(&tmp, permissions).map_err(|e| e.to_string())?;
-        }
-        // Close the temporary file before renaming it. This is especially important on Windows,
-        // where an open handle can make rename semantics more restrictive.
-        drop(file);
-        #[cfg(windows)]
-        if path.exists() {
-            // Windows rename does not replace an existing destination. Move the original aside
-            // and roll back if installing the synced replacement fails, so an error never leaves
-            // the destination missing. Sharing violations from editors/AV are often very brief.
-            let backup = unique_temp_path(parent, ".oxi-backup", "tmp");
-            retry_windows_io("move original to backup", path, || {
-                fs::rename(path, &backup)
-            })?;
-            if let Err(install_error) =
-                retry_windows_io("install replacement", path, || fs::rename(&tmp, path))
-            {
-                if let Err(rollback_error) =
-                    retry_windows_io("restore original", path, || fs::rename(&backup, path))
-                {
-                    return Err(format!(
-                        "{install_error}; rollback also failed: {rollback_error}; original remains at {}",
-                        backup.display()
-                    ));
-                }
-                return Err(install_error);
-            }
-            let _ = retry_windows_io("remove replacement backup", &backup, || {
-                fs::remove_file(&backup)
-            });
-        } else {
-            retry_windows_io("install new file", path, || fs::rename(&tmp, path))?;
-        }
-        #[cfg(not(windows))]
-        fs::rename(&tmp, path).map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
-}
-
-#[cfg(windows)]
-fn retry_windows_io<T>(
-    operation: &str,
-    path: &Path,
-    mut action: impl FnMut() -> std::io::Result<T>,
-) -> Result<T, String> {
-    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, and ERROR_LOCK_VIOLATION are commonly
-    // transient while an editor, language server, indexer, or antivirus scans a file.
-    const RETRY_DELAYS_MS: &[u64] = &[10, 25, 50, 100, 200, 400];
-    for delay_ms in RETRY_DELAYS_MS {
-        match action() {
-            Ok(value) => return Ok(value),
-            Err(error) if is_transient_windows_file_error(&error) => {
-                std::thread::sleep(std::time::Duration::from_millis(*delay_ms));
-            }
-            Err(error) => {
-                return Err(format!("Could not {operation} {}: {error}", path.display()));
-            }
-        }
-    }
-    action().map_err(|error| {
-        format!(
-            "Could not {operation} {} after {} attempts: {error}",
-            path.display(),
-            RETRY_DELAYS_MS.len() + 1
-        )
-    })
-}
-
-#[cfg(windows)]
-fn is_transient_windows_file_error(error: &std::io::Error) -> bool {
-    error.kind() == std::io::ErrorKind::PermissionDenied
-        || matches!(error.raw_os_error(), Some(5 | 32 | 33))
 }
 
 pub(crate) fn tool_read(cwd: &Path, args: &Value) -> Result<String, String> {
@@ -294,7 +181,7 @@ pub(crate) fn tool_write(
             full_output_path: None,
         };
     }
-    if let Err(e) = atomic_write(&abs, content.as_bytes()) {
+    if let Err(e) = crate::fsutil::write_atomic(&abs, content.as_bytes()) {
         return ToolResult {
             output: e.to_string(),
             is_error: true,
@@ -516,7 +403,7 @@ pub(crate) fn tool_edit(
             full_output_path: None,
         };
     }
-    if let Err(e) = atomic_write(&abs, content.as_bytes()) {
+    if let Err(e) = crate::fsutil::write_atomic(&abs, content.as_bytes()) {
         return ToolResult {
             output: e.to_string(),
             is_error: true,

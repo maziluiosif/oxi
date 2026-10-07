@@ -133,14 +133,15 @@ impl OxiApp {
                 (GitTab::History, "History"),
                 (GitTab::Compare, "Compare"),
             ] {
-                let selected = self.conv.git_tab == tab;
+                let selected = self.conv.git_ui.tab == tab;
                 let n = match tab {
                     GitTab::Changes => self.conv.git.staged.len() + self.conv.git.unstaged.len(),
                     GitTab::Branches => self.conv.git.branches.len(),
                     GitTab::History => self.conv.git.log.len(),
                     GitTab::Compare => self
                         .conv
-                        .git_compare
+                        .git_ui
+                        .compare
                         .data
                         .as_ref()
                         .map_or(0, |data| data.commits.len()),
@@ -151,7 +152,7 @@ impl OxiApp {
                     label.to_string()
                 };
                 if crate::ui::chrome::pill_tab(ui, &label, selected) {
-                    self.conv.git_tab = tab;
+                    self.conv.git_ui.tab = tab;
                 }
             }
         });
@@ -168,7 +169,7 @@ impl OxiApp {
         ui.add_space(2.0);
         crate::ui::chrome::settings_text_area(
             ui,
-            &mut self.conv.git_commit_message,
+            &mut self.conv.git_ui.commit_message,
             "Commit message…",
             3,
         );
@@ -176,7 +177,7 @@ impl OxiApp {
 
         let gen_active = self.commit_gen_active();
         let staged_empty = self.conv.git.staged.is_empty();
-        let msg_empty = self.conv.git_commit_message.trim().is_empty();
+        let msg_empty = self.conv.git_ui.commit_message.trim().is_empty();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
             let commit_resp = ui
@@ -192,9 +193,9 @@ impl OxiApp {
                     "Write or generate a commit message"
                 });
             if commit_resp.clicked() {
-                let msg = self.conv.git_commit_message.clone();
+                let msg = self.conv.git_ui.commit_message.clone();
                 self.request(GitOp::Commit(msg));
-                self.conv.git_commit_message.clear();
+                self.conv.git_ui.commit_message.clear();
             }
             let (gen_icon, gen_label) = if gen_active {
                 ("", "Generating…")
@@ -214,20 +215,20 @@ impl OxiApp {
             .clicked()
             {
                 // Ask the worker for the diff; the response handler starts the LLM run.
-                self.conv.commit_gen_error = None;
-                self.conv.commit_gen_pending = true;
+                self.conv.git_ui.commit_gen_error = None;
+                self.conv.git_ui.commit_gen_pending = true;
                 self.request(GitOp::CollectCommitDiff);
             }
         });
 
-        if let Some(err) = self.conv.commit_gen_error.clone() {
+        if let Some(err) = self.conv.git_ui.commit_gen_error.clone() {
             ui.add_space(4.0);
             if crate::ui::chrome::dismissible_notice(
                 ui,
                 "commit_gen_error",
                 &format!("Generate failed: {err}"),
             ) {
-                self.conv.commit_gen_error = None;
+                self.conv.git_ui.commit_gen_error = None;
             }
         }
 
@@ -500,7 +501,7 @@ impl OxiApp {
                 path: entry.path.clone(),
                 staged,
             });
-            self.conv.diff_view_open = true;
+            self.conv.diff_view.open = true;
             self.conv.editor.diff_tab_active = true;
         }
         if hovered {
@@ -532,7 +533,7 @@ impl OxiApp {
         // Close the viewer on Esc.
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.request(GitOp::ClearDiff);
-            self.conv.diff_view_open = false;
+            self.conv.diff_view.open = false;
             self.focus_active_view_next_frame();
         }
 
@@ -564,7 +565,7 @@ impl OxiApp {
                             .clicked()
                         {
                             self.request(GitOp::ClearDiff);
-                            self.conv.diff_view_open = false;
+                            self.conv.diff_view.open = false;
                             self.focus_active_view_next_frame();
                         }
                     });

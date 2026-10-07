@@ -73,10 +73,7 @@ pub enum LocalModelMsg {
 }
 
 pub fn data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
-        .join("local-models")
+    crate::app_dirs::data_dir().join("local-models")
 }
 
 pub fn models_dir() -> PathBuf {
@@ -119,7 +116,7 @@ pub fn load_manifest() -> LocalModelManifest {
 pub fn save_manifest(manifest: &LocalModelManifest) -> Result<(), String> {
     fs::create_dir_all(data_dir()).map_err(|e| e.to_string())?;
     let json = serde_json::to_vec_pretty(manifest).map_err(|e| e.to_string())?;
-    fs::write(manifest_path(), json).map_err(|e| e.to_string())
+    crate::fsutil::write_atomic(&manifest_path(), &json)
 }
 
 pub fn upsert_downloaded(model: DownloadedModel) -> Result<(), String> {

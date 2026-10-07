@@ -16,7 +16,7 @@ use crate::session_store;
 
 impl OxiApp {
     pub(crate) fn send_message(&mut self) {
-        if self.conv.editing_last_prompt.is_some() {
+        if self.conv.composer.editing_last_prompt.is_some() {
             self.submit_edited_last_prompt();
         } else {
             self.send_message_opts(false);
@@ -53,20 +53,20 @@ impl OxiApp {
         else {
             return;
         };
-        let previous_input = std::mem::take(&mut self.conv.input);
-        let previous_images = std::mem::take(&mut self.conv.pending_images);
-        let previous_texts = std::mem::take(&mut self.conv.pending_texts);
-        self.conv.pending_texts = user
+        let previous_input = std::mem::take(&mut self.conv.composer.input);
+        let previous_images = std::mem::take(&mut self.conv.composer.pending_images);
+        let previous_texts = std::mem::take(&mut self.conv.composer.pending_texts);
+        self.conv.composer.pending_texts = user
             .attachments
             .iter()
             .filter(|a| matches!(a, UserAttachment::Text { .. }))
             .cloned()
             .collect();
-        self.conv.input = self
+        self.conv.composer.input = self
             .run_state(key)
             .and_then(|run| run.last_user_prompt.clone())
             .unwrap_or(user.text);
-        self.conv.pending_images = user
+        self.conv.composer.pending_images = user
             .attachments
             .into_iter()
             .filter_map(|a| match a {
@@ -74,27 +74,27 @@ impl OxiApp {
                 _ => None,
             })
             .collect();
-        self.conv.editing_last_prompt = Some(super::state::PromptEditState {
+        self.conv.composer.editing_last_prompt = Some(super::state::PromptEditState {
             previous_input,
             previous_images,
             previous_texts,
         });
-        self.conv.focus_chat_input_next_frame = true;
+        self.conv.composer.focus_next_frame = true;
     }
 
     pub(crate) fn cancel_edit_last_prompt(&mut self) {
-        if let Some(edit) = self.conv.editing_last_prompt.take() {
-            self.conv.input = edit.previous_input;
-            self.conv.pending_images = edit.previous_images;
-            self.conv.pending_texts = edit.previous_texts;
+        if let Some(edit) = self.conv.composer.editing_last_prompt.take() {
+            self.conv.composer.input = edit.previous_input;
+            self.conv.composer.pending_images = edit.previous_images;
+            self.conv.composer.pending_texts = edit.previous_texts;
         }
     }
 
     fn submit_edited_last_prompt(&mut self) {
         let key = self.active_session_key();
-        if self.conv.input.trim().is_empty()
-            && self.conv.pending_images.is_empty()
-            && self.conv.pending_texts.is_empty()
+        if self.conv.composer.input.trim().is_empty()
+            && self.conv.composer.pending_images.is_empty()
+            && self.conv.composer.pending_texts.is_empty()
         {
             return;
         }
@@ -121,7 +121,7 @@ impl OxiApp {
         self.active_session_mut().messages.truncate(user_idx);
         self.invalidate_wire_cache(key);
         self.reset_acp_session(key);
-        self.conv.editing_last_prompt = None;
+        self.conv.composer.editing_last_prompt = None;
         self.send_message_opts(true);
     }
 
@@ -148,9 +148,9 @@ impl OxiApp {
             .run_state(key)
             .and_then(|run| run.last_user_prompt.clone())
             .unwrap_or(user.text);
-        let draft_input = std::mem::replace(&mut self.conv.input, text);
+        let draft_input = std::mem::replace(&mut self.conv.composer.input, text);
         let draft_texts = std::mem::replace(
-            &mut self.conv.pending_texts,
+            &mut self.conv.composer.pending_texts,
             user.attachments
                 .iter()
                 .filter(|a| matches!(a, UserAttachment::Text { .. }))
@@ -158,7 +158,7 @@ impl OxiApp {
                 .collect(),
         );
         let draft_images = std::mem::replace(
-            &mut self.conv.pending_images,
+            &mut self.conv.composer.pending_images,
             user.attachments
                 .into_iter()
                 .filter_map(|a| match a {
@@ -172,13 +172,13 @@ impl OxiApp {
         self.reset_acp_session(key);
         self.run_state_mut(key).stream_error = None;
         self.send_message_opts(false);
-        if self.conv.input.is_empty()
-            && self.conv.pending_images.is_empty()
-            && self.conv.pending_texts.is_empty()
+        if self.conv.composer.input.is_empty()
+            && self.conv.composer.pending_images.is_empty()
+            && self.conv.composer.pending_texts.is_empty()
         {
-            self.conv.input = draft_input;
-            self.conv.pending_images = draft_images;
-            self.conv.pending_texts = draft_texts;
+            self.conv.composer.input = draft_input;
+            self.conv.composer.pending_images = draft_images;
+            self.conv.composer.pending_texts = draft_texts;
         }
     }
 
@@ -192,9 +192,9 @@ impl OxiApp {
     /// Send the composer contents into `key`'s chat. While that chat is still answering, the
     /// message is queued instead and goes out when the response finishes.
     pub(super) fn send_message_for(&mut self, key: SessionKey, skip_autocompact: bool) {
-        let text = self.conv.input.trim().to_string();
-        let has_attachments =
-            !self.conv.pending_images.is_empty() || !self.conv.pending_texts.is_empty();
+        let text = self.conv.composer.input.trim().to_string();
+        let has_attachments = !self.conv.composer.pending_images.is_empty()
+            || !self.conv.composer.pending_texts.is_empty();
         if text.is_empty() && !has_attachments {
             return;
         }
@@ -203,8 +203,8 @@ impl OxiApp {
             .is_some_and(|state| state.waiting_response)
         {
             self.push_input_history(&text);
-            self.conv.input_history_index = None;
-            self.conv.input_history_draft.clear();
+            self.conv.composer.history_index = None;
+            self.conv.composer.history_draft.clear();
             let queued = self.take_composer_payload();
             self.run_state_mut(key).queued.push_back(queued);
             return;
@@ -228,9 +228,9 @@ impl OxiApp {
                         run.plan_mode = !run.plan_mode;
                         self.save_settings_quietly();
                         self.push_input_history(&text);
-                        self.conv.input_history_index = None;
-                        self.conv.input_history_draft.clear();
-                        self.conv.input.clear();
+                        self.conv.composer.history_index = None;
+                        self.conv.composer.history_draft.clear();
+                        self.conv.composer.input.clear();
                         return;
                     }
                     // Bare `/plan` with attachments: plan them.
@@ -250,9 +250,9 @@ impl OxiApp {
                             .any(|c| c.name == "compact")) =>
             {
                 self.push_input_history(&text);
-                self.conv.input_history_index = None;
-                self.conv.input_history_draft.clear();
-                self.conv.input.clear();
+                self.conv.composer.history_index = None;
+                self.conv.composer.history_draft.clear();
+                self.conv.composer.input.clear();
                 match cmd {
                     super::compaction::SlashCommand::Compact => {
                         self.start_compaction(key, None);
@@ -286,9 +286,9 @@ impl OxiApp {
                     >= super::compaction::AUTO_COMPACT_THRESHOLD * max_tokens as f32
                 && self.compactable_turns(key) > super::compaction::COMPACT_KEEP_RECENT_TURNS
             {
-                let images = std::mem::take(&mut self.conv.pending_images);
-                let texts = std::mem::take(&mut self.conv.pending_texts);
-                self.conv.input.clear();
+                let images = std::mem::take(&mut self.conv.composer.pending_images);
+                let texts = std::mem::take(&mut self.conv.composer.pending_texts);
+                self.conv.composer.input.clear();
                 self.notify_composer(
                     "Context is almost full — compacting first; your message will be sent \
                      automatically.",
@@ -311,7 +311,7 @@ impl OxiApp {
             self.session_mut_by_key(key).title = if !text.is_empty() {
                 make_session_title(&text)
             } else {
-                if !self.conv.pending_texts.is_empty() {
+                if !self.conv.composer.pending_texts.is_empty() {
                     "Pasted text"
                 } else {
                     "Image"
@@ -321,10 +321,10 @@ impl OxiApp {
         }
 
         self.push_input_history(&text);
-        self.conv.input_history_index = None;
-        self.conv.input_history_draft.clear();
+        self.conv.composer.history_index = None;
+        self.conv.composer.history_draft.clear();
 
-        let pending = std::mem::take(&mut self.conv.pending_images);
+        let pending = std::mem::take(&mut self.conv.composer.pending_images);
         let mut user_attachments: Vec<UserAttachment> = pending
             .iter()
             .map(|(mime, data)| UserAttachment::Image {
@@ -332,9 +332,9 @@ impl OxiApp {
                 data: data.clone(),
             })
             .collect();
-        user_attachments.append(&mut self.conv.pending_texts);
-        self.conv.input.clear();
-        self.conv.scroll_to_bottom_once = true;
+        user_attachments.append(&mut self.conv.composer.pending_texts);
+        self.conv.composer.input.clear();
+        self.conv.transcript.scroll_to_bottom_once = true;
 
         {
             let run = self.run_state_mut(key);

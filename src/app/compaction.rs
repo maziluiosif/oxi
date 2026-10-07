@@ -275,9 +275,9 @@ impl OxiApp {
     /// Put a deferred message back into the composer so an aborted auto-compaction loses nothing.
     fn restore_queued_send(&mut self, queued: Option<QueuedSend>) {
         if let Some(q) = queued {
-            self.conv.input = q.text;
-            self.conv.pending_images = q.images;
-            self.conv.pending_texts = q.texts;
+            self.conv.composer.input = q.text;
+            self.conv.composer.pending_images = q.images;
+            self.conv.composer.pending_texts = q.texts;
         }
     }
 }

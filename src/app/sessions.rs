@@ -91,14 +91,14 @@ impl OxiApp {
         let active_workspace = self.conv.active_workspace;
         let old_session = self.active_workspace().active;
         self.conv.workspaces[active_workspace].sessions[old_session].input_text =
-            std::mem::take(&mut self.conv.input);
+            std::mem::take(&mut self.conv.composer.input);
         self.conv.workspaces[active_workspace].sessions[old_session].pending_images =
-            std::mem::take(&mut self.conv.pending_images);
+            std::mem::take(&mut self.conv.composer.pending_images);
         self.conv.workspaces[active_workspace].sessions[old_session].pending_texts =
-            std::mem::take(&mut self.conv.pending_texts);
-        self.conv.input_history_index = None;
-        self.conv.input_history_draft.clear();
-        self.conv.composer_notice = None;
+            std::mem::take(&mut self.conv.composer.pending_texts);
+        self.conv.composer.history_index = None;
+        self.conv.composer.history_draft.clear();
+        self.conv.composer.notice = None;
 
         let old_states = std::mem::take(&mut self.flow.sessions);
         let mut session = Self::blank_session(title);
@@ -137,12 +137,12 @@ impl OxiApp {
         // the transcript is in front, and if the sidebar is browsing files, flip it back to the
         // chat list so the new chat is visible there too.
         self.reveal_chat_view();
-        if self.conv.sidebar_open && self.conv.sidebar_mode == super::state::SidebarMode::Explorer {
-            self.conv.sidebar_mode = super::state::SidebarMode::Chats;
+        if self.conv.sidebar.open && self.conv.sidebar.mode == super::state::SidebarMode::Explorer {
+            self.conv.sidebar.mode = super::state::SidebarMode::Chats;
         }
 
-        self.conv.scroll_to_bottom_once = true;
-        self.conv.focus_chat_input_next_frame = true;
+        self.conv.transcript.scroll_to_bottom_once = true;
+        self.conv.composer.focus_next_frame = true;
         self.persist_active_session_selection();
         if let Some(state) = self.flow.sessions.get_mut(&self.active_session_key()) {
             state.stream_error = None;
@@ -220,7 +220,7 @@ impl OxiApp {
     }
 
     pub(crate) fn pick_image_attachment(&mut self) {
-        if self.conv.pending_images.len() >= MAX_PENDING_IMAGES {
+        if self.conv.composer.pending_images.len() >= MAX_PENDING_IMAGES {
             self.notify_composer(format!("At most {MAX_PENDING_IMAGES} images per message"));
             return;
         }
@@ -252,14 +252,17 @@ impl OxiApp {
                 _ => "image/png",
             })
             .unwrap_or("image/png");
-        self.conv.pending_images.push((mime.to_string(), bytes));
+        self.conv
+            .composer
+            .pending_images
+            .push((mime.to_string(), bytes));
     }
 
     /// Attach an image currently stored in the OS clipboard. egui's paste event carries text
     /// only, so bitmap clipboard formats (notably Windows screenshots / Snipping Tool) must be
     /// read explicitly and encoded into the same PNG byte format used by normal attachments.
     pub(crate) fn paste_clipboard_image(&mut self) -> bool {
-        if self.conv.pending_images.len() >= MAX_PENDING_IMAGES {
+        if self.conv.composer.pending_images.len() >= MAX_PENDING_IMAGES {
             self.notify_composer(format!("At most {MAX_PENDING_IMAGES} images per message"));
             return true;
         }
@@ -313,15 +316,16 @@ impl OxiApp {
             return true;
         }
         self.conv
+            .composer
             .pending_images
             .push(("image/png".to_string(), bytes));
-        self.conv.composer_notice = None;
+        self.conv.composer.notice = None;
         true
     }
 
     pub(crate) fn remove_pending_image_at(&mut self, index: usize) {
-        if index < self.conv.pending_images.len() {
-            self.conv.pending_images.remove(index);
+        if index < self.conv.composer.pending_images.len() {
+            self.conv.composer.pending_images.remove(index);
         }
     }
 
@@ -331,7 +335,7 @@ impl OxiApp {
             return;
         }
         for file in dropped {
-            if self.conv.pending_images.len() >= MAX_PENDING_IMAGES {
+            if self.conv.composer.pending_images.len() >= MAX_PENDING_IMAGES {
                 self.notify_composer(format!("At most {MAX_PENDING_IMAGES} images per message"));
                 break;
             }
@@ -366,8 +370,11 @@ impl OxiApp {
                 .and_then(|p| mime_for_image_path(p))
                 .or_else(|| image::guess_format(&bytes).ok().map(mime_from_image_format))
                 .unwrap_or("image/png");
-            self.conv.pending_images.push((mime.to_string(), bytes));
-            self.conv.composer_notice = None;
+            self.conv
+                .composer
+                .pending_images
+                .push((mime.to_string(), bytes));
+            self.conv.composer.notice = None;
         }
     }
 
@@ -474,16 +481,14 @@ impl OxiApp {
         });
         self.acp.close(&acp_key);
 
-        if let Some(session_file) = session_file.as_deref() {
+        if let Some(session_file) = session_file {
             if deleting_current_backend_session {
                 self.flow.current_backend_session_file = None;
             }
-
-            if let Err(err) = delete_session_file_from_disk(Path::new(session_file)) {
-                self.run_state_mut(active_key).stream_error =
-                    Some(format!("Failed to delete chat file: {err}"));
-                return;
-            }
+            // Moving to the trash runs an external tool; keep it off the frame.
+            self.spawn_chore("Could not delete the chat file", move || {
+                delete_session_file_from_disk(Path::new(&session_file))
+            });
         }
 
         let old_states = std::mem::take(&mut self.flow.sessions);
@@ -514,12 +519,12 @@ impl OxiApp {
             {
                 self.conv.compaction = None;
             }
-            self.conv.input.clear();
-            self.conv.pending_images.clear();
-            self.conv.pending_texts.clear();
-            self.conv.input_history_index = None;
-            self.conv.input_history_draft.clear();
-            self.conv.scroll_to_bottom_once = true;
+            self.conv.composer.input.clear();
+            self.conv.composer.pending_images.clear();
+            self.conv.composer.pending_texts.clear();
+            self.conv.composer.history_index = None;
+            self.conv.composer.history_draft.clear();
+            self.conv.transcript.scroll_to_bottom_once = true;
         } else {
             if idx < self.active_workspace().active {
                 self.active_workspace_mut().active -= 1;
@@ -613,15 +618,15 @@ impl OxiApp {
             self.flow.pending_session_idx = None;
             self.flow.pending_load_session_idx = None;
             let new_si = self.active_workspace().active;
-            self.conv.input =
+            self.conv.composer.input =
                 std::mem::take(&mut self.active_workspace_mut().sessions[new_si].input_text);
-            self.conv.pending_images =
+            self.conv.composer.pending_images =
                 std::mem::take(&mut self.active_workspace_mut().sessions[new_si].pending_images);
-            self.conv.pending_texts =
+            self.conv.composer.pending_texts =
                 std::mem::take(&mut self.active_workspace_mut().sessions[new_si].pending_texts);
-            self.conv.input_history_index = None;
-            self.conv.input_history_draft.clear();
-            self.conv.scroll_to_bottom_once = true;
+            self.conv.composer.history_index = None;
+            self.conv.composer.history_draft.clear();
+            self.conv.transcript.scroll_to_bottom_once = true;
             self.ensure_active_session_loaded();
             self.refresh_git_cwd();
         }

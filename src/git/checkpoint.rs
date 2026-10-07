@@ -114,8 +114,15 @@ pub fn restore(repo: &Path, before: &str, after: &str, only: Option<&str>) -> Re
                 if let Some(parent) = target.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| format!("{path}: {e}"))?;
                 }
-                std::fs::write(&target, blob.content()).map_err(|e| format!("{path}: {e}"))?;
-                set_executable(&target, entry.filemode() == 0o100755);
+                // Replace the path itself, as a checkout would: writing through a symlink the
+                // turn created would clobber whatever it points at.
+                if entry.filemode() == FILEMODE_LINK {
+                    restore_symlink(&target, blob.content()).map_err(|e| format!("{path}: {e}"))?;
+                } else {
+                    crate::fsutil::write_atomic(&target, blob.content())
+                        .map_err(|e| format!("{path}: {e}"))?;
+                    set_executable(&target, entry.filemode() == 0o100755);
+                }
             }
             Err(_) => {
                 match std::fs::remove_file(&target) {
@@ -186,6 +193,29 @@ fn set_executable(path: &Path, executable: bool) {
 
 #[cfg(not(unix))]
 fn set_executable(_path: &Path, _executable: bool) {}
+
+/// Git's file mode for a symbolic link; the blob holds the link target.
+const FILEMODE_LINK: i32 = 0o120000;
+
+#[cfg(unix)]
+fn restore_symlink(path: &Path, target: &[u8]) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => {
+            return Err("a directory is in the way of the symlink".to_string());
+        }
+        Ok(_) => std::fs::remove_file(path).map_err(|e| e.to_string())?,
+        Err(_) => {}
+    }
+    std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(target), path).map_err(|e| e.to_string())
+}
+
+/// Without reliable symlink support, store the link target as a plain file, like git does with
+/// `core.symlinks = false`.
+#[cfg(not(unix))]
+fn restore_symlink(path: &Path, target: &[u8]) -> Result<(), String> {
+    crate::fsutil::write_atomic(path, target)
+}
 
 #[cfg(test)]
 mod tests {
@@ -274,6 +304,29 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("a.txt")).unwrap(),
             "user\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_resets_a_retargeted_symlink_without_writing_through_it() {
+        let (_dir, root) = repo_with_file();
+        std::fs::write(root.join("b.txt"), "bee\n").unwrap();
+        std::os::unix::fs::symlink("a.txt", root.join("link")).unwrap();
+        let before = snapshot(&root).unwrap();
+        std::fs::remove_file(root.join("link")).unwrap();
+        std::os::unix::fs::symlink("b.txt", root.join("link")).unwrap();
+        let after = snapshot(&root).unwrap();
+
+        restore(&root, &before.tree, &after.tree, None).unwrap();
+        assert_eq!(
+            std::fs::read_link(root.join("link")).unwrap(),
+            PathBuf::from("a.txt")
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("b.txt")).unwrap(),
+            "bee\n",
+            "the link's new target must not be overwritten"
         );
     }
 

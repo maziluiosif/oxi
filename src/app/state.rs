@@ -133,6 +133,8 @@ pub struct EditorState {
     pub text_edit_ids: std::collections::HashMap<PathBuf, eframe::egui::Id>,
     /// The gutter's change peek and live markers (see `file_explorer::quick_diff`).
     pub quick_diff: Option<super::file_explorer::QuickDiff>,
+    /// A clicked change marker whose Git base is still being read in the background.
+    pub quick_diff_pending: Option<super::file_explorer::PendingQuickDiff>,
     /// Select and reveal this byte range after opening a definition target.
     pub navigation_target: Option<(PathBuf, std::ops::Range<usize>)>,
     /// Navigate from the editor caret on the next render (normally requested by F12).
@@ -523,6 +525,186 @@ pub struct TranscriptUnitHeight {
     pub height: f32,
 }
 
+/// Chat composer: the draft, its attachments, prompt history and layout measurements.
+#[derive(Default)]
+pub struct ComposerState {
+    pub input: String,
+    pub pending_images: Vec<(String, Vec<u8>)>,
+    pub pending_texts: Vec<crate::model::UserAttachment>,
+    pub history: Vec<String>,
+    pub history_index: Option<usize>,
+    pub history_draft: String,
+    /// Short-lived inline notice under the composer (blocked send, rejected
+    /// attachment, …) with the moment it was raised; expires after a few seconds.
+    pub notice: Option<(String, Instant)>,
+    /// Present while the composer is replacing the last user prompt and its assistant response.
+    pub editing_last_prompt: Option<PromptEditState>,
+    /// Set when navigation should hand keyboard focus back to the chat composer.
+    pub focus_next_frame: bool,
+    /// Measured height of the composer TextEdit from the previous frame.
+    pub measured_text_h: f32,
+    /// Full height of the composer row (from the previous frame) for splitting transcript vs input.
+    pub measured_full_h: f32,
+}
+
+/// Left sidebar: visibility, width, mode, chat search and inline rename.
+#[derive(Default)]
+pub struct SidebarState {
+    pub open: bool,
+    pub width: f32,
+    pub mode: SidebarMode,
+    pub search: String,
+    /// Cross-view notice shown in the Chats sidebar (for example, a blocked workspace switch).
+    pub notice: Option<String>,
+    /// When set, the sidebar shows an inline rename field for `(workspace_idx, session_idx)`.
+    pub renaming_session: Option<(usize, usize)>,
+    pub rename_draft: String,
+    /// Sidebar search results per chat, keyed by `(workspace_idx, session_idx)`.
+    pub search_cache: std::collections::HashMap<(usize, usize), SidebarSearchHit>,
+}
+
+/// Workspace file explorer tree.
+#[derive(Default)]
+pub struct ExplorerState {
+    /// Directories expanded in the workspace explorer. Children are read only when expanded.
+    pub expanded: HashSet<PathBuf>,
+    /// Workspace roots are open by default; this records roots explicitly folded by the user.
+    pub collapsed_roots: HashSet<PathBuf>,
+    /// Directory listings and `.gitignore` patterns behind the explorer tree, so the tree is
+    /// not re-read from disk on every frame.
+    pub cache: crate::app::file_explorer::ExplorerCache,
+}
+
+/// Bottom terminal panel layout (the shells themselves live on `OxiApp::terminals`).
+#[derive(Default)]
+pub struct TerminalPanelState {
+    /// Bottom terminal panel visibility and height (persisted in settings).
+    pub open: bool,
+    pub height: f32,
+    /// Set when opening the terminal from chrome so keyboard focus moves into the PTY.
+    pub focus_next_frame: bool,
+}
+
+/// Settings page: navigation, the dirty-check snapshot and per-provider connection helpers.
+#[derive(Default)]
+pub struct SettingsPageState {
+    /// Settings page left-nav width (independent of the chat sidebar).
+    pub sidebar_width: f32,
+    /// Snapshot captured when Settings opens. Used to detect dirty state and restore on Cancel.
+    pub original: Option<AppSettings>,
+    pub exit_prompt: Option<SettingsExitAction>,
+    /// Last failed settings save, shown inline on the Settings page (not in chat).
+    pub save_error: Option<String>,
+    pub open: bool,
+    pub tab: SettingsTab,
+    pub provider_tab: LlmProviderKind,
+    pub oauth_busy: bool,
+    pub oauth_last_message: Option<String>,
+    /// Draft (in-memory only) SSH passwords for Remote SSH compute targets, keyed by
+    /// provider kind. Loaded lazily from the credential store on first edit, written
+    /// through on change; never stored in `settings.json`.
+    pub ssh_password_drafts: std::collections::HashMap<LlmProviderKind, String>,
+    /// Background "Test connection" results for Remote SSH compute targets, keyed by
+    /// provider kind.
+    pub ssh_test: std::collections::HashMap<LlmProviderKind, SshTestStatus>,
+    /// Channel for SSH "Test connection" results (drained each frame).
+    pub ssh_test_rx: Option<std::sync::mpsc::Receiver<SshTestMsg>>,
+}
+
+/// The diff view that replaces the chat while a file/commit diff is open.
+#[derive(Default)]
+pub struct DiffViewState {
+    /// Set while the diff view is shown in place of the chat.
+    pub open: bool,
+    /// Parsed git diff plus its view state (layout mode, folds, scroll), rebuilt only when
+    /// the diff text changes.
+    pub git: Option<crate::ui::diff_view::DiffView>,
+    /// Same for the active editor document's unsaved-changes diff.
+    pub unsaved: Option<crate::ui::diff_view::DiffView>,
+}
+
+/// Chat transcript scrolling, virtualization caches and per-message UI.
+pub struct TranscriptState {
+    pub scroll_id: egui::Id,
+    pub scroll_to_bottom_once: bool,
+    /// Keep transcript `stick_to_bottom` for a few frames while a newly opened/session-loaded
+    /// conversation settles its layout.
+    pub stick_bottom_hold_frames: u8,
+    /// Measured heights of transcript units (a user message or a contiguous assistant run),
+    /// keyed by `(workspace_idx, session_idx, unit_start_message_idx)`. Units outside the
+    /// scroll viewport advance the cursor by their cached height instead of being rendered,
+    /// so a long conversation costs O(visible) per frame instead of O(history). Entries are
+    /// revalidated against the column width and a cheap content fingerprint, and re-measured
+    /// whenever the unit actually renders.
+    pub heights: std::collections::HashMap<(usize, usize, usize), TranscriptUnitHeight>,
+    /// Transcript units laid out for real last frame. While the pointer rests over the
+    /// transcript none of them is culled, so the widget under the cursor cannot flip between a
+    /// real label and a placeholder right before a click. See `render_conversation`.
+    pub rendered: std::collections::HashSet<(usize, usize, usize)>,
+    /// File lists and view state of "N files changed" cards under agent turns.
+    pub turn_changes: super::turn_changes::TurnChangesCache,
+    /// Right-click menu of a transcript message (fork, copy).
+    pub message_menu: Option<super::fork::MessageMenu>,
+}
+
+impl Default for TranscriptState {
+    fn default() -> Self {
+        Self {
+            scroll_id: egui::Id::new("main_chat_scroll"),
+            // A freshly opened chat starts at its newest message.
+            scroll_to_bottom_once: true,
+            stick_bottom_hold_frames: 0,
+            heights: Default::default(),
+            rendered: Default::default(),
+            turn_changes: Default::default(),
+            message_menu: None,
+        }
+    }
+}
+
+/// Source-control panel and the git worker plumbing (the repository data is `git`).
+#[derive(Default)]
+pub struct GitUiState {
+    /// Source-control (git) panel visibility and width (persisted in settings).
+    pub open: bool,
+    pub width: f32,
+    pub tab: crate::app::git_panel::GitTab,
+    pub commit_message: String,
+    pub new_branch: String,
+    /// Branch comparison shown by the Compare tab (see [`crate::git::compare`]).
+    pub compare: crate::app::git_panel::CompareView,
+    /// Set while a commit-message generation is in flight: we've asked the git worker for
+    /// the diff and are waiting for it to come back so we can kick off the LLM completion.
+    pub commit_gen_pending: bool,
+    /// Receiver for the in-flight commit-message completion (deltas + terminal Done).
+    /// `Some` while generating; cleared when the run finishes.
+    pub commit_gen_rx: Option<std::sync::mpsc::Receiver<crate::agent::CompleteEvent>>,
+    /// Last commit-generation error, shown inline under the composer until the next run.
+    pub commit_gen_error: Option<String>,
+    /// Commit message stashed while a generation streams into the field; restored
+    /// if the generation fails so the user's own text isn't lost.
+    pub commit_gen_stash: Option<String>,
+    /// Git worker request channel. Responses arrive on `rx`; drained each frame.
+    pub tx: Option<crate::git::GitSender>,
+    pub rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
+    pub last_auto_refresh: Option<Instant>,
+    pub auto_refresh_pending: bool,
+}
+
+/// Update check against GitHub releases.
+#[derive(Default)]
+pub struct UpdateCheckState {
+    /// True once the on-startup update check has been kicked off (it runs once per
+    /// app start; the About panel's button can force a re-run).
+    pub started: bool,
+    /// True while an update check is in flight.
+    pub checking: bool,
+    /// Outcome of the last update check. Errors are only surfaced in the About panel.
+    pub result: Option<Result<crate::update::ReleaseInfo, String>>,
+    /// Channel for the update-check result (drained each frame).
+    pub rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+}
+
 pub struct ConversationState {
     /// Never empty: once the user removes every workspace, a hidden scratch workspace rooted at
     /// the home directory takes index 0 and `no_workspace` is set.
@@ -531,107 +713,24 @@ pub struct ConversationState {
     /// The only entry in `workspaces` is the hidden scratch one: the sidebar shows an empty
     /// state and nothing is persisted until the user opens a folder.
     pub no_workspace: bool,
-    pub input: String,
-    pub sidebar_search: String,
-    /// Cross-view notice shown in the Chats sidebar (for example, a blocked workspace switch).
-    pub sidebar_notice: Option<String>,
-    /// When set, the sidebar shows an inline rename field for `(workspace_idx, session_idx)`.
-    pub renaming_session: Option<(usize, usize)>,
-    pub rename_draft: String,
-    pub chat_scroll_id: egui::Id,
-    pub pending_images: Vec<(String, Vec<u8>)>,
-    pub pending_texts: Vec<crate::model::UserAttachment>,
-    pub scroll_to_bottom_once: bool,
-    /// Keep transcript `stick_to_bottom` for a few frames while a newly opened/session-loaded
-    /// conversation settles its layout.
-    pub stick_bottom_hold_frames: u8,
-    pub input_history: Vec<String>,
-    pub input_history_index: Option<usize>,
-    pub input_history_draft: String,
-    /// Short-lived inline notice under the composer (blocked send, rejected
-    /// attachment, …) with the moment it was raised; expires after a few seconds.
-    pub composer_notice: Option<(String, Instant)>,
-    /// Present while the composer is replacing the last user prompt and its assistant response.
-    pub editing_last_prompt: Option<PromptEditState>,
-    /// Set when navigation should hand keyboard focus back to the chat composer.
-    pub focus_chat_input_next_frame: bool,
-    /// Set when opening the terminal from chrome so keyboard focus moves into the PTY.
-    pub focus_terminal_next_frame: bool,
-    pub sidebar_open: bool,
-    pub sidebar_width: f32,
-    pub sidebar_mode: SidebarMode,
-    /// Directories expanded in the workspace explorer. Children are read only when expanded.
-    pub explorer_expanded: HashSet<PathBuf>,
-    /// Workspace roots are open by default; this records roots explicitly folded by the user.
-    pub explorer_collapsed_roots: HashSet<PathBuf>,
-    /// Directory listings and `.gitignore` patterns behind the explorer tree, so the tree is
-    /// not re-read from disk on every frame.
-    pub explorer_cache: crate::app::file_explorer::ExplorerCache,
+    pub composer: ComposerState,
+    pub sidebar: SidebarState,
+    pub explorer: ExplorerState,
     pub editor: EditorState,
-    /// Settings page left-nav width (independent of the chat sidebar).
-    pub settings_sidebar_width: f32,
-    /// Bottom terminal panel visibility and height (persisted in settings).
-    pub terminal_open: bool,
-    pub terminal_height: f32,
+    pub terminal_panel: TerminalPanelState,
     pub settings: AppSettings,
-    /// Snapshot captured when Settings opens. Used to detect dirty state and restore on Cancel.
-    pub settings_original: Option<AppSettings>,
-    pub settings_exit_prompt: Option<SettingsExitAction>,
-    /// Last failed settings save, shown inline on the Settings page (not in chat).
-    pub settings_save_error: Option<String>,
-    pub settings_open: bool,
-    pub settings_tab: SettingsTab,
-    pub settings_provider_tab: LlmProviderKind,
-    pub oauth_busy: bool,
-    pub oauth_last_message: Option<String>,
-    /// Measured height of the composer TextEdit from the previous frame.
-    pub composer_measured_text_h: f32,
-    /// Full height of the composer row (from the previous frame) for splitting transcript vs input.
-    pub composer_measured_full_h: f32,
-    /// Diff view replaces the chat window while a file/commit diff is open.
-    pub diff_view_open: bool,
-    /// Parsed git diff plus its view state (layout mode, folds, scroll), rebuilt only when
-    /// the diff text changes.
-    pub git_diff_view: Option<crate::ui::diff_view::DiffView>,
-    /// Same for the active editor document's unsaved-changes diff.
-    pub unsaved_diff_view: Option<crate::ui::diff_view::DiffView>,
-    /// Measured heights of transcript units (a user message or a contiguous assistant run),
-    /// keyed by `(workspace_idx, session_idx, unit_start_message_idx)`. Units outside the
-    /// scroll viewport advance the cursor by their cached height instead of being rendered,
-    /// so a long conversation costs O(visible) per frame instead of O(history). Entries are
-    /// revalidated against the column width and a cheap content fingerprint, and re-measured
-    /// whenever the unit actually renders.
-    pub transcript_heights: std::collections::HashMap<(usize, usize, usize), TranscriptUnitHeight>,
-    /// Transcript units laid out for real last frame. While the pointer rests over the
-    /// transcript none of them is culled, so the widget under the cursor cannot flip between a
-    /// real label and a placeholder right before a click. See `render_conversation`.
-    pub transcript_rendered: std::collections::HashSet<(usize, usize, usize)>,
-    /// File lists and view state of "N files changed" cards under agent turns.
-    pub turn_changes: super::turn_changes::TurnChangesCache,
+    pub settings_page: SettingsPageState,
+    pub diff_view: DiffViewState,
+    pub transcript: TranscriptState,
     /// Work tree create/merge operations running in the background.
     pub worktree_ops: Vec<std::sync::mpsc::Receiver<super::worktrees::WorktreeResult>>,
-    /// Right-click menu of a transcript message (fork, copy).
-    pub message_menu: Option<super::fork::MessageMenu>,
-    /// Sidebar search results per chat, keyed by `(workspace_idx, session_idx)`.
-    pub sidebar_search_cache: std::collections::HashMap<(usize, usize), SidebarSearchHit>,
-    /// Source-control (git) panel visibility and width (persisted in settings).
-    pub git_open: bool,
-    pub git_width: f32,
-    pub git_tab: crate::app::git_panel::GitTab,
+    /// Background filesystem chores (see [`super::chores`]).
+    pub chores: Vec<super::chores::Chore>,
+    pub git_ui: GitUiState,
     pub git: crate::git::GitState,
-    pub git_commit_message: String,
-    pub git_new_branch: String,
-    /// Branch comparison shown by the Compare tab (see [`crate::git::compare`]).
-    pub git_compare: crate::app::git_panel::CompareView,
     /// Destructive action awaiting confirmation in the shared modal (delete chat /
     /// workspace / model, git discard). At most one at a time, app-wide.
     pub confirm_prompt: Option<ConfirmAction>,
-    /// Set while a commit-message generation is in flight: we've asked the git worker for
-    /// the diff and are waiting for it to come back so we can kick off the LLM completion.
-    pub commit_gen_pending: bool,
-    /// Receiver for the in-flight commit-message completion (deltas + terminal Done).
-    /// `Some` while generating; cleared when the run finishes.
-    pub commit_gen_rx: Option<std::sync::mpsc::Receiver<crate::agent::CompleteEvent>>,
     /// In-flight chat-title completions: (workspace root, session file, auto title it replaces).
     pub title_gen: Vec<(
         String,
@@ -639,18 +738,8 @@ pub struct ConversationState {
         String,
         std::sync::mpsc::Receiver<crate::agent::CompleteEvent>,
     )>,
-    /// Last commit-generation error, shown inline under the composer until the next run.
-    pub commit_gen_error: Option<String>,
-    /// Commit message stashed while a generation streams into the field; restored
-    /// if the generation fails so the user's own text isn't lost.
-    pub commit_gen_stash: Option<String>,
-    /// Git worker request channel. Responses arrive on `git_rx`; drained each frame.
-    pub git_tx: Option<crate::git::GitSender>,
-    pub git_rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
     /// egui context used for the git worker so it can request repaints.
     pub git_ctx: eframe::egui::Context,
-    pub git_last_auto_refresh: Option<Instant>,
-    pub git_auto_refresh_pending: bool,
     /// Background model-list fetch results keyed by provider kind.
     pub fetched_models: std::collections::HashMap<LlmProviderKind, FetchedModels>,
     /// Channels for in-flight model-list fetch results (drained each frame).
@@ -664,24 +753,7 @@ pub struct ConversationState {
     /// receiver here would lose the older operation's result and leave its loading flag stuck.
     pub local_model_rxs: Vec<std::sync::mpsc::Receiver<crate::local_models::LocalModelMsg>>,
     pub local_runtime: Option<LocalRuntimeState>,
-    /// Draft (in-memory only) SSH passwords for Remote SSH compute targets, keyed by
-    /// provider kind. Loaded lazily from the credential store on first edit, written
-    /// through on change; never stored in `settings.json`.
-    pub ssh_password_drafts: std::collections::HashMap<LlmProviderKind, String>,
-    /// Background "Test connection" results for Remote SSH compute targets, keyed by
-    /// provider kind.
-    pub ssh_test: std::collections::HashMap<LlmProviderKind, SshTestStatus>,
-    /// Channel for SSH "Test connection" results (drained each frame).
-    pub ssh_test_rx: Option<std::sync::mpsc::Receiver<SshTestMsg>>,
-    /// True once the on-startup update check has been kicked off (it runs once per
-    /// app start; the About panel's button can force a re-run).
-    pub update_check_started: bool,
-    /// True while an update check is in flight.
-    pub update_checking: bool,
-    /// Outcome of the last update check. Errors are only surfaced in the About panel.
-    pub update_result: Option<Result<crate::update::ReleaseInfo, String>>,
-    /// Channel for the update-check result (drained each frame).
-    pub update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+    pub update: UpdateCheckState,
     /// In-flight context compaction (manual `/compact` or automatic pre-send), if any.
     /// At most one runs app-wide; drained each frame. See [`super::compaction`].
     pub compaction: Option<super::compaction::ActiveCompaction>,

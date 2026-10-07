@@ -110,14 +110,12 @@ fn human_size(bytes: u64) -> String {
 }
 
 fn external_actions(ui: &mut Ui, path: &Path) {
-    if mini_button_icon_enabled(ui, ICON_FOLDER, super::explorer_tree::reveal_label(), true)
-        .clicked()
-    {
-        super::explorer_tree::reveal_path_in_file_manager(path);
+    if mini_button_icon_enabled(ui, ICON_FOLDER, crate::os_open::reveal_label(), true).clicked() {
+        crate::os_open::reveal_path(path);
     }
     ui.add_space(4.0);
     if mini_button_icon_enabled(ui, ICON_EXTERNAL, "Open in default app", true).clicked() {
-        open_with_default_app(path);
+        crate::os_open::open_path(path);
     }
 }
 
@@ -322,7 +320,7 @@ fn media_card(ui: &mut Ui, path: &Path, kind: MediaKind, modified: Option<std::t
                             .on_hover_text("Play in the default app");
                         paint_play_badge(ui, response.rect.center(), response.hovered());
                         if response.clicked() {
-                            open_with_default_app(path);
+                            crate::os_open::open_path(path);
                         }
                     }
                     Some(PosterState::Pending) => {
@@ -491,28 +489,6 @@ fn generate_poster(video: &Path, out: &Path) -> bool {
                 .arg(out),
         ) && out.is_file()
     })
-}
-
-pub(super) fn open_with_default_app(path: &Path) {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = std::process::Command::new("open");
-        command.arg(path);
-        command
-    };
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", ""]).arg(path);
-        command
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = std::process::Command::new("xdg-open");
-        command.arg(path);
-        command
-    };
-    let _ = command.spawn();
 }
 
 #[cfg(test)]

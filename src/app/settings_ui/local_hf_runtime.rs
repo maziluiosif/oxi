@@ -42,6 +42,7 @@ impl OxiApp {
             .clone();
         let pw = self
             .conv
+            .settings_page
             .ssh_password_drafts
             .get(&LlmProviderKind::RemoteHf)
             .cloned()

@@ -129,9 +129,9 @@ impl OxiApp {
     /// Line markers for the editor gutter: changes since the compare base while the Compare
     /// tab is showing, otherwise the uncommitted changes.
     pub(crate) fn git_gutter_line_changes(&self, relative: &str) -> Option<&Vec<GitLineChange>> {
-        if self.conv.git_open
-            && self.conv.git_tab == GitTab::Compare
-            && let Some(data) = &self.conv.git_compare.data
+        if self.conv.git_ui.open
+            && self.conv.git_ui.tab == GitTab::Compare
+            && let Some(data) = &self.conv.git_ui.compare.data
             && data.error.is_none()
         {
             return data.line_changes.get(relative);
@@ -143,7 +143,7 @@ impl OxiApp {
         let fingerprint = worktree_fingerprint(&self.conv.git);
         let cwd = self.active_workspace().root_path.clone();
         let ctx = self.conv.git_ctx.clone();
-        let view = &mut self.conv.git_compare;
+        let view = &mut self.conv.git_ui.compare;
         view.fingerprint = Some(fingerprint);
         if view.rx.is_some() {
             view.rerun = true;
@@ -164,7 +164,7 @@ impl OxiApp {
     }
 
     pub(super) fn drain_git_compare(&mut self) {
-        let Some((cwd, rx)) = &self.conv.git_compare.rx else {
+        let Some((cwd, rx)) = &self.conv.git_ui.compare.rx else {
             return;
         };
         let result = match rx.try_recv() {
@@ -173,7 +173,7 @@ impl OxiApp {
             Err(mpsc::TryRecvError::Disconnected) => None,
         };
         let current = cwd == &self.active_workspace().root_path;
-        let view = &mut self.conv.git_compare;
+        let view = &mut self.conv.git_ui.compare;
         view.rx = None;
         if let Some(result) = result.filter(|_| current) {
             view.tree = CompareTree::build(&result.files);
@@ -185,11 +185,11 @@ impl OxiApp {
     }
 
     pub(super) fn render_git_compare(&mut self, ui: &mut Ui) {
-        let loading = self.conv.git_compare.rx.is_some();
+        let loading = self.conv.git_ui.compare.rx.is_some();
         if !loading && !self.conv.git.busy {
             let fingerprint = worktree_fingerprint(&self.conv.git);
-            if self.conv.git_compare.data.is_none()
-                || self.conv.git_compare.fingerprint != Some(fingerprint)
+            if self.conv.git_ui.compare.data.is_none()
+                || self.conv.git_ui.compare.fingerprint != Some(fingerprint)
             {
                 self.request_git_compare();
             }
@@ -200,15 +200,15 @@ impl OxiApp {
         crate::ui::chrome::hairline(ui);
         ui.add_space(4.0);
 
-        let Some(data) = self.conv.git_compare.data.take() else {
+        let Some(data) = self.conv.git_ui.compare.data.take() else {
             return;
         };
         if let Some(error) = &data.error {
             ui.label(RichText::new(error).size(FS_SMALL).color(c_text_muted()));
-            self.conv.git_compare.data = Some(data);
+            self.conv.git_ui.compare.data = Some(data);
             return;
         }
-        let tree = std::mem::take(&mut self.conv.git_compare.tree);
+        let tree = std::mem::take(&mut self.conv.git_ui.compare.tree);
         ScrollArea::vertical()
             .id_salt("git_compare_scroll")
             .max_height(ui.available_height())
@@ -228,14 +228,14 @@ impl OxiApp {
                 ui.add_space(6.0);
                 self.render_compare_files(ui, &data, &tree);
             });
-        self.conv.git_compare.tree = tree;
+        self.conv.git_ui.compare.tree = tree;
         // A new comparison may have landed meanwhile only via `drain_git_compare`, which
         // runs outside rendering; putting the old one back cannot overwrite it.
-        self.conv.git_compare.data = Some(data);
+        self.conv.git_ui.compare.data = Some(data);
     }
 
     fn render_compare_header(&mut self, ui: &mut Ui, loading: bool) {
-        let data = self.conv.git_compare.data.as_ref();
+        let data = self.conv.git_ui.compare.data.as_ref();
         let shown_base = data.map(|data| data.base.clone()).unwrap_or_default();
         let bases = data.map(|data| data.bases.clone()).unwrap_or_default();
         let mut picked = None;
@@ -287,13 +287,14 @@ impl OxiApp {
         if let Some(base) = picked
             && base != shown_base
         {
-            self.conv.git_compare.base = base;
+            self.conv.git_ui.compare.base = base;
             self.request_git_compare();
         }
 
         let Some(data) = self
             .conv
-            .git_compare
+            .git_ui
+            .compare
             .data
             .as_ref()
             .filter(|d| d.error.is_none())
@@ -340,9 +341,9 @@ impl OxiApp {
         } else {
             data.commits.len().to_string()
         };
-        let collapsed = self.conv.git_compare.commits_collapsed;
+        let collapsed = self.conv.git_ui.compare.commits_collapsed;
         if compare_section_header(ui, &format!("Commits {count}"), collapsed, |_| {}) {
-            self.conv.git_compare.commits_collapsed = !collapsed;
+            self.conv.git_ui.compare.commits_collapsed = !collapsed;
         }
         if collapsed {
             return;
@@ -362,8 +363,8 @@ impl OxiApp {
     }
 
     fn render_compare_files(&mut self, ui: &mut Ui, data: &GitCompare, tree: &CompareTree) {
-        let collapsed = self.conv.git_compare.files_collapsed;
-        let mut flat = self.conv.git_compare.flat;
+        let collapsed = self.conv.git_ui.compare.files_collapsed;
+        let mut flat = self.conv.git_ui.compare.flat;
         let title = format!("Files changed {}", data.files.len());
         if compare_section_header(ui, &title, collapsed, |ui| {
             let (icon, hover) = if flat {
@@ -378,9 +379,9 @@ impl OxiApp {
                 flat = !flat;
             }
         }) {
-            self.conv.git_compare.files_collapsed = !collapsed;
+            self.conv.git_ui.compare.files_collapsed = !collapsed;
         }
-        self.conv.git_compare.flat = flat;
+        self.conv.git_ui.compare.flat = flat;
         if collapsed {
             return;
         }
@@ -401,7 +402,7 @@ impl OxiApp {
         depth: usize,
     ) {
         for dir in &tree.dirs {
-            let collapsed = self.conv.git_compare.collapsed.contains(&dir.path);
+            let collapsed = self.conv.git_ui.compare.collapsed.contains(&dir.path);
             let (rect, response) =
                 ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
             if ui.is_rect_visible(rect) {
@@ -441,9 +442,9 @@ impl OxiApp {
             }
             if response.clicked() {
                 if collapsed {
-                    self.conv.git_compare.collapsed.remove(&dir.path);
+                    self.conv.git_ui.compare.collapsed.remove(&dir.path);
                 } else {
-                    self.conv.git_compare.collapsed.insert(dir.path.clone());
+                    self.conv.git_ui.compare.collapsed.insert(dir.path.clone());
                 }
             }
             if !collapsed {
@@ -466,7 +467,7 @@ impl OxiApp {
         let file = &data.files[index];
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
-        let selected = self.conv.diff_view_open
+        let selected = self.conv.diff_view.open
             && self.conv.git.current_diff_path.as_deref() == Some(file.path.as_str())
             && self
                 .conv
@@ -621,7 +622,7 @@ impl OxiApp {
                 path: file.path.clone(),
                 old_path: file.old_path.clone(),
             });
-            self.conv.diff_view_open = true;
+            self.conv.diff_view.open = true;
             self.conv.editor.diff_tab_active = true;
         }
         if response.hovered() {

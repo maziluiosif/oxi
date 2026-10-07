@@ -37,10 +37,10 @@ impl OxiApp {
 
     pub(crate) fn close_editor_git_diff(&mut self) {
         self.request(crate::git::GitOp::ClearDiff);
-        self.conv.diff_view_open = false;
+        self.conv.diff_view.open = false;
         self.conv.editor.diff_tab_active = false;
         if self.conv.editor.documents.is_empty() {
-            self.conv.sidebar_mode = super::super::state::SidebarMode::Chats;
+            self.conv.sidebar.mode = super::super::state::SidebarMode::Chats;
             self.focus_active_view_next_frame();
         }
     }
@@ -72,11 +72,12 @@ impl OxiApp {
         } else {
             "Working Tree".to_owned()
         };
-        crate::ui::diff_view::DiffView::sync(&mut self.conv.git_diff_view, diff_text);
+        crate::ui::diff_view::DiffView::sync(&mut self.conv.diff_view.git, diff_text);
         let root = PathBuf::from(&self.active_workspace().root_path);
         let can_open = |path: &str| root.join(path).is_file();
         self.conv
-            .git_diff_view
+            .diff_view
+            .git
             .as_mut()?
             .show(ui, &source, &can_open, block_actions)
     }
@@ -90,18 +91,34 @@ impl OxiApp {
             }
         };
         let path = PathBuf::from(&self.active_workspace().root_path).join(path);
+        if let Some(document_path) = self.open_file_at_line(path, line) {
+            self.conv.editor.git_full_highlight_path = Some(document_path);
+        }
+    }
+
+    /// Open `path` in the editor (without revealing it in the Explorer) with the caret at the
+    /// start of 1-based `line`. Returns the opened document's path, `None` when it could not
+    /// be opened (outside the workspace, unreadable).
+    pub(crate) fn open_file_at_line(
+        &mut self,
+        path: PathBuf,
+        line: Option<usize>,
+    ) -> Option<PathBuf> {
+        let wanted = std::fs::canonicalize(&path).ok()?;
         self.conv.editor.show_diff = false;
         self.open_editor_file_only(path);
-        let Some(document) = self.conv.editor.active_document() else {
-            return;
-        };
+        let document = self
+            .conv
+            .editor
+            .active_document()
+            .filter(|document| document.path == wanted)?;
         let document_path = document.path.clone();
         if let Some(line) = line {
             let byte = line_start_byte(&document.content, line.saturating_sub(1));
             self.conv.editor.navigation_target = Some((document_path.clone(), byte..byte));
         }
-        self.conv.editor.git_full_highlight_path = Some(document_path);
         self.conv.editor.focus_editor_next_frame = true;
+        Some(document_path)
     }
 
     pub(super) fn render_editor_diff(&mut self, ui: &mut Ui) {
@@ -133,8 +150,8 @@ impl OxiApp {
             });
             return;
         }
-        crate::ui::diff_view::DiffView::sync(&mut self.conv.unsaved_diff_view, &diff);
-        let Some(view) = self.conv.unsaved_diff_view.as_mut() else {
+        crate::ui::diff_view::DiffView::sync(&mut self.conv.diff_view.unsaved, &diff);
+        let Some(view) = self.conv.diff_view.unsaved.as_mut() else {
             return;
         };
         let action = view.show(
@@ -175,15 +192,15 @@ impl OxiApp {
         let mut parent = path.parent();
         while let Some(directory) = parent {
             if directory.starts_with(&root) {
-                self.conv.explorer_expanded.insert(directory.to_path_buf());
+                self.conv.explorer.expanded.insert(directory.to_path_buf());
             }
             if directory == root {
                 break;
             }
             parent = directory.parent();
         }
-        self.conv.sidebar_mode = super::super::state::SidebarMode::Explorer;
-        self.conv.sidebar_open = true;
+        self.conv.sidebar.mode = super::super::state::SidebarMode::Explorer;
+        self.conv.sidebar.open = true;
     }
 }
 

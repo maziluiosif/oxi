@@ -111,6 +111,37 @@ fn tool_write_produces_diff() {
     assert!(diff.contains("+new content"));
 }
 
+/// New files follow the process umask like any other tool's output; replacing a file keeps
+/// its own mode (a private key stays private).
+#[cfg(unix)]
+#[test]
+fn tool_write_uses_default_mode_for_new_files_and_keeps_existing_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    let cwd = temp_workspace("write-modes");
+    let mode = |name: &str| fs::metadata(cwd.join(name)).unwrap().permissions().mode() & 0o777;
+
+    fs::write(cwd.join("reference.txt"), "x").unwrap();
+    let res = run_tool(
+        &cwd,
+        "write",
+        &json!({"path": "fresh.txt", "content": "new"}),
+        &all_enabled(),
+    );
+    assert!(!res.is_error, "{}", res.output);
+    assert_eq!(mode("fresh.txt"), mode("reference.txt"));
+
+    fs::write(cwd.join("secret.env"), "old").unwrap();
+    fs::set_permissions(cwd.join("secret.env"), fs::Permissions::from_mode(0o600)).unwrap();
+    let res = run_tool(
+        &cwd,
+        "write",
+        &json!({"path": "secret.env", "content": "rotated"}),
+        &all_enabled(),
+    );
+    assert!(!res.is_error, "{}", res.output);
+    assert_eq!(mode("secret.env"), 0o600);
+}
+
 #[test]
 fn tool_write_missing_content() {
     let cwd = temp_workspace("write-no-content");

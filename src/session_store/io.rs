@@ -38,8 +38,8 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
         let line = match line {
             Ok(line) => line,
             Err(e) => {
-                eprintln!(
-                    "[oxi] partially recovered session {session_file}: line {} could not be read: {e}",
+                log::warn!(
+                    "partially recovered session {session_file}: line {} could not be read: {e}",
                     line_idx + 1
                 );
                 break;
@@ -52,8 +52,8 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
         let value = match serde_json::from_str::<Value>(trimmed) {
             Ok(value) => value,
             Err(e) if saw_header => {
-                eprintln!(
-                    "[oxi] partially recovered session {session_file}: invalid JSON on line {}: {e}",
+                log::warn!(
+                    "partially recovered session {session_file}: invalid JSON on line {}: {e}",
                     line_idx + 1
                 );
                 break;
@@ -125,7 +125,16 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
     }
 
     let tmp_path = session_path.with_extension("jsonl.tmp");
-    let mut file = File::create(&tmp_path).map_err(|e| e.to_string())?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    // Transcripts carry tool output (file contents, environment, pasted secrets): owner-only,
+    // like settings.json, even where home directories are world-readable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp_path).map_err(|e| e.to_string())?;
 
     let session_id = session_file_stem_or_generated(&session_path);
     writeln!(
@@ -201,64 +210,13 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
 
     file.sync_all().map_err(|e| e.to_string())?;
     drop(file);
-    replace_synced_file(&tmp_path, &session_path)?;
+    if let Err(error) = crate::fsutil::install(&tmp_path, &session_path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error);
+    }
 
     session.session_file = Some(session_path.to_string_lossy().to_string());
     session.messages_loaded = true;
-    Ok(())
-}
-
-/// Install a synced temporary file without exposing a partial destination.
-fn replace_synced_file(tmp_path: &Path, destination: &Path) -> Result<(), String> {
-    let parent = destination
-        .parent()
-        .ok_or_else(|| "session destination has no parent".to_string())?;
-    #[cfg(windows)]
-    {
-        use rand::RngExt;
-        let retry = |mut action: Box<dyn FnMut() -> std::io::Result<()>>| {
-            let mut last = None;
-            for _ in 0..6 {
-                match action() {
-                    Ok(()) => return Ok(()),
-                    Err(e) => {
-                        last = Some(e);
-                        std::thread::sleep(std::time::Duration::from_millis(25));
-                    }
-                }
-            }
-            Err(last.unwrap().to_string())
-        };
-        if destination.exists() {
-            let random: u64 = rand::rng().random();
-            let backup = parent.join(format!(".oxi-session-backup-{random:016x}.tmp"));
-            let src = destination.to_path_buf();
-            let dst = backup.clone();
-            retry(Box::new(move || fs::rename(&src, &dst)))?;
-            let src = tmp_path.to_path_buf();
-            let dst = destination.to_path_buf();
-            if let Err(install_error) = retry(Box::new(move || fs::rename(&src, &dst))) {
-                let src = backup.clone();
-                let dst = destination.to_path_buf();
-                if let Err(rollback_error) = retry(Box::new(move || fs::rename(&src, &dst))) {
-                    return Err(format!(
-                        "{install_error}; session rollback failed: {rollback_error}; backup remains at {}",
-                        backup.display()
-                    ));
-                }
-                return Err(install_error);
-            }
-            let _ = fs::remove_file(backup);
-        } else {
-            fs::rename(tmp_path, destination).map_err(|e| e.to_string())?;
-        }
-    }
-    #[cfg(not(windows))]
-    fs::rename(tmp_path, destination).map_err(|e| e.to_string())?;
-
-    if let Ok(dir) = File::open(parent) {
-        let _ = dir.sync_all();
-    }
     Ok(())
 }
 

@@ -45,9 +45,7 @@ struct Registry {
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
 
 fn store_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
+    crate::app_dirs::data_dir()
         .join("acp")
         .join("commands.json")
 }
@@ -69,10 +67,7 @@ fn write_cache(path: &Path, cache: &HashMap<String, List>) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, json).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
-    }
+    let _ = crate::fsutil::write_atomic(path, json.as_bytes());
 }
 
 /// Parse the `availableCommands` array of an `available_commands_update`.

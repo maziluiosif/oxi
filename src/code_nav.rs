@@ -505,7 +505,7 @@ fn build_specs() -> HashMap<&'static str, Spec> {
             Ok(spec) => Some((language, spec)),
             Err(error) => {
                 // A grammar update renamed a node: lose navigation for that language only.
-                eprintln!("code navigation query for {language} failed: {error}");
+                log::warn!("code navigation query for {language} failed: {error}");
                 None
             }
         })

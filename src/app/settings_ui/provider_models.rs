@@ -160,7 +160,7 @@ impl OxiApp {
             move |rt| {
                 let client = match reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(30))
-                    .tls_danger_accept_invalid_certs(cfg.provider.allows_self_signed_tls())
+                    .tls_danger_accept_invalid_certs(cfg.allows_self_signed_tls())
                     .build()
                 {
                     Ok(c) => c,

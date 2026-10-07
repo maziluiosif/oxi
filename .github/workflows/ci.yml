@@ -111,11 +111,11 @@ jobs:
 
       - name: cargo clippy
         if: env.RUST == 'true'
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: cargo test
         if: env.RUST == 'true'
-        run: cargo test
+        run: cargo test --locked
 
   audit:
     needs: changes
@@ -162,10 +162,10 @@ jobs:
           key: macos-check
 
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: cargo test
-        run: cargo test
+        run: cargo test --locked
 
   windows-check:
     name: windows-check
@@ -194,9 +194,9 @@ jobs:
 
       # Lint the cfg(windows) code too, so platform-specific warnings can't reach a release.
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       # Run the suite too: path handling, shell launching and ACP spawning all differ on
       # Windows, and those bugs used to surface only after a release.
       - name: cargo test
-        run: cargo test
+        run: cargo test --locked

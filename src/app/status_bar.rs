@@ -28,8 +28,8 @@ impl OxiApp {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
 
-                    let sidebar_on = self.conv.sidebar_open
-                        && self.conv.sidebar_mode == crate::app::state::SidebarMode::Chats;
+                    let sidebar_on = self.conv.sidebar.open
+                        && self.conv.sidebar.mode == crate::app::state::SidebarMode::Chats;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_MENU, 20.0, sidebar_on)
                         .on_hover_text(if sidebar_on {
                             "Hide sidebar (Cmd/Ctrl+B)"
@@ -43,8 +43,8 @@ impl OxiApp {
                         );
                     }
 
-                    let explorer_on = self.conv.sidebar_open
-                        && self.conv.sidebar_mode == crate::app::state::SidebarMode::Explorer;
+                    let explorer_on = self.conv.sidebar.open
+                        && self.conv.sidebar.mode == crate::app::state::SidebarMode::Explorer;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_EXPLORER, 20.0, explorer_on)
                         .on_hover_text(if explorer_on {
                             "Hide workspace explorer (Cmd/Ctrl+E)"
@@ -76,7 +76,7 @@ impl OxiApp {
                         {
                             super::activity_window::toggle_activity_window(ui.ctx());
                         }
-                        let term_on = self.conv.terminal_open;
+                        let term_on = self.conv.terminal_panel.open;
                         if crate::ui::chrome::icon_button_plain(ui, ICON_TERMINAL, 20.0, term_on)
                             .on_hover_text("Toggle terminal panel (Cmd/Ctrl+`)")
                             .clicked()
@@ -85,7 +85,7 @@ impl OxiApp {
                                 crate::app::state::SettingsExitAction::ToggleTerminal,
                             );
                         }
-                        let git_on = self.conv.git_open;
+                        let git_on = self.conv.git_ui.open;
                         if crate::ui::chrome::icon_button_plain(ui, ICON_GIT, 20.0, git_on)
                             .on_hover_text(if git_on {
                                 "Hide git panel (Cmd/Ctrl+Shift+B)"
@@ -101,7 +101,7 @@ impl OxiApp {
 
                         if self.conv.git.repo {
                             let branches_on =
-                                self.conv.git_open && self.conv.git_tab == GitTab::Branches;
+                                self.conv.git_ui.open && self.conv.git_ui.tab == GitTab::Branches;
                             let mut label = self.conv.git.branch.clone();
                             if self.conv.git.ahead > 0 {
                                 label.push_str(&format!(" \u{2191}{}", self.conv.git.ahead));

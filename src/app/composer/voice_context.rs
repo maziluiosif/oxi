@@ -5,7 +5,7 @@ use crate::settings::LlmProviderKind;
 
 impl OxiApp {
     /// Round mic button: idle → click starts recording (lazy-loads the whisper model on
-    /// first use if needed); recording → click stops and transcribes into `conv.input`.
+    /// first use if needed); recording → click stops and transcribes into `conv.composer.input`.
     ///
     /// While `transcribing` (mic just turned off, waiting on model load + inference — can
     /// take a few seconds on first use) the button shows three pulsing dots instead of the
@@ -79,7 +79,7 @@ impl OxiApp {
     pub(crate) fn toggle_dictation(&mut self) {
         let Some(model_path) = self.active_voice_model_path() else {
             self.open_settings_page();
-            self.conv.settings_tab = crate::app::state::SettingsTab::Voice;
+            self.conv.settings_page.tab = crate::app::state::SettingsTab::Voice;
             return;
         };
         if self.conv.voice_ui.recording {
@@ -119,14 +119,14 @@ impl OxiApp {
                     match result {
                         Ok(text) if !text.trim().is_empty() => {
                             let text = text.trim();
-                            if !self.conv.input.is_empty()
-                                && !self.conv.input.ends_with(' ')
-                                && !self.conv.input.ends_with('\n')
+                            if !self.conv.composer.input.is_empty()
+                                && !self.conv.composer.input.ends_with(' ')
+                                && !self.conv.composer.input.ends_with('\n')
                             {
-                                self.conv.input.push(' ');
+                                self.conv.composer.input.push(' ');
                             }
-                            self.conv.input.push_str(text);
-                            self.conv.focus_chat_input_next_frame = true;
+                            self.conv.composer.input.push_str(text);
+                            self.conv.composer.focus_next_frame = true;
                         }
                         Ok(_) => {}
                         Err(e) => self.conv.voice_ui.error = Some(e),
@@ -296,9 +296,10 @@ impl OxiApp {
 
     fn estimated_active_context_chars(&self) -> usize {
         let key = self.active_session_key();
-        let current_input = self.conv.input.len()
+        let current_input = self.conv.composer.input.len()
             + self
                 .conv
+                .composer
                 .pending_images
                 .iter()
                 .map(|(_, data)| data.len() * 4 / 3)

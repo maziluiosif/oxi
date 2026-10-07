@@ -38,7 +38,7 @@ pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
 pub(crate) use explorer_tree::{ExplorerCache, git_status_color};
 pub(crate) use layout_cache::EditorLayoutCache;
 pub(crate) use media_view::MediaKind;
-pub(crate) use quick_diff::QuickDiff;
+pub(crate) use quick_diff::{PendingQuickDiff, QuickDiff};
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
@@ -46,7 +46,7 @@ impl OxiApp {
         self.conv.editor.editor_area = Some((ui.ctx().cumulative_frame_nr(), ui.max_rect()));
         self.render_editor_tabs(ui);
         if self.conv.editor.diff_tab_active
-            && self.conv.diff_view_open
+            && self.conv.diff_view.open
             && self.conv.git.diff.is_some()
         {
             self.render_editor_git_diff(ui);

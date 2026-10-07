@@ -28,9 +28,9 @@ impl OxiApp {
             .to_string_lossy()
             .replace('\\', "/");
         let attachment = selection_attachment(&document.content, start, end, &path);
-        self.conv.pending_texts.push(attachment);
+        self.conv.composer.pending_texts.push(attachment);
         self.reveal_chat_view();
-        self.conv.focus_chat_input_next_frame = true;
+        self.conv.composer.focus_next_frame = true;
     }
 }
 

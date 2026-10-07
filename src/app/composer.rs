@@ -207,13 +207,13 @@ impl OxiApp {
     }
 
     fn render_text_attachments(&mut self, ui: &mut Ui) {
-        if self.conv.pending_texts.is_empty() {
+        if self.conv.composer.pending_texts.is_empty() {
             return;
         }
         let scope = self.text_attachment_scope();
         let mut remove = None;
         ui.horizontal_wrapped(|ui| {
-            for (index, attachment) in self.conv.pending_texts.iter().enumerate() {
+            for (index, attachment) in self.conv.composer.pending_texts.iter().enumerate() {
                 if let crate::model::UserAttachment::Text { name, text } = attachment {
                     if ui
                         .button(format!(
@@ -235,23 +235,23 @@ impl OxiApp {
             }
         });
         if let Some(index) = remove {
-            self.conv.pending_texts.remove(index);
+            self.conv.composer.pending_texts.remove(index);
         }
     }
 
     /// Raise a short-lived inline notice under the composer (blocked send, rejected
     /// attachment, …). Replaces any previous notice.
     pub(crate) fn notify_composer(&mut self, msg: impl Into<String>) {
-        self.conv.composer_notice = Some((msg.into(), std::time::Instant::now()));
+        self.conv.composer.notice = Some((msg.into(), std::time::Instant::now()));
     }
 
     /// Small warning line inside the composer card; auto-expires.
     fn render_composer_notice(&mut self, ui: &mut Ui) {
-        let Some((msg, raised_at)) = self.conv.composer_notice.clone() else {
+        let Some((msg, raised_at)) = self.conv.composer.notice.clone() else {
             return;
         };
         if raised_at.elapsed().as_secs_f32() > COMPOSER_NOTICE_SECS {
-            self.conv.composer_notice = None;
+            self.conv.composer.notice = None;
             return;
         }
         ui.horizontal(|ui| {
@@ -274,12 +274,12 @@ impl OxiApp {
         let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
         let input_id = Id::new("composer_input");
         self.intercept_large_pastes(ui, input_id);
-        let can_send = !self.conv.input.trim().is_empty()
-            || !self.conv.pending_images.is_empty()
-            || !self.conv.pending_texts.is_empty();
-        let had_draft_content = !self.conv.input.is_empty()
-            || !self.conv.pending_images.is_empty()
-            || !self.conv.pending_texts.is_empty();
+        let can_send = !self.conv.composer.input.trim().is_empty()
+            || !self.conv.composer.pending_images.is_empty()
+            || !self.conv.composer.pending_texts.is_empty();
+        let had_draft_content = !self.conv.composer.input.is_empty()
+            || !self.conv.composer.pending_images.is_empty()
+            || !self.conv.composer.pending_texts.is_empty();
 
         // Focus state persists in egui memory across frames, so reading it here (before
         // the TextEdit runs) is exact, not one frame late.
@@ -311,7 +311,7 @@ impl OxiApp {
                         self.render_queue_panel(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
-                        if self.conv.editing_last_prompt.is_some() {
+                        if self.conv.composer.editing_last_prompt.is_some() {
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new("Editing previous prompt")
@@ -326,7 +326,7 @@ impl OxiApp {
                         }
 
                         // === Attachment thumbnails (above the text, like Cursor) ===
-                        if !self.conv.pending_images.is_empty() {
+                        if !self.conv.composer.pending_images.is_empty() {
                             self.render_attachment_thumbnails(ui);
                             ui.add_space(COMPOSER_GAP);
                         }
@@ -340,7 +340,7 @@ impl OxiApp {
                         // as the user types (both newlines and soft-wrap).
                         let mut te_output = composer_text_edit(
                             ui,
-                            &mut self.conv.input,
+                            &mut self.conv.composer.input,
                             input_id,
                             slash_menu_open,
                             plan_mode,
@@ -358,21 +358,21 @@ impl OxiApp {
                             te_output.response.rect,
                             te_output.response.has_focus(),
                         );
-                        if self.conv.focus_chat_input_next_frame {
+                        if self.conv.composer.focus_next_frame {
                             // Navigation should put the caret at the end of any existing draft,
                             // not at egui's default/start position.
-                            let end = CCursor::new(self.conv.input.chars().count());
+                            let end = CCursor::new(self.conv.composer.input.chars().count());
                             te_output
                                 .state
                                 .cursor
                                 .set_char_range(Some(CCursorRange::one(end)));
                             te_output.state.store(ui.ctx(), input_id);
                             te_output.response.request_focus();
-                            self.conv.focus_chat_input_next_frame = false;
+                            self.conv.composer.focus_next_frame = false;
                         }
 
                         let galley_h = te_output.galley.rect.height().min(160.0);
-                        self.conv.composer_measured_text_h = galley_h;
+                        self.conv.composer.measured_text_h = galley_h;
 
                         // Enter → send, Shift+Enter → newline; ↑/↓ → input history.
                         // Suppressed while the confirm modal is up: Enter there means
@@ -384,12 +384,12 @@ impl OxiApp {
                             && !shift_held
                             && !self.confirm_prompt_open()
                         {
-                            while self.conv.input.ends_with('\n') {
-                                self.conv.input.pop();
+                            while self.conv.composer.input.ends_with('\n') {
+                                self.conv.composer.input.pop();
                             }
-                            let can_send_now = !self.conv.input.trim().is_empty()
-                                || !self.conv.pending_images.is_empty()
-                                || !self.conv.pending_texts.is_empty();
+                            let can_send_now = !self.conv.composer.input.trim().is_empty()
+                                || !self.conv.composer.pending_images.is_empty()
+                                || !self.conv.composer.pending_texts.is_empty();
                             if can_send_now {
                                 self.send_message();
                             }
@@ -425,17 +425,17 @@ impl OxiApp {
         });
         let measured_h = row.response.rect.height();
         let draft_cleared = had_draft_content
-            && self.conv.input.is_empty()
-            && self.conv.pending_images.is_empty()
-            && self.conv.pending_texts.is_empty();
+            && self.conv.composer.input.is_empty()
+            && self.conv.composer.pending_images.is_empty()
+            && self.conv.composer.pending_texts.is_empty();
         if draft_cleared {
             // Sending clears the model after TextEdit has already laid out the old text in this
             // pass. Reset to the compact anchor before the second pass instead of carrying that
             // stale, tall measurement into it.
-            self.conv.composer_measured_full_h = 0.0;
+            self.conv.composer.measured_full_h = 0.0;
             ui.ctx().request_discard("composer draft cleared");
-        } else if (measured_h - self.conv.composer_measured_full_h).abs() > 0.5 {
-            self.conv.composer_measured_full_h = measured_h;
+        } else if (measured_h - self.conv.composer.measured_full_h).abs() > 0.5 {
+            self.conv.composer.measured_full_h = measured_h;
             // The floating rect was positioned earlier in this pass using the old height.
             // Re-run layout before painting instead of exposing one incorrectly anchored frame.
             ui.ctx().request_discard("composer height changed");
@@ -532,7 +532,7 @@ impl OxiApp {
                     crate::theme::c_on_accent(),
                     true,
                     ICON_SEND,
-                    if self.conv.editing_last_prompt.is_some() {
+                    if self.conv.composer.editing_last_prompt.is_some() {
                         "Restore changes and send"
                     } else {
                         "Send message"
@@ -605,7 +605,7 @@ impl OxiApp {
         let mut remove_idx: Option<usize> = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            for (i, (mime, data)) in self.conv.pending_images.iter().enumerate() {
+            for (i, (mime, data)) in self.conv.composer.pending_images.iter().enumerate() {
                 let tex = composer_thumb_texture(ui, data);
                 let size = match &tex {
                     Some(tex) => {
