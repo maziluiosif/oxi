@@ -113,6 +113,13 @@ mod tests {
             .unwrap();
         let path = dir.join("readme.md");
         let text = "![plain](test%20imagine.png)\n\n[![linked](test%20imagine.png)](https://example.com)\n\n| image | description |\n|---|---|\n| ![table](test%20imagine.png) | Table image |";
+        // Match the loader's local-file URI form independently of the Markdown resolver.
+        #[cfg(windows)]
+        let uri = format!(
+            "file:///{}",
+            image_path.to_str().unwrap().replace('\\', "/")
+        );
+        #[cfg(not(windows))]
         let uri = format!("file://{}", image_path.display());
         let start = std::time::Instant::now();
         let mut image_count = 0;
