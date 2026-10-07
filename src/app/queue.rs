@@ -11,9 +11,11 @@ impl OxiApp {
     /// Move the composer's text and attachments out, leaving it empty.
     pub(crate) fn take_composer_payload(&mut self) -> QueuedSend {
         QueuedSend {
-            text: std::mem::take(&mut self.conv.input).trim().to_string(),
-            images: std::mem::take(&mut self.conv.pending_images),
-            texts: std::mem::take(&mut self.conv.pending_texts),
+            text: std::mem::take(&mut self.conv.composer.input)
+                .trim()
+                .to_string(),
+            images: std::mem::take(&mut self.conv.composer.pending_images),
+            texts: std::mem::take(&mut self.conv.composer.pending_texts),
         }
     }
 
@@ -26,14 +28,14 @@ impl OxiApp {
         skip_autocompact: bool,
     ) {
         let draft = self.take_composer_payload_raw();
-        self.conv.input = queued.text;
-        self.conv.pending_images = queued.images;
-        self.conv.pending_texts = queued.texts;
+        self.conv.composer.input = queued.text;
+        self.conv.composer.pending_images = queued.images;
+        self.conv.composer.pending_texts = queued.texts;
         self.send_message_for(key, skip_autocompact);
         let leftover = self.take_composer_payload();
-        self.conv.input = draft.text;
-        self.conv.pending_images = draft.images;
-        self.conv.pending_texts = draft.texts;
+        self.conv.composer.input = draft.text;
+        self.conv.composer.pending_images = draft.images;
+        self.conv.composer.pending_texts = draft.texts;
         if !leftover.is_empty() {
             self.run_state_mut(key).queued.push_front(leftover);
         }
@@ -42,9 +44,9 @@ impl OxiApp {
     /// Like [`Self::take_composer_payload`] but keeps the draft text byte-for-byte.
     fn take_composer_payload_raw(&mut self) -> QueuedSend {
         QueuedSend {
-            text: std::mem::take(&mut self.conv.input),
-            images: std::mem::take(&mut self.conv.pending_images),
-            texts: std::mem::take(&mut self.conv.pending_texts),
+            text: std::mem::take(&mut self.conv.composer.input),
+            images: std::mem::take(&mut self.conv.composer.pending_images),
+            texts: std::mem::take(&mut self.conv.composer.pending_texts),
         }
     }
 
@@ -144,15 +146,15 @@ impl OxiApp {
             }
             Some(QueueAction::Edit(i)) => {
                 if let Some(item) = self.run_state_mut(key).queued.remove(i) {
-                    let draft = std::mem::take(&mut self.conv.input);
-                    self.conv.input = if draft.trim().is_empty() {
+                    let draft = std::mem::take(&mut self.conv.composer.input);
+                    self.conv.composer.input = if draft.trim().is_empty() {
                         item.text
                     } else {
                         format!("{}\n\n{}", item.text, draft.trim())
                     };
-                    self.conv.pending_images.extend(item.images);
-                    self.conv.pending_texts.extend(item.texts);
-                    self.conv.focus_chat_input_next_frame = true;
+                    self.conv.composer.pending_images.extend(item.images);
+                    self.conv.composer.pending_texts.extend(item.texts);
+                    self.conv.composer.focus_next_frame = true;
                 }
             }
             None => {}

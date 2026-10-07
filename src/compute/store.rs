@@ -22,10 +22,7 @@ pub struct SshCredentialStore {
 
 /// Legacy location from before SSH passwords moved into the OS keychain.
 fn legacy_credentials_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
-        .join("ssh_credentials.json")
+    crate::app_dirs::config_dir().join("ssh_credentials.json")
 }
 
 pub fn load_ssh_credentials() -> SshCredentialStore {

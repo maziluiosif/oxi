@@ -42,7 +42,7 @@ impl OxiApp {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        !self.conv.oauth_busy,
+                        !self.conv.settings_page.oauth_busy,
                         crate::ui::chrome::primary_button_widget("Sign in with ChatGPT"),
                     )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -50,7 +50,7 @@ impl OxiApp {
                 {
                     self.spawn_codex_oauth(ui.ctx());
                 }
-                if self.conv.oauth_busy {
+                if self.conv.settings_page.oauth_busy {
                     ui.add(egui::Spinner::new().size(13.0).color(c_text_muted()));
                     ui.label(
                         RichText::new("Waiting for the browser sign-in…")
@@ -68,13 +68,13 @@ impl OxiApp {
                 {
                     let mut s = load_oauth_store();
                     clear_codex(&mut s);
-                    self.conv.oauth_last_message = Some(match save_oauth_store(&s) {
+                    self.conv.settings_page.oauth_last_message = Some(match save_oauth_store(&s) {
                         Ok(()) => "Signed out Codex OAuth.".into(),
                         Err(e) => format!("Could not update the OS keychain: {e}"),
                     });
                 }
             });
-            if let Some(ref msg) = self.conv.oauth_last_message {
+            if let Some(ref msg) = self.conv.settings_page.oauth_last_message {
                 ui.add_space(6.0);
                 ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
             }
@@ -84,11 +84,11 @@ impl OxiApp {
     // ── OAuth spawn helpers ───────────────────────────────────────────────────
 
     fn spawn_codex_oauth(&mut self, ctx: &egui::Context) {
-        if self.conv.oauth_busy {
+        if self.conv.settings_page.oauth_busy {
             return;
         }
-        self.conv.oauth_busy = true;
-        self.conv.oauth_last_message = None;
+        self.conv.settings_page.oauth_busy = true;
+        self.conv.settings_page.oauth_last_message = None;
         let (tx, rx) = std::sync::mpsc::channel();
         self.conn.oauth_rx = Some(rx);
         let ctx = ctx.clone();

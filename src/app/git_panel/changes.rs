@@ -133,14 +133,15 @@ impl OxiApp {
                 (GitTab::History, "History"),
                 (GitTab::Compare, "Compare"),
             ] {
-                let selected = self.conv.git_tab == tab;
+                let selected = self.conv.git_ui.tab == tab;
                 let n = match tab {
                     GitTab::Changes => self.conv.git.staged.len() + self.conv.git.unstaged.len(),
                     GitTab::Branches => self.conv.git.branches.len(),
                     GitTab::History => self.conv.git.log.len(),
                     GitTab::Compare => self
                         .conv
-                        .git_compare
+                        .git_ui
+                        .compare
                         .data
                         .as_ref()
                         .map_or(0, |data| data.commits.len()),
@@ -151,7 +152,7 @@ impl OxiApp {
                     label.to_string()
                 };
                 if crate::ui::chrome::pill_tab(ui, &label, selected) {
-                    self.conv.git_tab = tab;
+                    self.conv.git_ui.tab = tab;
                 }
             }
         });
@@ -168,7 +169,7 @@ impl OxiApp {
         ui.add_space(2.0);
         crate::ui::chrome::settings_text_area(
             ui,
-            &mut self.conv.git_commit_message,
+            &mut self.conv.git_ui.commit_message,
             "Commit message…",
             3,
         );
@@ -176,7 +177,7 @@ impl OxiApp {
 
         let gen_active = self.commit_gen_active();
         let staged_empty = self.conv.git.staged.is_empty();
-        let msg_empty = self.conv.git_commit_message.trim().is_empty();
+        let msg_empty = self.conv.git_ui.commit_message.trim().is_empty();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
             let commit_resp = ui
@@ -192,9 +193,9 @@ impl OxiApp {
                     "Write or generate a commit message"
                 });
             if commit_resp.clicked() {
-                let msg = self.conv.git_commit_message.clone();
+                let msg = self.conv.git_ui.commit_message.clone();
                 self.request(GitOp::Commit(msg));
-                self.conv.git_commit_message.clear();
+                self.conv.git_ui.commit_message.clear();
             }
             let (gen_icon, gen_label) = if gen_active {
                 ("", "Generating…")
@@ -214,20 +215,20 @@ impl OxiApp {
             .clicked()
             {
                 // Ask the worker for the diff; the response handler starts the LLM run.
-                self.conv.commit_gen_error = None;
-                self.conv.commit_gen_pending = true;
+                self.conv.git_ui.commit_gen_error = None;
+                self.conv.git_ui.commit_gen_pending = true;
                 self.request(GitOp::CollectCommitDiff);
             }
         });
 
-        if let Some(err) = self.conv.commit_gen_error.clone() {
+        if let Some(err) = self.conv.git_ui.commit_gen_error.clone() {
             ui.add_space(4.0);
             if crate::ui::chrome::dismissible_notice(
                 ui,
                 "commit_gen_error",
                 &format!("Generate failed: {err}"),
             ) {
-                self.conv.commit_gen_error = None;
+                self.conv.git_ui.commit_gen_error = None;
             }
         }
 
@@ -352,14 +353,22 @@ impl OxiApp {
             .is_some_and(|p| rect.contains(p));
 
         // Selection highlight if this is the currently-viewed diff.
-        let selected = self
-            .conv
-            .git
-            .current_diff_path
-            .as_deref()
-            .map(|p| p == entry.path)
-            .unwrap_or(false)
-            && self.conv.git.current_diff_staged.unwrap_or(false) == staged;
+        let selected = match self.active_diff_target() {
+            Some((path, source)) => {
+                path == entry.path
+                    && matches!(
+                        (source, staged),
+                        (crate::app::file_explorer::DiffSource::Staged, true)
+                            | (crate::app::file_explorer::DiffSource::WorkTree, false)
+                    )
+            }
+            None => {
+                self.conv.diff_view.open
+                    && self.conv.editor.diff_tab_active
+                    && self.conv.git.current_diff_path.as_deref() == Some(entry.path.as_str())
+                    && self.conv.git.current_diff_staged.unwrap_or(false) == staged
+            }
+        };
 
         let fill = if selected {
             c_row_active()
@@ -491,17 +500,25 @@ impl OxiApp {
             },
         );
 
-        // Like VS Code: a click shows the change as a diff; the hover action (or the diff's
-        // own "Open file" button / line numbers) jumps into the editable file.
+        // Like VS Code: a click shows the change as a diff in the file's editor tab (editable
+        // for working tree changes); the hover action opens the plain file.
         if open_file {
             self.open_changed_file(&entry.path);
         } else if response.clicked() {
-            self.request(GitOp::ShowDiff {
-                path: entry.path.clone(),
-                staged,
-            });
-            self.conv.diff_view_open = true;
-            self.conv.editor.diff_tab_active = true;
+            let source = if staged {
+                crate::app::file_explorer::DiffSource::Staged
+            } else {
+                crate::app::file_explorer::DiffSource::WorkTree
+            };
+            // A deleted or binary file has no editable text: show its patch instead.
+            if !self.open_diff_editor(&entry.path, source, None) {
+                self.request(GitOp::ShowDiff {
+                    path: entry.path.clone(),
+                    staged,
+                });
+                self.conv.diff_view.open = true;
+                self.conv.editor.diff_tab_active = true;
+            }
         }
         if hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -522,70 +539,11 @@ impl OxiApp {
             path: relative.to_owned(),
             line: first_changed_line.map(|line| line + 1),
         });
-    }
-
-    /// Full-area diff viewer that replaces the chat window while a diff is open.
-    /// Constrained to the same centered column as the chat header/transcript so it
-    /// stays aligned when the side panels are closed. Easy to close via the close
-    /// button or Esc.
-    pub(crate) fn render_diff_view(&mut self, ui: &mut Ui, title: &str, column_center_w: f32) {
-        // Close the viewer on Esc.
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.request(GitOp::ClearDiff);
-            self.conv.diff_view_open = false;
-            self.focus_active_view_next_frame();
-        }
-
-        let col_w = column_center_w.min(crate::theme::chat_column_max_width(ui.ctx()));
-        let pad = ((column_center_w - col_w) * 0.5).max(0.0);
-
-        // Header bar: title + metadata on the left, close button on the right,
-        // constrained to the centered chat column like the chat header above it.
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            if pad > 0.0 {
-                ui.add_space(pad);
-            }
-            ui.allocate_ui_with_layout(
-                egui::vec2(col_w, 24.0),
-                egui::Layout::left_to_right(Align::Center),
-                |ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.label(RichText::new("Diff").size(FS_H3).color(c_text()).strong());
-                    ui.label(
-                        RichText::new(title)
-                            .size(FS_SMALL)
-                            .color(c_text_muted())
-                            .monospace(),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, 24.0, false)
-                            .on_hover_text("Close diff (Esc)")
-                            .clicked()
-                        {
-                            self.request(GitOp::ClearDiff);
-                            self.conv.diff_view_open = false;
-                            self.focus_active_view_next_frame();
-                        }
-                    });
-                },
-            );
-        });
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            if pad > 0.0 {
-                ui.add_space(pad);
-            }
-            ui.allocate_ui(egui::vec2(col_w, 1.0), |ui| {
-                crate::ui::chrome::hairline(ui);
-            });
-        });
-        ui.add_space(6.0);
-
-        // The diff body uses the full column width: side-by-side panes need the room.
-        if let Some(action) = self.show_git_diff_view(ui) {
-            self.apply_diff_action(action);
+        if let Some(index) = self.conv.editor.active.filter(|&index| {
+            self.conv.editor.git_full_highlight_path.as_ref()
+                == Some(&self.conv.editor.documents[index].path)
+        }) {
+            self.close_document_diff(index);
         }
     }
 }

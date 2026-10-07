@@ -200,3 +200,25 @@ fn web_search_duckduckgo_default_survives_bursts_live() {
         assert!(out.contains("Search results for:"));
     }
 }
+
+#[test]
+fn searxng_cert_checks_are_skipped_only_on_the_local_network() {
+    for local in [
+        "https://localhost:8888/search",
+        "https://127.0.0.1/search",
+        "https://192.168.1.20:8443/search",
+        "https://[fd00::1]/search",
+        "https://searx.local/search",
+        "https://searxng/search",
+        "https://box.home.arpa/search",
+    ] {
+        assert!(is_local_destination(local), "{local}");
+    }
+    for public in [
+        "https://8.8.8.8/search",
+        "https://[2001:4860:4860::8888]/search",
+        "not a url",
+    ] {
+        assert!(!is_local_destination(public), "{public}");
+    }
+}

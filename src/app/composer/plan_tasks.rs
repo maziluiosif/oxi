@@ -126,7 +126,7 @@ impl OxiApp {
             let run = self.run_state_mut(key);
             run.plan_mode = false;
             self.save_settings_quietly();
-            self.conv.focus_chat_input_next_frame = true;
+            self.conv.composer.focus_next_frame = true;
         }
     }
 
@@ -149,7 +149,7 @@ impl OxiApp {
             return;
         }
         let (implement, dismiss) =
-            render_plan_ready_actions(ui, self.conv.editing_last_prompt.is_some());
+            render_plan_ready_actions(ui, self.conv.composer.editing_last_prompt.is_some());
         if dismiss {
             self.run_state_mut(key).last_turn_planned = false;
         }
@@ -158,8 +158,8 @@ impl OxiApp {
             run.plan_mode = false;
             run.last_turn_planned = false;
             self.save_settings_quietly();
-            let draft = std::mem::take(&mut self.conv.input);
-            self.conv.input = if draft.trim().is_empty() {
+            let draft = std::mem::take(&mut self.conv.composer.input);
+            self.conv.composer.input = if draft.trim().is_empty() {
                 "Implement the plan above.".to_string()
             } else {
                 format!("Implement the plan above. {}", draft.trim())

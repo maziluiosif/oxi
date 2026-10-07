@@ -1,7 +1,7 @@
 //! Right-click editing menu and Linux middle-click paste for the chat input.
 //!
 //! egui's `TextEdit` handles keyboard shortcuts but has no context menu, and it does not
-//! read the X11/Wayland primary selection. Both operate on `conv.input` directly using the
+//! read the X11/Wayland primary selection. Both operate on `conv.composer.input` directly using the
 //! TextEdit's char-based cursor state.
 
 use super::*;
@@ -14,10 +14,11 @@ impl OxiApp {
         let mut index = 1;
         let name = loop {
             let candidate = format!("pasted-{index}.txt");
-            if !self.conv.pending_texts.iter().any(|a| matches!(a, crate::model::UserAttachment::Text { name, .. } if name == &candidate)) { break candidate; }
+            if !self.conv.composer.pending_texts.iter().any(|a| matches!(a, crate::model::UserAttachment::Text { name, .. } if name == &candidate)) { break candidate; }
             index += 1;
         };
         self.conv
+            .composer
             .pending_texts
             .push(crate::model::UserAttachment::Text {
                 name,
@@ -65,7 +66,7 @@ impl OxiApp {
                 return;
             }
             let at = galley.cursor_from_pos(pos - galley_pos).index.0;
-            let caret = replace_char_range(&mut self.conv.input, at..at, &text);
+            let caret = replace_char_range(&mut self.conv.composer.input, at..at, &text);
             set_char_range(ui.ctx(), input_id, caret..caret);
         }
 
@@ -77,7 +78,7 @@ impl OxiApp {
             })
             .filter(|r| !r.is_empty());
         let caret = cursor.map(|r| r.primary.index.0);
-        let has_text = !self.conv.input.is_empty();
+        let has_text = !self.conv.composer.input.is_empty();
 
         response.context_menu(|ui| {
             ui.set_min_width(140.0);
@@ -87,8 +88,8 @@ impl OxiApp {
                 && let Some(range) = selection.clone()
             {
                 ui.ctx()
-                    .copy_text(char_slice(&self.conv.input, range.clone()).to_string());
-                let caret = replace_char_range(&mut self.conv.input, range, "");
+                    .copy_text(char_slice(&self.conv.composer.input, range.clone()).to_string());
+                let caret = replace_char_range(&mut self.conv.composer.input, range, "");
                 set_char_range(ui.ctx(), input_id, caret..caret);
                 ui.close();
             }
@@ -98,7 +99,7 @@ impl OxiApp {
                 && let Some(range) = selection.clone()
             {
                 ui.ctx()
-                    .copy_text(char_slice(&self.conv.input, range).to_string());
+                    .copy_text(char_slice(&self.conv.composer.input, range).to_string());
                 ui.close();
             }
             if ui.button("Paste").clicked() {
@@ -110,9 +111,9 @@ impl OxiApp {
                         ui.close();
                         return;
                     }
-                    let at = caret.unwrap_or_else(|| self.conv.input.chars().count());
+                    let at = caret.unwrap_or_else(|| self.conv.composer.input.chars().count());
                     let range = selection.clone().unwrap_or(at..at);
-                    let caret = replace_char_range(&mut self.conv.input, range, &text);
+                    let caret = replace_char_range(&mut self.conv.composer.input, range, &text);
                     set_char_range(ui.ctx(), input_id, caret..caret);
                 }
                 ui.close();
@@ -122,7 +123,11 @@ impl OxiApp {
                 .add_enabled(has_text, egui::Button::new("Select all"))
                 .clicked()
             {
-                set_char_range(ui.ctx(), input_id, 0..self.conv.input.chars().count());
+                set_char_range(
+                    ui.ctx(),
+                    input_id,
+                    0..self.conv.composer.input.chars().count(),
+                );
                 ui.close();
             }
         });

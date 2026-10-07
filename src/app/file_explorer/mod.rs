@@ -5,6 +5,7 @@ use crate::theme::c_warning_fg;
 use eframe::egui::{self, RichText, Ui};
 
 mod code_navigation;
+mod diff_editor;
 mod documents;
 mod editor_body;
 mod editor_commands;
@@ -18,10 +19,10 @@ mod file_picker;
 mod find_replace;
 mod layout_cache;
 mod line_layout;
+mod markdown_preview;
 mod media_view;
 mod minimap;
 mod navigation_diff;
-mod quick_diff;
 mod safety;
 mod support;
 mod syntax_window;
@@ -35,19 +36,19 @@ pub(crate) use find_replace::{FIND_FIELD_ID, FindCache};
 pub(crate) use minimap::MinimapGeometry;
 pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
 
+pub(crate) use diff_editor::{DiffSource, DocumentDiff};
 pub(crate) use explorer_tree::{ExplorerCache, git_status_color};
 pub(crate) use layout_cache::EditorLayoutCache;
 pub(crate) use media_view::MediaKind;
-pub(crate) use quick_diff::QuickDiff;
 
 impl OxiApp {
     pub(crate) fn render_text_editor(&mut self, ui: &mut Ui) {
         self.poll_code_navigation();
         self.conv.editor.editor_area = Some((ui.ctx().cumulative_frame_nr(), ui.max_rect()));
         self.render_editor_tabs(ui);
-        if self.conv.editor.diff_tab_active
-            && self.conv.diff_view_open
-            && self.conv.git.diff.is_some()
+        let git_diff_open = self.conv.diff_view.open && self.conv.git.diff.is_some();
+        if git_diff_open
+            && (self.conv.editor.diff_tab_active || self.conv.editor.active_document().is_none())
         {
             self.render_editor_git_diff(ui);
             return;
@@ -79,15 +80,20 @@ impl OxiApp {
             self.conv.editor.error = None;
         }
 
+        if self.conv.editor.markdown_preview_active
+            && self.conv.editor.active_document().is_some_and(|document| {
+                document.markdown_preview_open && document.supports_markdown_preview()
+            })
+        {
+            self.render_editor_markdown_preview(ui);
+            return;
+        }
+
         if self.conv.editor.find_open {
             // Find floats over the bottom of the editor instead of participating in layout.
             // Opening/closing it therefore cannot resize the editor viewport or alter its scroll.
             let editor_rect = ui.available_rect_before_wrap();
-            if self.conv.editor.show_diff {
-                self.render_editor_diff(ui);
-            } else {
-                self.render_editor_body(ui);
-            }
+            self.render_editor_document(ui);
             let panel_height = self.find_panel_height();
             let panel_rect = egui::Rect::from_min_size(
                 egui::pos2(editor_rect.left(), editor_rect.bottom() - panel_height),
@@ -99,8 +105,20 @@ impl OxiApp {
                     .sense(egui::Sense::hover()),
                 |ui| self.render_find_replace(ui),
             );
-        } else if self.conv.editor.show_diff {
-            self.render_editor_diff(ui);
+        } else {
+            self.render_editor_document(ui);
+        }
+    }
+
+    /// The active document: its diff when diff mode is on, otherwise the plain editor.
+    fn render_editor_document(&mut self, ui: &mut Ui) {
+        if self
+            .conv
+            .editor
+            .active_document()
+            .is_some_and(|document| document.diff.is_some())
+        {
+            self.render_diff_editor(ui);
         } else {
             self.render_editor_body(ui);
         }

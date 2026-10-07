@@ -19,6 +19,13 @@ cargo run --release
 Debug builds work too (`cargo run`), but the release profile is closer to what CI/release
 artifacts ship and is noticeably more responsive for UI work.
 
+Published binaries are built with `cargo build --profile dist`: the release profile plus thin
+LTO and a single codegen unit, about 11% smaller. It takes several minutes longer to build, so
+it is kept out of the everyday `--release` loop.
+
+Diagnostics go to `oxi.log` next to `settings.json` (Settings → About → Open log); set
+`OXI_LOG=debug` for more detail. Panics land in `crash.log` in the same folder.
+
 ## Before opening a PR
 
 CI (`.github/workflows/ci.yml`) runs these three checks on every push and PR; run them
@@ -41,8 +48,21 @@ explaining why it's acceptable.
 
 ## Code layout
 
-Start from the [Architecture](README.md#architecture) section of the README for the
-module map. A few conventions worth knowing before you dive in:
+| Path | What lives there |
+| --- | --- |
+| `src/app/` | The egui app: `OxiApp` and its state (`state.rs`), one module per surface (composer, sidebar, conversation, editor in `file_explorer/`, git panel, settings) and the per-frame drains of background work. |
+| `src/ui/` | Reusable widgets and painters: chrome, chat messages, the diff view, markdown. |
+| `src/agent/` | Agent runs: provider loops (`openai.rs`, `anthropic.rs`, `codex_responses.rs`), tools, approvals, MCP and ACP clients. |
+| `src/settings/`, `src/secrets.rs` | `settings.json` and the OS keychain. |
+| `src/session_store/` | Chat transcripts on disk (JSONL). |
+| `src/git/`, `src/git.rs` | libgit2 operations, snapshots of agent turns, hunk staging. |
+| `src/compute/` | SSH connections and tunnels to remote model runtimes. |
+| `src/router/` | Router (auto) provider: task classification, quotas, spend ledger. |
+| `src/fsutil.rs` | Crash-safe file replacement for oxi's own files and the agent's file tools; prefer it over `fs::write` for app state. |
+| `src/logging.rs` | `oxi.log` and `crash.log`. Use `log::warn!` / `log::error!` rather than `eprintln!`. |
+| `src/os_open.rs` | Opening files and folders with the OS; never through a shell. |
+
+A few conventions worth knowing before you dive in:
 
 - Tool implementations live under `src/agent/tools/`; path-based tools must go through
   `paths::resolve_under_cwd`/`resolve_under_cwd_for_create` so they can't escape the

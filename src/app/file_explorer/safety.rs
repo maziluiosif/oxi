@@ -29,10 +29,10 @@ impl OxiApp {
             self.conv.editor.focus_editor_next_frame = true;
         } else if self.conv.editor.documents.is_empty()
             && !(self.conv.editor.diff_tab_active
-                && self.conv.diff_view_open
+                && self.conv.diff_view.open
                 && self.conv.git.diff.is_some())
         {
-            self.conv.sidebar_mode = SidebarMode::Chats;
+            self.conv.sidebar.mode = SidebarMode::Chats;
             self.focus_active_view_next_frame();
         }
     }
@@ -53,7 +53,7 @@ impl OxiApp {
             && (self.conv.editor.documents.iter().any(|d| d.is_dirty()) || self.settings_dirty())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.conv.settings_exit_prompt = None;
+            self.conv.settings_page.exit_prompt = None;
             self.conv.editor.prompt = Some(EditorPrompt::Exit);
         }
     }

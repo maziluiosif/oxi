@@ -1,10 +1,12 @@
 //! Remote compute targets: SSH tunnels to model runtimes (Ollama / LM Studio) running on
 //! another host reachable only over SSH.
 
+mod connect;
 mod ssh;
 pub mod store;
 mod tunnel;
 
+pub use connect::take_observed_host_keys;
 pub use ssh::exec as ssh_exec;
 pub use store::{load_ssh_credentials, save_ssh_credentials};
 pub use tunnel::{TunnelError, TunnelManager};
@@ -40,9 +42,9 @@ pub async fn resolve_base_url(
                 .flatten()
         })
         .unwrap_or_default();
-    let ok = tunnels
+    let local_port = tunnels
         .ensure_tunnel(key, ssh, password)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(format!("http://127.0.0.1:{}/v1", ok.local_port))
+    Ok(format!("http://127.0.0.1:{local_port}/v1"))
 }

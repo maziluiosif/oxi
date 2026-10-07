@@ -41,9 +41,9 @@ impl OxiApp {
         // The panel can come up open straight from settings (git_open persisted), so
         // make sure the worker exists and we don't sit on a stale "Not a git repository"
         // default state.
-        if self.conv.git_rx.is_none() {
+        if self.conv.git_ui.rx.is_none() {
             self.ensure_git_channels();
-            let _ = self.conv.git_tx.as_ref().map(|t| t.send(GitOp::Refresh));
+            let _ = self.conv.git_ui.tx.as_ref().map(|t| t.send(GitOp::Refresh));
         }
         ui.set_min_width(ui.max_rect().width());
         ui.set_min_height(ui.max_rect().height());
@@ -91,7 +91,7 @@ impl OxiApp {
                     ui.add_space(6.0);
                 }
 
-                match self.conv.git_tab {
+                match self.conv.git_ui.tab {
                     GitTab::Changes => self.render_git_changes(ui),
                     GitTab::Branches => self.render_git_branches(ui),
                     GitTab::History => self.render_git_history(ui),

@@ -264,14 +264,37 @@ pub(super) fn render_inline_until(
                             Event::TaskListMarker(done) => {
                                 label.push_str(if done { "[x] " } else { "[ ] " });
                             }
+                            Event::Start(Tag::Image { dest_url, .. }) => {
+                                if !label.is_empty() {
+                                    ui.add(Hyperlink::from_label_and_url(
+                                        RichText::new(std::mem::take(&mut label))
+                                            .color(c_accent())
+                                            .size(SZ_BODY),
+                                        &dest,
+                                    ));
+                                }
+                                let mut alt = String::new();
+                                for inner in it.by_ref() {
+                                    match inner {
+                                        Event::End(TagEnd::Image) => break,
+                                        Event::Text(text) | Event::Code(text) => {
+                                            alt.push_str(&text)
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                render_markdown_inline_image(ui, wrap_w, &dest_url, &alt, false);
+                            }
                             Event::Start(nested) => consume_until_end(it, nested.to_end()),
                             _ => {}
                         }
                     }
-                    ui.add(Hyperlink::from_label_and_url(
-                        RichText::new(label).color(c_accent()).size(SZ_BODY),
-                        dest,
-                    ));
+                    if !label.is_empty() {
+                        ui.add(Hyperlink::from_label_and_url(
+                            RichText::new(label).color(c_accent()).size(SZ_BODY),
+                            dest,
+                        ));
+                    }
                 }
                 Event::Start(Tag::Image { dest_url, .. }) => {
                     if !job.text.is_empty() {

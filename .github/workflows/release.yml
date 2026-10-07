@@ -118,14 +118,14 @@ jobs:
             libgl1-mesa-dev
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --profile dist --target ${{ matrix.target }}
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
         env:
           OXI_VERSION: ${{ needs.changelog.outputs.version }}
         run: |
-          bin="target/${{ matrix.target }}/release/oxi"
+          bin="target/${{ matrix.target }}/dist/oxi"
           # Wrap the binary in a proper .app bundle so Finder launches the GUI
           # directly (no Terminal window, correct icon).
           bash scripts/bundle-macos.sh "$bin" dist
@@ -135,7 +135,7 @@ jobs:
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          bin="target/${{ matrix.target }}/release/oxi"
+          bin="target/${{ matrix.target }}/dist/oxi"
           tar -czf "${{ matrix.name }}.tar.gz" -C "$(dirname "$bin")" oxi
           ls -la "${{ matrix.name }}.tar.gz"
 
@@ -143,7 +143,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/oxi.exe" -DestinationPath "${{ matrix.name }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/dist/oxi.exe" -DestinationPath "${{ matrix.name }}.zip"
 
       - name: Upload packaged binary
         uses: actions/upload-artifact@v7

@@ -21,16 +21,16 @@ impl OxiApp {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             let resp = ui.add(
-                egui::TextEdit::singleline(&mut self.conv.git_new_branch)
+                egui::TextEdit::singleline(&mut self.conv.git_ui.new_branch)
                     .hint_text("branch name…")
                     .desired_width(ui.available_width() - 78.0),
             );
             let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if crate::ui::chrome::primary_button(ui, "Create").clicked() || enter {
-                let name = self.conv.git_new_branch.trim().to_string();
+                let name = self.conv.git_ui.new_branch.trim().to_string();
                 if !name.is_empty() {
                     self.request(GitOp::NewBranch(name));
-                    self.conv.git_new_branch.clear();
+                    self.conv.git_ui.new_branch.clear();
                 }
             }
         });
@@ -139,7 +139,7 @@ impl OxiApp {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 40.0), Sense::click());
         let hovered = response.hovered();
         // The commit whose diff is open (ShowCommit records its hash as the diff path).
-        let selected = self.conv.diff_view_open
+        let selected = self.conv.diff_view.open
             && self.conv.git.current_diff_path.as_deref() == Some(commit.hash.as_str());
         let fill = if selected {
             c_row_active()
@@ -191,7 +191,7 @@ impl OxiApp {
         );
         if response.clicked() {
             self.request(GitOp::ShowCommit(commit.hash.clone()));
-            self.conv.diff_view_open = true;
+            self.conv.diff_view.open = true;
             // Open the commit diff as an editor tab, like working-tree file diffs.
             self.conv.editor.diff_tab_active = true;
         } else if response.secondary_clicked() {

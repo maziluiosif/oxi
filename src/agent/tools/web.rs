@@ -2,8 +2,8 @@
 //! `web_fetch` (URL → readable text).
 //!
 //! Both are classified as read-only by the provider loops, so they execute inside
-//! `tokio::task::spawn_blocking`. We drive the async `reqwest` client from there using a small
-//! current-thread runtime, which keeps these helpers synchronous like the other tools.
+//! `tokio::task::spawn_blocking`. We drive the async `reqwest` client from there on the shared
+//! runtime, which keeps these helpers synchronous like the other tools.
 
 use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
@@ -50,8 +50,9 @@ struct HttpResponse {
     body: String,
 }
 
-/// Perform a blocking HTTP GET. `accept_invalid_certs` is enabled for the user's local SearXNG
-/// instance (typically a self-signed cert on an mDNS host); it stays off for arbitrary fetches.
+/// Perform a blocking HTTP GET. `accept_invalid_certs` is enabled for a SearXNG instance on this
+/// machine or the local network (typically a self-signed cert on an mDNS host); it stays off for
+/// public instances and arbitrary fetches.
 fn http_get(
     url: &str,
     query: &[(&str, &str)],
@@ -59,11 +60,7 @@ fn http_get(
     user_agent: &str,
     headers: &[(&str, &str)],
 ) -> Result<HttpResponse, String> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("runtime: {e}"))?;
-    rt.block_on(async {
+    crate::runtime::block_on(async {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .user_agent(user_agent)
@@ -91,7 +88,7 @@ fn http_get(
             content_type,
             body,
         })
-    })
+    })?
 }
 
 pub(crate) fn tool_web_search(
@@ -122,7 +119,7 @@ pub(crate) fn tool_web_search(
     let resp = http_get(
         &url,
         &[("q", query), ("format", "json")],
-        true,
+        is_local_destination(&url),
         DEFAULT_USER_AGENT,
         &[],
     )?;
@@ -429,6 +426,41 @@ fn ip_is_private_or_special(ip: IpAddr) -> bool {
     }
 }
 
+/// Whether `url` points at this machine or the local network, where a self-signed certificate
+/// is the norm: a private/loopback address, a `.local`/`.lan`-style or single-label name, or a
+/// name that only resolves to private addresses. Public hosts get their certificates checked.
+fn is_local_destination(url: &str) -> bool {
+    let Ok(url) = url::Url::parse(url) else {
+        return false;
+    };
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip_is_private_or_special(ip.into()),
+        Some(url::Host::Ipv6(ip)) => ip_is_private_or_special(ip.into()),
+        Some(url::Host::Domain(host)) => {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            const LOCAL_SUFFIXES: [&str; 5] =
+                [".localhost", ".local", ".lan", ".home.arpa", ".internal"];
+            if host == "localhost"
+                || !host.contains('.')
+                || LOCAL_SUFFIXES.iter().any(|suffix| host.ends_with(suffix))
+            {
+                return true;
+            }
+            let port = url.port_or_known_default().unwrap_or(443);
+            (host.as_str(), port)
+                .to_socket_addrs()
+                .is_ok_and(|addresses| {
+                    let addresses: Vec<_> = addresses.collect();
+                    !addresses.is_empty()
+                        && addresses
+                            .iter()
+                            .all(|address| ip_is_private_or_special(address.ip()))
+                })
+        }
+        None => false,
+    }
+}
+
 fn public_addresses_for_url(url: &url::Url) -> Result<Vec<std::net::SocketAddr>, String> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(err("url must use http:// or https://"));
@@ -460,11 +492,7 @@ fn public_http_get_bounded(url: &str) -> Result<HttpResponse, String> {
         .host_str()
         .ok_or_else(|| err("url is missing a host"))?
         .to_string();
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("runtime: {e}"))?;
-    rt.block_on(async {
+    crate::runtime::block_on(async {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
             .user_agent(DEFAULT_USER_AGENT)
@@ -516,7 +544,7 @@ fn public_http_get_bounded(url: &str) -> Result<HttpResponse, String> {
             content_type,
             body,
         })
-    })
+    })?
 }
 
 pub(crate) fn tool_web_fetch(args: &Value) -> Result<String, String> {

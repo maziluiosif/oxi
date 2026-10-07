@@ -42,8 +42,8 @@ pub(super) fn to_acp(servers: &[McpServerConfig], agent_caps: &Value) -> Value {
                 }))
             }
             McpTransport::Http => {
-                eprintln!(
-                    "[acp] agent does not take HTTP MCP servers; skipping `{}`",
+                log::warn!(
+                    "ACP agent does not take HTTP MCP servers; skipping `{}`",
                     s.name.trim()
                 );
                 None

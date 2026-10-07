@@ -246,7 +246,7 @@ pub(super) async fn sync_plan_mode(
             plan_mode
         }
         Err(e) => {
-            eprintln!("[acp] could not switch the agent to mode {value}: {e}");
+            log::warn!("could not switch the ACP agent to mode {value}: {e}");
             false
         }
     }

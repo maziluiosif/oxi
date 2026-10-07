@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 fn document(path: PathBuf) -> EditorDocument {
     EditorDocument {
+        markdown_preview_open: false,
         path,
         is_scratchpad: false,
         content: "my edits".into(),
@@ -18,6 +19,7 @@ fn document(path: PathBuf) -> EditorDocument {
         viewport_width_bits: None,
         viewport_anchor_line: 0,
         media: None,
+        diff: None,
     }
 }
 
@@ -297,4 +299,25 @@ fn changed_size_is_detected_even_when_the_mtime_is_preserved() {
     doc.sync_from_disk();
     assert_eq!(doc.content, "longer external content");
     assert!(!doc.externally_modified);
+}
+
+#[test]
+fn preview_selection_survives_other_tab_closes_and_clears_with_its_source() {
+    let mut editor = EditorState {
+        documents: vec![
+            document(PathBuf::from("other.rs")),
+            document(PathBuf::from("readme.md")),
+        ],
+        active: Some(1),
+        markdown_preview_active: true,
+        ..Default::default()
+    };
+    editor.documents[1].markdown_preview_open = true;
+    editor.remove_document(0);
+    assert_eq!(editor.active, Some(0));
+    assert!(editor.markdown_preview_active);
+    assert!(editor.active_document().unwrap().markdown_preview_open);
+    editor.remove_document(0);
+    assert!(editor.active.is_none());
+    assert!(!editor.markdown_preview_active);
 }

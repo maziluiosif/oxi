@@ -35,7 +35,7 @@ impl OxiApp {
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(
-                        !self.conv.update_checking,
+                        !self.conv.update.checking,
                         crate::ui::chrome::ghost_button_widget("Check for updates", false),
                     )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -44,7 +44,7 @@ impl OxiApp {
                     self.ensure_update_checked(ui.ctx(), true);
                 }
                 ui.add_space(8.0);
-                if self.conv.update_checking {
+                if self.conv.update.checking {
                     ui.label(
                         RichText::new("Checking…")
                             .size(FS_TINY)
@@ -66,7 +66,7 @@ impl OxiApp {
                         let _ = webbrowser::open(&info.html_url);
                     }
                 } else {
-                    match &self.conv.update_result {
+                    match &self.conv.update.result {
                         Some(Ok(_)) => {
                             ui.label(
                                 RichText::new("You're up to date.")
@@ -130,13 +130,18 @@ impl OxiApp {
                     ui.ctx().copy_text(report);
                 }
                 if crate::ui::chrome::ghost_button(ui, "Open config folder", false).clicked() {
-                    let _ = webbrowser::open(&format!("file://{}", config_dir.display()));
+                    crate::os_open::open_path(config_dir);
                 }
-                let crash_log = config_dir.join("crash.log");
+                let log = crate::logging::log_path();
+                if log.is_file() && crate::ui::chrome::ghost_button(ui, "Open log", false).clicked()
+                {
+                    crate::os_open::open_path(&log);
+                }
+                let crash_log = crate::logging::crash_log_path();
                 if crash_log.is_file()
                     && crate::ui::chrome::ghost_button(ui, "Open crash log", false).clicked()
                 {
-                    let _ = webbrowser::open(&format!("file://{}", crash_log.display()));
+                    crate::os_open::open_path(&crash_log);
                 }
             });
 

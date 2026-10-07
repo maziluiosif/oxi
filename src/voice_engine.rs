@@ -161,7 +161,7 @@ fn start_recording() -> Result<ActiveRecording, String> {
     let config: cpal::StreamConfig = supported.into();
 
     let samples: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
-    let err_fn = |err| eprintln!("oxi: microphone stream error: {err}");
+    let err_fn = |err| log::warn!("microphone stream error: {err}");
 
     let stream = {
         let samples = samples.clone();

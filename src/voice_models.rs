@@ -105,10 +105,7 @@ pub enum VoiceModelMsg {
 }
 
 pub fn data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
-        .join("voice-models")
+    crate::app_dirs::data_dir().join("voice-models")
 }
 
 fn manifest_path() -> PathBuf {
@@ -126,7 +123,7 @@ pub fn load_manifest() -> VoiceModelManifest {
 pub fn save_manifest(manifest: &VoiceModelManifest) -> Result<(), String> {
     fs::create_dir_all(data_dir()).map_err(|e| e.to_string())?;
     let json = serde_json::to_vec_pretty(manifest).map_err(|e| e.to_string())?;
-    fs::write(manifest_path(), json).map_err(|e| e.to_string())
+    crate::fsutil::write_atomic(&manifest_path(), &json)
 }
 
 pub fn upsert_downloaded(model: DownloadedVoiceModel) -> Result<(), String> {

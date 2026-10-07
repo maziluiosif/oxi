@@ -428,11 +428,11 @@ impl OxiApp {
         let ctx = ctx.clone();
         let option_name = option.name.clone();
         spawn_async_task(
-            |e| eprintln!("[acp] could not set an agent option: {e}"),
+            |e| log::warn!("could not set an ACP agent option: {e}"),
             move |rt| {
                 let name = option_name;
                 if let Err(e) = rt.block_on(acp.set_option(req)) {
-                    eprintln!("[acp] could not set {name}: {e}");
+                    log::warn!("could not set ACP agent option {name}: {e}");
                     // Shown under the composer by the next frame (e.g. fast mode refused by
                     // the account's plan).
                     ctx.data_mut(|d| {

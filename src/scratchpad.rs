@@ -36,7 +36,7 @@ fn write(path: &Path, content: &str) -> Result<(), String> {
         .parent()
         .ok_or("Scratchpad path has no parent directory.")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    std::fs::write(path, content).map_err(|e| e.to_string())
+    crate::fsutil::write_atomic(path, content.as_bytes())
 }
 
 pub(crate) fn save(path: &Path, baseline: &str, content: &str) -> Result<(), String> {

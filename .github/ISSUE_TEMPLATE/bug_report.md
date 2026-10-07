@@ -27,8 +27,9 @@ A clear description of the bug and what you expected instead.
 ## Logs
 
 <!--
-If oxi crashed, attach the crash log:
-  macOS/Linux: <config_dir>/oxi/crash.log
+Settings → About → Diagnostics opens both logs (they live next to settings.json):
+  oxi.log    warnings and errors from the last runs (OXI_LOG=debug for more detail)
+  crash.log  panics with a backtrace, if oxi crashed
 Please redact API keys, tokens, and any private paths first.
 -->
 

@@ -155,10 +155,7 @@ impl ThemeSpec {
 
 /// Directory custom theme files are read from: `<config>/oxi/themes`.
 pub fn custom_themes_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
-        .join("themes")
+    crate::app_dirs::config_dir().join("themes")
 }
 
 /// Load custom themes from disk. Malformed files are skipped. Custom ids are namespaced

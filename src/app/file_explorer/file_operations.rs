@@ -93,7 +93,8 @@ impl OxiApp {
                     }
                     let expanded_descendants = self
                         .conv
-                        .explorer_expanded
+                        .explorer
+                        .expanded
                         .iter()
                         .filter_map(|expanded| {
                             expanded
@@ -103,9 +104,10 @@ impl OxiApp {
                         })
                         .collect::<Vec<_>>();
                     self.conv
-                        .explorer_expanded
+                        .explorer
+                        .expanded
                         .retain(|expanded| !expanded.starts_with(&path));
-                    self.conv.explorer_expanded.extend(expanded_descendants);
+                    self.conv.explorer.expanded.extend(expanded_descendants);
                 }
                 result
             }
@@ -140,13 +142,14 @@ impl OxiApp {
             Ok(()) => {
                 self.conv.editor.file_operation = None;
                 self.conv.editor.error = None;
-                self.conv.explorer_cache.invalidate();
+                self.conv.explorer.cache.invalidate();
             }
             Err(error) => self.conv.editor.error = Some(format!("File operation failed: {error}")),
         }
     }
 
     fn remove_editor_path(&mut self, path: &Path) {
+        self.conv.editor.markdown_preview_active = false;
         self.conv
             .editor
             .documents

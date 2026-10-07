@@ -21,6 +21,7 @@ impl OxiApp {
             self.conv.editor.active = Some(index);
             self.conv.editor.hidden_active = None;
             self.conv.editor.diff_tab_active = false;
+            self.conv.editor.markdown_preview_active = false;
             self.conv.editor.focus_editor_next_frame = true;
             return;
         }
@@ -30,6 +31,7 @@ impl OxiApp {
             .and_then(|metadata| metadata.modified())
             .ok();
         self.conv.editor.documents.push(EditorDocument {
+            markdown_preview_open: false,
             path,
             is_scratchpad: true,
             saved_content: content.clone(),
@@ -44,11 +46,12 @@ impl OxiApp {
             viewport_width_bits: None,
             viewport_anchor_line: 0,
             media: None,
+            diff: None,
         });
         self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
         self.conv.editor.hidden_active = None;
         self.conv.editor.diff_tab_active = false;
-        self.conv.editor.show_diff = false;
+        self.conv.editor.markdown_preview_active = false;
         self.conv.editor.error = None;
         self.conv.editor.focus_editor_next_frame = true;
     }
@@ -87,13 +90,13 @@ impl OxiApp {
 
         let relative = safe_path.strip_prefix(&safe_root).unwrap_or(&safe_path);
         let explorer_path = root.join(relative);
-        self.conv.explorer_collapsed_roots.remove(&root);
+        self.conv.explorer.collapsed_roots.remove(&root);
         let mut parent = explorer_path.parent();
         while let Some(directory) = parent {
             if directory == root {
                 break;
             }
-            self.conv.explorer_expanded.insert(directory.to_path_buf());
+            self.conv.explorer.expanded.insert(directory.to_path_buf());
             parent = directory.parent();
         }
         self.conv.editor.explorer_reveal_pending = Some(explorer_path);
@@ -120,8 +123,8 @@ impl OxiApp {
             }
         };
         if reveal_in_explorer {
-            self.conv.sidebar_mode = super::super::state::SidebarMode::Explorer;
-            self.conv.sidebar_open = true;
+            self.conv.sidebar.mode = super::super::state::SidebarMode::Explorer;
+            self.conv.sidebar.open = true;
         }
         self.conv.editor.hidden_active = None;
         if let Some(index) = self
@@ -133,6 +136,7 @@ impl OxiApp {
         {
             self.conv.editor.active = Some(index);
             self.conv.editor.diff_tab_active = false;
+            self.conv.editor.markdown_preview_active = false;
             if reveal_in_explorer {
                 self.reveal_editor_file_in_explorer(&safe_path);
             }
@@ -161,6 +165,7 @@ impl OxiApp {
         match content {
             Ok(content) => {
                 self.conv.editor.documents.push(EditorDocument {
+                    markdown_preview_open: false,
                     path: safe_path.clone(),
                     is_scratchpad: false,
                     saved_content: content.clone(),
@@ -175,12 +180,13 @@ impl OxiApp {
                     viewport_width_bits: None,
                     viewport_anchor_line: 0,
                     media,
+                    diff: None,
                 });
                 self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
                 self.conv.editor.error = None;
-                self.conv.editor.show_diff = false;
                 // An open git diff stays reachable as an editor tab; just show the file.
                 self.conv.editor.diff_tab_active = false;
+                self.conv.editor.markdown_preview_active = false;
                 if reveal_in_explorer {
                     self.reveal_editor_file_in_explorer(&safe_path);
                 }
@@ -221,7 +227,7 @@ impl OxiApp {
     ) -> Result<(), String> {
         self.conv.editor.documents[index].save_to_disk(overwrite)?;
         self.conv.editor.error = None;
-        if let Some(tx) = &self.conv.git_tx {
+        if let Some(tx) = &self.conv.git_ui.tx {
             let _ = tx.send(crate::git::GitOp::Refresh);
         }
         Ok(())

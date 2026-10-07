@@ -184,12 +184,14 @@ impl LlmProviderKind {
         }
     }
 
-    /// Whether HTTP clients for this provider should accept self-signed / invalid TLS certs.
+    /// Whether HTTP clients for this provider accept self-signed / invalid TLS certs when the
+    /// user hasn't chosen (see [`ProviderConfig::allows_self_signed_tls`]).
     ///
-    /// Enabled for LM Studio and Ollama, which often run on a trusted LAN host behind
-    /// HTTPS with a self-signed cert — same trust model as a local SearXNG instance.
-    /// Stays off for public providers so their certs are always validated.
-    pub fn allows_self_signed_tls(&self) -> bool {
+    /// On for the self-hosted runtimes, which often run on a trusted LAN host behind HTTPS with
+    /// a self-signed cert — same trust model as a local SearXNG instance. Off for everything
+    /// that carries an API key to a hosted service (Azure, Anthropic-compatible proxies, …):
+    /// accepting any certificate there hands the key to whoever sits on the network path.
+    pub fn self_signed_tls_by_default(&self) -> bool {
         matches!(
             self,
             LlmProviderKind::LmStudio
@@ -197,8 +199,23 @@ impl LlmProviderKind {
                 | LlmProviderKind::Ollama
                 | LlmProviderKind::LocalHf
                 | LlmProviderKind::RemoteHf
-                | LlmProviderKind::AzureOpenAi
+        )
+    }
+
+    /// Providers whose endpoint the user types in, so a self-signed certificate is plausible
+    /// and the Settings form offers the TLS override. The rest talk to fixed official
+    /// endpoints (or launch a subprocess) and always validate certificates.
+    pub fn has_custom_endpoint(&self) -> bool {
+        matches!(
+            self,
+            LlmProviderKind::OpenAi
                 | LlmProviderKind::CustomAnthropic
+                | LlmProviderKind::AzureOpenAi
+                | LlmProviderKind::LmStudio
+                | LlmProviderKind::LlamaCpp
+                | LlmProviderKind::Ollama
+                | LlmProviderKind::LocalHf
+                | LlmProviderKind::RemoteHf
         )
     }
 }
@@ -293,6 +310,10 @@ pub struct ProviderConfig {
     /// PATH lookup, and arguments all work as typed.
     #[serde(default)]
     pub acp_command: String,
+    /// Accept self-signed / invalid TLS certificates from this provider's endpoint.
+    /// `None` = the provider's default ([`LlmProviderKind::self_signed_tls_by_default`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_self_signed_tls: Option<bool>,
 }
 
 impl ProviderConfig {
@@ -318,6 +339,15 @@ impl ProviderConfig {
             ComputeLocation::Local => None,
             ComputeLocation::RemoteSsh(cfg) => Some(cfg),
         }
+    }
+
+    /// Whether HTTP clients for this provider accept self-signed / invalid TLS certificates:
+    /// the user's explicit choice, else the provider default. Fixed official endpoints never do.
+    pub fn allows_self_signed_tls(&self) -> bool {
+        self.provider.has_custom_endpoint()
+            && self
+                .allow_self_signed_tls
+                .unwrap_or_else(|| self.provider.self_signed_tls_by_default())
     }
 
     pub fn effective_base_url(&self) -> String {
@@ -365,12 +395,6 @@ impl ProviderConfig {
             );
         }
         None
-    }
-
-    /// Compact "Provider · model" label (unit-tested; handy for status/chrome surfaces).
-    #[allow(dead_code)]
-    pub fn subtitle(&self) -> String {
-        format!("{} · {}", self.provider.label(), self.model_id)
     }
 
     /// Default command line for launching an ACP agent subprocess. Uses the actively-maintained
@@ -490,6 +514,7 @@ impl From<ProviderProfile> for ProviderConfig {
             effort: p.effort,
             location: p.location,
             acp_command: String::new(),
+            allow_self_signed_tls: None,
         }
     }
 }
@@ -668,7 +693,43 @@ mod tests {
             LlmProviderKind::LlamaCpp.default_remote_runtime_port(),
             8080
         );
-        assert!(LlmProviderKind::LlamaCpp.allows_self_signed_tls());
+        assert!(c.allows_self_signed_tls());
+    }
+
+    #[test]
+    fn hosted_providers_validate_tls_unless_the_user_opts_out() {
+        for kind in [
+            LlmProviderKind::AzureOpenAi,
+            LlmProviderKind::CustomAnthropic,
+        ] {
+            let mut c = ProviderConfig::new(kind);
+            assert!(
+                !c.allows_self_signed_tls(),
+                "{kind:?} must validate certs by default"
+            );
+            c.allow_self_signed_tls = Some(true);
+            assert!(c.allows_self_signed_tls());
+        }
+        let mut ollama = ProviderConfig::new(LlmProviderKind::Ollama);
+        assert!(ollama.allows_self_signed_tls());
+        ollama.allow_self_signed_tls = Some(false);
+        assert!(!ollama.allows_self_signed_tls());
+        // Official endpoints ignore a stray override.
+        let mut openrouter = ProviderConfig::new(LlmProviderKind::OpenRouter);
+        openrouter.allow_self_signed_tls = Some(true);
+        assert!(!openrouter.allows_self_signed_tls());
+    }
+
+    #[test]
+    fn tls_override_round_trips_and_stays_out_of_json_when_unset() {
+        let c = ProviderConfig::new(LlmProviderKind::AzureOpenAi);
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!json.contains("allow_self_signed_tls"));
+        let mut c = c;
+        c.allow_self_signed_tls = Some(true);
+        let back: ProviderConfig =
+            serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.allow_self_signed_tls, Some(true));
     }
 
     #[test]
@@ -691,13 +752,5 @@ mod tests {
             let json = serde_json::to_string(&kind).unwrap();
             assert_eq!(json, format!("\"{}\"", kind.slug()));
         }
-    }
-
-    #[test]
-    fn config_subtitle_format() {
-        let c = ProviderConfig::new(LlmProviderKind::OpenAi);
-        let sub = c.subtitle();
-        assert!(sub.contains("OpenAI"));
-        assert!(sub.contains("gpt-4o-mini"));
     }
 }

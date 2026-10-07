@@ -601,7 +601,10 @@ fn parse_anthropic_event(
     let v: Value = match serde_json::from_str(&data_line) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("[oxi] skipping malformed Anthropic SSE event ({e}): {data_line}");
+            log::warn!(
+                "skipping malformed Anthropic SSE event ({e}): {}",
+                crate::logging::excerpt(&data_line)
+            );
             return;
         }
     };

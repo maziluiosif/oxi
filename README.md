@@ -142,7 +142,7 @@ ChatGPT sign-in needs port `1455` free for the login callback. The Router's task
 
 ## Your data
 
-Everything stays on your machine. Settings live in your config folder (e.g. `~/.config/oxi/settings.json` on Linux). API keys, sign-in tokens and SSH passwords go to the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never into the settings file.
+Everything stays on your machine. Settings live in your config folder (e.g. `~/.config/oxi/settings.json` on Linux), next to the diagnostics log `oxi.log` and, if oxi ever crashes, `crash.log` (Settings → About opens them). API keys, sign-in tokens and SSH passwords go to the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux), never into the settings file.
 
 If a workspace has an `AGENTS.md` at its root, oxi adds it to the agent's instructions.
 

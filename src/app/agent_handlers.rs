@@ -174,13 +174,13 @@ impl OxiApp {
             match rx.try_recv() {
                 Ok(msg) => match msg {
                     OAuthUiMsg::CodexOpenBrowser { url } => {
-                        self.conv.oauth_last_message = Some(format!(
+                        self.conv.settings_page.oauth_last_message = Some(format!(
                             "Complete sign-in in the browser (or check port 1455). {url}"
                         ));
                     }
                     OAuthUiMsg::CodexDone(r) => {
-                        self.conv.oauth_busy = false;
-                        self.conv.oauth_last_message = Some(match r {
+                        self.conv.settings_page.oauth_busy = false;
+                        self.conv.settings_page.oauth_last_message = Some(match r {
                             Ok(()) => "ChatGPT (Codex): signed in.".to_string(),
                             Err(e) => format!("Codex OAuth: {e}"),
                         });
@@ -193,11 +193,11 @@ impl OxiApp {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     // Worker ended without a terminal message (normal after CodexDone;
                     // abnormal mid-flow) — make sure the UI doesn't stay silent.
-                    if self.conv.oauth_busy {
-                        self.conv.oauth_last_message =
+                    if self.conv.settings_page.oauth_busy {
+                        self.conv.settings_page.oauth_last_message =
                             Some("Sign-in was interrupted — try again.".to_string());
                     }
-                    self.conv.oauth_busy = false;
+                    self.conv.settings_page.oauth_busy = false;
                     break;
                 }
             }
@@ -225,7 +225,7 @@ impl OxiApp {
                     if key.workspace_idx == self.conv.active_workspace {
                         self.terminals.push(terminal);
                         self.active_terminal = self.terminals.len() - 1;
-                        self.conv.terminal_open = true;
+                        self.conv.terminal_panel.open = true;
                     } else {
                         let root = self.conv.workspaces[key.workspace_idx].root_path.clone();
                         self.parked_terminals
@@ -253,7 +253,7 @@ impl OxiApp {
                     crate::model::apply_tool_update(&mut message.blocks, *update);
                 }
                 if finished {
-                    self.conv.explorer_cache.invalidate();
+                    self.conv.explorer.cache.invalidate();
                 }
             }
             AgentEvent::ToolStart {
@@ -305,11 +305,11 @@ impl OxiApp {
                 };
                 self.finalize_tool_run(key, id, is_error, full_output_path, diff);
                 // The tool may have created, moved or deleted files: show them right away.
-                self.conv.explorer_cache.invalidate();
+                self.conv.explorer.cache.invalidate();
                 self.refresh_scratchpad();
             }
             AgentEvent::StreamRetry { attempt, reason } => {
-                eprintln!("[oxi] stream retry (attempt {attempt}): {reason}");
+                log::info!("stream retry (attempt {attempt}): {reason}");
                 self.run_state_mut(key).stream_retrying =
                     Some(format!("Connection lost (attempt {attempt}): {reason}"));
                 self.reset_streaming_tail(key);

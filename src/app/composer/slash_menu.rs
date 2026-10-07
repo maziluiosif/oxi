@@ -106,9 +106,9 @@ impl OxiApp {
 
     /// Matches for the command name being typed, or `None` when the menu should be hidden.
     fn slash_menu_items(&self, ctx: &egui::Context) -> Option<Vec<AcpSlashCommand>> {
-        let query = self.conv.input.strip_prefix('/')?;
+        let query = self.conv.composer.input.strip_prefix('/')?;
         if query.contains(char::is_whitespace)
-            || load_state(ctx).dismissed.as_deref() == Some(self.conv.input.as_str())
+            || load_state(ctx).dismissed.as_deref() == Some(self.conv.composer.input.as_str())
         {
             return None;
         }
@@ -127,8 +127,8 @@ impl OxiApp {
             return false;
         };
         let mut state = load_state(ui.ctx());
-        if state.input != self.conv.input {
-            state.input = self.conv.input.clone();
+        if state.input != self.conv.composer.input {
+            state.input = self.conv.composer.input.clone();
             state.selected = 0;
         }
         state.selected = state.selected.min(items.len() - 1);
@@ -152,7 +152,7 @@ impl OxiApp {
             state.scroll = true;
         }
         if escape {
-            state.dismissed = Some(self.conv.input.clone());
+            state.dismissed = Some(self.conv.composer.input.clone());
         }
         let selected = items[state.selected].clone();
         store_state(ui.ctx(), state);
@@ -170,12 +170,12 @@ impl OxiApp {
         command: &AcpSlashCommand,
         run: bool,
     ) {
-        self.conv.input = format!("/{} ", command.name);
+        self.conv.composer.input = format!("/{} ", command.name);
         if run && command.hint.is_none() {
             self.send_message();
             return;
         }
-        let end = CCursor::new(self.conv.input.chars().count());
+        let end = CCursor::new(self.conv.composer.input.chars().count());
         let mut te_state = TextEdit::load_state(ctx, input_id).unwrap_or_default();
         te_state.cursor.set_char_range(Some(CCursorRange::one(end)));
         te_state.store(ctx, input_id);
@@ -197,7 +197,7 @@ impl OxiApp {
             return;
         };
         let state = load_state(ui.ctx());
-        let selected = if state.input == self.conv.input {
+        let selected = if state.input == self.conv.composer.input {
             state.selected.min(items.len() - 1)
         } else {
             0

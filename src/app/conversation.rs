@@ -63,8 +63,8 @@ impl OxiApp {
         let key = self.active_session_key();
         let provider = self.ensure_session_config(key).provider;
         self.open_settings_page();
-        self.conv.settings_tab = super::state::SettingsTab::Providers;
-        self.conv.settings_provider_tab = provider;
+        self.conv.settings_page.tab = super::state::SettingsTab::Providers;
+        self.conv.settings_page.provider_tab = provider;
     }
 
     /// Approve/deny prompt for a shell or built-in filesystem mutation tool.
@@ -221,8 +221,8 @@ impl OxiApp {
                             .clicked()
                         {
                             self.open_settings_page();
-                            self.conv.settings_tab = super::state::SettingsTab::Providers;
-                            self.conv.settings_provider_tab = provider;
+                            self.conv.settings_page.tab = super::state::SettingsTab::Providers;
+                            self.conv.settings_page.provider_tab = provider;
                         }
                     });
                 ui.add_space(if compact { 12.0 } else { 18.0 });
@@ -266,10 +266,10 @@ impl OxiApp {
                     ui.spacing_mut().item_spacing.x = GAP;
                     for &(icon, title, prompt) in row {
                         if suggestion_card(ui, card_w, icon, title, prompt).clicked() {
-                            self.conv.input = prompt.to_string();
+                            self.conv.composer.input = prompt.to_string();
                             // A suggestion is a starting point, not a terminal action: put
                             // the caret in the composer so the user can tailor it.
-                            self.conv.focus_chat_input_next_frame = true;
+                            self.conv.composer.focus_next_frame = true;
                         }
                     }
                 });
@@ -290,7 +290,7 @@ impl OxiApp {
         let si = self.conv.workspaces[wi].active;
 
         let scroll_outer_w = ui.available_width();
-        let force_scroll_bottom = self.conv.scroll_to_bottom_once;
+        let force_scroll_bottom = self.conv.transcript.scroll_to_bottom_once;
         // Suppress auto-stick whenever the user has an active text selection
         // (dragging or just holding one) so streaming growth doesn't yank the
         // viewport away from their selection.
@@ -330,7 +330,7 @@ impl OxiApp {
 
         // Hold stick-to-bottom for a few frames while a newly opened/session-loaded
         // conversation settles its layout.
-        let hold_stick = self.conv.stick_bottom_hold_frames > 0;
+        let hold_stick = self.conv.transcript.stick_bottom_hold_frames > 0;
         let stick_bottom = !manual_layout_change
             && !user_has_selection
             && (force_scroll_bottom
@@ -343,7 +343,7 @@ impl OxiApp {
 
         let scroll_output = ScrollArea::vertical()
             .max_width(scroll_outer_w)
-            .id_salt(self.conv.chat_scroll_id)
+            .id_salt(self.conv.transcript.scroll_id)
             .max_height(transcript_h)
             // Keep full height when the transcript is short so the composer stays bottom-anchored.
             .auto_shrink([false, false])
@@ -427,7 +427,7 @@ impl OxiApp {
                             let cull_enabled = !user_has_selection;
                             let keep_rendered = pointer_over_transcript && !scrolling;
                             let previously_rendered =
-                                std::mem::take(&mut self.conv.transcript_rendered);
+                                std::mem::take(&mut self.conv.transcript.rendered);
                             for (start, end) in units {
                                 let messages = &self.conv.workspaces[wi].sessions[si].messages;
                                 let fingerprint =
@@ -436,7 +436,8 @@ impl OxiApp {
                                 let top = ui.cursor().min.y;
                                 let cached_height = self
                                     .conv
-                                    .transcript_heights
+                                    .transcript
+                                    .heights
                                     .get(&key)
                                     .filter(|entry| {
                                         entry.width_bits == width_bits
@@ -509,9 +510,9 @@ impl OxiApp {
                                 if near_viewport
                                     || (keep_rendered && previously_rendered.contains(&key))
                                 {
-                                    self.conv.transcript_rendered.insert(key);
+                                    self.conv.transcript.rendered.insert(key);
                                 }
-                                self.conv.transcript_heights.insert(
+                                self.conv.transcript.heights.insert(
                                     key,
                                     super::state::TranscriptUnitHeight {
                                         width_bits,
@@ -536,7 +537,7 @@ impl OxiApp {
                                     .messages
                                     .last()
                                     .is_some_and(|m| m.role == MsgRole::Assistant)
-                                && self.conv.editing_last_prompt.is_none()
+                                && self.conv.composer.editing_last_prompt.is_none()
                                 && rollback_available;
                             if can_edit {
                                 ui.horizontal(|ui| {
@@ -624,7 +625,7 @@ impl OxiApp {
             // Sit the button just above the composer's actual top edge. Using the padded
             // `bottom_overlay_h` (min 88) left it floating well above a short composer;
             // mirror the real composer height (see `render_composer` in sidebar.rs).
-            let composer_h = self.conv.composer_measured_full_h.max(80.0);
+            let composer_h = self.conv.composer.measured_full_h.max(80.0);
             let pos = egui::pos2(
                 scroll_output.inner_rect.center().x - BTN * 0.5,
                 scroll_output.inner_rect.bottom() - composer_h - BTN - 8.0,
@@ -667,21 +668,22 @@ impl OxiApp {
                     jump = resp.clicked();
                 });
             if jump {
-                self.conv.scroll_to_bottom_once = true;
+                self.conv.transcript.scroll_to_bottom_once = true;
                 ui.ctx().request_repaint();
             }
         }
 
         // Only clear the flag consumed this frame — the jump button above may have just
         // re-armed it for the next frame.
-        if force_scroll_bottom && self.conv.scroll_to_bottom_once {
-            self.conv.scroll_to_bottom_once = false;
+        if force_scroll_bottom && self.conv.transcript.scroll_to_bottom_once {
+            self.conv.transcript.scroll_to_bottom_once = false;
             // Startup/session-load layout is not stable in one pass. Holding stick-to-bottom
             // briefly ensures the restored conversation opens at its actual final message.
-            self.conv.stick_bottom_hold_frames = self.conv.stick_bottom_hold_frames.max(3);
+            self.conv.transcript.stick_bottom_hold_frames =
+                self.conv.transcript.stick_bottom_hold_frames.max(3);
         }
-        if self.conv.stick_bottom_hold_frames > 0 {
-            self.conv.stick_bottom_hold_frames -= 1;
+        if self.conv.transcript.stick_bottom_hold_frames > 0 {
+            self.conv.transcript.stick_bottom_hold_frames -= 1;
             ui.ctx().request_repaint();
         }
     }

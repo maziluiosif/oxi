@@ -10,6 +10,7 @@ use crate::settings::AppSettings;
 
 mod activity_window;
 mod agent_handlers;
+mod chores;
 mod compaction;
 mod composer;
 mod composer_helpers;
@@ -24,6 +25,8 @@ mod fork;
 mod frame_stats;
 mod git_panel;
 mod input_history;
+mod links;
+mod main_area;
 pub(crate) mod mentions;
 mod notify;
 mod queue;
@@ -86,14 +89,14 @@ impl OxiApp {
     /// document tab is active, the chat composer otherwise. Use this instead of setting
     /// `focus_chat_input_next_frame` directly so focus never lands on a hidden widget.
     pub(crate) fn focus_active_view_next_frame(&mut self) {
-        self.conv.focus_terminal_next_frame = false;
-        self.conv.focus_chat_input_next_frame = false;
+        self.conv.terminal_panel.focus_next_frame = false;
+        self.conv.composer.focus_next_frame = false;
         self.conv.editor.focus_editor_next_frame = false;
         self.conv.editor.focus_find_next_frame = false;
         self.conv.editor.find_focus_editor_pending = false;
         match self.conv.editor.focus_target() {
             state::EditorFocusTarget::Editor => self.conv.editor.focus_editor_next_frame = true,
-            state::EditorFocusTarget::ChatInput => self.conv.focus_chat_input_next_frame = true,
+            state::EditorFocusTarget::ChatInput => self.conv.composer.focus_next_frame = true,
         }
     }
 
@@ -106,7 +109,7 @@ impl OxiApp {
         if self.conv.editor.active.is_some() {
             self.conv.editor.hidden_active = self.conv.editor.active.take();
         }
-        self.conv.diff_view_open = false;
+        self.conv.diff_view.open = false;
     }
 
     pub fn new() -> Self {
@@ -120,42 +123,43 @@ impl OxiApp {
         let git_width = settings.git_width;
         let last_active_workspace_root_path = settings.last_active_workspace_root_path.clone();
         let last_active_session_file = settings.last_active_session_file.clone();
-        // Restore persisted workspaces; the cwd workspace is always present, first, and active.
-        let cwd_entry = settings
+        // Restore persisted workspaces. Launching from a project folder opens it too (first),
+        // but a GUI launch (cwd `/` or home) adds nothing, so a removed workspace stays removed.
+        let workspace_from_entry = |entry: &crate::settings::WorkspaceEntry| Workspace {
+            root_path: entry.root_path.clone(),
+            sessions: Self::initial_workspace_sessions(&entry.root_path, false),
+            active: 0,
+            sidebar_folded: entry.folded,
+            pinned: entry.pinned.clone(),
+            folded_groups: entry.folded_groups.clone(),
+            worktree: crate::git::worktree::info(std::path::Path::new(&entry.root_path)),
+        };
+        let mut workspaces: Vec<Workspace> = settings
             .workspaces
             .iter()
-            .find(|w| w.root_path == root_path);
-        let cwd_folded = cwd_entry.is_some_and(|w| w.folded);
-        let cwd_pinned = cwd_entry.map(|w| w.pinned.clone()).unwrap_or_default();
-        let cwd_folded_groups = cwd_entry
-            .map(|w| w.folded_groups.clone())
-            .unwrap_or_default();
-        let mut workspaces = vec![Workspace {
-            root_path: root_path.clone(),
-            sessions: Self::initial_workspace_sessions(&root_path, false),
-            active: 0,
-            sidebar_folded: cwd_folded,
-            pinned: cwd_pinned,
-            folded_groups: cwd_folded_groups,
-            worktree: crate::git::worktree::info(std::path::Path::new(&root_path)),
-        }];
-        for entry in &settings.workspaces {
-            if entry.root_path == root_path {
-                continue;
-            }
-            workspaces.push(Workspace {
-                root_path: entry.root_path.clone(),
-                sessions: Self::initial_workspace_sessions(&entry.root_path, false),
-                active: 0,
-                sidebar_folded: entry.folded,
-                pinned: entry.pinned.clone(),
-                folded_groups: entry.folded_groups.clone(),
-                worktree: crate::git::worktree::info(std::path::Path::new(&entry.root_path)),
-            });
+            .map(workspace_from_entry)
+            .collect();
+        let launched_in_project =
+            cwd.parent().is_some() && dirs::home_dir().is_none_or(|home| home != cwd);
+        if launched_in_project && !workspaces.iter().any(|w| w.root_path == root_path) {
+            workspaces.insert(
+                0,
+                workspace_from_entry(&crate::settings::WorkspaceEntry {
+                    root_path: root_path.clone(),
+                    folded: false,
+                    pinned: Vec::new(),
+                    folded_groups: Vec::new(),
+                }),
+            );
+        }
+        let no_workspace = workspaces.is_empty();
+        if no_workspace {
+            workspaces.push(Self::scratch_workspace());
         }
         let active_workspace = last_active_workspace_root_path
             .as_deref()
             .and_then(|root| workspaces.iter().position(|w| w.root_path == root))
+            .or_else(|| workspaces.iter().position(|w| w.root_path == root_path))
             .unwrap_or(0);
         if let Some(session_file) = last_active_session_file.as_deref()
             && let Some(active) = workspaces[active_workspace]
@@ -181,71 +185,42 @@ impl OxiApp {
             conv: ConversationState {
                 workspaces,
                 active_workspace,
-                input: String::new(),
-                sidebar_search: String::new(),
-                sidebar_notice: None,
-                renaming_session: None,
-                rename_draft: String::new(),
-                chat_scroll_id: egui::Id::new("main_chat_scroll"),
-                pending_images: Vec::new(),
-                pending_texts: Vec::new(),
-                scroll_to_bottom_once: true,
-                stick_bottom_hold_frames: 0,
-                input_history: Vec::new(),
-                input_history_index: None,
-                input_history_draft: String::new(),
-                composer_notice: None,
-                editing_last_prompt: None,
-                focus_chat_input_next_frame: true,
-                focus_terminal_next_frame: false,
-                sidebar_open: true,
-                sidebar_width: settings.sidebar_width,
-                sidebar_mode: state::SidebarMode::default(),
-                explorer_expanded: std::collections::HashSet::new(),
-                explorer_collapsed_roots: std::collections::HashSet::new(),
-                explorer_cache: Default::default(),
+                no_workspace,
+                composer: state::ComposerState {
+                    focus_next_frame: true,
+                    ..Default::default()
+                },
+                sidebar: state::SidebarState {
+                    open: true,
+                    width: settings.sidebar_width,
+                    ..Default::default()
+                },
+                explorer: state::ExplorerState::default(),
                 editor: state::EditorState::default(),
-                settings_sidebar_width: 220.0,
-                terminal_open: settings.terminal_open,
-                terminal_height: settings.terminal_height,
+                terminal_panel: state::TerminalPanelState {
+                    open: settings.terminal_open,
+                    height: settings.terminal_height,
+                    focus_next_frame: false,
+                },
                 settings: settings.clone(),
-                settings_original: None,
-                settings_exit_prompt: None,
-                settings_save_error: None,
-                settings_open: false,
-                settings_tab: state::SettingsTab::default(),
-                settings_provider_tab: crate::settings::LlmProviderKind::OpenAi,
-                oauth_busy: false,
-                oauth_last_message: None,
-                composer_measured_text_h: 0.0,
-                composer_measured_full_h: 0.0,
-                diff_view_open: false,
-                git_diff_view: None,
-                unsaved_diff_view: None,
-                transcript_heights: std::collections::HashMap::new(),
-                transcript_rendered: std::collections::HashSet::new(),
-                turn_changes: Default::default(),
+                settings_page: state::SettingsPageState {
+                    sidebar_width: 220.0,
+                    provider_tab: crate::settings::LlmProviderKind::OpenAi,
+                    ..Default::default()
+                },
+                diff_view: state::DiffViewState::default(),
+                transcript: state::TranscriptState::default(),
                 worktree_ops: Vec::new(),
-                message_menu: None,
-                sidebar_search_cache: std::collections::HashMap::new(),
-                git_open,
-                git_width,
-                git_tab: crate::app::git_panel::GitTab::default(),
+                chores: Vec::new(),
+                git_ui: state::GitUiState {
+                    open: git_open,
+                    width: git_width,
+                    ..Default::default()
+                },
                 git: crate::git::GitState::default(),
-                git_commit_message: String::new(),
-                git_new_branch: String::new(),
-                git_compare: Default::default(),
                 confirm_prompt: None,
-                commit_gen_pending: false,
-                commit_gen_rx: None,
                 title_gen: Vec::new(),
-                commit_gen_error: None,
-                commit_gen_stash: None,
-                git_tx: None,
-                git_rx: None,
                 git_ctx: eframe::egui::Context::default(),
-                git_last_auto_refresh: None,
-                git_auto_refresh_pending: false,
                 fetched_models: std::collections::HashMap::new(),
                 model_rxs: Vec::new(),
                 local_models: crate::app::state::LocalModelsUiState {
@@ -260,13 +235,7 @@ impl OxiApp {
                 },
                 local_model_rxs: Vec::new(),
                 local_runtime: None,
-                ssh_password_drafts: std::collections::HashMap::new(),
-                ssh_test: std::collections::HashMap::new(),
-                ssh_test_rx: None,
-                update_check_started: false,
-                update_checking: false,
-                update_result: None,
-                update_rx: None,
+                update: state::UpdateCheckState::default(),
                 compaction: None,
                 voice_ui: crate::app::state::VoiceUiState {
                     downloaded: crate::voice_models::load_manifest().models,
@@ -395,9 +364,9 @@ impl OxiApp {
     pub(crate) fn active_chat_is_visible(&self, ctx: &egui::Context) -> bool {
         let app_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
         app_focused
-            && !self.conv.settings_open
+            && !self.conv.settings_page.open
             && self.conv.editor.active_document().is_none()
-            && !(self.conv.diff_view_open && self.conv.git.diff.is_some())
+            && !(self.conv.diff_view.open && self.conv.git.diff.is_some())
     }
 
     pub(crate) fn active_session_mut(&mut self) -> &mut Session {
@@ -432,22 +401,22 @@ impl OxiApp {
         let old_wi = self.conv.active_workspace;
         let old_si = self.conv.workspaces[old_wi].active;
         self.conv.workspaces[old_wi].sessions[old_si].input_text =
-            std::mem::take(&mut self.conv.input);
+            std::mem::take(&mut self.conv.composer.input);
         self.conv.workspaces[old_wi].sessions[old_si].pending_images =
-            std::mem::take(&mut self.conv.pending_images);
+            std::mem::take(&mut self.conv.composer.pending_images);
         self.conv.workspaces[old_wi].sessions[old_si].pending_texts =
-            std::mem::take(&mut self.conv.pending_texts);
-        self.conv.pending_texts = std::mem::take(
+            std::mem::take(&mut self.conv.composer.pending_texts);
+        self.conv.composer.pending_texts = std::mem::take(
             &mut self.conv.workspaces[new_workspace].sessions[new_session].pending_texts,
         );
-        self.conv.input = std::mem::take(
+        self.conv.composer.input = std::mem::take(
             &mut self.conv.workspaces[new_workspace].sessions[new_session].input_text,
         );
-        self.conv.pending_images = std::mem::take(
+        self.conv.composer.pending_images = std::mem::take(
             &mut self.conv.workspaces[new_workspace].sessions[new_session].pending_images,
         );
-        self.conv.input_history_index = None;
-        self.conv.input_history_draft.clear();
+        self.conv.composer.history_index = None;
+        self.conv.composer.history_draft.clear();
     }
 
     pub(crate) fn select_workspace(&mut self, workspace_idx: usize) {
@@ -459,11 +428,11 @@ impl OxiApp {
         if self.conv.editor.any_dirty_workspace_file() {
             let message = "Save the open file before switching workspace.".to_string();
             self.conv.editor.error = Some(message.clone());
-            self.conv.sidebar_notice = Some(message);
+            self.conv.sidebar.notice = Some(message);
             return;
         }
         self.capture_active_session_config();
-        self.conv.sidebar_notice = None;
+        self.conv.sidebar.notice = None;
         self.conv
             .editor
             .documents
@@ -479,7 +448,7 @@ impl OxiApp {
         let target_si = self.conv.workspaces[workspace_idx].active;
         self.swap_session_input(workspace_idx, target_si);
         self.conv.active_workspace = workspace_idx;
-        self.conv.scroll_to_bottom_once = true;
+        self.conv.transcript.scroll_to_bottom_once = true;
         self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
         self.restore_active_session_config();
@@ -510,11 +479,11 @@ impl OxiApp {
         if workspace_changed && self.conv.editor.any_dirty_workspace_file() {
             let message = "Save the open file before switching workspace.".to_string();
             self.conv.editor.error = Some(message.clone());
-            self.conv.sidebar_notice = Some(message);
+            self.conv.sidebar.notice = Some(message);
             return;
         }
         self.capture_active_session_config();
-        self.conv.sidebar_notice = None;
+        self.conv.sidebar.notice = None;
         if workspace_changed {
             self.conv
                 .editor
@@ -532,7 +501,7 @@ impl OxiApp {
         self.swap_session_input(workspace_idx, session_idx);
         self.conv.active_workspace = workspace_idx;
         self.conv.workspaces[workspace_idx].active = session_idx;
-        self.conv.scroll_to_bottom_once = true;
+        self.conv.transcript.scroll_to_bottom_once = true;
         self.reveal_chat_view();
         self.focus_active_view_next_frame();
         self.ensure_active_session_loaded();
@@ -576,6 +545,23 @@ impl OxiApp {
             chars_per_token: None,
             agent_context: None,
             wire_cache: None,
+        }
+    }
+
+    /// Hidden stand-in used while the user has no workspaces (see `ConversationState::no_workspace`).
+    pub(crate) fn scratch_workspace() -> Workspace {
+        let root = dirs::home_dir()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let root_path = root.to_string_lossy().to_string();
+        Workspace {
+            sessions: Self::initial_workspace_sessions(&root_path, false),
+            root_path,
+            active: 0,
+            sidebar_folded: false,
+            pinned: Vec::new(),
+            folded_groups: Vec::new(),
+            worktree: None,
         }
     }
 
@@ -764,12 +750,12 @@ impl OxiApp {
         if trimmed.is_empty() {
             return;
         }
-        if self.conv.input_history.first().map(|s| s.as_str()) == Some(trimmed) {
+        if self.conv.composer.history.first().map(|s| s.as_str()) == Some(trimmed) {
             return;
         }
-        self.conv.input_history.insert(0, trimmed.to_string());
-        if self.conv.input_history.len() > 100 {
-            self.conv.input_history.pop();
+        self.conv.composer.history.insert(0, trimmed.to_string());
+        if self.conv.composer.history.len() > 100 {
+            self.conv.composer.history.pop();
         }
     }
 }

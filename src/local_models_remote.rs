@@ -2,7 +2,7 @@
 
 use crate::compute;
 use crate::local_models::DownloadedModel;
-use crate::settings::SshConfig;
+use crate::settings::{LlmProviderKind, SshConfig};
 
 // Keep the SSH-managed runtime and downloads in their own namespace. In particular, an SSH
 // target may be this same machine (a common way to test Remote HF); sharing `local-models`
@@ -34,7 +34,7 @@ fn runtime_url_for(os: &str, arch: &str) -> Result<&'static str, String> {
 }
 
 async fn exec_ok(cfg: &SshConfig, password: &str, command: &str) -> Result<String, String> {
-    let out = compute::ssh_exec(cfg, password, command)
+    let out = compute::ssh_exec(LlmProviderKind::RemoteHf.slug(), cfg, password, command)
         .await
         .map_err(|e| e.to_string())?;
     if out.status == 0 {

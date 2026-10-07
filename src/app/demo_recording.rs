@@ -129,7 +129,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             crate::theme::apply_theme(&cc.egui_ctx, &app.conv.settings.theme_id);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             seed_local_model(&mut app);
-            app.conv.sidebar_width = 250.0;
+            app.conv.sidebar.width = 250.0;
             app.new_chat();
             app
         });
@@ -158,6 +158,11 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
 
     if std::env::var_os("OXI_PICKER_REVIEW").is_some() {
         review_composer_pickers(&mut rec);
+        return;
+    }
+
+    if std::env::var_os("OXI_COMPOSER_REVIEW").is_some() {
+        review_composer_typing(&mut rec);
         return;
     }
 
@@ -205,7 +210,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             (SettingsTab::Appearance, "settings-appearance"),
             (SettingsTab::About, "settings-about"),
         ] {
-            rec.app().conv.settings_tab = tab;
+            rec.app().conv.settings_page.tab = tab;
             rec.harness.run_steps(3);
             rec.still(name);
             if tab == SettingsTab::Agent {
@@ -249,8 +254,8 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             LlmProviderKind::Ollama,
         ] {
             let app = rec.app();
-            app.conv.settings_tab = SettingsTab::Providers;
-            app.conv.settings_provider_tab = provider;
+            app.conv.settings_page.tab = SettingsTab::Providers;
+            app.conv.settings_page.provider_tab = provider;
             rec.harness.run_steps(3);
             rec.still(&format!("settings-provider-{provider:?}").to_lowercase());
             if provider == LlmProviderKind::Router {
@@ -258,23 +263,23 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
                 rec.still("settings-provider-router-quota");
             }
         }
-        rec.app().conv.settings_tab = SettingsTab::Providers;
-        rec.app().conv.settings_open = false;
-        rec.app().conv.settings_original = None;
+        rec.app().conv.settings_page.tab = SettingsTab::Providers;
+        rec.app().conv.settings_page.open = false;
+        rec.app().conv.settings_page.original = None;
         rec.harness.run_steps(3);
     }
     {
         let app = rec.app();
         app.open_settings_page();
-        app.conv.settings_provider_tab = LlmProviderKind::LocalHf;
+        app.conv.settings_page.provider_tab = LlmProviderKind::LocalHf;
     }
     rec.hold(2.6);
     rec.still("local-models");
     {
         let app = rec.app();
-        app.conv.settings_open = false;
-        app.conv.settings_original = None;
-        app.conv.focus_chat_input_next_frame = true;
+        app.conv.settings_page.open = false;
+        app.conv.settings_page.original = None;
+        app.conv.composer.focus_next_frame = true;
     }
 
     // 2. Ask for a fix.
@@ -441,8 +446,8 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.app().open_settings_page();
         rec.harness.run_steps(4);
         rec.still("narrow-settings");
-        rec.app().conv.settings_open = false;
-        rec.app().conv.settings_original = None;
+        rec.app().conv.settings_page.open = false;
+        rec.app().conv.settings_page.original = None;
         rec.harness.set_size(SIZE);
         rec.harness.run_steps(4);
         {
@@ -461,7 +466,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         {
             let app = rec.app();
             app.active_session_mut().messages = heavy_transcript(300);
-            app.conv.scroll_to_bottom_once = true;
+            app.conv.transcript.scroll_to_bottom_once = true;
         }
         rec.harness.run_steps(4);
         rec.still("chat-heavy");
@@ -472,9 +477,9 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.profile_composer_typing("composer typing");
         println!(
             "PROFILE composer received {} chars",
-            rec.app().conv.input.len()
+            rec.app().conv.composer.input.len()
         );
-        rec.app().conv.input.clear();
+        rec.app().conv.composer.input.clear();
         for streaming in [false, true] {
             let selected = rec.drag_select_label("That is the whole story for turn", streaming);
             println!(
@@ -496,7 +501,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.harness.run_steps(20);
         let selected = rec.drag_select_label("That is the whole story for turn", false);
         println!("PROFILE text selection after scrolling up a 300-turn chat: {selected}");
-        rec.app().conv.scroll_to_bottom_once = true;
+        rec.app().conv.transcript.scroll_to_bottom_once = true;
         rec.harness.run_steps(4);
         // A long chat history in the sidebar.
         {
@@ -511,10 +516,10 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         }
         rec.harness.run_steps(3);
         rec.still("sidebar-400");
-        rec.app().conv.sidebar_search = "csv".into();
+        rec.app().conv.sidebar.search = "csv".into();
         rec.harness.run_steps(3);
         rec.still("sidebar-search");
-        rec.app().conv.sidebar_search.clear();
+        rec.app().conv.sidebar.search.clear();
         // Folded date group: the header keeps its count, the rows are hidden.
         {
             let app = rec.app();
@@ -538,7 +543,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         {
             let app = rec.app();
             app.active_session_mut().messages.truncate(2);
-            app.conv.scroll_to_bottom_once = true;
+            app.conv.transcript.scroll_to_bottom_once = true;
         }
         rec.harness.run_steps(4);
     }
@@ -549,7 +554,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         let path = std::fs::canonicalize(project.join("stats.py")).unwrap();
         app.open_editor_file(path.clone());
         app.conv.editor.git_full_highlight_path = Some(path);
-        app.conv.git_open = true;
+        app.conv.git_ui.open = true;
     }
     rec.hold(4.0);
     rec.still("editor-git");
@@ -563,13 +568,13 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.app()
             .open_editor_file(std::fs::canonicalize(project.join("stats.py")).unwrap());
         rec.harness.run_steps(4);
-        rec.app().conv.git_tab = GitTab::History;
+        rec.app().conv.git_ui.tab = GitTab::History;
         rec.harness.run_steps(4);
         rec.still("git-history");
-        rec.app().conv.git_tab = GitTab::Branches;
+        rec.app().conv.git_ui.tab = GitTab::Branches;
         rec.harness.run_steps(4);
         rec.still("git-branches");
-        rec.app().conv.git_tab = GitTab::Changes;
+        rec.app().conv.git_ui.tab = GitTab::Changes;
         rec.app().conv.editor.find_open = true;
         rec.app().conv.editor.find_query = "ordered".into();
         rec.harness.run_steps(4);
@@ -628,47 +633,48 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         }
         rec.harness.run_steps(2);
         rec.check_editor_commands();
-        // VS Code-style diff tab: working-tree file diff (split, inline), then a commit.
-        rec.app().request(crate::git::GitOp::ShowDiff {
-            path: "stats.py".into(),
-            staged: false,
-        });
-        rec.app().conv.diff_view_open = true;
-        rec.app().conv.editor.diff_tab_active = true;
-        rec.wait_for_git_diff("stats.py");
+        // Diff mode in the editor tab: a working-tree change side by side (the right side is
+        // the editable file), inline, then a commit's patch.
+        assert!(rec.app().open_diff_editor(
+            "stats.py",
+            crate::app::file_explorer::DiffSource::WorkTree,
+            None
+        ));
+        rec.wait_for_diff_editor();
         rec.still("diff-split");
-        // Hovering a change shows its block actions (Stage / Revert).
-        let scale = rec.harness.ctx.pixels_per_point();
-        let line = rec
-            .harness
-            .query_all_by_label_contains("mid = len(ordered)")
-            .map(|node| node.rect())
-            .next();
-        if let Some(line) = line {
-            rec.harness
-                .hover_at((line.center().to_vec2() / scale).to_pos2());
-            rec.harness.run_steps(4);
-            rec.still("diff-block-actions");
+        // Hovering a change shows its block actions (Stage / Discard).
+        let mid_line = rec.diff_change_point(0);
+        rec.harness.hover_at(mid_line);
+        rec.harness.run_steps(4);
+        rec.still("diff-block-actions");
+        // Drag-select from inside that line down two lines: it is the editor's own selection.
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let select_to = mid_line + egui::vec2(110.0, 35.0);
+        rec.harness.event(button(mid_line, true));
+        rec.harness.step();
+        for i in 1..=6 {
+            rec.harness.event(egui::Event::PointerMoved(
+                mid_line.lerp(select_to, i as f32 / 6.0),
+            ));
+            rec.harness.step();
         }
+        rec.harness.event(button(select_to, false));
+        rec.harness.run_steps(2);
+        rec.still("diff-selection");
         rec.profile("diff split idle", false);
-        rec.app().conv.git_open = false;
+        rec.app().conv.git_ui.open = false;
         rec.harness.run_steps(4);
         rec.still("diff-split-wide");
-        rec.app().conv.git_open = true;
-        rec.app()
-            .conv
-            .git_diff_view
-            .as_mut()
-            .unwrap()
-            .set_inline(true);
+        rec.app().conv.git_ui.open = true;
+        rec.app().conv.editor.diff_inline = true;
         rec.harness.run_steps(4);
         rec.still("diff-inline");
-        rec.app()
-            .conv
-            .git_diff_view
-            .as_mut()
-            .unwrap()
-            .set_inline(false);
+        rec.app().conv.editor.diff_inline = false;
         let hash = rec.app().conv.git.log.first().map(|c| c.hash.clone());
         if let Some(hash) = hash {
             rec.app()
@@ -676,10 +682,10 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             rec.wait_for_git_diff(&format!("Commit {hash}"));
             rec.still("diff-commit");
             // The commit being shown is highlighted in the History list.
-            rec.app().conv.git_tab = crate::app::git_panel::GitTab::History;
+            rec.app().conv.git_ui.tab = crate::app::git_panel::GitTab::History;
             rec.harness.run_steps(4);
             rec.still("git-history-selected");
-            rec.app().conv.git_tab = crate::app::git_panel::GitTab::Changes;
+            rec.app().conv.git_ui.tab = crate::app::git_panel::GitTab::Changes;
         }
         // Branch compare: a base branch one commit back, plus the uncommitted edit.
         if let Ok(repo) = git2::Repository::discover(&project)
@@ -687,50 +693,63 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         {
             let base = head.parent(0).unwrap_or_else(|_| head.clone());
             let _ = repo.branch("base-demo", &base, true);
-            rec.app().conv.git_tab = crate::app::git_panel::GitTab::Compare;
+            rec.app().conv.git_ui.tab = crate::app::git_panel::GitTab::Compare;
             for _ in 0..200 {
                 rec.harness.run_steps(1);
-                if rec.app().conv.git_compare.data.is_some() {
+                if rec.app().conv.git_ui.compare.data.is_some() {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             rec.harness.run_steps(4);
             rec.still("git-compare");
-            let target = rec.app().conv.git_compare.data.as_ref().and_then(|data| {
-                let file = data.files.iter().find(|f| f.status != 'D')?;
-                Some((data.base.clone(), file.path.clone()))
-            });
-            if let Some((base, path)) = target {
-                rec.app().request(crate::git::GitOp::ShowCompareDiff {
-                    base: base.clone(),
-                    path: path.clone(),
-                    old_path: None,
+            let target = rec
+                .app()
+                .conv
+                .git_ui
+                .compare
+                .data
+                .as_ref()
+                .and_then(|data| {
+                    let file = data.files.iter().find(|f| f.status != 'D')?;
+                    Some((data.base.clone(), file.path.clone()))
                 });
-                rec.app().conv.diff_view_open = true;
-                rec.app().conv.editor.diff_tab_active = true;
-                rec.wait_for_git_diff(&crate::git::compare_diff_title(&base, &path));
+            if let Some((base, path)) = target {
+                assert!(rec.app().open_diff_editor(
+                    &path,
+                    crate::app::file_explorer::DiffSource::Compare {
+                        base: base.clone(),
+                        old_path: None,
+                    },
+                    None,
+                ));
+                rec.wait_for_diff_editor();
                 rec.still("diff-compare");
                 rec.app().open_changed_file(&path);
                 rec.harness.run_steps(4);
                 rec.still("editor-compare-gutter");
-                // Clicking a gutter marker peeks at the lines the change replaced.
+                // Clicking a gutter marker opens the diff at that change.
                 if let Some(index) = rec.app().conv.editor.active {
-                    rec.app().open_quick_diff(index, 13);
+                    let source = rec.app().gutter_diff_source();
+                    rec.app().open_document_diff(index, source);
                 }
+                rec.wait_for_diff_editor();
+                rec.app().conv.editor.diff_inline = true;
                 rec.harness.run_steps(4);
-                rec.still("editor-quick-diff");
-                // Revert from the peek, clicked for real: the edit lands mid-render, which once
-                // dropped the minimap geometry the editor still had to paint (a panic).
+                rec.still("editor-gutter-diff");
+                // Discard from the hover buttons, clicked for real: the edit lands mid-render.
+                let at = rec.diff_change_point(0);
+                rec.harness.hover_at(at);
+                rec.harness.run_steps(2);
                 let scale = rec.harness.ctx.pixels_per_point();
                 let button = rec
                     .harness
-                    .query_all_by_label("Revert")
+                    .query_all_by_label("Discard")
                     .map(|node| node.rect())
                     .next();
-                assert!(button.is_some(), "peek Revert button not found");
+                assert!(button.is_some(), "Discard button not found");
+                let original = std::fs::read_to_string(project.join(&path)).unwrap();
                 if let Some(button) = button {
-                    // Press and release over the button: a real pointer click.
                     let at = (button.center().to_vec2() / scale).to_pos2();
                     rec.harness.hover_at(at);
                     rec.harness.run_steps(1);
@@ -741,27 +760,27 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
                 rec.harness.run_steps(4);
                 let app = rec.app();
                 if let Some(index) = app.conv.editor.active {
-                    let document = &app.conv.editor.documents[index];
-                    let reverted = document
-                        .content
-                        .contains("return ordered[len(ordered) // 2]")
-                        && document.is_dirty();
-                    let markers = app.quick_diff_markers(index).unwrap_or_default();
-                    println!(
-                        "CHECK quick diff revert: {reverted}, markers left {}",
-                        markers.len()
-                    );
-                    assert!(reverted && markers.is_empty(), "quick diff revert failed");
                     let document = &mut app.conv.editor.documents[index];
-                    document.content = document.saved_content.clone();
+                    let revision = document.content_revision;
+                    let left = document
+                        .diff
+                        .as_mut()
+                        .and_then(|diff| diff.decor_at(revision, &document.content))
+                        .map_or(usize::MAX, |decor| decor.changes.len());
+                    let reverted = document.content != original;
+                    println!("CHECK diff discard: {reverted}, changes left {left}");
+                    assert!(reverted, "diff discard failed");
+                    // Put the file back for the rest of the demo.
+                    std::fs::write(project.join(&path), &original).unwrap();
+                    document.content = original.clone();
+                    document.saved_content = original;
                     document.dirty = false;
                     document.content_revision += 1;
+                    document.diff = None;
                 }
-                if let Some(quick) = rec.app().conv.editor.quick_diff.as_mut() {
-                    quick.close_peek();
-                }
+                rec.app().conv.editor.diff_inline = false;
             }
-            rec.app().conv.git_tab = crate::app::git_panel::GitTab::Changes;
+            rec.app().conv.git_ui.tab = crate::app::git_panel::GitTab::Changes;
         }
         rec.app().close_editor_git_diff();
         rec.harness.run_steps(2);
@@ -822,12 +841,13 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             let app = rec.app();
             for dir in ["src", "src/reporting", "src/reporting/exporters"] {
                 app.conv
-                    .explorer_expanded
+                    .explorer
+                    .expanded
                     .insert(std::fs::canonicalize(project.join(dir)).unwrap());
             }
-            app.conv.explorer_cache.invalidate();
-            app.conv.sidebar_open = true;
-            app.conv.sidebar_mode = crate::app::state::SidebarMode::Explorer;
+            app.conv.explorer.cache.invalidate();
+            app.conv.sidebar.open = true;
+            app.conv.sidebar.mode = crate::app::state::SidebarMode::Explorer;
             app.open_editor_file(deep);
             app.request(crate::git::GitOp::Refresh);
         }
@@ -835,7 +855,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.still("explorer-tree");
     }
     if gallery {
-        rec.app().conv.terminal_open = true;
+        rec.app().conv.terminal_panel.open = true;
         rec.hold(1.5);
         rec.still("terminal");
         crate::theme::apply_theme(&rec.harness.ctx, "light");
@@ -843,8 +863,8 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.still("editor-light");
         {
             let app = rec.app();
-            app.conv.terminal_open = false;
-            app.conv.git_open = false;
+            app.conv.terminal_panel.open = false;
+            app.conv.git_ui.open = false;
             app.conv.editor.documents.clear();
             app.conv.editor.active = None;
         }
@@ -907,12 +927,12 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.still("plan-ready");
         assert!(rec.harness.query_by_label("Implement plan").is_some());
         let message_count = rec.app().active_session().messages.len();
-        rec.app().conv.editing_last_prompt = Some(super::state::PromptEditState {
+        rec.app().conv.composer.editing_last_prompt = Some(super::state::PromptEditState {
             previous_input: String::new(),
             previous_images: Vec::new(),
             previous_texts: Vec::new(),
         });
-        rec.app().conv.input = "Revise the CSV plan".into();
+        rec.app().conv.composer.input = "Revise the CSV plan".into();
         rec.harness.run_steps(3);
         assert!(rec.harness.query_by_label("Implement plan").is_none());
         rec.still("plan-editing");
@@ -1057,7 +1077,7 @@ impl Recorder<'_> {
             );
             reply.streaming = true;
             app.active_session_mut().messages.push(reply);
-            app.conv.scroll_to_bottom_once = true;
+            app.conv.transcript.scroll_to_bottom_once = true;
         }
         let grow = |rec: &mut Self| {
             if !streaming {
@@ -1372,6 +1392,40 @@ impl Recorder<'_> {
         self.harness.run_steps(2);
     }
 
+    /// Wait until the active document's diff has read its base and laid out its changes.
+    fn wait_for_diff_editor(&mut self) {
+        for _ in 0..400 {
+            self.harness.step();
+            let ready = self
+                .app()
+                .conv
+                .editor
+                .active_document()
+                .and_then(|document| document.diff.as_ref())
+                .is_some_and(|diff| diff.ready());
+            if ready {
+                self.harness.run_steps(6);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the diff editor never loaded its base");
+    }
+
+    /// A point inside the first line of change `index` on the diff's new side.
+    fn diff_change_point(&mut self, index: usize) -> egui::Pos2 {
+        let diff = self
+            .app()
+            .conv
+            .editor
+            .active_document()
+            .and_then(|document| document.diff.as_ref())
+            .expect("diff mode");
+        let (top, _) = diff.frame_new_span(index).expect("change on screen");
+        let clip = diff.frame_new_clip();
+        egui::pos2(clip.left() + 120.0, top + 6.0)
+    }
+
     fn wait_for_git_diff(&mut self, title: &str) {
         for _ in 0..400 {
             self.harness.step();
@@ -1412,8 +1466,8 @@ impl Recorder<'_> {
         let app = self.app();
         let key = app.active_session_key();
         app.active_session_mut().title = crate::model::make_session_title(text);
-        app.conv.input.clear();
-        app.conv.scroll_to_bottom_once = true;
+        app.conv.composer.input.clear();
+        app.conv.transcript.scroll_to_bottom_once = true;
         {
             let run = app.run_state_mut(key);
             run.begin_waiting_response();
@@ -1715,10 +1769,10 @@ fn review_acp_ui(rec: &mut Recorder<'_>) {
         let app = rec.app();
         let key = app.active_session_key();
         app.run_state_mut(key).agent_rx = Some(rx);
-        app.conv.sidebar_open = false;
+        app.conv.sidebar.open = false;
     }
     rec.harness.run_steps(5);
-    assert!(rec.app().conv.terminal_open);
+    assert!(rec.app().conv.terminal_panel.open);
     assert_eq!(rec.app().terminals.len(), 1);
     for scale in [1.0, 1.25, 1.5] {
         rec.harness.set_pixels_per_point(scale);
@@ -1755,7 +1809,7 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     for scale in [1.0, 1.25, 1.5] {
         rec.harness.set_pixels_per_point(scale);
         for width in [180.0, 250.0] {
-            rec.app().conv.sidebar_width = width;
+            rec.app().conv.sidebar.width = width;
             rec.app().conv.workspaces[0].sidebar_folded = false;
             rec.harness.run_steps(4);
             rec.still(&format!("worktrees-{width}-{scale}"));
@@ -1851,10 +1905,84 @@ fn review_composer_pickers(rec: &mut Recorder<'_>) {
             route: None,
             changes: None,
         });
-        app.conv.pending_images = (0..12)
+        app.conv.composer.pending_images = (0..12)
             .map(|i| ("image/png".to_string(), png(800, 600, (i * 20) as u8)))
             .collect();
     }
     rec.harness.run_steps(6);
     rec.still("chat-many-images");
+}
+
+/// Compare the actual app's GPU pixels on the input frame and the following idle frame.
+/// Run with OXI_COMPOSER_REVIEW=1 OXI_GALLERY=/tmp/oxi-composer cargo test
+/// --locked --bin oxi render_gallery -- --ignored --nocapture.
+fn review_composer_typing(rec: &mut Recorder<'_>) {
+    let input_id = egui::Id::new("composer_input");
+    for theme in ["dark", "light"] {
+        rec.app().conv.settings.theme_id = theme.into();
+        crate::theme::apply_theme(&rec.harness.ctx, theme);
+        rec.harness
+            .ctx
+            .all_styles_mut(|s| s.visuals.text_cursor.blink = false);
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            rec.app().conv.composer.input.clear();
+            rec.harness.set_pixels_per_point(scale);
+            rec.harness.ctx.memory_mut(|m| m.request_focus(input_id));
+            rec.harness.run_steps(4);
+            for (i, ch) in "hello ăîșț\n世界".chars().enumerate() {
+                if ch == '\n' {
+                    rec.harness.input_mut().modifiers = egui::Modifiers::SHIFT;
+                    rec.harness.event(Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::SHIFT,
+                    });
+                } else {
+                    rec.harness.event(Event::Text(ch.to_string()));
+                }
+                rec.harness.step();
+                rec.harness.input_mut().modifiers = egui::Modifiers::NONE;
+                let input = &rec.harness.state().conv.composer.input;
+                let text = rec
+                    .harness
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text == *input => Some(t),
+                        _ => None,
+                    })
+                    .expect("composer text shape");
+                let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                let typed = rec.harness.render().unwrap();
+                rec.harness.step();
+                let idle = rec.harness.render().unwrap();
+                let x = (rect.left() * scale).ceil() as u32;
+                let y = (rect.top() * scale).ceil() as u32;
+                let w = (rect.width() * scale).floor() as u32;
+                let h = (rect.height() * scale).floor() as u32;
+                let typed = image::imageops::crop_imm(&typed, x, y, w, h).to_image();
+                let idle = image::imageops::crop_imm(&idle, x, y, w, h).to_image();
+                let changed = typed
+                    .pixels()
+                    .zip(idle.pixels())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                if let Some(dir) = &rec.stills {
+                    typed
+                        .save(dir.join(format!("composer-{theme}-{scale}-{i}-typed.png")))
+                        .unwrap();
+                    idle.save(dir.join(format!("composer-{theme}-{scale}-{i}-idle.png")))
+                        .unwrap();
+                }
+                assert_eq!(
+                    changed, 0,
+                    "{theme}, scale {scale}, character {ch:?}: composer text changes brightness after input"
+                );
+            }
+            println!("COMPOSER GPU stable: {theme}, scale {scale}");
+        }
+    }
 }

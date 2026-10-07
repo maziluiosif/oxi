@@ -42,8 +42,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 russh = "0.63"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "query", "form"] }
 futures-util = "0.3"
-bytes = "1"
 regex = "1"
+log = "0.4"
 memchr = "2"
 glob = "0.3"
 git2 = { version = "0.21", features = ["https", "ssh", "vendored-libgit2"] }
@@ -90,3 +90,10 @@ winresource = "0.1"
 [dev-dependencies]
 egui_kittest = { version = "0.35", features = ["eframe", "wgpu"] }
 wiremock = "0.6"
+
+# What release artifacts are built with (`cargo build --profile dist`). Kept separate from
+# `release` so local `cargo run --release` stays quick to rebuild while iterating on the UI.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1

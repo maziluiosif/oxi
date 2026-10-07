@@ -121,6 +121,7 @@ impl OxiApp {
 
         // Lazily load the saved password (if any) into the in-memory draft on first touch.
         self.conv
+            .settings_page
             .ssh_password_drafts
             .entry(kind)
             .or_insert_with(|| {
@@ -148,6 +149,7 @@ impl OxiApp {
             field_label_first(ui, "SSH password");
             let changed = self
                 .conv
+                .settings_page
                 .ssh_password_drafts
                 .get_mut(&kind)
                 .is_some_and(|password| {
@@ -156,6 +158,7 @@ impl OxiApp {
             if changed {
                 let pw = self
                     .conv
+                    .settings_page
                     .ssh_password_drafts
                     .get(&kind)
                     .cloned()
@@ -171,7 +174,7 @@ impl OxiApp {
             ui.add_space(8.0);
             // Clone the status out first so rendering it doesn't hold an immutable borrow of
             // `self.conv` while the buttons need `&mut self`.
-            let status = self.conv.ssh_test.get(&kind).cloned();
+            let status = self.conv.settings_page.ssh_test.get(&kind).cloned();
             let pinned = self
                 .conv
                 .settings
@@ -250,7 +253,7 @@ impl OxiApp {
     }
 
     /// Kick off a background SSH "Test connection" check for `kind`'s `RemoteSsh` config,
-    /// if one isn't already in flight. Results arrive on `conv.ssh_test_rx` and are
+    /// if one isn't already in flight. Results arrive on `conv.settings_page.ssh_test_rx` and are
     /// drained each frame.
     fn spawn_ssh_test(&mut self, ctx: &egui::Context, kind: LlmProviderKind) {
         let Some(cfg) = self.conv.settings.provider(kind).ssh_config().cloned() else {
@@ -258,12 +261,13 @@ impl OxiApp {
         };
         let password = self
             .conv
+            .settings_page
             .ssh_password_drafts
             .get(&kind)
             .cloned()
             .unwrap_or_default();
 
-        let entry = self.conv.ssh_test.entry(kind).or_default();
+        let entry = self.conv.settings_page.ssh_test.entry(kind).or_default();
         if entry.loading {
             return;
         }
@@ -271,7 +275,7 @@ impl OxiApp {
         entry.result = None;
 
         let (tx, rx) = std::sync::mpsc::channel::<SshTestMsg>();
-        self.conv.ssh_test_rx = Some(rx);
+        self.conv.settings_page.ssh_test_rx = Some(rx);
         let ctx = ctx.clone();
         let tunnels = self.tunnels.clone();
         let err_tx = tx.clone();
@@ -285,9 +289,7 @@ impl OxiApp {
                 err_ctx.request_repaint();
             },
             move |rt| {
-                let r = rt
-                    .block_on(tunnels.ensure_tunnel(kind.slug(), &cfg, &password))
-                    .map(|ok| ok.local_port);
+                let r = rt.block_on(tunnels.ensure_tunnel(kind.slug(), &cfg, &password));
                 let _ = tx.send(SshTestMsg {
                     provider: kind,
                     result: r,
@@ -297,13 +299,14 @@ impl OxiApp {
         );
     }
 
-    /// Pin host keys observed on successful SSH connects (trust-on-first-use). Drains the
-    /// tunnel manager's observed-fingerprint map each frame; for any provider whose
-    /// `SshConfig` has no pinned key yet, records the observed fingerprint and saves
-    /// settings. Already-pinned providers are left untouched — a mismatch never reaches a
-    /// successful connect, so an attacker key can't silently overwrite an existing pin.
+    /// Pin host keys observed on successful SSH connects (trust-on-first-use), whether by a
+    /// tunnel or a one-shot remote command. Drains the observed-fingerprint map each frame;
+    /// for any provider whose `SshConfig` has no pinned key yet, records the observed
+    /// fingerprint and saves settings. Already-pinned providers are left untouched — a
+    /// mismatch never reaches a successful connect, so an attacker key can't silently
+    /// overwrite an existing pin.
     pub(crate) fn pin_observed_host_keys(&mut self) {
-        let observed = self.tunnels.take_observed_host_keys();
+        let observed = crate::compute::take_observed_host_keys();
         if observed.is_empty() {
             return;
         }
@@ -326,10 +329,10 @@ impl OxiApp {
         }
     }
 
-    /// Drain background SSH "Test connection" results into `conv.ssh_test`. Mirrors
+    /// Drain background SSH "Test connection" results into `conv.settings_page.ssh_test`. Mirrors
     /// [`Self::drain_models`].
     pub(crate) fn drain_ssh_test(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.conv.ssh_test_rx.take() else {
+        let Some(rx) = self.conv.settings_page.ssh_test_rx.take() else {
             return;
         };
         let mut repainted = false;
@@ -342,13 +345,18 @@ impl OxiApp {
                     if msg.provider == LlmProviderKind::RemoteHf && msg.result.is_ok() {
                         self.conv.local_models.remote_list_for = None;
                     }
-                    let entry = self.conv.ssh_test.entry(msg.provider).or_default();
+                    let entry = self
+                        .conv
+                        .settings_page
+                        .ssh_test
+                        .entry(msg.provider)
+                        .or_default();
                     entry.loading = false;
                     entry.result = Some(msg.result);
                     repainted = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    self.conv.ssh_test_rx = Some(rx);
+                    self.conv.settings_page.ssh_test_rx = Some(rx);
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,

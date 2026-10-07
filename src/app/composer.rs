@@ -129,56 +129,84 @@ fn composer_text_edit(
     lock_focus: bool,
     plan_mode: bool,
 ) -> egui::text_edit::TextEditOutput {
+    let hint = if plan_mode {
+        "Describe what to plan…"
+    } else {
+        "Message oxi…"
+    };
     // Offset this pass paints with: what the scroll area stored at the end of the last pass.
     let painted_offset_id = input_id.with("painted_scroll_offset");
     let painted_offset = ui
         .ctx()
         .data(|d| d.get_temp::<f32>(painted_offset_id))
         .unwrap_or(0.0);
-    let scroll = egui::ScrollArea::vertical()
-        .id_salt("composer_text_scroll")
-        .animated(false)
-        .min_scrolled_height(160.0)
-        .max_height(160.0)
-        .show(ui, |ui| {
-            let selection_shape = ui.painter().add(egui::Shape::Noop);
-            let output = ui
-                .scope(|ui| {
-                    ui.visuals_mut().selection.bg_fill = Color32::TRANSPARENT;
-                    ui.visuals_mut().selection.stroke.color = c_text();
-                    TextEdit::multiline(input)
-                        .id(input_id)
-                        .lock_focus(lock_focus)
-                        .hint_text(
-                            RichText::new(if plan_mode {
-                                "Describe what to plan…"
-                            } else {
-                                "Message oxi…"
-                            })
-                            .size(FS_BODY)
-                            .color(c_text_faint()),
-                        )
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(1)
-                        .frame(egui::Frame::NONE)
-                        .show(ui)
+    let scroll = ui
+        .scope(|ui| {
+            // egui paints edge fades before clamping the caret's requested scroll offset.
+            // On a compact one-line editor that temporary offset dims the whole row for
+            // the input frame, even though the final offset is zero. Editable text should
+            // keep the same contrast while typing and while idle.
+            ui.spacing_mut().scroll.fade.strength = 0.0;
+            egui::ScrollArea::vertical()
+                .id_salt("composer_text_scroll")
+                .animated(false)
+                .min_scrolled_height(160.0)
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    let selection_shape = ui.painter().add(egui::Shape::Noop);
+                    let output = ui
+                        .scope(|ui| {
+                            ui.visuals_mut().selection.bg_fill = Color32::TRANSPARENT;
+                            ui.visuals_mut().selection.stroke.color = c_text();
+                            TextEdit::multiline(input)
+                                .id(input_id)
+                                .lock_focus(lock_focus)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(1)
+                                .frame(egui::Frame::NONE)
+                                .show(ui)
+                        })
+                        .inner;
+                    ui.ctx().accesskit_node_builder(output.response.id, |node| {
+                        node.set_placeholder(hint)
+                    });
+                    // egui's hint path lays out the placeholder before handling input and keeps
+                    // the old, empty galley for one frame on the first keystroke. Always lay out
+                    // the real editor, then paint a placeholder only if it is still empty.
+                    if input.is_empty() {
+                        let galley = egui::WidgetText::from(RichText::new(hint).size(FS_BODY))
+                            .into_galley(
+                                ui,
+                                Some(egui::TextWrapMode::Truncate),
+                                output.response.rect.width(),
+                                egui::TextStyle::Body,
+                            );
+                        ui.painter().with_clip_rect(output.response.rect).galley(
+                            output.galley_pos,
+                            galley,
+                            c_text_faint(),
+                        );
+                    }
+                    if let Some(range) = output.cursor_range
+                        && !range.is_empty()
+                    {
+                        let rects = crate::ui::text_selection::galley_selection_rects(
+                            &output.galley,
+                            output.galley_pos,
+                            range,
+                        );
+                        ui.painter().set(
+                            selection_shape,
+                            crate::ui::text_selection::selection_shape(
+                                &rects,
+                                editor_selection_fill(),
+                            ),
+                        );
+                    }
+                    output
                 })
-                .inner;
-            if let Some(range) = output.cursor_range
-                && !range.is_empty()
-            {
-                let rects = crate::ui::text_selection::galley_selection_rects(
-                    &output.galley,
-                    output.galley_pos,
-                    range,
-                );
-                ui.painter().set(
-                    selection_shape,
-                    crate::ui::text_selection::selection_shape(&rects, editor_selection_fill()),
-                );
-            }
-            output
-        });
+        })
+        .inner;
     // ScrollArea resolves TextEdit's caret target after painting its contents. Re-layout
     // with the final offset before presenting a frame, so typing never shows stale scroll.
     // Compare offsets, not rects: the content origin is pixel-rounded, so at fractional DPI
@@ -207,13 +235,13 @@ impl OxiApp {
     }
 
     fn render_text_attachments(&mut self, ui: &mut Ui) {
-        if self.conv.pending_texts.is_empty() {
+        if self.conv.composer.pending_texts.is_empty() {
             return;
         }
         let scope = self.text_attachment_scope();
         let mut remove = None;
         ui.horizontal_wrapped(|ui| {
-            for (index, attachment) in self.conv.pending_texts.iter().enumerate() {
+            for (index, attachment) in self.conv.composer.pending_texts.iter().enumerate() {
                 if let crate::model::UserAttachment::Text { name, text } = attachment {
                     if ui
                         .button(format!(
@@ -235,23 +263,23 @@ impl OxiApp {
             }
         });
         if let Some(index) = remove {
-            self.conv.pending_texts.remove(index);
+            self.conv.composer.pending_texts.remove(index);
         }
     }
 
     /// Raise a short-lived inline notice under the composer (blocked send, rejected
     /// attachment, …). Replaces any previous notice.
     pub(crate) fn notify_composer(&mut self, msg: impl Into<String>) {
-        self.conv.composer_notice = Some((msg.into(), std::time::Instant::now()));
+        self.conv.composer.notice = Some((msg.into(), std::time::Instant::now()));
     }
 
     /// Small warning line inside the composer card; auto-expires.
     fn render_composer_notice(&mut self, ui: &mut Ui) {
-        let Some((msg, raised_at)) = self.conv.composer_notice.clone() else {
+        let Some((msg, raised_at)) = self.conv.composer.notice.clone() else {
             return;
         };
         if raised_at.elapsed().as_secs_f32() > COMPOSER_NOTICE_SECS {
-            self.conv.composer_notice = None;
+            self.conv.composer.notice = None;
             return;
         }
         ui.horizontal(|ui| {
@@ -274,12 +302,12 @@ impl OxiApp {
         let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
         let input_id = Id::new("composer_input");
         self.intercept_large_pastes(ui, input_id);
-        let can_send = !self.conv.input.trim().is_empty()
-            || !self.conv.pending_images.is_empty()
-            || !self.conv.pending_texts.is_empty();
-        let had_draft_content = !self.conv.input.is_empty()
-            || !self.conv.pending_images.is_empty()
-            || !self.conv.pending_texts.is_empty();
+        let can_send = !self.conv.composer.input.trim().is_empty()
+            || !self.conv.composer.pending_images.is_empty()
+            || !self.conv.composer.pending_texts.is_empty();
+        let had_draft_content = !self.conv.composer.input.is_empty()
+            || !self.conv.composer.pending_images.is_empty()
+            || !self.conv.composer.pending_texts.is_empty();
 
         // Focus state persists in egui memory across frames, so reading it here (before
         // the TextEdit runs) is exact, not one frame late.
@@ -311,7 +339,7 @@ impl OxiApp {
                         self.render_queue_panel(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
-                        if self.conv.editing_last_prompt.is_some() {
+                        if self.conv.composer.editing_last_prompt.is_some() {
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new("Editing previous prompt")
@@ -326,7 +354,7 @@ impl OxiApp {
                         }
 
                         // === Attachment thumbnails (above the text, like Cursor) ===
-                        if !self.conv.pending_images.is_empty() {
+                        if !self.conv.composer.pending_images.is_empty() {
                             self.render_attachment_thumbnails(ui);
                             ui.add_space(COMPOSER_GAP);
                         }
@@ -340,7 +368,7 @@ impl OxiApp {
                         // as the user types (both newlines and soft-wrap).
                         let mut te_output = composer_text_edit(
                             ui,
-                            &mut self.conv.input,
+                            &mut self.conv.composer.input,
                             input_id,
                             slash_menu_open,
                             plan_mode,
@@ -358,21 +386,21 @@ impl OxiApp {
                             te_output.response.rect,
                             te_output.response.has_focus(),
                         );
-                        if self.conv.focus_chat_input_next_frame {
+                        if self.conv.composer.focus_next_frame {
                             // Navigation should put the caret at the end of any existing draft,
                             // not at egui's default/start position.
-                            let end = CCursor::new(self.conv.input.chars().count());
+                            let end = CCursor::new(self.conv.composer.input.chars().count());
                             te_output
                                 .state
                                 .cursor
                                 .set_char_range(Some(CCursorRange::one(end)));
                             te_output.state.store(ui.ctx(), input_id);
                             te_output.response.request_focus();
-                            self.conv.focus_chat_input_next_frame = false;
+                            self.conv.composer.focus_next_frame = false;
                         }
 
                         let galley_h = te_output.galley.rect.height().min(160.0);
-                        self.conv.composer_measured_text_h = galley_h;
+                        self.conv.composer.measured_text_h = galley_h;
 
                         // Enter → send, Shift+Enter → newline; ↑/↓ → input history.
                         // Suppressed while the confirm modal is up: Enter there means
@@ -384,12 +412,12 @@ impl OxiApp {
                             && !shift_held
                             && !self.confirm_prompt_open()
                         {
-                            while self.conv.input.ends_with('\n') {
-                                self.conv.input.pop();
+                            while self.conv.composer.input.ends_with('\n') {
+                                self.conv.composer.input.pop();
                             }
-                            let can_send_now = !self.conv.input.trim().is_empty()
-                                || !self.conv.pending_images.is_empty()
-                                || !self.conv.pending_texts.is_empty();
+                            let can_send_now = !self.conv.composer.input.trim().is_empty()
+                                || !self.conv.composer.pending_images.is_empty()
+                                || !self.conv.composer.pending_texts.is_empty();
                             if can_send_now {
                                 self.send_message();
                             }
@@ -425,17 +453,17 @@ impl OxiApp {
         });
         let measured_h = row.response.rect.height();
         let draft_cleared = had_draft_content
-            && self.conv.input.is_empty()
-            && self.conv.pending_images.is_empty()
-            && self.conv.pending_texts.is_empty();
+            && self.conv.composer.input.is_empty()
+            && self.conv.composer.pending_images.is_empty()
+            && self.conv.composer.pending_texts.is_empty();
         if draft_cleared {
             // Sending clears the model after TextEdit has already laid out the old text in this
             // pass. Reset to the compact anchor before the second pass instead of carrying that
             // stale, tall measurement into it.
-            self.conv.composer_measured_full_h = 0.0;
+            self.conv.composer.measured_full_h = 0.0;
             ui.ctx().request_discard("composer draft cleared");
-        } else if (measured_h - self.conv.composer_measured_full_h).abs() > 0.5 {
-            self.conv.composer_measured_full_h = measured_h;
+        } else if (measured_h - self.conv.composer.measured_full_h).abs() > 0.5 {
+            self.conv.composer.measured_full_h = measured_h;
             // The floating rect was positioned earlier in this pass using the old height.
             // Re-run layout before painting instead of exposing one incorrectly anchored frame.
             ui.ctx().request_discard("composer height changed");
@@ -532,7 +560,7 @@ impl OxiApp {
                     crate::theme::c_on_accent(),
                     true,
                     ICON_SEND,
-                    if self.conv.editing_last_prompt.is_some() {
+                    if self.conv.composer.editing_last_prompt.is_some() {
                         "Restore changes and send"
                     } else {
                         "Send message"
@@ -605,7 +633,7 @@ impl OxiApp {
         let mut remove_idx: Option<usize> = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            for (i, (mime, data)) in self.conv.pending_images.iter().enumerate() {
+            for (i, (mime, data)) in self.conv.composer.pending_images.iter().enumerate() {
                 let tex = composer_thumb_texture(ui, data);
                 let size = match &tex {
                     Some(tex) => {
@@ -684,6 +712,173 @@ impl OxiApp {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn typing_does_not_paint_scroll_fades_over_the_editor() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx, "dark");
+            ctx.set_pixels_per_point(scale);
+            let id = Id::new("composer_input");
+            ctx.memory_mut(|m| m.request_focus(id));
+            let mut input = String::new();
+            for insert in ["", "h", "e", "l", "l", "o", "", "\n", "ă", ""] {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600.0, 500.0),
+                        )),
+                        events: if insert.is_empty() {
+                            vec![]
+                        } else if insert == "\n" {
+                            vec![egui::Event::Key {
+                                key: egui::Key::Enter,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: egui::Modifiers::SHIFT,
+                            }]
+                        } else {
+                            vec![egui::Event::Text(insert.into())]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.scope_builder(
+                            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                                egui::pos2(10.0, 300.9375),
+                                egui::vec2(550.0, 180.0),
+                            )),
+                            |ui| {
+                                composer_text_edit(ui, &mut input, id, false, false);
+                            },
+                        );
+                    },
+                );
+                assert!(
+                    !output
+                        .shapes
+                        .iter()
+                        .any(|s| matches!(&s.shape, egui::Shape::Mesh(_))),
+                    "unexpected scroll fade on draft {input:?}, scale {scale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn placeholder_and_first_keystroke_are_painted_in_the_same_frame() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for plan_mode in [false, true] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_theme(&ctx, "dark");
+                ctx.set_pixels_per_point(scale);
+                let id = Id::new("composer_input");
+                let mut input = String::new();
+                ctx.memory_mut(|m| m.request_focus(id));
+                for events in [
+                    vec![],
+                    vec![egui::Event::Text("ă".into())],
+                    vec![egui::Event::Key {
+                        key: egui::Key::Backspace,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                ] {
+                    let full = ctx.run_ui(
+                        egui::RawInput {
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let output = composer_text_edit(ui, &mut input, id, false, plan_mode);
+                            assert_eq!(output.galley.job.text, input, "scale {scale}");
+                        },
+                    );
+                    let expected = if input.is_empty() {
+                        if plan_mode {
+                            "Describe what to plan…"
+                        } else {
+                            "Message oxi…"
+                        }
+                    } else {
+                        &input
+                    };
+                    assert!(full.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == expected && shape.clip_rect.width() > 0.0)
+                    }), "scale {scale}: missing visible {expected:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn single_line_typing_keeps_existing_glyphs_and_height_stable() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx, "dark");
+            ctx.set_pixels_per_point(scale);
+            let id = Id::new("composer_input");
+            let mut input = "a".to_owned();
+            let mut height: f32 = 80.0;
+            let mut previous = None;
+            ctx.memory_mut(|m| m.request_focus(id));
+            for (frame, insert) in ["", "", "", "b", "c", "g", "ă", "î", "ș", "ț", " ", "d"]
+                .into_iter()
+                .enumerate()
+            {
+                let mut geometry = None;
+                let full = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(600.0, 500.0),
+                        )),
+                        events: if insert.is_empty() {
+                            vec![]
+                        } else {
+                            vec![egui::Event::Text(insert.into())]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(10.0, ui.max_rect().bottom() - height.max(80.0)),
+                            egui::vec2(560.0, height.max(80.0)),
+                        );
+                        let row = ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                            Frame::new()
+                                .inner_margin(Margin::same(COMPOSER_FRAME_MARGIN as i8))
+                                .show(ui, |ui| {
+                                    let output =
+                                        composer_text_edit(ui, &mut input, id, false, false);
+                                    geometry =
+                                        Some((output.galley_pos, output.response.rect.height()));
+                                    ui.add_space(COMPOSER_GAP);
+                                    let _ = ui.button("Send");
+                                });
+                        });
+                        let measured = row.response.rect.height();
+                        if (measured - height).abs() > 0.5 {
+                            height = measured;
+                            ctx.request_discard("composer height changed");
+                        }
+                    },
+                );
+                let geometry = geometry.unwrap();
+                if frame >= 3
+                    && let Some(previous) = previous
+                {
+                    assert_eq!(geometry, previous, "scale {scale}, draft {input:?}");
+                    assert_eq!(full.platform_output.num_completed_passes, 1);
+                }
+                previous = Some(geometry);
+            }
+        }
+    }
 
     #[test]
     fn typing_keeps_short_input_visible_in_bottom_anchored_composer() {

@@ -29,7 +29,7 @@ pub mod worktree;
 
 #[path = "git/hunk.rs"]
 mod hunk;
-pub use hunk::{BlockEdit, BlockTarget, TextHunk, base_text, splice_lines, text_hunks};
+pub use hunk::{BlockEdit, BlockTarget, DiffBase, diff_texts, splice_lines, text_hunks};
 pub use system::version as system_git_version;
 
 #[cfg(test)]
@@ -49,11 +49,9 @@ const FULL_FILE_CONTEXT: u32 = 1_000_000;
 #[derive(Debug, Clone, Default)]
 pub struct GitEntry {
     pub path: String,
-    #[allow(dead_code)]
-    pub code: String,
+    /// `git status --short` letter for this side: `A M D R T` staged, `? M D R T U` unstaged
+    /// (`U` = unmerged).
     pub status: char,
-    #[allow(dead_code)]
-    pub conflict: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -469,7 +467,10 @@ fn status_entries(repo: &Repository) -> Result<(Vec<GitEntry>, Vec<GitEntry>), S
         } else {
             None
         };
-        let work_status = if status.contains(Status::WT_NEW) {
+        // An unmerged path needs resolving whatever else changed, so it reads as `U` first.
+        let work_status = if conflict {
+            Some('U')
+        } else if status.contains(Status::WT_NEW) {
             Some('?')
         } else if status.contains(Status::WT_MODIFIED) {
             Some('M')
@@ -479,26 +480,17 @@ fn status_entries(repo: &Repository) -> Result<(Vec<GitEntry>, Vec<GitEntry>), S
             Some('R')
         } else if status.contains(Status::WT_TYPECHANGE) {
             Some('T')
-        } else if conflict {
-            Some('U')
         } else {
             None
         };
         if let Some(s) = index_status {
             staged.push(GitEntry {
                 path: path.clone(),
-                code: format!("{s} "),
                 status: s,
-                conflict,
             });
         }
         if let Some(s) = work_status {
-            unstaged.push(GitEntry {
-                path,
-                code: format!(" {s}"),
-                status: s,
-                conflict,
-            });
+            unstaged.push(GitEntry { path, status: s });
         }
     }
     Ok((staged, unstaged))

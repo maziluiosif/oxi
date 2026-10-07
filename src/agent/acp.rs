@@ -738,8 +738,8 @@ async fn resume_session(
         .await;
         match res {
             Ok(Ok(res)) => return Some(res),
-            Ok(Err(e)) => eprintln!("[acp] {method} {session_id} failed: {e}"),
-            Err(_) => eprintln!("[acp] {method} {session_id} timed out"),
+            Ok(Err(e)) => log::warn!("ACP {method} {session_id} failed: {e}"),
+            Err(_) => log::warn!("ACP {method} {session_id} timed out"),
         }
     }
     None

@@ -48,16 +48,17 @@ const SETTINGS_NAV: &[SettingsNavGroup] = &[
 
 impl OxiApp {
     pub(crate) fn open_settings_page(&mut self) {
-        if self.conv.settings_original.is_none() {
-            self.conv.settings_original = Some(self.conv.settings.clone());
+        if self.conv.settings_page.original.is_none() {
+            self.conv.settings_page.original = Some(self.conv.settings.clone());
         }
-        self.conv.settings_save_error = None;
-        self.conv.settings_open = true;
+        self.conv.settings_page.save_error = None;
+        self.conv.settings_page.open = true;
     }
 
     pub(crate) fn settings_dirty(&self) -> bool {
         self.conv
-            .settings_original
+            .settings_page
+            .original
             .as_ref()
             .is_some_and(|original| original != &self.conv.settings)
     }
@@ -69,28 +70,28 @@ impl OxiApp {
                 self.focus_active_view_next_frame();
             }
             SettingsExitAction::ToggleSidebar => {
-                let chats_on = self.conv.sidebar_open
-                    && self.conv.sidebar_mode == crate::app::state::SidebarMode::Chats;
-                let chat_covered = self.conv.editor.active.is_some() || self.conv.diff_view_open;
+                let chats_on = self.conv.sidebar.open
+                    && self.conv.sidebar.mode == crate::app::state::SidebarMode::Chats;
+                let chat_covered = self.conv.editor.active.is_some() || self.conv.diff_view.open;
                 if chats_on && chat_covered {
                     // The chat list is already showing but an editor/diff tab covers the chat:
                     // bring the chat forward instead of hiding the list.
                     self.reveal_chat_view();
                 } else {
-                    self.conv.sidebar_open = !chats_on;
+                    self.conv.sidebar.open = !chats_on;
                 }
                 if !chats_on {
-                    self.conv.sidebar_mode = crate::app::state::SidebarMode::Chats;
+                    self.conv.sidebar.mode = crate::app::state::SidebarMode::Chats;
                     self.reveal_chat_view();
                 }
                 self.focus_active_view_next_frame();
             }
             SettingsExitAction::ToggleExplorer => {
-                let explorer_on = self.conv.sidebar_open
-                    && self.conv.sidebar_mode == crate::app::state::SidebarMode::Explorer;
-                self.conv.sidebar_open = !explorer_on;
+                let explorer_on = self.conv.sidebar.open
+                    && self.conv.sidebar.mode == crate::app::state::SidebarMode::Explorer;
+                self.conv.sidebar.open = !explorer_on;
                 if !explorer_on {
-                    self.conv.sidebar_mode = crate::app::state::SidebarMode::Explorer;
+                    self.conv.sidebar.mode = crate::app::state::SidebarMode::Explorer;
                     if self.conv.editor.active.is_none() {
                         self.conv.editor.active = self.conv.editor.hidden_active.take();
                     }
@@ -106,8 +107,8 @@ impl OxiApp {
     }
 
     pub(crate) fn request_settings_exit(&mut self, action: SettingsExitAction) {
-        if self.conv.settings_open && self.settings_dirty() {
-            self.conv.settings_exit_prompt = Some(action);
+        if self.conv.settings_page.open && self.settings_dirty() {
+            self.conv.settings_page.exit_prompt = Some(action);
         } else {
             self.close_settings_page();
             self.continue_after_settings_exit(action);
@@ -115,9 +116,9 @@ impl OxiApp {
     }
 
     pub(crate) fn close_settings_page(&mut self) {
-        self.conv.settings_original = None;
-        self.conv.settings_exit_prompt = None;
-        self.conv.settings_open = false;
+        self.conv.settings_page.original = None;
+        self.conv.settings_page.exit_prompt = None;
+        self.conv.settings_page.open = false;
         self.focus_active_view_next_frame();
     }
 
@@ -125,36 +126,36 @@ impl OxiApp {
         // Failures stay on the Settings page (inline banner) — routing them to the
         // chat's stream-error banner hid them from the view the user is looking at.
         if let Err(e) = self.conv.settings.save() {
-            self.conv.settings_save_error = Some(format!("Could not save settings: {e}"));
-            self.conv.settings_exit_prompt = None;
+            self.conv.settings_page.save_error = Some(format!("Could not save settings: {e}"));
+            self.conv.settings_page.exit_prompt = None;
             return;
         }
-        self.conv.settings_save_error = None;
-        self.conv.settings_original = Some(self.conv.settings.clone());
-        self.conv.settings_exit_prompt = None;
-        self.conv.settings_open = false;
+        self.conv.settings_page.save_error = None;
+        self.conv.settings_page.original = Some(self.conv.settings.clone());
+        self.conv.settings_page.exit_prompt = None;
+        self.conv.settings_page.open = false;
         self.focus_active_view_next_frame();
     }
 
     fn save_settings_and_continue(&mut self, action: SettingsExitAction) {
         if let Err(e) = self.conv.settings.save() {
-            self.conv.settings_save_error = Some(format!("Could not save settings: {e}"));
-            self.conv.settings_exit_prompt = None;
+            self.conv.settings_page.save_error = Some(format!("Could not save settings: {e}"));
+            self.conv.settings_page.exit_prompt = None;
             return;
         }
-        self.conv.settings_save_error = None;
-        self.conv.settings_original = Some(self.conv.settings.clone());
+        self.conv.settings_page.save_error = None;
+        self.conv.settings_page.original = Some(self.conv.settings.clone());
         self.close_settings_page();
         self.continue_after_settings_exit(action);
     }
 
     fn discard_settings_and_continue(&mut self, ctx: &egui::Context, action: SettingsExitAction) {
-        if let Some(original) = self.conv.settings_original.take() {
+        if let Some(original) = self.conv.settings_page.original.take() {
             self.conv.settings = original;
         }
         self.reapply_appearance(ctx);
-        self.conv.settings_exit_prompt = None;
-        self.conv.settings_open = false;
+        self.conv.settings_page.exit_prompt = None;
+        self.conv.settings_page.open = false;
         self.continue_after_settings_exit(action);
     }
 
@@ -173,8 +174,8 @@ impl OxiApp {
     }
 
     pub(crate) fn render_settings_page(&mut self, ui: &mut Ui) {
-        if self.conv.settings_original.is_none() {
-            self.conv.settings_original = Some(self.conv.settings.clone());
+        if self.conv.settings_page.original.is_none() {
+            self.conv.settings_page.original = Some(self.conv.settings.clone());
         }
         const SIDEBAR_W_MIN: f32 = 180.0;
         const SIDEBAR_W_MAX: f32 = 320.0;
@@ -187,7 +188,8 @@ impl OxiApp {
             // Independent of the chat sidebar width so resizing chat doesn't affect Settings.
             let w = self
                 .conv
-                .settings_sidebar_width
+                .settings_page
+                .sidebar_width
                 .clamp(SIDEBAR_W_MIN, SIDEBAR_W_MAX);
             ui.allocate_ui_with_layout(
                 egui::vec2(w, full_h),
@@ -224,7 +226,7 @@ impl OxiApp {
                 |ui| {
                     Frame::new().fill(c_bg_main()).show(ui, |ui| {
                         self.render_settings_header(ui);
-                        if let Some(err) = self.conv.settings_save_error.clone() {
+                        if let Some(err) = self.conv.settings_page.save_error.clone() {
                             Frame::new()
                                 .inner_margin(Margin {
                                     left: 36,
@@ -273,7 +275,7 @@ impl OxiApp {
     }
 
     fn render_unsaved_settings_exit_prompt(&mut self, ctx: &egui::Context) {
-        let Some(action) = self.conv.settings_exit_prompt else {
+        let Some(action) = self.conv.settings_page.exit_prompt else {
             return;
         };
 
@@ -281,7 +283,7 @@ impl OxiApp {
         // Clicking the dimmed backdrop dismisses (Stay); Escape is handled by the
         // global shortcut handler so it doesn't race the prompt being opened.
         if crate::ui::chrome::modal_backdrop(ctx, "unsaved_settings_exit_backdrop") {
-            self.conv.settings_exit_prompt = None;
+            self.conv.settings_page.exit_prompt = None;
         }
 
         egui::Area::new(egui::Id::new("unsaved_settings_exit_prompt"))
@@ -320,7 +322,7 @@ impl OxiApp {
                                 .on_hover_text("Esc")
                                 .clicked()
                             {
-                                self.conv.settings_exit_prompt = None;
+                                self.conv.settings_page.exit_prompt = None;
                             }
                         });
                     });
@@ -403,10 +405,10 @@ impl OxiApp {
             settings_caption(ui, group.caption);
             ui.add_space(4.0);
             for (tab, icon, label) in group.items {
-                let selected = self.conv.settings_tab == *tab;
+                let selected = self.conv.settings_page.tab == *tab;
                 let response = settings_nav_row(ui, icon, label, selected);
                 if response.clicked() {
-                    self.conv.settings_tab = *tab;
+                    self.conv.settings_page.tab = *tab;
                 }
                 ui.add_space(2.0);
             }
@@ -428,7 +430,7 @@ impl OxiApp {
     }
 
     fn render_settings_body(&mut self, ui: &mut Ui) {
-        match self.conv.settings_tab {
+        match self.conv.settings_page.tab {
             SettingsTab::Providers => self.render_settings_providers_panel(ui),
             SettingsTab::Agent => self.render_settings_agent_panel(ui),
             SettingsTab::GitHub => self.render_settings_github_panel(ui),

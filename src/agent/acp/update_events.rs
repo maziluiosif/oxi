@@ -337,10 +337,7 @@ fn save_image(data_b64: &str, mime: &str) -> Option<PathBuf> {
     };
     let mut h = DefaultHasher::new();
     bytes.hash(&mut h);
-    let dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
-        .join("images");
+    let dir = crate::app_dirs::data_dir().join("images");
     let path = dir.join(format!("{:016x}.{ext}", h.finish()));
     if !path.is_file() {
         std::fs::create_dir_all(&dir).ok()?;

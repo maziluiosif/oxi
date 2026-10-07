@@ -15,16 +15,16 @@ const RESIZE_H: f32 = 6.0;
 impl OxiApp {
     /// Show or hide the terminal panel, persisting the choice.
     pub(crate) fn toggle_terminal(&mut self) {
-        self.conv.terminal_open = !self.conv.terminal_open;
-        self.conv.settings.terminal_open = self.conv.terminal_open;
-        if self.conv.terminal_open {
-            self.conv.focus_chat_input_next_frame = false;
+        self.conv.terminal_panel.open = !self.conv.terminal_panel.open;
+        self.conv.settings.terminal_open = self.conv.terminal_panel.open;
+        if self.conv.terminal_panel.open {
+            self.conv.composer.focus_next_frame = false;
             self.conv.editor.focus_editor_next_frame = false;
             self.conv.editor.focus_find_next_frame = false;
             self.conv.editor.find_focus_editor_pending = false;
-            self.conv.focus_terminal_next_frame = true;
+            self.conv.terminal_panel.focus_next_frame = true;
         } else {
-            self.conv.focus_terminal_next_frame = false;
+            self.conv.terminal_panel.focus_next_frame = false;
             self.focus_active_view_next_frame();
         }
         self.save_settings_quietly();
@@ -68,7 +68,7 @@ impl OxiApp {
 
     /// Open a new terminal tab in the workspace and type `command` at its prompt (not run).
     pub(crate) fn open_command_in_terminal(&mut self, ctx: &egui::Context, command: &str) {
-        if !self.conv.terminal_open {
+        if !self.conv.terminal_panel.open {
             self.toggle_terminal();
         }
         match self.spawn_terminal(ctx) {
@@ -76,7 +76,7 @@ impl OxiApp {
                 if let Some(term) = self.terminals.get_mut(self.active_terminal) {
                     term.type_text(&single_line_command(command));
                 }
-                self.conv.focus_terminal_next_frame = true;
+                self.conv.terminal_panel.focus_next_frame = true;
             }
             Err(e) => self.notify_composer(format!("Could not open a terminal: {e}")),
         }
@@ -91,14 +91,15 @@ impl OxiApp {
         if self.active_terminal > index || self.active_terminal >= self.terminals.len() {
             self.active_terminal = self.active_terminal.saturating_sub(1);
         }
-        self.conv.focus_terminal_next_frame = true;
+        self.conv.terminal_panel.focus_next_frame = true;
     }
 
     /// Render the bottom terminal panel (call before the `CentralPanel`).
     pub(crate) fn render_terminal_panel(&mut self, ui: &mut egui::Ui) {
         let height = self
             .conv
-            .terminal_height
+            .terminal_panel
+            .height
             .clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
 
         egui::Panel::bottom("terminal_panel")
@@ -112,7 +113,7 @@ impl OxiApp {
             .show(ui, |ui| {
                 self.render_terminal_resize_handle(ui);
                 self.render_terminal_header(ui);
-                if self.conv.terminal_open {
+                if self.conv.terminal_panel.open {
                     self.render_terminal_body(ui);
                 }
             });
@@ -129,9 +130,9 @@ impl OxiApp {
         {
             // Position-based like the sidebar sep (see there for why deltas jitter).
             // The panel's bottom edge is pinned, so height = bottom - pointer.
-            self.conv.terminal_height =
+            self.conv.terminal_panel.height =
                 (ui.max_rect().bottom() - pos.y).clamp(TERMINAL_H_MIN, TERMINAL_H_MAX);
-            self.conv.settings.terminal_height = self.conv.terminal_height;
+            self.conv.settings.terminal_height = self.conv.terminal_panel.height;
         }
         if resp.drag_stopped() {
             self.save_settings_quietly();
@@ -202,7 +203,7 @@ impl OxiApp {
                 }
                 if let Some(index) = select {
                     self.active_terminal = index;
-                    self.conv.focus_terminal_next_frame = true;
+                    self.conv.terminal_panel.focus_next_frame = true;
                 }
                 if let Some(index) = close {
                     self.close_terminal(index);
@@ -234,7 +235,7 @@ impl OxiApp {
                                     Some(format!("Failed to start terminal: {e}"));
                             }
                         }
-                        self.conv.focus_terminal_next_frame = true;
+                        self.conv.terminal_panel.focus_next_frame = true;
                     }
                 });
             },
@@ -266,7 +267,7 @@ impl OxiApp {
         }
         self.active_terminal = self.active_terminal.min(self.terminals.len() - 1);
         if let Some(term) = self.terminals.get_mut(self.active_terminal) {
-            term.ui(ui, inner, &mut self.conv.focus_terminal_next_frame);
+            term.ui(ui, inner, &mut self.conv.terminal_panel.focus_next_frame);
         }
     }
 

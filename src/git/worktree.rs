@@ -12,10 +12,7 @@ use super::{current_branch, err, open_repo, repo_root};
 
 /// Where oxi keeps the work trees it creates.
 fn worktrees_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
-        .join("worktrees")
+    crate::app_dirs::data_dir().join("worktrees")
 }
 
 /// A linked work tree and the checkout it branches from.

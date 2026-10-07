@@ -151,7 +151,10 @@ pub(super) async fn send_with_retry(
             format!("Attempt {attempt}/{MAX_SEND_ATTEMPTS} failed · {title}"),
             &err,
         );
-        eprintln!("[oxi] request failed (attempt {attempt}/{MAX_SEND_ATTEMPTS}), retrying: {err}");
+        log::info!(
+            "request failed (attempt {attempt}/{MAX_SEND_ATTEMPTS}), retrying: {}",
+            crate::logging::excerpt(&err)
+        );
         let delay = wait.unwrap_or_else(|| backoff_delay(attempt));
         if !sleep_cancellable(delay, cancel).await {
             return Err("Cancelled".into());

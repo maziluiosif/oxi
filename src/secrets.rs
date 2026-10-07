@@ -40,7 +40,7 @@ fn ensure_default_store() {
 
         match store {
             Ok(store) => keyring_core::set_default_store(store),
-            Err(e) => eprintln!("failed to initialize OS credential store: {e}"),
+            Err(e) => log::error!("failed to initialize OS credential store: {e}"),
         }
     });
 }

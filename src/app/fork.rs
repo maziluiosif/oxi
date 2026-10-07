@@ -39,7 +39,7 @@ impl OxiApp {
             return;
         };
         if rect.contains(pos) && ui.clip_rect().contains(pos) {
-            self.conv.message_menu = Some(MessageMenu {
+            self.conv.transcript.message_menu = Some(MessageMenu {
                 workspace_idx: wi,
                 session_idx: si,
                 start,
@@ -51,14 +51,14 @@ impl OxiApp {
     }
 
     pub(crate) fn render_message_menu(&mut self, ctx: &egui::Context) {
-        let Some(menu) = self.conv.message_menu.clone() else {
+        let Some(menu) = self.conv.transcript.message_menu.clone() else {
             return;
         };
         let key = self.active_session_key();
         if (menu.workspace_idx, menu.session_idx) != (key.workspace_idx, key.session_idx)
             || menu.end > self.active_session().messages.len()
         {
-            self.conv.message_menu = None;
+            self.conv.transcript.message_menu = None;
             return;
         }
         let is_user = self.active_session().messages[menu.start].role == MsgRole::User;
@@ -94,7 +94,7 @@ impl OxiApp {
         let just_opened = ctx.cumulative_pass_nr() == menu.opened_pass;
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if fork || copy || escape || (!just_opened && area.response.clicked_elsewhere()) {
-            self.conv.message_menu = None;
+            self.conv.transcript.message_menu = None;
         }
         if copy {
             let text = message_text(&self.active_session().messages[menu.start..menu.end]);
@@ -140,18 +140,21 @@ impl OxiApp {
             self.persist_active_session_selection();
         }
         if let Some(user) = prefill {
-            self.conv.input = crate::app::mentions::strip_mention_context(&user.text).to_string();
+            self.conv.composer.input =
+                crate::app::mentions::strip_mention_context(&user.text).to_string();
             for attachment in user.attachments {
                 match attachment {
                     UserAttachment::Image { mime, data } => {
-                        self.conv.pending_images.push((mime, data));
+                        self.conv.composer.pending_images.push((mime, data));
                     }
-                    text @ UserAttachment::Text { .. } => self.conv.pending_texts.push(text),
+                    text @ UserAttachment::Text { .. } => {
+                        self.conv.composer.pending_texts.push(text)
+                    }
                 }
             }
         }
-        self.conv.scroll_to_bottom_once = true;
-        self.conv.focus_chat_input_next_frame = true;
+        self.conv.transcript.scroll_to_bottom_once = true;
+        self.conv.composer.focus_next_frame = true;
     }
 }
 

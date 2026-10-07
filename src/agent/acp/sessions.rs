@@ -26,9 +26,7 @@ struct Stored {
 static LOCK: Mutex<()> = Mutex::new(());
 
 fn store_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("oxi")
+    crate::app_dirs::data_dir()
         .join("acp")
         .join("sessions.json")
 }
@@ -51,10 +49,7 @@ fn write(path: &Path, map: &HashMap<String, Stored>) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, json).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
-    }
+    let _ = crate::fsutil::write_atomic(path, json.as_bytes());
 }
 
 fn lookup_in(path: &Path, key: &str, command_line: &str, cwd: &Path) -> Option<String> {

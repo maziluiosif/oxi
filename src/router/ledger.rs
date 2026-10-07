@@ -49,7 +49,7 @@ struct Ledger {
 }
 
 fn ledger_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("oxi").join("usage.jsonl"))
+    Some(crate::app_dirs::config_dir().join("usage.jsonl"))
 }
 
 fn ledger() -> &'static Mutex<Ledger> {

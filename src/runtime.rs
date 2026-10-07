@@ -37,6 +37,12 @@ pub fn runtime() -> Result<&'static Runtime, String> {
         .map_err(Clone::clone)
 }
 
+/// Drive `future` to completion on the shared runtime from synchronous code: a plain thread,
+/// a `spawn_blocking` closure or a [`block_in_place`] section (never from inside an async task).
+pub fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, String> {
+    Ok(runtime()?.block_on(future))
+}
+
 /// Shared client for plain requests (no per-request TLS, proxy or DNS overrides), so repeated
 /// calls to the same host reuse pooled TLS connections. Cloning is cheap.
 pub fn http_client() -> reqwest::Client {

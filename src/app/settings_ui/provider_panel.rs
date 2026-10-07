@@ -237,17 +237,7 @@ impl OxiApp {
                     ui,
                     "Shell command for the ACP server. Leave empty for the recommended default. Refresh models to verify that it can launch; failures include installation hints.",
                 );
-            } else if matches!(
-                kind,
-                LlmProviderKind::OpenAi
-                    | LlmProviderKind::CustomAnthropic
-                    | LlmProviderKind::AzureOpenAi
-                    | LlmProviderKind::LmStudio
-                    | LlmProviderKind::LlamaCpp
-                    | LlmProviderKind::Ollama
-                    | LlmProviderKind::LocalHf
-                    | LlmProviderKind::RemoteHf
-            ) {
+            } else if kind.has_custom_endpoint() {
                 field_label_first(ui, "Base URL (optional)");
                 settings_text_field(
                     ui,
@@ -257,6 +247,23 @@ impl OxiApp {
                 if let Some(warning) = self.conv.settings.provider(kind).base_url_warning() {
                     ui.add_space(4.0);
                     alert_banner(ui, warning, false);
+                }
+                ui.add_space(6.0);
+                let mut accept_invalid = self.conv.settings.provider(kind).allows_self_signed_tls();
+                if ui
+                    .checkbox(
+                        &mut accept_invalid,
+                        RichText::new("Accept self-signed TLS certificates")
+                            .size(FS_SMALL)
+                            .color(c_text()),
+                    )
+                    .on_hover_text(
+                        "Skips certificate validation for this endpoint. Only enable it for a server you control on a trusted network: anyone on the path could otherwise read the API key.",
+                    )
+                    .changed()
+                {
+                    self.conv.settings.provider_mut(kind).allow_self_signed_tls =
+                        Some(accept_invalid);
                 }
             } else {
                 field_label_first(ui, "Endpoint");

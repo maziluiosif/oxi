@@ -59,65 +59,110 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Wait for one GET /auth/callback?code=...&state=...
-pub async fn wait_localhost_callback(expected_state: &str) -> Result<String, String> {
-    let listener = TcpListener::bind("127.0.0.1:1455")
+/// How long the localhost callback waits for the browser sign-in before giving up and freeing
+/// the port, so closing the tab doesn't leave the login stuck.
+const CALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Bind the redirect listener. Done before the browser opens, so a busy port fails at once
+/// instead of after the user has signed in.
+async fn bind_callback_listener() -> Result<TcpListener, String> {
+    TcpListener::bind("127.0.0.1:1455")
         .await
-        .map_err(|e| format!("Bind 127.0.0.1:1455 failed (is another app using it?): {e}"))?;
+        .map_err(|e| format!("Bind 127.0.0.1:1455 failed (is another app using it?): {e}"))
+}
 
-    let (mut stream, _) = listener
-        .accept()
+/// Wait for `GET /auth/callback?code=...&state=...` and return the code. Other requests
+/// (browser pre-connects, `/favicon.ico`, a stale tab's callback with an old `state`) are
+/// answered and ignored; an `error=` callback for this login ends it.
+async fn wait_localhost_callback(
+    listener: TcpListener,
+    expected_state: &str,
+) -> Result<String, String> {
+    tokio::time::timeout(CALLBACK_TIMEOUT, accept_callback(&listener, expected_state))
         .await
-        .map_err(|e| format!("accept: {e}"))?;
-    drop(listener);
+        .map_err(|_| "Timed out waiting for the browser sign-in. Try again.".to_string())?
+}
 
-    let mut buf = vec![0u8; 8192];
-    let n = stream
-        .read(&mut buf)
-        .await
-        .map_err(|e| format!("read: {e}"))?;
-    let req = String::from_utf8_lossy(&buf[..n]);
-
-    let first_line = req.lines().next().unwrap_or("");
-    let path = first_line.split_whitespace().nth(1).unwrap_or("");
-
-    let (code, state) = if let Some(q) = path.find('?') {
-        let query = &path[q + 1..];
-        let mut code_v = None;
-        let mut state_v = None;
+async fn accept_callback(listener: &TcpListener, expected_state: &str) -> Result<String, String> {
+    loop {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .map_err(|e| format!("accept: {e}"))?;
+        let Some(path) = read_request_path(&mut stream).await else {
+            continue;
+        };
+        let Some(query) = path
+            .strip_prefix("/auth/callback")
+            .and_then(|rest| rest.strip_prefix('?'))
+        else {
+            respond(&mut stream, "404 Not Found", &err_html("not found")).await;
+            continue;
+        };
+        let (mut code, mut state, mut error) = (None, None, None);
         for (k, v) in form_urlencoded::parse(query.as_bytes()) {
             match k.as_ref() {
-                "code" => code_v = Some(v.into_owned()),
-                "state" => state_v = Some(v.into_owned()),
+                "code" => code = Some(v.into_owned()),
+                "state" => state = Some(v.into_owned()),
+                "error_description" => error = Some(v.into_owned()),
+                "error" if error.is_none() => error = Some(v.into_owned()),
                 _ => {}
             }
         }
-        (code_v, state_v)
-    } else {
-        (None, None)
-    };
-
-    let ok = state.as_deref() == Some(expected_state) && code.is_some();
-    let response = if ok {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            success_html().len(),
-            success_html()
-        )
-    } else {
-        let body = err_html("state mismatch or missing code");
-        format!(
-            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        )
-    };
-    let _ = stream.write_all(response.as_bytes()).await;
-
-    if !ok {
-        return Err("OAuth callback: missing code or state mismatch".into());
+        if state.as_deref() != Some(expected_state) {
+            respond(
+                &mut stream,
+                "400 Bad Request",
+                &err_html("this sign-in link is stale; finish the latest one"),
+            )
+            .await;
+            continue;
+        }
+        match (code, error) {
+            (Some(code), None) => {
+                respond(&mut stream, "200 OK", success_html()).await;
+                return Ok(code);
+            }
+            (_, error) => {
+                let error = error.unwrap_or_else(|| "missing authorization code".to_string());
+                respond(&mut stream, "400 Bad Request", &err_html(&error)).await;
+                return Err(format!("OAuth sign-in failed: {error}"));
+            }
+        }
     }
-    code.ok_or_else(|| "OAuth callback: missing authorization code".to_string())
+}
+
+/// The request target of an HTTP request on `stream`, or `None` when the client sent nothing
+/// usable (a speculative pre-connect closes without a request).
+async fn read_request_path(stream: &mut tokio::net::TcpStream) -> Option<String> {
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    let read_line = async {
+        while !buf.windows(2).any(|w| w == b"\r\n") && buf.len() < 8192 {
+            let n = stream.read(&mut chunk).await.ok()?;
+            if n == 0 {
+                return None;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        Some(())
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), read_line)
+        .await
+        .ok()??;
+    let request = String::from_utf8_lossy(&buf);
+    let first_line = request.lines().next()?;
+    let mut parts = first_line.split_whitespace();
+    (parts.next()? == "GET").then_some(())?;
+    parts.next().map(str::to_string)
+}
+
+async fn respond(stream: &mut tokio::net::TcpStream, status: &str, body: &str) {
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
 }
 
 #[derive(Deserialize)]
@@ -224,6 +269,7 @@ pub async fn login_openai_codex(
     let (verifier, challenge) = generate_pkce();
     let state = random_state();
     let url = build_authorize_url(&challenge, &state);
+    let listener = bind_callback_listener().await?;
     let _ = tx.send(super::OAuthUiMsg::CodexOpenBrowser { url: url.clone() });
     let _ = webbrowser::open(&url);
 
@@ -232,7 +278,7 @@ pub async fn login_openai_codex(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let code = wait_localhost_callback(&state).await?;
+    let code = wait_localhost_callback(listener, &state).await?;
     let tok = exchange_authorization_code(&client, &code, &verifier).await?;
     let account_id = extract_account_id(&tok.access_token)?;
     let expires_ms = chrono::Utc::now().timestamp_millis() + tok.expires_in * 1000;
@@ -273,4 +319,67 @@ pub async fn ensure_codex_access_token(
     }
     save_oauth_store(store).map_err(|e| e.to_string())?;
     Ok((tok.access_token, account_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn get(port: u16, path: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        stream
+            .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut response = String::new();
+        let _ = stream.read_to_string(&mut response).await;
+        response
+    }
+
+    async fn listener() -> (TcpListener, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (listener, port)
+    }
+
+    #[tokio::test]
+    async fn callback_skips_preconnects_other_paths_and_stale_states() {
+        let (listener, port) = listener().await;
+        let waiter = tokio::spawn(wait_localhost_callback(listener, "good"));
+
+        // A speculative pre-connect that never sends a request.
+        drop(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap(),
+        );
+        assert!(get(port, "/favicon.ico").await.starts_with("HTTP/1.1 404"));
+        assert!(
+            get(port, "/auth/callback?code=old&state=stale")
+                .await
+                .starts_with("HTTP/1.1 400")
+        );
+        assert!(
+            get(port, "/auth/callback?code=fresh&state=good")
+                .await
+                .starts_with("HTTP/1.1 200")
+        );
+        assert_eq!(waiter.await.unwrap().unwrap(), "fresh");
+    }
+
+    #[tokio::test]
+    async fn callback_reports_a_denied_sign_in() {
+        let (listener, port) = listener().await;
+        let waiter = tokio::spawn(wait_localhost_callback(listener, "s"));
+        let response = get(
+            port,
+            "/auth/callback?error=access_denied&error_description=User%20cancelled&state=s",
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 400"));
+        let error = waiter.await.unwrap().unwrap_err();
+        assert!(error.contains("User cancelled"), "{error}");
+    }
 }

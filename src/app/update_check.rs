@@ -14,17 +14,17 @@ impl OxiApp {
     /// Run the update check once per app start (plus explicit re-runs from the About
     /// panel's button with `force`). Failures are stored and shown only in About.
     pub(crate) fn ensure_update_checked(&mut self, ctx: &egui::Context, force: bool) {
-        if self.conv.update_check_started && !force {
+        if self.conv.update.started && !force {
             return;
         }
-        if self.conv.update_checking {
+        if self.conv.update.checking {
             return;
         }
-        self.conv.update_check_started = true;
-        self.conv.update_checking = true;
+        self.conv.update.started = true;
+        self.conv.update.checking = true;
 
         let (tx, rx) = std::sync::mpsc::channel::<UpdateMsg>();
-        self.conv.update_rx = Some(rx);
+        self.conv.update.rx = Some(rx);
         let ctx = ctx.clone();
         let err_tx = tx.clone();
         let err_ctx = ctx.clone();
@@ -46,19 +46,19 @@ impl OxiApp {
 
     /// Drain the update-check result. Mirrors [`Self::drain_models`].
     pub(crate) fn drain_update_check(&mut self, ctx: &egui::Context) {
-        let Some(rx) = self.conv.update_rx.take() else {
+        let Some(rx) = self.conv.update.rx.take() else {
             return;
         };
         let mut repainted = false;
         loop {
             match rx.try_recv() {
                 Ok(UpdateMsg(result)) => {
-                    self.conv.update_checking = false;
-                    self.conv.update_result = Some(result);
+                    self.conv.update.checking = false;
+                    self.conv.update.result = Some(result);
                     repainted = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    self.conv.update_rx = Some(rx);
+                    self.conv.update.rx = Some(rx);
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
@@ -71,7 +71,7 @@ impl OxiApp {
 
     /// The latest release, when it is strictly newer than the running binary.
     pub(crate) fn update_available(&self) -> Option<&ReleaseInfo> {
-        match &self.conv.update_result {
+        match &self.conv.update.result {
             Some(Ok(info)) if is_newer(&info.version, APP_VERSION) => Some(info),
             _ => None,
         }

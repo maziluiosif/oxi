@@ -1,7 +1,6 @@
 //! On-disk settings persistence and OS-keychain synchronization.
 
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
 use super::migration::LegacyAppSettings;
@@ -9,10 +8,7 @@ use super::*;
 
 impl AppSettings {
     pub fn config_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("oxi")
-            .join("settings.json")
+        crate::app_dirs::config_dir().join("settings.json")
     }
 
     pub fn load() -> Self {
@@ -26,12 +22,12 @@ impl AppSettings {
                 let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
                 let backup = path.with_file_name(format!("settings.corrupt-{timestamp}.json"));
                 match fs::copy(&path, &backup) {
-                    Ok(_) => eprintln!(
-                        "[oxi] invalid settings JSON ({e}); preserved it at {}",
+                    Ok(_) => log::error!(
+                        "invalid settings JSON ({e}); preserved it at {}",
                         backup.display()
                     ),
-                    Err(copy_err) => eprintln!(
-                        "[oxi] invalid settings JSON ({e}); could not preserve it: {copy_err}"
+                    Err(copy_err) => log::error!(
+                        "invalid settings JSON ({e}); could not preserve it: {copy_err}"
                     ),
                 }
                 serde_json::Value::Null
@@ -151,21 +147,8 @@ impl AppSettings {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        let tmp_path = path.with_extension("json.tmp");
-        {
-            let mut file = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
-            file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
-        }
-        // Restrict to the owner as defense in depth for the rest of this file (base
-        // URLs, model ids, etc.); the actual secrets (API keys) live in the OS keychain,
-        // not here.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
-        }
-        fs::rename(&tmp_path, &path).map_err(|e| e.to_string())?;
-        Ok(())
+        // Owner-only as defense in depth for the rest of this file (base URLs, model ids,
+        // etc.); the actual secrets (API keys) live in the OS keychain, not here.
+        crate::fsutil::write_atomic_private(&path, json.as_bytes())
     }
 }
