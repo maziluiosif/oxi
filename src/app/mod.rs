@@ -131,8 +131,11 @@ impl OxiApp {
             folded_groups: entry.folded_groups.clone(),
             worktree: crate::git::worktree::info(std::path::Path::new(&entry.root_path)),
         };
-        let mut workspaces: Vec<Workspace> =
-            settings.workspaces.iter().map(workspace_from_entry).collect();
+        let mut workspaces: Vec<Workspace> = settings
+            .workspaces
+            .iter()
+            .map(workspace_from_entry)
+            .collect();
         let launched_in_project =
             cwd.parent().is_some() && dirs::home_dir().is_none_or(|home| home != cwd);
         if launched_in_project && !workspaces.iter().any(|w| w.root_path == root_path) {

@@ -654,8 +654,9 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.harness.event(button(mid_line, true));
         rec.harness.step();
         for i in 1..=6 {
-            rec.harness
-                .event(egui::Event::PointerMoved(mid_line.lerp(select_to, i as f32 / 6.0)));
+            rec.harness.event(egui::Event::PointerMoved(
+                mid_line.lerp(select_to, i as f32 / 6.0),
+            ));
             rec.harness.step();
         }
         rec.harness.event(button(select_to, false));

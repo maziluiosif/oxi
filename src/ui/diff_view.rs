@@ -939,7 +939,11 @@ impl DiffView {
                         .as_ref()
                         .map_or(0.0, |g| g.pos_from_cursor(CCursor::new(col)).min.x)
                 };
-                let from = if row == start.0 { start.1.min(chars) } else { 0 };
+                let from = if row == start.0 {
+                    start.1.min(chars)
+                } else {
+                    0
+                };
                 let left = x_of(from);
                 let right = if row == end.0 {
                     x_of(end.1.min(chars))
@@ -948,10 +952,13 @@ impl DiffView {
                     galley.as_ref().map_or(0.0, |g| g.size().x) + pane.height() * 0.5
                 };
                 if right > left {
-                    selection_runs.last_mut().expect("never empty").push(Rect::from_min_max(
-                        pos2(x + left, pane.top()),
-                        pos2(x + right, pane.bottom()),
-                    ));
+                    selection_runs
+                        .last_mut()
+                        .expect("never empty")
+                        .push(Rect::from_min_max(
+                            pos2(x + left, pane.top()),
+                            pos2(x + right, pane.bottom()),
+                        ));
                 } else {
                     selection_runs.push(Vec::new());
                 }
@@ -965,13 +972,7 @@ impl DiffView {
     }
 
     /// Horizontal extent of a pane's text column, in the rows' coordinates.
-    fn pane_text_column(
-        &self,
-        pane: usize,
-        left: f32,
-        width: f32,
-        numbers_w: f32,
-    ) -> egui::Rangef {
+    fn pane_text_column(&self, pane: usize, left: f32, width: f32, numbers_w: f32) -> egui::Rangef {
         let half = (width / 2.0).floor();
         let (pane_left, pane_right, numbers) = match pane {
             0 => (left, left + half, numbers_w),
@@ -1019,7 +1020,11 @@ impl DiffView {
         if y >= self.layout.total {
             return (rows - 1, usize::MAX);
         }
-        let row = self.layout.ys.partition_point(|&top| top <= y).saturating_sub(1);
+        let row = self
+            .layout
+            .ys
+            .partition_point(|&top| top <= y)
+            .saturating_sub(1);
         let Some((f, line, side)) = self.pane_line(row, pane) else {
             return (row, 0);
         };
@@ -1276,15 +1281,7 @@ impl DiffView {
         // which would hide that button again; track the pointer over the whole header instead.
         let hot = ui.rect_contains_pointer(rect);
         let painter = ui.painter();
-        painter.rect_filled(
-            rect,
-            0.0,
-            if hot {
-                c_row_hover()
-            } else {
-                c_bg_elevated()
-            },
-        );
+        painter.rect_filled(rect, 0.0, if hot { c_row_hover() } else { c_bg_elevated() });
         painter.hline(
             rect.x_range(),
             rect.bottom() - 0.5,
