@@ -114,7 +114,18 @@ fn resolve_image_uri(base_dir: &Path, destination: &str) -> Option<String> {
     // egui's file loader expects a filesystem path after `file://`; it does not
     // percent-decode URL paths. Decode spaces/Unicode before passing it to the loader.
     let path = resolved.to_file_path().ok()?;
-    Some(format!("file://{}", path.display()))
+    if cfg!(windows) {
+        let path = path.to_str()?.replace('\\', "/");
+        // The loader treats a URI host as a UNC server. Local drive paths need
+        // an empty host (`file:///C:/...`), while UNC paths retain their host.
+        Some(if path.starts_with("//") {
+            format!("file:{path}")
+        } else {
+            format!("file:///{path}")
+        })
+    } else {
+        Some(format!("file://{}", path.display()))
+    }
 }
 
 /// Parser flags for assistant markdown: GFM-ish features without enabling math (avoids
@@ -356,5 +367,47 @@ fn render_list(
                 it.next();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod image_uri_tests {
+    use super::*;
+
+    #[test]
+    fn relative_image_uri_decodes_spaces_unicode_and_parent_segments() {
+        let base = if cfg!(windows) {
+            Path::new(r"C:\oxi docs\nested")
+        } else {
+            Path::new("/oxi docs/nested")
+        };
+        let expected = if cfg!(windows) {
+            "file:///C:/oxi docs/imagine ș.png"
+        } else {
+            "file:///oxi docs/imagine ș.png"
+        };
+        assert_eq!(
+            resolve_image_uri(base, "../imagine%20%C8%99.png").as_deref(),
+            Some(expected)
+        );
+        for destination in [
+            "https://example.com/image.png",
+            "data:image/png;base64,AAAA",
+        ] {
+            assert_eq!(resolve_image_uri(base, destination), None);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn relative_image_uri_preserves_unc_host() {
+        assert_eq!(
+            resolve_image_uri(
+                Path::new(r"\\server\share\oxi docs"),
+                "imagine%20%C8%99.png"
+            )
+            .as_deref(),
+            Some("file://server/share/oxi docs/imagine ș.png")
+        );
     }
 }
