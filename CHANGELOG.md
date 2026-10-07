@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-07
+
+### Added
+- **Editor:** Native diff mode in editor tabs with live editing on the right, read-only base on the left, word highlights, overview ruler, and F7 navigation.
+- **Editor:** Stage and Discard actions on diff changes via hover menu.
+- **Editor:** Live Markdown preview in the editor.
+- **Sidebar:** Remove any workspace, including the launch folder; the last removal shows an empty sidebar with an Open folder prompt.
+
+### Changed
+- **Diffs:** Gutter quick diff peek now opens the full diff at that change instead of a separate view.
+- **Diffs:** Diff text selection now works like the editor with drag, Shift+click, double/triple click, Cmd+A, and copy.
+- **Diffs:** File header Open button now stays visible when hovering.
+
+### Removed
+- **Diffs:** Separate patch view for unsaved changes and in-chat diffs (now use editor tabs).
+
+### Fixed
+- **Markdown:** Windows image URIs now work with the preview loader.
+- **Composer:** Text no longer dims while typing.
+
+
 ### Changed
 - **Editor:** File diffs (working tree, staged, branch compare, agent turn, unsaved changes) open in the editor tab itself: the file stays editable, side by side or inline, with word highlights, an overview ruler and Stage / Discard (or Unstage) on hovering a change. Clicking a gutter marker opens the diff at that change.
 
@@ -934,7 +955,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/maziluiosif/oxi/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/maziluiosif/oxi/compare/v1.9.2...v1.10.0
 [1.9.2]: https://github.com/maziluiosif/oxi/compare/v1.9.1...v1.9.2
 [1.9.1]: https://github.com/maziluiosif/oxi/compare/v1.9.0...v1.9.1
