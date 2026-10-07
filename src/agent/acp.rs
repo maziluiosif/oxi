@@ -14,7 +14,10 @@
 //!
 //! Client responsibilities we implement: `fs/read_text_file`, `fs/write_text_file`, and
 //! `session/request_permission` (routed through oxi's approval gate). We advertise no terminal
-//! capability, so Claude Code runs shell commands itself and reports them as tool-call updates.
+//! capability, so the agent runs shell commands itself and reports them as tool-call updates;
+//! their output streams through the `_meta.terminal_output_delta` extension Claude Code and
+//! Codex share. oxi's MCP servers are handed to the agent's session, and plan-mode turns use
+//! the agent's own plan mode when it has one (see [`modes`]).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,18 +33,34 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 use super::approval::{ApprovalDecision, ApprovalPolicy, PLAN_MODE_REFUSAL};
-use super::events::AgentEvent;
+use super::events::{AgentEvent, TokenUsage};
+use crate::settings::McpServerConfig;
 
 #[path = "acp/client_fs.rs"]
 mod client_fs;
 
 #[path = "acp/commands.rs"]
 mod commands;
+
+#[path = "acp/config_options.rs"]
+pub mod config_options;
 use client_fs::fs_write_text;
 pub use commands::{AcpSlashCommand, available as available_commands};
 
 #[path = "acp/install.rs"]
 mod install;
+
+#[path = "acp/mcp_servers.rs"]
+mod mcp_servers;
+
+#[path = "acp/modes.rs"]
+mod modes;
+#[path = "acp/terminals.rs"]
+mod terminals;
+
+#[path = "acp/todo_mcp.rs"]
+pub mod todo_mcp;
+use modes::{ModeState, SharedModes, set_user_option, sync_plan_mode};
 
 #[path = "acp/permissions.rs"]
 mod permissions;
@@ -81,6 +100,8 @@ pub struct AcpPrompt {
     pub model: String,
     /// Thinking/reasoning level, applied through the advertised `thought_level` option.
     pub effort: String,
+    /// oxi's MCP servers, handed to the agent's session.
+    pub mcp_servers: Vec<McpServerConfig>,
     /// The latest user message text.
     pub text: String,
     /// Transcript of the chat before the latest message. Sent ahead of the prompt only when the
@@ -88,6 +109,8 @@ pub struct AcpPrompt {
     pub history: String,
     /// Image attachments on the latest user message (`mime`, bytes).
     pub images: Vec<(String, Vec<u8>)>,
+    /// Files and folders `@`-mentioned in the latest message, sent as ACP resources.
+    pub resources: Vec<PathBuf>,
     /// Where translated agent events are delivered.
     pub event_tx: StdSender<AgentEvent>,
     /// Back-channel carrying the user's approval decisions.
@@ -116,6 +139,19 @@ pub struct AcpWarm {
     /// Configured model id and thinking level, applied through ACP session config options.
     pub model: String,
     pub effort: String,
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// Everything a session's agent subprocess is launched and set up with. Borrowed field by field
+/// from the request, so the `!Sync` approval receiver is never held across an await.
+struct LaunchSpec<'a> {
+    session_key: &'a str,
+    command_line: &'a str,
+    cwd: &'a std::path::Path,
+    env: &'a [(String, String)],
+    model: &'a str,
+    effort: &'a str,
+    mcp_servers: &'a [McpServerConfig],
 }
 
 enum AcpCommand {
@@ -127,9 +163,26 @@ enum AcpCommand {
         req: AcpWarm,
         reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
+    SetOption {
+        req: AcpSetOption,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     Close {
         session_key: String,
     },
+}
+
+/// The user picked a value for one of the agent's config options in the composer.
+pub struct AcpSetOption {
+    pub session_key: String,
+    pub command_line: String,
+    pub config_id: String,
+    /// A string for select options, a bool for boolean ones.
+    pub value: Value,
+    /// When the option is the model or the effort: oxi's setting it now corresponds to, so the
+    /// next prompt keeps this subprocess instead of relaunching for a "changed" model.
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// Cheap to clone; every clone talks to the same background ACP-management task.
@@ -164,16 +217,16 @@ impl AcpManager {
                             tokio::spawn(async move {
                                 // Only Sync fields are borrowed across the await here; the
                                 // `!Sync` approval Receiver stays owned by `req`.
-                                let ensured = ensure_conn(
-                                    &conns,
-                                    &req.session_key,
-                                    &req.command_line,
-                                    &req.cwd,
-                                    &req.env,
-                                    &req.model,
-                                    &req.effort,
-                                )
-                                .await;
+                                let spec = LaunchSpec {
+                                    session_key: &req.session_key,
+                                    command_line: &req.command_line,
+                                    cwd: &req.cwd,
+                                    env: &req.env,
+                                    model: &req.model,
+                                    effort: &req.effort,
+                                    mcp_servers: &req.mcp_servers,
+                                };
+                                let ensured = ensure_conn(&conns, &spec).await;
                                 match ensured {
                                     Ok(handles) => run_prompt(handles, req, reply).await,
                                     Err(e) => {
@@ -185,23 +238,30 @@ impl AcpManager {
                         AcpCommand::Warm { req, reply } => {
                             let conns = conns.clone();
                             tokio::spawn(async move {
-                                let ensured = ensure_conn(
-                                    &conns,
-                                    &req.session_key,
-                                    &req.command_line,
-                                    &req.cwd,
-                                    &req.env,
-                                    &req.model,
-                                    &req.effort,
-                                )
-                                .await;
+                                let spec = LaunchSpec {
+                                    session_key: &req.session_key,
+                                    command_line: &req.command_line,
+                                    cwd: &req.cwd,
+                                    env: &req.env,
+                                    model: &req.model,
+                                    effort: &req.effort,
+                                    mcp_servers: &req.mcp_servers,
+                                };
+                                let ensured = ensure_conn(&conns, &spec).await;
                                 let _ = reply.send(ensured.map(|h| h.available_models));
+                            });
+                        }
+                        AcpCommand::SetOption { req, reply } => {
+                            let conns = conns.clone();
+                            tokio::spawn(async move {
+                                let _ = reply.send(set_option(&conns, req).await);
                             });
                         }
                         AcpCommand::Close { session_key } => {
                             // Dropping the Conn kills the subprocess (kill_on_drop).
                             conns.lock().await.remove(&session_key);
                             sessions::forget(&session_key);
+                            config_options::forget(&session_key);
                         }
                     }
                 }
@@ -242,6 +302,20 @@ impl AcpManager {
             .map_err(|_| "ACP manager dropped the request".to_string())?
     }
 
+    /// Set one of the agent's config options on the session's live subprocess.
+    pub async fn set_option(&self, req: AcpSetOption) -> Result<(), String> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(AcpCommand::SetOption {
+                req,
+                reply: reply_tx,
+            })
+            .map_err(|_| "ACP manager is not running".to_string())?;
+        reply_rx
+            .await
+            .map_err(|_| "ACP manager dropped the request".to_string())?
+    }
+
     /// Tear down the subprocess for a session (e.g. when its tab is closed). No-op if none.
     pub fn close(&self, session_key: &str) {
         let _ = self.tx.send(AcpCommand::Close {
@@ -258,6 +332,8 @@ struct Conn {
     /// with a deterministic model and reasoning level.
     model: String,
     effort: String,
+    /// The usable MCP servers the session was set up with; a change sets it up again.
+    mcp_servers: Vec<McpServerConfig>,
     alive: Arc<AtomicBool>,
     handles: ConnHandles,
     // Kept alive for their side effects; never read directly.
@@ -279,12 +355,20 @@ struct ConnHandles {
     /// Set when the session was created blank rather than resumed; the first prompt then carries
     /// oxi's transcript of the chat so far.
     needs_history: Arc<AtomicBool>,
+    /// The agent's session modes, kept current by the reader task.
+    modes: SharedModes,
+    /// The agent accepts embedded `resource` blocks (`promptCapabilities.embeddedContext`).
+    embedded_context: bool,
+    /// Held for a whole prompt turn. A prompt sent right after Stop waits here until the
+    /// cancelled turn has wound down, instead of having its context cleared by it.
+    turn_lock: Arc<AsyncMutex<()>>,
 }
 
 /// The event/approval context for the in-flight prompt, shared with the reader task so it can
 /// route notifications and forward permission requests.
 struct PromptCtx {
     session_id: String,
+    cwd: PathBuf,
     plan_mode: bool,
     updates: UpdateState,
     event_tx: StdSender<AgentEvent>,
@@ -313,30 +397,63 @@ impl PromptCtx {
 /// healthy subprocess (or if the launch command changed).
 async fn ensure_conn(
     conns: &Arc<AsyncMutex<HashMap<String, Conn>>>,
-    session_key: &str,
-    command_line: &str,
-    cwd: &std::path::Path,
-    env: &[(String, String)],
-    model: &str,
-    effort: &str,
+    spec: &LaunchSpec<'_>,
 ) -> Result<ConnHandles, String> {
+    let mcp_servers = mcp_servers::usable(spec.mcp_servers);
     {
         let map = conns.lock().await;
-        if let Some(c) = map.get(session_key)
+        if let Some(c) = map.get(spec.session_key)
             && c.alive.load(Ordering::SeqCst)
-            && c.command_line == command_line
-            && c.model == model
-            && c.effort == effort
+            && c.command_line == spec.command_line
+            && c.model == spec.model
+            && c.effort == spec.effort
+            && c.mcp_servers == mcp_servers
         {
             return Ok(c.handles.clone());
         }
     }
-    // A new subprocess (or one whose launch command / model changed): spawn it and replace any
-    // previous entry, whose Conn is dropped here and killed (kill_on_drop).
-    let conn = spawn_conn(session_key, command_line, cwd, env, model, effort).await?;
+    // A new subprocess (or one whose launch command / model / MCP servers changed): spawn it and
+    // replace any previous entry, whose Conn is dropped here and killed (kill_on_drop). The
+    // agent session itself is resumed, so the conversation carries over.
+    let conn = spawn_conn(spec, mcp_servers).await?;
     let handles = conn.handles.clone();
-    conns.lock().await.insert(session_key.to_string(), conn);
+    conns
+        .lock()
+        .await
+        .insert(spec.session_key.to_string(), conn);
     Ok(handles)
+}
+
+async fn set_option(
+    conns: &Arc<AsyncMutex<HashMap<String, Conn>>>,
+    req: AcpSetOption,
+) -> Result<(), String> {
+    let handles = {
+        let mut map = conns.lock().await;
+        let Some(conn) = map
+            .get_mut(&req.session_key)
+            .filter(|c| c.alive.load(Ordering::SeqCst) && c.command_line == req.command_line)
+        else {
+            return Err("the agent is not running".into());
+        };
+        if let Some(model) = req.model {
+            conn.model = model;
+        }
+        if let Some(effort) = req.effort {
+            conn.effort = effort;
+        }
+        conn.handles.clone()
+    };
+    set_user_option(
+        &handles.stdin,
+        &handles.next_id,
+        &handles.pending,
+        &handles.session_id,
+        &handles.modes,
+        &req.config_id,
+        req.value,
+    )
+    .await
 }
 
 /// `PATH` for tool subprocesses launched from a GUI session (login-shell `PATH` merged with
@@ -382,13 +499,18 @@ fn launch_error(command_line: &str, error: &std::io::Error) -> String {
 }
 
 async fn spawn_conn(
-    session_key: &str,
-    command_line: &str,
-    cwd: &std::path::Path,
-    env: &[(String, String)],
-    model: &str,
-    effort: &str,
+    spec: &LaunchSpec<'_>,
+    mcp_servers: Vec<McpServerConfig>,
 ) -> Result<Conn, String> {
+    let LaunchSpec {
+        session_key,
+        command_line,
+        cwd,
+        env,
+        model,
+        effort,
+        ..
+    } = *spec;
     let command_line = command_line.trim();
     if command_line.is_empty() {
         return Err(
@@ -430,6 +552,7 @@ async fn spawn_conn(
     let prompt_ctx: Arc<AsyncMutex<Option<PromptCtx>>> = Arc::new(AsyncMutex::new(None));
     let next_id = Arc::new(AtomicI64::new(1));
     let alive = Arc::new(AtomicBool::new(true));
+    let modes: SharedModes = Arc::default();
 
     let stderr_tail = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
     let stderr_task = tokio::spawn(drain_stderr(stderr, stderr_tail.clone()));
@@ -439,6 +562,7 @@ async fn spawn_conn(
         prompt_ctx.clone(),
         stdin.clone(),
         alive.clone(),
+        modes.clone(),
         CommandsKey {
             command_line: command_line.to_string(),
             cwd: cwd.to_path_buf(),
@@ -450,7 +574,12 @@ async fn spawn_conn(
         "protocolVersion": PROTOCOL_VERSION,
         "clientCapabilities": {
             "fs": { "readTextFile": true, "writeTextFile": true },
-            "terminal": false
+            "terminal": true,
+            // Fast mode and similar switches arrive as `type: "boolean"` options.
+            "session": { "configOptions": { "boolean": {} } },
+            // Command output as appended chunks on the tool call (Claude Code and Codex). Codex
+            // sends command output only this way.
+            "_meta": { "terminal_output_delta": true }
         }
     });
     let init = tokio::time::timeout(
@@ -479,8 +608,12 @@ async fn spawn_conn(
     };
 
     let caps = &init["agentCapabilities"];
+    let mut mcp = mcp_servers::to_acp(&mcp_servers, caps);
+    if let (Some(list), Some(todo)) = (mcp.as_array_mut(), todo_mcp::acp_entry()) {
+        list.push(todo);
+    }
     let resumed = match sessions::lookup(session_key, command_line, cwd) {
-        Some(id) => resume_session(&stdin, &next_id, &pending, caps, cwd, &id)
+        Some(id) => resume_session(&stdin, &next_id, &pending, caps, cwd, &id, &mcp)
             .await
             .map(|res| (id, res)),
         None => None,
@@ -488,7 +621,7 @@ async fn spawn_conn(
     let (session_id, res, needs_history) = match resumed {
         Some((id, res)) => (id, res, false),
         None => {
-            let (id, res) = new_session(&stdin, &next_id, &pending, cwd).await?;
+            let (id, res) = new_session(&stdin, &next_id, &pending, cwd, &mcp).await?;
             (id, res, true)
         }
     };
@@ -505,7 +638,7 @@ async fn spawn_conn(
         model,
     )
     .await?;
-    let _ = set_thought_level(
+    let config_options = set_thought_level(
         &stdin,
         &next_id,
         &pending,
@@ -514,6 +647,11 @@ async fn spawn_conn(
         effort,
     )
     .await?;
+    *modes.lock().unwrap_or_else(|e| e.into_inner()) = ModeState::new(
+        config_options,
+        res.get("modes").cloned().unwrap_or(Value::Null),
+    )
+    .published_as(session_key, command_line);
 
     let handles = ConnHandles {
         stdin,
@@ -523,11 +661,15 @@ async fn spawn_conn(
         session_id,
         available_models,
         needs_history: Arc::new(AtomicBool::new(needs_history)),
+        modes,
+        embedded_context: caps["promptCapabilities"]["embeddedContext"].as_bool() == Some(true),
+        turn_lock: Arc::new(AsyncMutex::new(())),
     };
     Ok(Conn {
         command_line: command_line.to_string(),
         model: model.to_string(),
         effort: effort.to_string(),
+        mcp_servers,
         alive,
         handles,
         _child: child,
@@ -542,10 +684,11 @@ async fn new_session(
     next_id: &Arc<AtomicI64>,
     pending: &Pending,
     cwd: &std::path::Path,
+    mcp_servers: &Value,
 ) -> Result<(String, Value), String> {
     let params = json!({
         "cwd": cwd.to_string_lossy(),
-        "mcpServers": []
+        "mcpServers": mcp_servers
     });
     let res = tokio::time::timeout(
         Duration::from_secs(30),
@@ -573,11 +716,12 @@ async fn resume_session(
     caps: &Value,
     cwd: &std::path::Path,
     session_id: &str,
+    mcp_servers: &Value,
 ) -> Option<Value> {
     let params = json!({
         "sessionId": session_id,
         "cwd": cwd.to_string_lossy(),
-        "mcpServers": []
+        "mcpServers": mcp_servers
     });
     let mut methods = Vec::new();
     if caps["sessionCapabilities"]["resume"].is_object() {
@@ -740,6 +884,7 @@ async fn run_prompt(
         text,
         history,
         images,
+        resources,
         event_tx,
         mut approval_rx,
         approval_policy,
@@ -749,9 +894,15 @@ async fn run_prompt(
         ..
     } = req;
 
+    let _turn = handles.turn_lock.clone().lock_owned().await;
+    if cancel.load(Ordering::SeqCst) {
+        let _ = reply.send(Ok(()));
+        return;
+    }
     let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermReq>();
     *handles.prompt_ctx.lock().await = Some(PromptCtx {
         session_id: handles.session_id.clone(),
+        cwd: cwd.clone(),
         plan_mode,
         updates: UpdateState::default(),
         event_tx: event_tx.clone(),
@@ -763,7 +914,20 @@ async fn run_prompt(
     // verbatim: plan mode is still enforced through the permission requests, and the replayed
     // history waits for the next regular message.
     let slash_command = is_advertised_command(&text, &command_line, &cwd);
-    let text = if plan_mode && !slash_command {
+    // A slash command may itself change the mode (Codex `/plan`), so it runs in whatever mode
+    // the agent is in. Otherwise the agent's own plan mode is switched to match oxi's; agents
+    // without one are asked for a plan in the prompt.
+    let native_plan = !slash_command
+        && sync_plan_mode(
+            &handles.stdin,
+            &handles.next_id,
+            &handles.pending,
+            &handles.session_id,
+            &handles.modes,
+            plan_mode,
+        )
+        .await;
+    let text = if plan_mode && !slash_command && !native_plan {
         format!("{ACP_PLAN_MODE_PREFIX}\n\n{text}")
     } else {
         text
@@ -775,7 +939,7 @@ async fn run_prompt(
     };
     let prompt_params = json!({
         "sessionId": handles.session_id,
-        "prompt": build_prompt_blocks(&text, &images),
+        "prompt": build_prompt_blocks(&text, &images, &resource_blocks(&resources, handles.embedded_context)),
     });
     let id = handles.next_id.fetch_add(1, Ordering::SeqCst);
     let (rtx, mut rrx) = oneshot::channel::<Result<Value, String>>();
@@ -827,7 +991,46 @@ async fn run_prompt(
         }
     };
     *handles.prompt_ctx.lock().await = None;
+    if slash_command {
+        handles
+            .modes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .note_user_command();
+    }
+    if let Ok(res) = &result
+        && let Some(usage) = prompt_usage(&res["usage"])
+    {
+        let _ = event_tx.send(AgentEvent::ExternalUsage(usage));
+    }
     let _ = reply.send(result.map(|_| ()));
+}
+
+/// Token usage from a `session/prompt` response. Agents disagree on whether `inputTokens`
+/// includes the cached part (Claude Code: no, Codex: yes); when the total only adds up with
+/// the cached tokens inside it, they are taken out to match [`TokenUsage::input_tokens`].
+fn prompt_usage(usage: &Value) -> Option<TokenUsage> {
+    let n = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let (input, output) = (n("inputTokens"), n("outputTokens"));
+    let (read, write, total) = (
+        n("cachedReadTokens"),
+        n("cachedWriteTokens"),
+        n("totalTokens"),
+    );
+    let cached = read + write;
+    let input = if cached > 0 && total == input + output && input >= cached {
+        input - cached
+    } else {
+        input
+    };
+    let usage = TokenUsage {
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_input_tokens: read,
+        cache_creation_input_tokens: write,
+        ..TokenUsage::default()
+    };
+    (!usage.is_zero()).then_some(usage)
 }
 
 /// Whether `text` invokes one of the agent's advertised slash commands (`/name` or
@@ -855,8 +1058,42 @@ fn with_history(history: &str, text: &str) -> String {
     )
 }
 
+/// Text files up to this size are embedded in the prompt; bigger ones are linked.
+const EMBED_RESOURCE_MAX_BYTES: u64 = 64 * 1024;
+
+/// ACP blocks for `@`-mentioned paths: small text files embedded (when the agent accepts
+/// embedded context), everything else as a `resource_link` the agent can open itself.
+fn resource_blocks(paths: &[PathBuf], embedded_context: bool) -> Vec<Value> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            let uri = url::Url::from_file_path(path).ok()?.to_string();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned());
+            let meta = std::fs::metadata(path).ok()?;
+            if embedded_context
+                && meta.is_file()
+                && meta.len() <= EMBED_RESOURCE_MAX_BYTES
+                && let Ok(text) = std::fs::read_to_string(path)
+            {
+                return Some(json!({
+                    "type": "resource",
+                    "resource": { "uri": uri, "mimeType": "text/plain", "text": text }
+                }));
+            }
+            let mut link = json!({ "type": "resource_link", "uri": uri, "name": name });
+            if meta.is_file() {
+                link["size"] = json!(meta.len());
+            }
+            Some(link)
+        })
+        .collect()
+}
+
 /// Build the ACP prompt content blocks for a user turn.
-fn build_prompt_blocks(text: &str, images: &[(String, Vec<u8>)]) -> Value {
+fn build_prompt_blocks(text: &str, images: &[(String, Vec<u8>)], resources: &[Value]) -> Value {
     let mut blocks = Vec::new();
     if !text.trim().is_empty() {
         blocks.push(json!({ "type": "text", "text": text }));
@@ -865,6 +1102,7 @@ fn build_prompt_blocks(text: &str, images: &[(String, Vec<u8>)]) -> Value {
         let b64 = base64::engine::general_purpose::STANDARD.encode(data);
         blocks.push(json!({ "type": "image", "mimeType": mime, "data": b64 }));
     }
+    blocks.extend(resources.iter().cloned());
     if blocks.is_empty() {
         blocks.push(json!({ "type": "text", "text": "" }));
     }

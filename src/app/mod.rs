@@ -20,10 +20,14 @@ mod conversation;
 mod demo_recording;
 mod eframe_app;
 mod file_explorer;
+mod fork;
 mod frame_stats;
 mod git_panel;
 mod input_history;
-mod mentions;
+pub(crate) mod mentions;
+mod notify;
+mod queue;
+mod selection_to_chat;
 mod sessions;
 mod settings_ui;
 mod sidebar;
@@ -33,7 +37,9 @@ mod streaming;
 mod task_runner;
 mod terminal_panel;
 mod title_gen;
+mod turn_changes;
 mod update_check;
+mod worktrees;
 
 pub use state::{
     ConnectionState, ConversationState, EditorDocument, LocalRuntimeState, ModelFetchMsg,
@@ -131,6 +137,7 @@ impl OxiApp {
             sidebar_folded: cwd_folded,
             pinned: cwd_pinned,
             folded_groups: cwd_folded_groups,
+            worktree: crate::git::worktree::info(std::path::Path::new(&root_path)),
         }];
         for entry in &settings.workspaces {
             if entry.root_path == root_path {
@@ -143,6 +150,7 @@ impl OxiApp {
                 sidebar_folded: entry.folded,
                 pinned: entry.pinned.clone(),
                 folded_groups: entry.folded_groups.clone(),
+                worktree: crate::git::worktree::info(std::path::Path::new(&entry.root_path)),
             });
         }
         let active_workspace = last_active_workspace_root_path
@@ -216,6 +224,9 @@ impl OxiApp {
                 unsaved_diff_view: None,
                 transcript_heights: std::collections::HashMap::new(),
                 transcript_rendered: std::collections::HashSet::new(),
+                turn_changes: Default::default(),
+                worktree_ops: Vec::new(),
+                message_menu: None,
                 sidebar_search_cache: std::collections::HashMap::new(),
                 git_open,
                 git_width,
@@ -563,6 +574,7 @@ impl OxiApp {
             pending_texts: Vec::new(),
             modified: std::time::SystemTime::now(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
         }
     }
@@ -583,6 +595,7 @@ impl OxiApp {
     }
 
     pub(crate) fn capture_active_session_config(&mut self) {
+        self.remember_acp_workspace_preferences();
         let key = self.active_session_key();
         let config = SessionConfig::from_provider(self.conv.settings.active_config());
         if self.session_by_key(key).config.as_ref() == Some(&config) {
@@ -607,7 +620,14 @@ impl OxiApp {
         if let Some(config) = self.session_by_key(key).config.clone() {
             return config;
         }
-        let config = SessionConfig::from_provider(self.conv.settings.active_config());
+        let config = self
+            .conv
+            .settings
+            .acp_workspace_preferences
+            .get(&self.conv.workspaces[key.workspace_idx].root_path)
+            .filter(|preference| preference.config.provider.is_acp())
+            .map(|preference| preference.config.clone())
+            .unwrap_or_else(|| SessionConfig::from_provider(self.conv.settings.active_config()));
         self.session_mut_by_key(key).config = Some(config.clone());
         config
     }
@@ -617,9 +637,16 @@ impl OxiApp {
         provider: crate::settings::LlmProviderKind,
     ) {
         let key = self.active_session_key();
-        let config = SessionConfig::from_provider(self.conv.settings.provider(provider));
+        let config = self
+            .conv
+            .settings
+            .acp_workspace_preferences
+            .get(&self.active_workspace().root_path)
+            .filter(|preference| provider.is_acp() && preference.config.provider == provider)
+            .map(|preference| preference.config.clone())
+            .unwrap_or_else(|| SessionConfig::from_provider(self.conv.settings.provider(provider)));
+        config.apply_to_settings(&mut self.conv.settings);
         self.session_mut_by_key(key).config = Some(config);
-        self.conv.settings.active_provider = provider;
     }
 
     pub(crate) fn set_active_session_model(&mut self, model_id: String) {
@@ -645,6 +672,34 @@ impl OxiApp {
     fn restore_active_session_config(&mut self) {
         let config = self.ensure_session_config(self.active_session_key());
         config.apply_to_settings(&mut self.conv.settings);
+        let key = self.active_session_key();
+        if config.provider.is_acp() && self.run_state(key).is_none() {
+            let plan_mode = self
+                .conv
+                .settings
+                .acp_workspace_preferences
+                .get(&self.active_workspace().root_path)
+                .filter(|preference| preference.config.provider == config.provider)
+                .is_some_and(|preference| preference.plan_mode);
+            self.run_state_mut(key).plan_mode = plan_mode;
+        }
+    }
+
+    pub(crate) fn remember_acp_workspace_preferences(&mut self) {
+        let config = SessionConfig::from_provider(self.conv.settings.active_config());
+        if !config.provider.is_acp() {
+            return;
+        }
+        let preference = crate::settings::AcpWorkspacePreference {
+            config,
+            plan_mode: self
+                .run_state(self.active_session_key())
+                .is_some_and(|run| run.plan_mode),
+        };
+        self.conv
+            .settings
+            .acp_workspace_preferences
+            .insert(self.active_workspace().root_path.clone(), preference);
     }
 
     pub(crate) fn sync_active_session_to_settings(&mut self) {

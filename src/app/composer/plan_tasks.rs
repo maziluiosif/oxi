@@ -28,6 +28,23 @@ pub(super) fn latest_todos(messages: &[crate::model::ChatMessage]) -> Option<Vec
         })
 }
 
+/// The checklist worth showing: the latest list while items remain open, or a finished one
+/// only during the turn that wrote it (an earlier turn's done list is history).
+pub(super) fn visible_todos(
+    messages: &[crate::model::ChatMessage],
+    running: bool,
+) -> Option<Vec<TodoItem>> {
+    let todos = latest_todos(messages).filter(|t| !t.is_empty())?;
+    if todos.iter().any(|t| t.status != TodoStatus::Completed) {
+        return Some(todos);
+    }
+    let turn_start = messages
+        .iter()
+        .rposition(|m| m.role == MsgRole::User)
+        .map_or(0, |i| i + 1);
+    (running && latest_todos(&messages[turn_start..]).is_some()).then_some(todos)
+}
+
 /// Editing a previous prompt must keep the approved plan in the transcript.
 fn render_plan_ready_actions(ui: &mut Ui, editing_prompt: bool) -> (bool, bool) {
     if editing_prompt {
@@ -84,7 +101,7 @@ impl OxiApp {
     /// keeps the agent read-only and asks for a plan; it stays on for the chat until switched
     /// off, by clicking the pill or with `/plan` again.
     pub(super) fn render_plan_toggle(&mut self, ui: &mut Ui, compact: bool) {
-        if !self.plan_mode_on() {
+        if !self.plan_mode_on() || self.agent_shows_plan_mode() {
             return;
         }
         let color = c_accent();
@@ -108,6 +125,7 @@ impl OxiApp {
             let key = self.active_session_key();
             let run = self.run_state_mut(key);
             run.plan_mode = false;
+            self.save_settings_quietly();
             self.conv.focus_chat_input_next_frame = true;
         }
     }
@@ -139,6 +157,7 @@ impl OxiApp {
             let run = self.run_state_mut(key);
             run.plan_mode = false;
             run.last_turn_planned = false;
+            self.save_settings_quietly();
             let draft = std::mem::take(&mut self.conv.input);
             self.conv.input = if draft.trim().is_empty() {
                 "Implement the plan above.".to_string()
@@ -152,17 +171,14 @@ impl OxiApp {
     /// The agent's current checklist, while it is still relevant (a run is going or items
     /// remain open). Collapsible; the fold state is remembered per chat.
     pub(super) fn render_task_panel(&mut self, ui: &mut Ui) {
-        let Some(todos) = latest_todos(&self.active_session().messages) else {
+        let running = self.active_waiting_response();
+        let Some(todos) = visible_todos(&self.active_session().messages, running) else {
             return;
         };
-        let running = self.active_waiting_response();
         let done = todos
             .iter()
             .filter(|t| t.status == TodoStatus::Completed)
             .count();
-        if todos.is_empty() || (done == todos.len() && !running) {
-            return;
-        }
         let key = self.active_session_key();
         let fold_id = Id::new(("composer_tasks_folded", key.workspace_idx, key.session_idx));
         let mut folded = ui
@@ -318,6 +334,7 @@ mod tests {
             started_at: None,
             worked_duration: None,
             route: None,
+            changes: None,
         }
     }
 
@@ -335,5 +352,29 @@ mod tests {
         assert_eq!(todos.len(), 2);
         assert_eq!(todos[1].status, TodoStatus::InProgress);
         assert!(latest_todos(&[]).is_none());
+    }
+
+    #[test]
+    fn finished_checklist_stays_with_its_turn() {
+        let mut done = assistant();
+        done.blocks.push(todo_block(
+            r#"{"todos":[{"content":"a","status":"completed"}]}"#,
+        ));
+        let mut open = assistant();
+        open.blocks.push(todo_block(
+            r#"{"todos":[{"content":"a","status":"in_progress"}]}"#,
+        ));
+        let user = ChatMessage {
+            role: MsgRole::User,
+            ..assistant()
+        };
+        // Finished in the running turn: shown until the turn ends.
+        assert!(visible_todos(&[user.clone(), done.clone()], true).is_some());
+        assert!(visible_todos(&[user.clone(), done.clone()], false).is_none());
+        // A new prompt does not bring back the previous turn's finished list.
+        let next = [user.clone(), done, user.clone(), assistant()];
+        assert!(visible_todos(&next, true).is_none());
+        // An unfinished list carries over until it is done.
+        assert!(visible_todos(&[user.clone(), open, user, assistant()], true).is_some());
     }
 }

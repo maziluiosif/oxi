@@ -151,6 +151,21 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         },
     };
 
+    if std::env::var_os("OXI_WORKTREE_REVIEW").is_some() {
+        review_worktree_sidebar(&mut rec);
+        return;
+    }
+
+    if std::env::var_os("OXI_PICKER_REVIEW").is_some() {
+        review_composer_pickers(&mut rec);
+        return;
+    }
+
+    if std::env::var_os("OXI_ACP_REVIEW").is_some() {
+        review_acp_ui(&mut rec);
+        return;
+    }
+
     let gallery = rec.out.is_none();
     // 1. The model is already downloaded and running: the guided Local HF setup.
     rec.harness.run_steps(4);
@@ -1619,6 +1634,7 @@ fn message(role: MsgRole, text: &str, blocks: Vec<AssistantBlock>) -> ChatMessag
         started_at: None,
         worked_duration: None,
         route: None,
+        changes: None,
     }
 }
 
@@ -1634,4 +1650,211 @@ fn seed_local_model(app: &mut OxiApp) {
         bytes: 4_683_074_240,
     }];
     app.conv.local_models.running_model_id = Some(id);
+}
+
+/// A focused GPU review using the demo's isolated settings and workspace.
+fn review_acp_ui(rec: &mut Recorder<'_>) {
+    let first_root = rec.project.to_string_lossy().into_owned();
+    let second_root = rec.project.join("second-workspace");
+    std::fs::create_dir_all(&second_root).unwrap();
+    {
+        let app = rec.app();
+        app.set_active_session_provider(LlmProviderKind::ClaudeCodeAcp);
+        app.set_active_session_model("workspace-one-model".into());
+        let key = app.active_session_key();
+        app.run_state_mut(key).plan_mode = true;
+        app.save_settings_quietly();
+        app.conv.workspaces.push(super::Workspace {
+            root_path: second_root.to_string_lossy().into_owned(),
+            sessions: vec![OxiApp::blank_session("Second workspace")],
+            active: 0,
+            sidebar_folded: false,
+            pinned: vec![],
+            folded_groups: vec![],
+            worktree: None,
+        });
+        let second = app.conv.workspaces.len() - 1;
+        app.select_workspace(second);
+        app.set_active_session_model("workspace-two-model".into());
+        let key = app.active_session_key();
+        app.run_state_mut(key).plan_mode = false;
+        app.save_settings_quietly();
+        app.select_workspace(0);
+        assert_eq!(
+            app.conv.settings.active_config().model_id,
+            "workspace-one-model"
+        );
+        assert!(app.run_state(app.active_session_key()).unwrap().plan_mode);
+        app.new_chat();
+        assert!(app.run_state(app.active_session_key()).unwrap().plan_mode);
+        assert_eq!(
+            app.conv.settings.acp_workspace_preferences[&first_root]
+                .config
+                .model_id,
+            "workspace-one-model"
+        );
+    }
+    let mut command =
+        portable_pty::CommandBuilder::new(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" });
+    if cfg!(windows) {
+        command.args(["/C", "echo ACP terminal ready"]);
+    } else {
+        command.args([
+            "-c",
+            "printf 'ACP terminal ready\nLive output is shown here.\n'",
+        ]);
+    }
+    let (terminal, _process) =
+        crate::terminal::TerminalSession::spawn_command(&rec.harness.ctx, command, 1024).unwrap();
+    let (tx, rx) = mpsc::channel();
+    tx.send(AgentEvent::AcpTerminal(crate::terminal::PendingTerminal(
+        std::sync::Arc::new(std::sync::Mutex::new(Some(terminal))),
+    )))
+    .unwrap();
+    {
+        let app = rec.app();
+        let key = app.active_session_key();
+        app.run_state_mut(key).agent_rx = Some(rx);
+        app.conv.sidebar_open = false;
+    }
+    rec.harness.run_steps(5);
+    assert!(rec.app().conv.terminal_open);
+    assert_eq!(rec.app().terminals.len(), 1);
+    for scale in [1.0, 1.25, 1.5] {
+        rec.harness.set_pixels_per_point(scale);
+        for width in [760.0, 420.0] {
+            rec.harness.set_size(egui::vec2(width, 620.0));
+            rec.harness.run_steps(3);
+            rec.still(&format!("acp-terminal-{width}-{scale}"));
+        }
+    }
+}
+
+/// Real sidebar rendering with linked checkouts, in the isolated gallery process.
+fn review_worktree_sidebar(rec: &mut Recorder) {
+    use super::state::Workspace;
+    let root = rec.project.to_string_lossy().into_owned();
+    for branch in [
+        "oxi/fix-sidebar",
+        "oxi/a-long-feature-branch-name-for-truncation",
+    ] {
+        rec.app().conv.workspaces.push(Workspace {
+            root_path: format!("{root}-{branch}"),
+            sessions: Vec::new(),
+            active: 0,
+            sidebar_folded: false,
+            pinned: Vec::new(),
+            folded_groups: Vec::new(),
+            worktree: Some(crate::git::worktree::WorktreeInfo {
+                branch: branch.into(),
+                main_root: root.clone().into(),
+                main_branch: "dev".into(),
+            }),
+        });
+    }
+    for scale in [1.0, 1.25, 1.5] {
+        rec.harness.set_pixels_per_point(scale);
+        for width in [180.0, 250.0] {
+            rec.app().conv.sidebar_width = width;
+            rec.app().conv.workspaces[0].sidebar_folded = false;
+            rec.harness.run_steps(4);
+            rec.still(&format!("worktrees-{width}-{scale}"));
+            rec.app().conv.workspaces[0].sidebar_folded = true;
+            rec.harness.run_steps(3);
+            rec.still(&format!("worktrees-folded-{width}-{scale}"));
+        }
+    }
+}
+
+/// Composer pickers fed by an ACP agent's config options, their searchable lists, and a user
+/// turn with many images.
+fn review_composer_pickers(rec: &mut Recorder<'_>) {
+    use crate::model::{ChatMessage, MsgRole, UserAttachment};
+    let select = |id: &str, name: &str, category: &str, current: &str, values: &[(&str, &str)]| {
+        serde_json::json!({
+            "id": id, "name": name, "category": category, "type": "select",
+            "currentValue": current,
+            "options": values.iter().map(|(v, n)| serde_json::json!({"value": v, "name": n, "description": format!("{n} description")})).collect::<Vec<_>>(),
+        })
+    };
+    let options = serde_json::json!([
+        select("mode", "Mode", "mode", "auto", &[("default", "Manual"), ("acceptEdits", "Accept edits"), ("plan", "Plan"), ("auto", "Auto"), ("bypassPermissions", "Bypass permissions")]),
+        select("model", "Model", "model", "opus", &[("default", "Default (recommended)"), ("opus", "Opus 5.5"), ("sonnet", "Sonnet 5.5"), ("fable", "Fable 5.1"), ("haiku", "Haiku 4.5"), ("sonnet5", "Sonnet 5"), ("opus5", "Opus 5"), ("fable5", "Fable 5"), ("opus48", "Opus 4.8"), ("opus47", "Opus 4.7"), ("opus46", "Opus 4.6"), ("sonnet46", "Sonnet 4.6")]),
+        select("effort", "Effort", "thought_level", "high", &[("default", "Default"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Xhigh"), ("max", "Max")]),
+        {"id": "fast", "name": "Fast mode", "category": "model_config", "type": "boolean", "currentValue": false, "description": "Faster responses on supported models"},
+    ]);
+    {
+        let app = rec.app();
+        app.set_active_session_provider(LlmProviderKind::ClaudeCodeAcp);
+        let key = app.active_session_key();
+        let session_key = app.acp_session_key(key);
+        let command = app.conv.settings.active_config().effective_acp_command();
+        crate::agent::acp::config_options::publish(&session_key, &command, &options);
+    }
+    rec.harness.run_steps(4);
+    rec.still("pickers-row");
+    rec.harness.set_size(egui::vec2(1000.0, 620.0));
+    rec.harness.run_steps(4);
+    rec.still("pickers-row-narrow");
+    rec.harness.set_size(SIZE);
+    rec.harness.run_steps(2);
+    let popup = |salt: (&str, &str)| egui::Id::new(("select_menu", salt)).with("popup");
+    for (name, id) in [("mode", "mode"), ("model", "model"), ("effort", "effort")] {
+        egui::Popup::open_id(&rec.harness.ctx, popup(("agent_option", id)));
+        rec.harness.run_steps(3);
+        rec.still(&format!("pickers-{name}-open"));
+        egui::Popup::close_id(&rec.harness.ctx, popup(("agent_option", id)));
+        rec.harness.run_steps(2);
+    }
+    egui::Popup::open_id(&rec.harness.ctx, popup(("agent_option", "model")));
+    rec.harness.run_steps(2);
+    for c in "son".chars() {
+        rec.harness.event(egui::Event::Text(c.to_string()));
+        rec.harness.run_steps(1);
+    }
+    rec.harness.run_steps(2);
+    rec.still("pickers-model-search");
+    egui::Popup::close_id(&rec.harness.ctx, popup(("agent_option", "model")));
+
+    let png = |w: u32, h: u32, shade: u8| {
+        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([shade, (x * 255 / w) as u8, (y * 255 / h) as u8, 255])
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    };
+    let attachments = (0..14)
+        .map(|i| UserAttachment::Image {
+            mime: "image/png".into(),
+            data: png(if i % 3 == 0 { 1600 } else { 900 }, 700, (i * 17) as u8),
+        })
+        .collect();
+    {
+        let app = rec.app();
+        let key = app.active_session_key();
+        let session = app.session_mut_by_key(key);
+        session.messages.push(ChatMessage {
+            role: MsgRole::User,
+            text: "Here are all the screenshots".into(),
+            is_summary: false,
+            attachments,
+            blocks: Vec::new(),
+            streaming: false,
+            started_at: None,
+            worked_duration: None,
+            route: None,
+            changes: None,
+        });
+        app.conv.pending_images = (0..12)
+            .map(|i| ("image/png".to_string(), png(800, 600, (i * 20) as u8)))
+            .collect();
+    }
+    rec.harness.run_steps(6);
+    rec.still("chat-many-images");
 }

@@ -36,6 +36,22 @@ pub struct UsageWindow {
     pub model_scope: Option<String>,
 }
 
+impl UsageWindow {
+    /// `5h 34% used (resets in 2h 10m)`; a window whose reset already passed reads as empty.
+    pub fn summary(&self, now: u64) -> String {
+        match self.resets_at {
+            Some(t) if t <= now => format!("{} 0% used", self.label),
+            Some(t) => format!(
+                "{} {:.0}% used (resets in {})",
+                self.label,
+                self.used_pct,
+                crate::router::decide::short_duration(t - now)
+            ),
+            None => format!("{} {:.0}% used", self.label, self.used_pct),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct QuotaSnapshot {
     pub windows: Vec<UsageWindow>,

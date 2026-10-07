@@ -89,13 +89,18 @@ impl OxiApp {
     /// Slash commands advertised by the active ACP agent for this workspace (empty for HTTP
     /// providers, or before the agent has started once).
     pub(crate) fn active_acp_commands(&self) -> Arc<Vec<AcpSlashCommand>> {
+        self.acp_commands_for(self.conv.active_workspace)
+    }
+
+    /// Slash commands the ACP agent advertised for a workspace (empty for other providers).
+    pub(crate) fn acp_commands_for(&self, workspace_idx: usize) -> Arc<Vec<AcpSlashCommand>> {
         let cfg = self.conv.settings.active_config();
         if !cfg.is_acp() {
             return Arc::default();
         }
         crate::agent::acp::available_commands(
             &cfg.effective_acp_command(),
-            std::path::Path::new(&self.active_workspace().root_path),
+            std::path::Path::new(&self.conv.workspaces[workspace_idx].root_path),
         )
     }
 

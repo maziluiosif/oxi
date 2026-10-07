@@ -61,6 +61,7 @@ mod todo;
 mod undo;
 mod web;
 pub use todo::{TodoItem, TodoStatus, parse_todos};
+pub(crate) use todo::{todo_write_definition, tool_todo_write};
 
 #[cfg(test)]
 mod tests;

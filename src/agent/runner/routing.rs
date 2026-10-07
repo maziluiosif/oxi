@@ -318,6 +318,7 @@ pub fn spawn_agent_run(
                     attachments: Vec::new(), blocks: vec![AssistantBlock::Answer(handoff)],
                     streaming: false, started_at: None, worked_duration: None,
                     route: Some(Box::new(note)),
+                    changes: None,
                 });
                 user.text = format!("Continue the original request after the quota interruption. A different provider was selected because the previous one is unavailable; retain all task constraints and approval rules.\n\nOriginal request:\n{}", user.text);
                 chat.push(user);

@@ -56,6 +56,7 @@ pub enum SettingsExitAction {
 pub enum ConfirmAction {
     DeleteSession { wi: usize, si: usize },
     DeleteWorkspace { wi: usize },
+    RemoveWorktree { wi: usize },
     GitDiscard { paths: Vec<String> },
     DeleteLocalModel { id: String },
     DeleteRemoteModel { id: String, path: String },
@@ -295,6 +296,8 @@ pub struct Workspace {
     pub pinned: Vec<String>,
     /// Keys of the sidebar date groups folded in this workspace (persisted in settings).
     pub folded_groups: Vec<String>,
+    /// Set when the folder is a linked git work tree (see `worktrees.rs`).
+    pub worktree: Option<crate::git::worktree::WorktreeInfo>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -337,12 +340,14 @@ pub struct SessionRunState {
     /// Provider/model the running turn bills against (the routed one under the Router), for
     /// the usage ledger.
     pub usage_target: Option<(crate::settings::LlmProviderKind, String)>,
+    /// Messages written while this chat was answering, sent one per finished response.
+    pub queued: std::collections::VecDeque<super::compaction::QueuedSend>,
 }
 
 impl SessionRunState {
     /// Per-chat composer modes that must survive idle-state pruning.
     pub fn keeps_chat_modes(&self) -> bool {
-        self.plan_mode || self.last_turn_planned
+        self.plan_mode || self.last_turn_planned || !self.queued.is_empty()
     }
 
     pub fn clear_agent(&mut self) {
@@ -596,6 +601,12 @@ pub struct ConversationState {
     /// transcript none of them is culled, so the widget under the cursor cannot flip between a
     /// real label and a placeholder right before a click. See `render_conversation`.
     pub transcript_rendered: std::collections::HashSet<(usize, usize, usize)>,
+    /// File lists and view state of "N files changed" cards under agent turns.
+    pub turn_changes: super::turn_changes::TurnChangesCache,
+    /// Work tree create/merge operations running in the background.
+    pub worktree_ops: Vec<std::sync::mpsc::Receiver<super::worktrees::WorktreeResult>>,
+    /// Right-click menu of a transcript message (fork, copy).
+    pub message_menu: Option<super::fork::MessageMenu>,
     /// Sidebar search results per chat, keyed by `(workspace_idx, session_idx)`.
     pub sidebar_search_cache: std::collections::HashMap<(usize, usize), SidebarSearchHit>,
     /// Source-control (git) panel visibility and width (persisted in settings).

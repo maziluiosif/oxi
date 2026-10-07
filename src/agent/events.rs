@@ -79,6 +79,8 @@ pub enum AgentOutcome {
 #[derive(Debug)]
 pub enum AgentEvent {
     AgentStart,
+    /// A command PTY to attach to this workspace's terminal panel.
+    AcpTerminal(crate::terminal::PendingTerminal),
     TextStart,
     TextDelta(String),
     /// Extended reasoning / thinking content from models that support it.
@@ -118,9 +120,21 @@ pub enum AgentEvent {
     Usage(TokenUsage),
     /// Usage from a delegated investigation; it must not calibrate the main agent's context.
     SubagentUsage(TokenUsage),
+    /// Usage of a whole turn as reported by an external (ACP) agent. Its prompt carries the
+    /// agent's own system prompt and tools, so like subagent usage it must not calibrate
+    /// oxi's context estimate.
+    ExternalUsage(TokenUsage),
+    /// Context occupancy reported by an external (ACP) agent: tokens in use and window size.
+    ContextUsage {
+        used: u64,
+        size: u64,
+    },
     /// The Router picked the provider/model for this turn (sent before any output, and again
     /// if the turn fails over to another provider).
     Routed(Box<crate::model::RouteNote>),
+    /// What the turn changed in the workspace (git snapshots before and after it). Sent just
+    /// before [`AgentEvent::Finished`] by turns that snapshot the work tree (ACP).
+    TurnChanges(Box<crate::model::TurnChanges>),
     /// The only terminal event for a run.
     Finished(AgentOutcome),
 }

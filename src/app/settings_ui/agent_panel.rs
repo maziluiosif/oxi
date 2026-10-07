@@ -289,6 +289,22 @@ impl OxiApp {
                 .size(FS_TINY)
                 .color(c_text_faint()),
             );
+            ui.add_space(8.0);
+            let mut notify = self.conv.settings.notify_in_background;
+            if ui
+                .checkbox(
+                    &mut notify,
+                    RichText::new("Notify me in the background")
+                        .size(FS_SMALL)
+                        .color(c_text()),
+                )
+                .on_hover_text(
+                    "When oxi is not the focused window, show a desktop notification when a response finishes or the agent is waiting for your approval.",
+                )
+                .changed()
+            {
+                self.conv.settings.notify_in_background = notify;
+            }
         });
 
         // ── Limits ─────────────────────────────────────────────────────────

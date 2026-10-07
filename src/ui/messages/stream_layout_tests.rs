@@ -64,6 +64,7 @@ fn check_stream(thinking: &str) {
         started_at: Some(std::time::Instant::now()),
         worked_duration: None,
         route: None,
+        changes: None,
     };
     let first_line = thinking.lines().next().unwrap();
     let thinking_y = text_ys(&ctx, &mut frame, &msg, first_line)[0];

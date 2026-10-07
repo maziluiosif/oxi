@@ -187,23 +187,8 @@ impl OxiApp {
                     }
                 });
                 if let Some(snap) = quota::snapshot(kind) {
-                    let mut parts: Vec<String> = snap
-                        .windows
-                        .iter()
-                        .map(|w| {
-                            let reset = w
-                                .resets_at
-                                .filter(|t| *t > now)
-                                .map(|t| {
-                                    format!(
-                                        " (resets in {})",
-                                        crate::router::decide::short_duration(t - now)
-                                    )
-                                })
-                                .unwrap_or_default();
-                            format!("{} {:.0}% used{reset}", w.label, w.used_pct)
-                        })
-                        .collect();
+                    let mut parts: Vec<String> =
+                        snap.windows.iter().map(|w| w.summary(now)).collect();
                     if let Some(c) = snap.credits_left {
                         parts.push(format!("${c:.2} credit left"));
                     }

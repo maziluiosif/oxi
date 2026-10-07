@@ -152,6 +152,7 @@ pub(super) fn render_tool_pill(
     let live = (is_bash || is_task) && (running || (streaming && is_newest_tool));
     let expanded = live || is_expanded(ui, persist_id);
 
+    let mut header_rect = eframe::egui::Rect::NOTHING;
     let frame = Frame::new()
         .fill(pill_bg)
         .stroke(Stroke::new(1.0, pill_border))
@@ -166,6 +167,7 @@ pub(super) fn render_tool_pill(
                         .font(FontId::new(FS_SMALL + 0.5, icon_font()))
                         .color(icon_color),
                 );
+                header_rect = ui.max_rect();
                 // Right-side status first so the (truncated) detail takes whatever is left.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add(
@@ -196,6 +198,9 @@ pub(super) fn render_tool_pill(
                 });
             });
         });
+    if is_bash && let Some(command) = bash_command(args_summary.as_deref()) {
+        command_context_menu(ui, header_rect, persist_id, &command);
+    }
     clickable_expand_overlay(ui, frame.response.rect, persist_id);
 
     // Folded, the pill is the whole tool-call bubble (keeps the transcript compact); a click
@@ -779,4 +784,39 @@ pub(super) fn render_explored_cluster(ui: &mut Ui, ctx: ExploredClusterCtx<'_>) 
     } = ctx;
 
     render_explored_tool_list(ui, msg_idx, blocks, start, end, streaming);
+}
+
+/// The shell command of a `bash` call, from its (possibly truncated) JSON arguments.
+fn bash_command(args_summary: Option<&str>) -> Option<String> {
+    let args: serde_json::Value = serde_json::from_str(args_summary?).ok()?;
+    let command = args.get("command")?.as_str()?.trim();
+    (!command.is_empty()).then(|| command.to_owned())
+}
+
+/// Right-click menu on a command pill's header: copy it, or type it into a new terminal tab.
+fn command_context_menu(ui: &mut Ui, rect: eframe::egui::Rect, persist_id: Id, command: &str) {
+    if !rect.is_positive() {
+        return;
+    }
+    let response = ui.interact(
+        rect,
+        persist_id.with("command_menu"),
+        eframe::egui::Sense::click(),
+    );
+    response.context_menu(|ui| {
+        if ui
+            .button("Open in terminal")
+            .on_hover_text(
+                "Type this command into a new terminal tab (not run until you press Enter)",
+            )
+            .clicked()
+        {
+            crate::ui::messages::request_terminal_command(ui.ctx(), command);
+            ui.close();
+        }
+        if ui.button("Copy command").clicked() {
+            ui.ctx().copy_text(command.to_owned());
+            ui.close();
+        }
+    });
 }

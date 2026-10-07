@@ -248,6 +248,7 @@ impl OxiApp {
                             started_at: None,
                             worked_duration: None,
                             route: None,
+                            changes: None,
                         },
                     );
                 }
@@ -261,10 +262,7 @@ impl OxiApp {
                     self.run_state_mut(key).stream_error = Some(format!("Save session: {e}"));
                 }
                 if let Some(queued) = active.queued_send {
-                    self.conv.input = queued.text;
-                    self.conv.pending_images = queued.images;
-                    self.conv.pending_texts = queued.texts;
-                    self.send_message_opts(true);
+                    self.send_queued(key, queued, true);
                 }
             }
             Err(e) => {
@@ -299,6 +297,7 @@ mod tests {
             started_at: None,
             worked_duration: None,
             route: None,
+            changes: None,
         }
     }
 
@@ -313,6 +312,7 @@ mod tests {
             started_at: None,
             worked_duration: None,
             route: None,
+            changes: None,
         }
     }
 

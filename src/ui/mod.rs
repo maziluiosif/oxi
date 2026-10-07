@@ -6,6 +6,7 @@ pub mod diff_view;
 pub mod image_viewer;
 pub mod messages;
 pub mod preview_expand;
+pub mod select_menu;
 pub mod window_chrome;
 
 pub mod text_attachment;

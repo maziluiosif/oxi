@@ -167,6 +167,7 @@ impl OxiApp {
         self.conv.editor.documents[index].viewport_width_bits = Some(prospective_width_bits);
         let mut goto_definition_byte = None;
         let mut editor_selection = None;
+        let mut selection_to_chat = false;
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
 
@@ -221,6 +222,14 @@ impl OxiApp {
                             let pixels_per_point_bits = ui.ctx().pixels_per_point().to_bits();
                             let allow_layout_cache = !has_mutating_text_input(ui);
                             let layout_cache = &mut document.layout_cache;
+                            // TextEdit moves the caret on any button press, so a right-click
+                            // would drop the selection the context menu acts on. Keep it.
+                            let selection_before_secondary_press = ui
+                                .input(|i| i.pointer.secondary_pressed())
+                                .then(|| TextEdit::load_state(ui.ctx(), editor_id))
+                                .flatten()
+                                .and_then(|state| state.cursor.char_range())
+                                .filter(|range| !range.is_empty());
                             let mut layouter =
                                 |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                                     let wrap_width_bits = wrap_width.round().to_bits();
@@ -304,6 +313,13 @@ impl OxiApp {
                                         .show(ui)
                                 })
                                 .inner;
+                            if let Some(range) = selection_before_secondary_press
+                                && output.response.hovered()
+                            {
+                                output.state.cursor.set_char_range(Some(range));
+                                output.state.clone().store(ui.ctx(), output.response.id);
+                                output.cursor_range = Some(range);
+                            }
                             let scratchpad_changed = (output.response.changed() || command_edited)
                                 && document.is_scratchpad;
                             if output.response.changed() {
@@ -461,11 +477,25 @@ impl OxiApp {
                                 .then(|| hovered_definition.as_ref().map(|range| range.start))
                                 .flatten();
                             let mut context_goto = false;
+                            let has_selection =
+                                output.cursor_range.is_some_and(|range| !range.is_empty());
                             output.response.context_menu(|ui| {
                                 if navigation_supported
                                     && ui.button("Go to Definition    F12").clicked()
                                 {
                                     context_goto = true;
+                                    ui.close();
+                                }
+                                if has_selection
+                                    && ui
+                                        .button(if cfg!(target_os = "macos") {
+                                            "Add Selection to Chat    ⌘⇧L"
+                                        } else {
+                                            "Add Selection to Chat    Ctrl+Shift+L"
+                                        })
+                                        .clicked()
+                                {
+                                    selection_to_chat = true;
                                     ui.close();
                                 }
                             });
@@ -1030,6 +1060,9 @@ impl OxiApp {
             );
         });
         self.conv.editor.editor_selection_chars = editor_selection;
+        if selection_to_chat {
+            self.add_editor_selection_to_chat();
+        }
         if let Some(byte) = goto_definition_byte {
             self.go_to_definition(byte, ui.ctx());
         }

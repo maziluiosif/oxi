@@ -20,6 +20,25 @@ fn acp_kind_is_read_only(kind: &str) -> bool {
     matches!(kind, "read" | "search" | "think" | "fetch")
 }
 
+/// Claude Code's plan mode writes the plan to `~/.claude/plans/`; that edit is part of planning.
+pub(super) fn is_plan_file_edit(tool: &Value) -> bool {
+    let Some(dir) = dirs::home_dir().map(|h| h.join(".claude").join("plans")) else {
+        return false;
+    };
+    let mut paths: Vec<&str> = tool["locations"]
+        .as_array()
+        .map(|l| l.iter().filter_map(|x| x["path"].as_str()).collect())
+        .unwrap_or_default();
+    if paths.is_empty() {
+        paths.extend(tool["rawInput"]["file_path"].as_str());
+    }
+    tool["kind"].as_str() == Some("edit")
+        && !paths.is_empty()
+        && paths
+            .iter()
+            .all(|p| std::path::Path::new(p).starts_with(&dir))
+}
+
 /// A `session/request_permission` request forwarded from the reader task to the prompt task.
 pub(super) struct PermReq {
     pub(super) id: Value,
@@ -44,7 +63,12 @@ pub(super) async fn handle_permission(
     let options = pr.params["options"].as_array().cloned().unwrap_or_default();
     let kind = pr.params["toolCall"]["kind"].as_str().unwrap_or("");
 
-    let decision = if plan_mode && !acp_kind_is_read_only(kind) {
+    // oxi's own checklist tool only updates the UI.
+    let decision = if super::todo_mcp::is_todo_tool(&pr.params["toolCall"])
+        || plan_mode && is_plan_file_edit(&pr.params["toolCall"])
+    {
+        Some(ApprovalDecision::Approve)
+    } else if plan_mode && !acp_kind_is_read_only(kind) {
         Some(ApprovalDecision::Deny)
     } else if *auto_approve
         || !approval_policy.requires_approval(&name)
@@ -151,10 +175,15 @@ pub(super) fn pick_option(options: &[Value], wanted_kinds: &[&str]) -> Option<St
 pub(super) fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
     let kind = tool.get("kind").and_then(|k| k.as_str()).unwrap_or("");
     let title = tool.get("title").and_then(|t| t.as_str()).unwrap_or("");
+    // Same names as oxi's own tools, so the approval settings mean the same thing for both.
     let name = match kind {
         "execute" => "bash".to_string(),
         "edit" | "delete" | "move" => "edit".to_string(),
-        "" => {
+        "read" => "read".to_string(),
+        "search" => "grep".to_string(),
+        "fetch" => "web_fetch".to_string(),
+        "think" => "task".to_string(),
+        "" | "other" => {
             if title.is_empty() {
                 "tool".to_string()
             } else {

@@ -66,6 +66,22 @@ impl OxiApp {
         Ok(())
     }
 
+    /// Open a new terminal tab in the workspace and type `command` at its prompt (not run).
+    pub(crate) fn open_command_in_terminal(&mut self, ctx: &egui::Context, command: &str) {
+        if !self.conv.terminal_open {
+            self.toggle_terminal();
+        }
+        match self.spawn_terminal(ctx) {
+            Ok(()) => {
+                if let Some(term) = self.terminals.get_mut(self.active_terminal) {
+                    term.type_text(&single_line_command(command));
+                }
+                self.conv.focus_terminal_next_frame = true;
+            }
+            Err(e) => self.notify_composer(format!("Could not open a terminal: {e}")),
+        }
+    }
+
     /// Close one tab. The panel stays open; the body respawns a shell if it was the last one.
     fn close_terminal(&mut self, index: usize) {
         if index >= self.terminals.len() {
@@ -148,12 +164,19 @@ impl OxiApp {
                 for index in 0..tabs {
                     let term = self.terminals.get(index);
                     let label = match term {
+                        Some(t) if t.process.is_some() => format!(
+                            "Agent {}{}",
+                            index + 1,
+                            if t.is_alive() { "" } else { " (exited)" }
+                        ),
                         Some(t) if !t.is_alive() => format!("Shell {} (exited)", index + 1),
                         _ => format!("Shell {}", index + 1),
                     };
                     // Windows has no foreground process group, so every live shell would
                     // read as busy there; only show the dot where it means something.
-                    let busy = cfg!(unix) && term.is_some_and(|t| t.has_foreground_job());
+                    let busy = term.is_some_and(|t| {
+                        (cfg!(unix) || t.process.is_some()) && t.has_foreground_job()
+                    });
                     let (clicked, closed) = terminal_tab(
                         ui,
                         index,
@@ -249,6 +272,7 @@ impl OxiApp {
 
     /// Persist settings, surfacing any error on the active session.
     pub(crate) fn save_settings_quietly(&mut self) {
+        self.remember_acp_workspace_preferences();
         if let Err(e) = self.conv.settings.save() {
             self.run_state_mut(self.active_session_key()).stream_error =
                 Some(format!("Save settings: {e}"));
@@ -332,4 +356,42 @@ fn terminal_tab(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     (response.clicked() && !closed, closed)
+}
+
+/// A newline at the prompt would run the command, so a multi-line one becomes one editable line:
+/// `\`-continued lines are joined, separate lines become `;`-separated commands.
+fn single_line_command(command: &str) -> String {
+    let mut out = String::new();
+    let mut continued = true;
+    for line in command.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if !out.is_empty() {
+            out.push_str(if continued { " " } else { "; " });
+        }
+        match line.strip_suffix('\\') {
+            Some(rest) => {
+                out.push_str(rest.trim_end());
+                continued = true;
+            }
+            None => {
+                out.push_str(line);
+                continued = false;
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::single_line_command;
+
+    #[test]
+    fn multi_line_commands_become_one_line() {
+        assert_eq!(single_line_command("cargo test"), "cargo test");
+        assert_eq!(single_line_command("cd src\nls -la\n"), "cd src; ls -la");
+        assert_eq!(
+            single_line_command("cargo build \\\n  --release\nls"),
+            "cargo build --release; ls"
+        );
+    }
 }

@@ -21,6 +21,12 @@ mod system;
 mod compare;
 pub use compare::{CompareFile, GitCompare, compare};
 
+#[path = "git/checkpoint.rs"]
+pub mod checkpoint;
+
+#[path = "git/worktree.rs"]
+pub mod worktree;
+
 #[path = "git/hunk.rs"]
 mod hunk;
 pub use hunk::{BlockEdit, BlockTarget, TextHunk, base_text, splice_lines, text_hunks};

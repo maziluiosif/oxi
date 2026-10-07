@@ -52,6 +52,7 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
             pending_texts: Vec::new(),
             modified: session.modified,
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
         })
         .collect()
@@ -153,6 +154,7 @@ mod tests {
             started_at: None,
             worked_duration: None,
             route: None,
+            changes: None,
         };
         let assistant = ChatMessage {
             role: MsgRole::Assistant,
@@ -178,6 +180,7 @@ mod tests {
             started_at: None,
             worked_duration: None,
             route: None,
+            changes: None,
         };
         let mut messages = vec![user.clone(), assistant.clone(), user, assistant];
 
@@ -199,6 +202,7 @@ mod tests {
                 started_at: None,
                 worked_duration: None,
                 route: None,
+                changes: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -210,6 +214,7 @@ mod tests {
                 started_at: None,
                 worked_duration: None,
                 route: None,
+                changes: None,
             },
             ChatMessage {
                 role: MsgRole::User,
@@ -221,6 +226,7 @@ mod tests {
                 started_at: None,
                 worked_duration: None,
                 route: None,
+                changes: None,
             },
             ChatMessage {
                 role: MsgRole::Assistant,
@@ -232,6 +238,7 @@ mod tests {
                 started_at: None,
                 worked_duration: None,
                 route: None,
+                changes: None,
             },
         ];
 
@@ -253,6 +260,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: Some(WireCache {
                 fingerprint: "v1:sha256:abcd".into(),
                 messages: vec![json!({"role":"system","content":"s"})],
@@ -290,6 +298,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
             modified: SystemTime::now(),
         };
@@ -321,6 +330,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
             modified: SystemTime::now(),
         };
@@ -354,6 +364,7 @@ mod tests {
                     started_at: None,
                     worked_duration: None,
                     route: None,
+                    changes: None,
                 },
                 ChatMessage {
                     role: MsgRole::Assistant,
@@ -379,6 +390,7 @@ mod tests {
                     started_at: None,
                     worked_duration: None,
                     route: None,
+                    changes: None,
                 },
             ],
             session_file: None,
@@ -387,6 +399,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
             modified: SystemTime::now(),
         };
@@ -418,6 +431,7 @@ mod tests {
                     started_at: None,
                     worked_duration: None,
                     route: None,
+                    changes: None,
                 },
                 ChatMessage {
                     role: MsgRole::Assistant,
@@ -429,6 +443,7 @@ mod tests {
                     started_at: None,
                     worked_duration: Some(Duration::from_secs(67)),
                     route: None,
+                    changes: None,
                 },
             ],
             session_file: None,
@@ -437,6 +452,7 @@ mod tests {
             pending_images: Vec::new(),
             pending_texts: Vec::new(),
             chars_per_token: None,
+            agent_context: None,
             wire_cache: None,
             modified: SystemTime::now(),
         };

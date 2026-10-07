@@ -11,6 +11,7 @@ use tokio::process::ChildStdin;
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use super::client_fs::fs_read_text;
+use super::modes::SharedModes;
 use super::permissions::PermReq;
 use super::{Pending, PromptCtx, commands};
 use crate::agent::activity_log::{self, ActivityKind};
@@ -70,9 +71,11 @@ pub(super) async fn read_loop(
     prompt_ctx: Arc<AsyncMutex<Option<PromptCtx>>>,
     stdin: Arc<AsyncMutex<ChildStdin>>,
     alive: Arc<AtomicBool>,
+    modes: SharedModes,
     commands_key: CommandsKey,
 ) {
     let mut lines = BufReader::new(stdout).lines();
+    let terminals = super::terminals::Terminals::default();
     // Streaming text arrives as one `session/update` per token chunk; logging each would push
     // everything else out of the activity log, so consecutive chunks become one entry.
     let mut chunks = String::new();
@@ -109,9 +112,40 @@ pub(super) async fn read_loop(
                 }
             }
         }
-        dispatch(&line, &pending, &prompt_ctx, &stdin, &commands_key).await;
+        // Waiting for a terminal must not block session updates or later kill requests.
+        let request: Option<Value> = serde_json::from_str(&line).ok();
+        if let Some(request) = request.filter(|v| {
+            v["method"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("terminal/"))
+                && !v["id"].is_null()
+        }) {
+            let terminals = terminals.clone();
+            let prompt_ctx = prompt_ctx.clone();
+            let stdin = stdin.clone();
+            tokio::spawn(async move {
+                let method = request["method"].as_str().unwrap();
+                let params = &request["params"];
+                let result = if method == "terminal/create" {
+                    let context = prompt_ctx.lock().await;
+                    context
+                        .as_ref()
+                        .ok_or_else(|| "No active ACP prompt".to_string())
+                        .and_then(|ctx| terminals.create(params, ctx))
+                } else {
+                    terminals.request(method, params).await
+                };
+                match result {
+                    Ok(result) => reply_ok(&stdin, request["id"].clone(), result).await,
+                    Err(error) => reply_err(&stdin, request["id"].clone(), -32000, &error).await,
+                }
+            });
+        } else {
+            dispatch(&line, &pending, &prompt_ctx, &stdin, &modes, &commands_key).await;
+        }
     }
     flush_chunks(&mut chunks, &mut chunk_count);
+    terminals.close();
     alive.store(false, Ordering::SeqCst);
     let mut p = pending.lock().await;
     for (_, tx) in p.drain() {
@@ -136,6 +170,7 @@ pub(super) async fn dispatch(
     pending: &Pending,
     prompt_ctx: &Arc<AsyncMutex<Option<PromptCtx>>>,
     stdin: &Arc<AsyncMutex<ChildStdin>>,
+    modes: &SharedModes,
     commands_key: &CommandsKey,
 ) {
     let v: Value = match serde_json::from_str(line) {
@@ -149,17 +184,27 @@ pub(super) async fn dispatch(
             handle_agent_request(method, id, params, stdin, prompt_ctx).await;
         } else if method == "session/update" {
             let update = &v["params"]["update"];
-            // Usually sent right after session setup, before any prompt, so it is handled
-            // regardless of whether a turn is in flight.
-            if update["sessionUpdate"].as_str() == Some("available_commands_update")
-                && let Some(list) = commands::parse_update(update)
-            {
-                commands::store(&commands_key.command_line, &commands_key.cwd, list);
-            } else if let Some(ctx) = prompt_ctx.lock().await.as_mut() {
-                ctx.emit_notification(&v["params"]);
+            // Commands usually arrive right after session setup and modes can change between
+            // turns, so both are handled regardless of whether a turn is in flight.
+            match update["sessionUpdate"].as_str() {
+                Some("available_commands_update") => {
+                    if let Some(list) = commands::parse_update(update) {
+                        commands::store(&commands_key.command_line, &commands_key.cwd, list);
+                    }
+                }
+                Some("config_option_update" | "current_mode_update") => {
+                    modes
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .apply_notification(update);
+                }
+                _ => {
+                    if let Some(ctx) = prompt_ctx.lock().await.as_mut() {
+                        ctx.emit_notification(&v["params"]);
+                    }
+                }
             }
         }
-        // Other notifications (current_mode_update, …) are ignored.
     } else if let Some(id) = v.get("id").and_then(|x| x.as_i64()) {
         let waiter = pending.lock().await.remove(&id);
         if let Some(w) = waiter {

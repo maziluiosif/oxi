@@ -459,6 +459,12 @@ impl OxiApp {
                                 // count, so every label's id shifted whenever culling changed —
                                 // which dropped a text selection the moment a drag began.
                                 let unit_id = ui.id().with(key);
+                                let turn_changes: Vec<crate::model::TurnChanges> = messages
+                                    [start..end]
+                                    .iter()
+                                    .filter(|m| !m.streaming)
+                                    .filter_map(|m| m.changes.as_deref().cloned())
+                                    .collect();
                                 ui.scope_builder(egui::UiBuilder::new().id(unit_id), |ui| {
                                     if messages[start].role == MsgRole::Assistant {
                                         render_assistant_message_run(
@@ -475,7 +481,26 @@ impl OxiApp {
                                         );
                                     }
                                 });
+                                if !turn_changes.is_empty() {
+                                    ui.scope_builder(
+                                        egui::UiBuilder::new().id(unit_id.with("changes")),
+                                        |ui| {
+                                            for changes in &turn_changes {
+                                                self.render_turn_changes(ui, changes);
+                                            }
+                                        },
+                                    );
+                                }
                                 let height = ui.cursor().min.y - top;
+                                if !messages_streaming(
+                                    &self.conv.workspaces[wi].sessions[si].messages[start..end],
+                                ) {
+                                    let unit_rect = egui::Rect::from_min_max(
+                                        egui::pos2(ui.max_rect().left(), top),
+                                        egui::pos2(ui.max_rect().right(), top + height),
+                                    );
+                                    self.detect_message_menu(ui, unit_rect, (wi, si), (start, end));
+                                }
                                 // Sticky only if it was actually near the viewport: units rendered
                                 // just to measure a missing height (e.g. right after a session
                                 // loads) must not pin the whole history as rendered.
@@ -586,6 +611,8 @@ impl OxiApp {
                     ui.scroll_to_cursor(Some(Align::BOTTOM));
                 }
             });
+
+        self.render_message_menu(ui.ctx());
 
         // Floating "scroll to bottom" jump button when the user has scrolled up —
         // especially useful while streaming keeps appending below the viewport.
@@ -936,3 +963,7 @@ pub(crate) fn conversation_selection_scroll_delta(ui: &Ui) -> (egui::Vec2, bool)
 #[cfg(test)]
 #[path = "conversation/tests.rs"]
 mod tests;
+
+fn messages_streaming(messages: &[crate::model::ChatMessage]) -> bool {
+    messages.iter().any(|m| m.streaming)
+}

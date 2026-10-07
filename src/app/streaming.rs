@@ -120,6 +120,7 @@ impl OxiApp {
         };
         self.active_session_mut().messages.truncate(user_idx);
         self.invalidate_wire_cache(key);
+        self.reset_acp_session(key);
         self.conv.editing_last_prompt = None;
         self.send_message_opts(true);
     }
@@ -168,6 +169,7 @@ impl OxiApp {
         );
         self.active_session_mut().messages.truncate(user_idx);
         self.invalidate_wire_cache(key);
+        self.reset_acp_session(key);
         self.run_state_mut(key).stream_error = None;
         self.send_message_opts(false);
         if self.conv.input.is_empty()
@@ -183,10 +185,28 @@ impl OxiApp {
     /// `skip_autocompact` is set when an auto-compaction has just finished and is replaying
     /// the deferred message — it must not re-trigger the threshold check (loop guard).
     pub(crate) fn send_message_opts(&mut self, skip_autocompact: bool) {
+        let key = self.active_session_key();
+        self.send_message_for(key, skip_autocompact);
+    }
+
+    /// Send the composer contents into `key`'s chat. While that chat is still answering, the
+    /// message is queued instead and goes out when the response finishes.
+    pub(super) fn send_message_for(&mut self, key: SessionKey, skip_autocompact: bool) {
         let text = self.conv.input.trim().to_string();
         let has_attachments =
             !self.conv.pending_images.is_empty() || !self.conv.pending_texts.is_empty();
         if text.is_empty() && !has_attachments {
+            return;
+        }
+        if self
+            .run_state(key)
+            .is_some_and(|state| state.waiting_response)
+        {
+            self.push_input_history(&text);
+            self.conv.input_history_index = None;
+            self.conv.input_history_draft.clear();
+            let queued = self.take_composer_payload();
+            self.run_state_mut(key).queued.push_back(queued);
             return;
         }
 
@@ -196,16 +216,17 @@ impl OxiApp {
         let mut text = text;
         match super::compaction::parse_slash_command(&text) {
             Some(super::compaction::SlashCommand::Plan(task)) => {
-                let key = self.active_session_key();
                 let run = self.run_state_mut(key);
                 match task {
                     // `/plan <task>`: plan mode on, then send the task as a normal message.
                     Some(task) => {
                         run.plan_mode = true;
                         text = task;
+                        self.save_settings_quietly();
                     }
                     None if !has_attachments => {
                         run.plan_mode = !run.plan_mode;
+                        self.save_settings_quietly();
                         self.push_input_history(&text);
                         self.conv.input_history_index = None;
                         self.conv.input_history_draft.clear();
@@ -216,6 +237,7 @@ impl OxiApp {
                     None => {
                         run.plan_mode = true;
                         text.clear();
+                        self.save_settings_quietly();
                     }
                 }
             }
@@ -223,7 +245,7 @@ impl OxiApp {
                 if !has_attachments
                     && (cmd == super::compaction::SlashCommand::New
                         || !self
-                            .active_acp_commands()
+                            .acp_commands_for(key.workspace_idx)
                             .iter()
                             .any(|c| c.name == "compact")) =>
             {
@@ -233,7 +255,6 @@ impl OxiApp {
                 self.conv.input.clear();
                 match cmd {
                     super::compaction::SlashCommand::Compact => {
-                        let key = self.active_session_key();
                         self.start_compaction(key, None);
                     }
                     _ => self.new_chat(),
@@ -243,17 +264,7 @@ impl OxiApp {
             _ => {}
         }
 
-        let key = self.active_session_key();
         self.ensure_session_config(key);
-        if self
-            .run_state(key)
-            .is_some_and(|state| state.waiting_response)
-        {
-            self.notify_composer(
-                "A response is still streaming — stop it or wait for it to finish.",
-            );
-            return;
-        }
         // Don't send into a session whose history is mid-compaction.
         if self.compaction_active_for(key) {
             self.notify_composer("Context is being compacted — try again in a moment.");
@@ -294,9 +305,10 @@ impl OxiApp {
             }
         }
 
-        if self.active_session().messages.is_empty() && self.active_session().session_file.is_none()
+        if self.session_by_key(key).messages.is_empty()
+            && self.session_by_key(key).session_file.is_none()
         {
-            self.active_session_mut().title = if !text.is_empty() {
+            self.session_mut_by_key(key).title = if !text.is_empty() {
                 make_session_title(&text)
             } else {
                 if !self.conv.pending_texts.is_empty() {
@@ -380,6 +392,7 @@ impl OxiApp {
             started_at: None,
             worked_duration: None,
             route: None,
+            changes: None,
         });
         sess.messages.push(ChatMessage {
             role: MsgRole::Assistant,
@@ -391,6 +404,7 @@ impl OxiApp {
             started_at: Some(std::time::Instant::now()),
             worked_duration: None,
             route: None,
+            changes: None,
         });
     }
 
@@ -632,14 +646,11 @@ impl OxiApp {
         // to a synthetic id for an as-yet-unsaved chat. Once a chat has been saved it switches
         // from the `mem:` key (used while warming a brand-new chat) to its file path, so retire
         // the now-orphaned warm subprocess to avoid leaking an idle Claude Code process.
-        let acp_session_key = match &session_file {
-            Some(path) => {
-                self.acp
-                    .close(&format!("mem:{}:{}", key.workspace_idx, key.session_idx));
-                path.clone()
-            }
-            None => format!("mem:{}:{}", key.workspace_idx, key.session_idx),
-        };
+        if session_file.is_some() {
+            self.acp
+                .close(&format!("mem:{}:{}", key.workspace_idx, key.session_idx));
+        }
+        let acp_session_key = self.acp_session_key(key);
         let (tx, rx) = relay_waking_ui(self.conv.git_ctx.clone());
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -671,6 +682,24 @@ impl OxiApp {
         run.pending_approval = None;
         run.cancel_agent = Some(cancel);
         Ok(())
+    }
+
+    /// Key of the chat's ACP agent subprocess: its session file, or a synthetic id while unsaved.
+    pub(crate) fn acp_session_key(&self, key: SessionKey) -> String {
+        match &self.session_by_key(key).session_file {
+            Some(path) => path.clone(),
+            None => format!("mem:{}:{}", key.workspace_idx, key.session_idx),
+        }
+    }
+
+    /// Drop the ACP agent's own memory of this chat. Used when oxi rewrites the transcript
+    /// (rewind, retry, fork): the next prompt starts a fresh agent session that is handed oxi's
+    /// transcript instead.
+    pub(crate) fn reset_acp_session(&mut self, key: SessionKey) {
+        if self.ensure_session_config(key).provider.is_acp() {
+            let session_key = self.acp_session_key(key);
+            self.acp.close(&session_key);
+        }
     }
 
     pub(crate) fn invalidate_wire_cache(&mut self, key: SessionKey) {

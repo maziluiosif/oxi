@@ -1,5 +1,7 @@
 #[path = "composer/plan_tasks.rs"]
 mod plan_tasks;
+#[path = "composer/selectors.rs"]
+mod selectors;
 #[path = "composer/slash_menu.rs"]
 mod slash_menu;
 #[path = "composer/text_menu.rs"]
@@ -11,15 +13,15 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use eframe::egui::{
-    self, Button, Color32, ComboBox, CornerRadius, Frame, Id, Image, Margin, Order, RichText,
-    Sense, Stroke, TextEdit, TextureHandle, Ui, text::CCursor, text::CCursorRange,
+    self, Button, Color32, CornerRadius, Frame, Id, Image, Margin, Order, RichText, Sense, Stroke,
+    TextEdit, TextureHandle, Ui, text::CCursor, text::CCursorRange,
 };
 
 use crate::theme::*;
 
 use super::composer_helpers::{
     context_indicator_color, estimate_message_chars, format_context_tokens, format_tokens_per_sec,
-    paint_arc, short_model_label,
+    paint_arc,
 };
 use super::{OxiApp, SessionKey};
 
@@ -98,60 +100,6 @@ fn composer_provider_groups(
             (!providers.is_empty()).then_some((*label, providers))
         })
         .collect()
-}
-
-/// Quiet pill styling shared by the composer combos (provider + model): transparent at
-/// rest, soft fill + hairline on hover, fully rounded.
-fn quiet_combo_style(ui: &mut Ui) {
-    let widgets = &mut ui.visuals_mut().widgets;
-    widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-    widgets.inactive.bg_fill = Color32::TRANSPARENT;
-    widgets.inactive.bg_stroke = Stroke::NONE;
-    widgets.inactive.corner_radius = CornerRadius::same(255);
-    widgets.hovered.weak_bg_fill = c_row_hover();
-    widgets.hovered.bg_stroke = Stroke::new(1.0, c_border_subtle());
-    widgets.hovered.corner_radius = CornerRadius::same(255);
-    widgets.active.weak_bg_fill = c_row_hover();
-    widgets.active.bg_stroke = Stroke::NONE;
-    widgets.active.corner_radius = CornerRadius::same(255);
-    widgets.open.weak_bg_fill = c_row_hover();
-    widgets.open.bg_stroke = Stroke::NONE;
-    widgets.open.corner_radius = CornerRadius::same(255);
-}
-
-/// Widest the thinking-level dropdown gets.
-const EFFORT_W: f32 = 72.0;
-
-/// Popup lists stay readable even under a short label such as "Auto".
-const COMBO_POPUP_MIN_W: f32 = 140.0;
-
-/// A quiet dropdown that hugs its label (chevron right after the text) but never grows past
-/// `max_w`; longer labels truncate. The slot used to be fixed-width, which left a wide gap
-/// between short labels like "Local HF" and their chevron.
-fn quiet_combo<R>(ui: &mut Ui, max_w: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let height = ui.available_height();
-    // `max_w` is the label + chevron area, as `ComboBox::width` was; the frame pads around it.
-    let max_w = max_w + 2.0 * ui.spacing().button_padding.x;
-    ui.allocate_ui_with_layout(
-        egui::vec2(max_w, height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            quiet_combo_style(ui);
-            add(ui)
-        },
-    )
-    .inner
-}
-
-/// Maximum (provider, model) dropdown widths for the column width class.
-fn composer_selector_widths(narrow: bool, compact: bool) -> (f32, f32) {
-    if compact {
-        (82.0, 90.0)
-    } else if narrow {
-        (96.0, 114.0)
-    } else {
-        (104.0, 130.0)
-    }
 }
 
 fn composer_text_fits(ui: &Ui, text: &str, extra_gap: f32) -> bool {
@@ -360,6 +308,7 @@ impl OxiApp {
                         // === Agent checklist and plan hand-off ===
                         self.render_task_panel(ui);
                         self.render_plan_ready_bar(ui);
+                        self.render_queue_panel(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
                         if self.conv.editing_last_prompt.is_some() {
@@ -499,14 +448,13 @@ impl OxiApp {
         let width = ui.available_width();
         let narrow = width < 520.0;
         let compact = width < 410.0;
-        let stacked = width < self.composer_single_row_width(narrow, compact);
+        let stacked = width < self.composer_single_row_width(ui.ctx(), narrow, compact);
         if stacked {
             // Attach leads the selector row so the second row is only mode + send controls;
             // left on the action row it sat alone under the selectors, detached from both.
             ui.horizontal_wrapped(|ui| {
                 self.render_attach_button(ui);
-                self.render_model_selector(ui, narrow, compact);
-                self.render_effort_selector(ui, compact);
+                self.render_measured_selectors(ui, narrow, compact);
             });
             ui.add_space(COMPOSER_GAP);
         }
@@ -553,15 +501,24 @@ impl OxiApp {
 
         // ── Left: provider + model (compact widths when the chat column is squeezed) ──
         if !stacked {
-            self.render_model_selector(ui, narrow, compact);
-            self.render_effort_selector(ui, compact);
+            self.render_measured_selectors(ui, narrow, compact);
         }
         self.render_plan_toggle(ui, compact);
 
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let active_session_streaming = self.active_waiting_response();
-            let (fill, fg, enabled, icon, hover) = if active_session_streaming {
+            // While streaming, a typed message is queued instead of replacing Stop.
+            let queue_instead = active_session_streaming && can_send;
+            let (fill, fg, enabled, icon, hover) = if queue_instead {
+                (
+                    c_accent(),
+                    crate::theme::c_on_accent(),
+                    true,
+                    ICON_SEND,
+                    "Queue message — sent when the current response finishes",
+                )
+            } else if active_session_streaming {
                 (
                     c_accent(),
                     crate::theme::c_on_accent(),
@@ -603,7 +560,9 @@ impl OxiApp {
                 .on_hover_text(hover)
                 .clicked();
             if clicked {
-                if active_session_streaming {
+                if queue_instead {
+                    self.send_message();
+                } else if active_session_streaming {
                     self.send_abort();
                 } else if can_send {
                     self.send_message();
@@ -640,296 +599,6 @@ impl OxiApp {
         });
     }
 
-    /// Two borderless dropdowns styled as quiet text with a chevron: provider (only
-    /// providers the user has actually configured), then model within that provider's
-    /// config. Each hugs its label up to a cap, so short names keep the chevron close and
-    /// long ones ("Claude Code (ACP)", long model ids) truncate instead of growing the bar.
-    fn render_model_selector(&mut self, ui: &mut Ui, narrow: bool, compact: bool) {
-        let active_provider = self.conv.settings.active_provider;
-        // Independent caps — one shared dynamic width made the bar look jumpy when labels
-        // swung from "Ollama" to "Claude Code (ACP)" / long model ids.
-        let (provider_w, model_w) = composer_selector_widths(narrow, compact);
-        let model_chars = if compact {
-            10usize
-        } else if narrow {
-            14
-        } else {
-            18
-        };
-
-        quiet_combo(ui, provider_w, |ui| {
-            let label = composer_provider_label(active_provider);
-            let resp = ComboBox::from_id_salt("provider_combo")
-                .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
-                .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(0.0)
-                .truncate()
-                .height(300.0)
-                .show_ui(ui, |ui| {
-                    ui.set_min_width(COMBO_POPUP_MIN_W);
-                    // Only while the popup is open: this clones the secrets blob and probes a
-                    // legacy file, far too much work for every frame.
-                    let oauth = crate::oauth::load_oauth_store();
-                    let configured = self.conv.settings.configured_provider_kinds(&oauth);
-                    for (index, (group_label, providers)) in composer_provider_groups(&configured)
-                        .into_iter()
-                        .enumerate()
-                    {
-                        if index > 0 {
-                            ui.separator();
-                        }
-                        ui.label(
-                            RichText::new(group_label)
-                                .size(FS_TINY)
-                                .color(c_text_faint())
-                                .strong(),
-                        );
-                        for kind in providers {
-                            let selected = active_provider == kind;
-                            if ui.selectable_label(selected, kind.label()).clicked() && !selected {
-                                self.set_active_session_provider(kind);
-                                self.save_settings_quietly();
-                                // Remote/local HF choices come from its downloaded-model list;
-                                // `/v1/models` only reports the one model currently loaded.
-                                if kind == crate::settings::LlmProviderKind::Router {
-                                    // Strategies, not models: nothing to fetch.
-                                } else if !matches!(
-                                    kind,
-                                    crate::settings::LlmProviderKind::LocalHf
-                                        | crate::settings::LlmProviderKind::RemoteHf
-                                ) {
-                                    self.spawn_model_fetch(ui.ctx(), kind);
-                                } else {
-                                    self.refresh_local_hf_model_choices();
-                                }
-                            }
-                        }
-                    }
-                });
-            resp.response
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(active_provider.label());
-        });
-
-        // Second dropdown: model within the active provider, populated from the fetched
-        // model list (falling back to just the current model id so it's never empty).
-        let kind = self.conv.settings.active_provider;
-        if kind == crate::settings::LlmProviderKind::Router {
-            self.render_router_strategy_selector(ui, model_w);
-            return;
-        }
-        let current = self.conv.settings.active_config().model_id.clone();
-        // Local HF's runtime endpoint only exposes the model currently loaded. Its
-        // composer dropdown must instead use every downloaded model, otherwise refreshing
-        // `/v1/models` makes all switch targets except the old running model disappear.
-        let fetched = if matches!(
-            kind,
-            crate::settings::LlmProviderKind::LocalHf | crate::settings::LlmProviderKind::RemoteHf
-        ) {
-            let downloaded = if kind == crate::settings::LlmProviderKind::RemoteHf {
-                &self.conv.local_models.remote_downloaded
-            } else {
-                &self.conv.local_models.downloaded
-            };
-            downloaded.iter().map(|m| m.id.clone()).collect()
-        } else {
-            self.conv
-                .fetched_models
-                .get(&kind)
-                .map(|f| f.models.clone())
-                .unwrap_or_default()
-        };
-        let items: Vec<String> = if !fetched.is_empty() {
-            fetched
-        } else if !current.is_empty() {
-            vec![current.clone()]
-        } else {
-            Vec::new()
-        };
-
-        let mut selected_model: Option<String> = None;
-        quiet_combo(ui, model_w, |ui| {
-            let label = short_model_label(&current, model_chars);
-            let resp = ComboBox::from_id_salt("active_model_combo")
-                .selected_text(RichText::new(label).size(FS_SMALL).color(c_text_muted()))
-                .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(0.0)
-                .truncate()
-                .height(300.0)
-                .show_ui(ui, |ui| {
-                    ui.set_min_width(COMBO_POPUP_MIN_W);
-                    for m in &items {
-                        // Full id in the popup so the user can tell near-duplicates apart;
-                        // the closed button keeps the short parsed form.
-                        if ui.selectable_label(m == &current, m.clone()).clicked() && m != &current
-                        {
-                            selected_model = Some(m.clone());
-                        }
-                    }
-                });
-            resp.response
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(&current);
-        });
-
-        if let Some(model_id) = selected_model {
-            if matches!(
-                kind,
-                crate::settings::LlmProviderKind::LocalHf
-                    | crate::settings::LlmProviderKind::RemoteHf
-            ) {
-                // HF selection is a runtime operation, not merely a config edit. Keep the
-                // currently active id until llama-server confirms that the replacement is
-                // healthy. Otherwise a failed remote switch leaves the failed id selected
-                // and the user cannot retry it from this combo without switching away first.
-                self.start_selected_local_hf_model(ui.ctx(), &model_id);
-            } else {
-                self.set_active_session_model(model_id);
-                self.save_settings_quietly();
-            }
-        }
-    }
-
-    /// Under the Router the model slot picks the routing strategy (stored as the Router's
-    /// `model_id`, so it is per chat like a model choice).
-    fn render_router_strategy_selector(&mut self, ui: &mut Ui, width: f32) {
-        use crate::settings::{LlmProviderKind, RouterStrategy};
-        let current = RouterStrategy::from_id(
-            &self
-                .conv
-                .settings
-                .provider(LlmProviderKind::Router)
-                .model_id,
-        );
-        let mut picked = None;
-        quiet_combo(ui, width, |ui| {
-            let resp = ComboBox::from_id_salt("router_strategy_combo")
-                .selected_text(
-                    RichText::new(current.label())
-                        .size(FS_SMALL)
-                        .color(c_text_muted()),
-                )
-                .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(0.0)
-                .truncate()
-                .show_ui(ui, |ui| {
-                    ui.set_min_width(COMBO_POPUP_MIN_W);
-                    for strategy in RouterStrategy::ALL {
-                        if ui
-                            .selectable_label(strategy == current, strategy.label())
-                            .on_hover_text(strategy.description())
-                            .clicked()
-                            && strategy != current
-                        {
-                            picked = Some(strategy);
-                        }
-                    }
-                });
-            resp.response
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text(current.description());
-        });
-        if let Some(strategy) = picked {
-            self.set_active_session_model(strategy.id().to_string());
-            self.save_settings_quietly();
-        }
-    }
-
-    /// Compact thinking/reasoning selector beside the active model. ACP adapters receive this
-    /// through `session/set_config_option`; HTTP providers use their native effort field.
-    fn active_provider_supports_effort(&self) -> bool {
-        matches!(
-            self.conv.settings.active_provider,
-            crate::settings::LlmProviderKind::CustomAnthropic
-                | crate::settings::LlmProviderKind::ClaudeCodeAcp
-                | crate::settings::LlmProviderKind::OpenAi
-                | crate::settings::LlmProviderKind::GptCodex
-                | crate::settings::LlmProviderKind::OpenCodeGo
-                | crate::settings::LlmProviderKind::AzureOpenAi
-                | crate::settings::LlmProviderKind::CodexAcp
-                | crate::settings::LlmProviderKind::CursorAcp
-        )
-    }
-
-    /// Width the controls need on a single row: the fixed-width selectors plus the round
-    /// buttons. The right-side extras (speed, context ring, hint) are left out because they
-    /// already hide themselves when space runs short.
-    fn composer_single_row_width(&self, narrow: bool, compact: bool) -> f32 {
-        const COMBO_PAD: f32 = 22.0;
-        const GAP: f32 = 6.0;
-        let (provider_w, model_w) = composer_selector_widths(narrow, compact);
-        let mut width =
-            ATTACH_DIAM + provider_w + model_w + 2.0 * COMBO_PAD + SEND_DIAM + 4.0 * GAP;
-        if self.active_provider_supports_effort() && !compact {
-            width += EFFORT_W + COMBO_PAD + GAP;
-        }
-        if self.plan_mode_on() {
-            width += if compact { 34.0 } else { 72.0 } + GAP;
-        }
-        if self.conv.settings.dictation.enabled {
-            width += SEND_DIAM + GAP;
-        }
-        width
-    }
-
-    fn render_effort_selector(&mut self, ui: &mut Ui, compact: bool) {
-        let kind = self.conv.settings.active_provider;
-        let is_anthropic = matches!(
-            kind,
-            crate::settings::LlmProviderKind::CustomAnthropic
-                | crate::settings::LlmProviderKind::ClaudeCodeAcp
-        );
-        if !self.active_provider_supports_effort() || compact {
-            return;
-        }
-        let values: &[(&str, &str)] = if is_anthropic {
-            &[
-                ("", "Auto"),
-                ("low", "Low"),
-                ("medium", "Medium"),
-                ("high", "High"),
-                ("xhigh", "XHigh"),
-                ("max", "Max"),
-            ]
-        } else {
-            &[
-                ("", "Auto"),
-                ("low", "Low"),
-                ("medium", "Medium"),
-                ("high", "High"),
-            ]
-        };
-        let current = self.conv.settings.provider(kind).effort.clone();
-        let selected = values
-            .iter()
-            .find(|(value, _)| *value == current)
-            .map(|(_, label)| *label)
-            .unwrap_or("Auto");
-        let mut changed = None;
-        // Short labels so this doesn't grow with "Thinking: …"; capped at EFFORT_W.
-        quiet_combo(ui, EFFORT_W, |ui| {
-            ComboBox::from_id_salt("active_effort_combo")
-                .selected_text(RichText::new(selected).size(FS_SMALL).color(c_text_muted()))
-                .icon(crate::ui::chrome::combo_chevron_icon)
-                .width(0.0)
-                .truncate()
-                .show_ui(ui, |ui| {
-                    ui.set_min_width(COMBO_POPUP_MIN_W);
-                    for (value, label) in values {
-                        if ui.selectable_label(current == *value, *label).clicked() {
-                            changed = Some((*value).to_string());
-                        }
-                    }
-                })
-                .response
-                .on_hover_text("Thinking / reasoning level");
-        });
-        if let Some(effort) = changed {
-            self.set_active_session_effort(effort);
-            self.save_settings_quietly();
-        }
-    }
-
     /// Image attachment thumbnails shown at the top of the composer, each with a
     /// corner remove button (Cursor-style).
     pub(crate) fn render_attachment_thumbnails(&mut self, ui: &mut Ui) {
@@ -938,38 +607,46 @@ impl OxiApp {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
             for (i, (mime, data)) in self.conv.pending_images.iter().enumerate() {
                 let tex = composer_thumb_texture(ui, data);
-                let frame = Frame::new()
-                    .fill(c_bg_input())
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP))
-                    .inner_margin(Margin::same(0))
-                    .show(ui, |ui| {
-                        if let Some(tex) = tex {
-                            let mut sz = tex.size_vec2();
-                            if sz.y > 0.0 {
-                                sz *= THUMB_H / sz.y;
-                            }
-                            if sz.x > THUMB_MAX_W {
-                                sz *= THUMB_MAX_W / sz.x;
-                            }
-                            ui.add(
-                                Image::new((tex.id(), sz))
-                                    .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP)),
-                            );
-                        } else {
-                            let short = mime.strip_prefix("image/").unwrap_or(mime.as_str());
-                            ui.allocate_ui(egui::vec2(THUMB_H * 1.6, THUMB_H), |ui| {
-                                ui.centered_and_justified(|ui| {
-                                    ui.label(
-                                        RichText::new(short).size(FS_TINY).color(c_text_muted()),
-                                    );
-                                });
-                            });
+                let size = match &tex {
+                    Some(tex) => {
+                        let mut sz = tex.size_vec2();
+                        if sz.y > 0.0 {
+                            sz *= THUMB_H / sz.y;
                         }
-                    });
+                        if sz.x > THUMB_MAX_W {
+                            sz *= THUMB_MAX_W / sz.x;
+                        }
+                        sz
+                    }
+                    None => egui::vec2(THUMB_H * 1.6, THUMB_H),
+                };
+                // Allocated at its final size so the row wraps: a `Frame` is placed before its
+                // size is known, so many images ran off the right and widened the composer.
+                let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+                let radius = CornerRadius::same(crate::theme::RADIUS_CHIP);
+                ui.painter().rect_filled(rect, radius, c_bg_input());
+                if let Some(tex) = tex {
+                    Image::new((tex.id(), size))
+                        .corner_radius(radius)
+                        .paint_at(ui, rect);
+                } else {
+                    let short = mime.strip_prefix("image/").unwrap_or(mime.as_str());
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        short,
+                        egui::FontId::proportional(FS_TINY),
+                        c_text_muted(),
+                    );
+                }
+                ui.painter().rect_stroke(
+                    rect,
+                    radius,
+                    Stroke::new(1.0, c_border()),
+                    egui::StrokeKind::Inside,
+                );
 
                 // Corner remove (×) overlay positioned over the top-right of the thumbnail.
-                let rect = frame.response.rect;
                 let x_pos = egui::pos2(rect.right() - 18.0, rect.top() + 4.0);
                 egui::Area::new(Id::new(("composer_thumb_x", i)))
                     .order(Order::Foreground)
