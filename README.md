@@ -1,17 +1,34 @@
-[![CI](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg)](https://github.com/maziluiosif/oxi/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-maziluiosif.github.io%2Foxi-e26a2c)](https://maziluiosif.github.io/oxi/)
+<p align="center">
+  <img src="assets/app-icon.png" alt="" width="96" />
+</p>
 
-# oxi
+<h1 align="center">oxi</h1>
 
-A native, local-first coding agent. One Rust binary, no Electron, ~110 MB idle.
+<p align="center">
+  <b>The native coding agent for any model.</b><br />
+  Run open models on your own machine, or bring the Claude Code, Codex or Cursor subscription you already pay for.<br />
+  One Rust binary. No Electron, no account, around 110 MB of RAM.
+</p>
 
-- **Run models locally:** pick a GGUF from HuggingFace and oxi downloads it, installs `llama-server` and runs it, on this machine or on a GPU box over SSH. LM Studio and Ollama work too.
-- **Or use what you already pay for:** Claude Code, Cursor and Codex CLI over ACP, ChatGPT/Codex sign-in, or any hosted API.
-- **A real workspace:** file explorer, code editor, Git panel and terminal next to the chat.
-- **No extra keys:** web search through DuckDuckGo, Bing or your own SearXNG, and local Whisper voice dictation.
+<p align="center">
+  <a href="#install"><b>Install</b></a> ·
+  <a href="https://maziluiosif.github.io/oxi/">Website</a> ·
+  <a href="#what-you-get">Features</a> ·
+  <a href="https://github.com/maziluiosif/oxi/releases/latest">Latest release</a>
+</p>
 
-![oxi demo](assets/demo/demo.gif)
+<p align="center">
+  <a href="https://github.com/maziluiosif/oxi/releases/latest"><img src="https://img.shields.io/github/v/release/maziluiosif/oxi?color=e26a2c&label=release" alt="Latest release" /></a>
+  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-555" alt="macOS, Linux and Windows" />
+  <a href="https://github.com/maziluiosif/oxi/actions/workflows/ci.yml"><img src="https://github.com/maziluiosif/oxi/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="MIT license" /></a>
+</p>
+
+<p align="center">
+  <a href="https://maziluiosif.github.io/oxi/#demo"><img src="assets/demo/demo.gif" alt="A one-minute tour of oxi: local models, providers, the agent fixing a failing test, reviewing the diff, committing, plan mode and themes" /></a>
+  <br />
+  <sub>One-minute tour, recorded from the real app. <a href="https://maziluiosif.github.io/oxi/#demo">Watch it in HD</a>.</sub>
+</p>
 
 ## Install
 
@@ -27,10 +44,10 @@ curl -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
 irm https://maziluiosif.github.io/oxi/install.ps1 | iex
 ```
 
-To update, run `oxi update` (or `oxi update v1.8.0` for a specific release), or the same install command again. Then start oxi from your apps menu, or run `oxi` inside a project folder to open it as your workspace.
+Then run `oxi` inside a project folder, or open it from your apps menu. To update, run `oxi update` or the same command again.
 
 <details>
-<summary>Other ways to install</summary>
+<summary>Homebrew, manual download, install options</summary>
 
 ### Homebrew (macOS, Linux)
 
@@ -45,8 +62,6 @@ xattr -cr /Applications/oxi.app   # macOS only, once after installing
 Get the archive for your platform from [Releases](https://github.com/maziluiosif/oxi/releases) and extract it. On macOS, move `oxi.app` to `/Applications` and run `xattr -cr /Applications/oxi.app` once, because the app is not notarized by Apple. On Windows, click **More info → Run anyway** the first time.
 
 ### Install options
-
-The install scripts accept a few environment variables:
 
 | Variable | Effect |
 |---|---|
@@ -83,26 +98,51 @@ Also install Visual Studio Build Tools with the **Desktop development with C++**
 
 </details>
 
-## What it does
+## Your first five minutes
 
-![oxi running tests, reading a file and showing its edit as a diff](assets/screenshots/agent-run.png)
+1. **Open a project.** Run `oxi` in its folder, or use **Open folder…** in the sidebar.
+2. **Pick a model** in Settings → Models & providers:
+   - **Free and private:** choose **Local HF**, click **Install runtime**, download a model (the usual choice is marked) and click **Run**.
+   - **Already have Claude Code, Codex or Cursor?** Choose it under External agents and click **Make active**. It uses your existing login.
+   - **Have an API key?** Paste it under OpenAI, OpenRouter, Anthropic-compatible and others.
+3. **Ask for something real:** *"Run the tests and fix the failing one."* For bigger changes, type `/plan` first.
 
-- **Agent with workspace tools:** reads, searches and edits code, runs checks, looks at Git diffs, searches the web and calls your MCP servers. File changes and shell commands can ask for approval first.
-- **Plan mode:** type `/plan` to let the agent investigate without changing anything, then click **Implement plan**.
-- **Editor:** multiple tabs, syntax highlighting, minimap, find and replace, Git changes inline.
-- **Git panel:** stage, commit, branch, pull and push, with AI commit messages.
-- **Terminal:** a shell rooted in your workspace.
-- **Sessions:** chats are saved per workspace and stay on your machine.
-- **Voice dictation:** local Whisper, nothing leaves your computer.
-- **Themes:** Dark, Light, Midnight, Sublime and Sublime 4.
+## What you get
 
-| Review in the editor | Local models |
-|---|---|
-| ![oxi editor with changed lines highlighted next to the Git panel](assets/screenshots/editor-git.png) | ![oxi Local HF setup with the runtime installed and a model running](assets/screenshots/local-models.png) |
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/screenshots/stage-local-models.png" alt="Local HF setup with the runtime installed and a Qwen model running" />
+      <b>Local models, set up for you.</b> Pick a GGUF from HuggingFace and oxi installs <code>llama-server</code>, downloads it and runs it, here or on a GPU box over SSH. LM Studio and Ollama work too.
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/screenshots/stage-router.png" alt="Router settings" />
+      <b>Any provider, or all of them.</b> Claude Code, Codex and Cursor over ACP, ChatGPT sign-in, or any API. The Router picks one per task and switches when a quota runs out.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/screenshots/stage-agent.png" alt="The agent running tests, reading a file and editing it" />
+      <b>An agent that shows its work.</b> It reads, searches and edits code, runs commands, searches the web and calls your MCP servers. Edits and commands can ask for approval first.
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/screenshots/stage-review.png" alt="Side-by-side diff with Stage and Discard buttons on a change" />
+      <b>Review in a real diff editor.</b> Side by side or inline, editable, with Stage and Discard on every block. Go to definition, find and replace, minimap and tabs.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/screenshots/stage-git.png" alt="Git panel with a new commit in the history" />
+      <b>Git built in.</b> Stage, commit, branch, compare, pull and push, with AI-written commit messages. A terminal rooted in your workspace sits one click away.
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/screenshots/stage-plan.png" alt="A plan with the Implement plan button" />
+      <b>Plan first, then build.</b> <code>/plan</code> investigates without changing a file, with a live checklist. One click implements it.
+    </td>
+  </tr>
+</table>
 
-| Remote compute over SSH | Dark theme |
-|---|---|
-| ![Remote SSH compute target settings](assets/screenshots/ssh-remote-compute.png) | ![oxi Dark theme](assets/screenshots/theme-dark.png) |
+Also: chats saved per workspace, local Whisper voice dictation, web search without an API key (DuckDuckGo, Bing or your SearXNG), custom system prompts, `AGENTS.md` support, and five themes (Dark, Light, Midnight, Sublime, Sublime 4).
 
 ## Models and providers
 

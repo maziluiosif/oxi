@@ -1,8 +1,9 @@
 //! Scripted product demo, rendered offscreen from the real UI.
 //!
-//! `scripts/render-demo.sh` runs this ignored test and turns the frames into the website video
-//! and the README GIF. The agent's turn is scripted (no model is called), but its tools run for
-//! real against a generated sample project, so the test output and the diff are genuine.
+//! `scripts/render-demo.sh` runs the ignored `record_demo` test, a guided tour composed on a
+//! stage (see `stage`), and turns it into the website video and the README GIF. The agent's
+//! turns are scripted (no model is called), but their tools run for real against a generated
+//! sample project, so the test output and the diffs are genuine.
 //!
 //! Isolation: the process uses a throwaway `HOME` and an in-memory credential store, so it
 //! never touches the user's settings, chats or keychain.
@@ -14,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Event};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
 use super::OxiApp;
@@ -23,7 +24,9 @@ use crate::agent::{AgentEvent, AgentOutcome, TokenUsage};
 use crate::model::{AssistantBlock, ChatMessage, MsgRole};
 use crate::settings::LlmProviderKind;
 
-const FPS: u64 = 20;
+mod stage;
+
+const FPS: u64 = 30;
 const FRAME: Duration = Duration::from_millis(1000 / FPS);
 const SIZE: egui::Vec2 = egui::vec2(1240.0, 780.0);
 const SCALE: f32 = 2.0;
@@ -83,9 +86,13 @@ if __name__ == "__main__":
 #[test]
 #[ignore = "renders the website demo; run through scripts/render-demo.sh"]
 fn record_demo() {
-    let out = PathBuf::from(std::env::var("OXI_DEMO_FRAMES").expect("OXI_DEMO_FRAMES"));
+    let video = PathBuf::from(std::env::var("OXI_DEMO_VIDEO").expect("OXI_DEMO_VIDEO"));
     let stills = std::env::var_os("OXI_DEMO_STILLS").map(PathBuf::from);
-    run_demo(Some(out), stills);
+    let mut rec = setup(stills, Some(&video));
+    tour(&mut rec);
+    if let Some(stage) = rec.stage.take() {
+        stage.finish();
+    }
 }
 
 /// Every key screen as a still, without the video frames or real-time pacing. Used to review UI
@@ -94,18 +101,18 @@ fn record_demo() {
 #[ignore = "renders UI review stills; set OXI_GALLERY to the output folder"]
 fn render_gallery() {
     let stills = PathBuf::from(std::env::var("OXI_GALLERY").expect("OXI_GALLERY"));
-    run_demo(None, Some(stills));
+    let mut rec = setup(Some(stills), None);
+    run_gallery(&mut rec);
 }
 
-fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
+/// A fresh sample project, throwaway home and seeded app. With `video`, frames are composed on
+/// the stage and encoded there, paced to `FPS`.
+fn setup(stills: Option<PathBuf>, video: Option<&Path>) -> Recorder<'static> {
     let scratch = std::env::temp_dir().join(format!("oxi-demo-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     let home = scratch.join("home");
     let project = scratch.join("Projects").join("stats-kit");
     std::fs::create_dir_all(&home).unwrap();
-    if let Some(out) = &out {
-        std::fs::create_dir_all(out).unwrap();
-    }
     if let Some(stills) = &stills {
         std::fs::create_dir_all(stills).unwrap();
     }
@@ -120,10 +127,15 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     seed_settings();
     seed_chats(&project);
 
-    let harness = Harness::builder()
+    let mut builder = Harness::builder()
         .with_size(SIZE)
-        .with_pixels_per_point(SCALE)
-        .wgpu()
+        .with_pixels_per_point(SCALE);
+    if video.is_some() {
+        // Real-time animations: one step per video frame.
+        builder = builder.with_step_dt(1.0 / FPS as f32);
+    }
+    let harness = builder
+        .renderer(NoCursor(egui_kittest::wgpu::WgpuTestRenderer::new()))
         .build_eframe(|cc| {
             let mut app = OxiApp::new();
             crate::theme::apply_theme(&cc.egui_ctx, &app.conv.settings.theme_id);
@@ -133,9 +145,9 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             app.new_chat();
             app
         });
-    let mut rec = Recorder {
+    Recorder {
         harness,
-        out,
+        stage: video.map(|video| stage::Stage::new(video, FPS, TOUR_CHAPTERS.to_vec())),
         stills,
         frame: 0,
         project: project.clone(),
@@ -149,29 +161,33 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
             undo_journal: None,
             subagent: None,
         },
-    };
+    }
+}
 
+fn run_gallery(rec: &mut Recorder<'_>) {
+    let project = rec.project.clone();
+    let rec = &mut *rec;
     if std::env::var_os("OXI_WORKTREE_REVIEW").is_some() {
-        review_worktree_sidebar(&mut rec);
+        review_worktree_sidebar(rec);
         return;
     }
 
     if std::env::var_os("OXI_PICKER_REVIEW").is_some() {
-        review_composer_pickers(&mut rec);
+        review_composer_pickers(rec);
         return;
     }
 
     if std::env::var_os("OXI_COMPOSER_REVIEW").is_some() {
-        review_composer_typing(&mut rec);
+        review_composer_typing(rec);
         return;
     }
 
     if std::env::var_os("OXI_ACP_REVIEW").is_some() {
-        review_acp_ui(&mut rec);
+        review_acp_ui(rec);
         return;
     }
 
-    let gallery = rec.out.is_none();
+    let gallery = true;
     // 1. The model is already downloaded and running: the guided Local HF setup.
     rec.harness.run_steps(4);
     if gallery {
@@ -275,6 +291,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     }
     rec.hold(2.6);
     rec.still("local-models");
+    rec.framed_still("local-models");
     {
         let app = rec.app();
         app.conv.settings_page.open = false;
@@ -309,39 +326,9 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     rec.hold(0.5);
 
     // 3. The agent works through it with real tools.
-    rec.stream_thinking(
-        "The user wants the failing test fixed. I'll run the suite first to see which test \
-         fails and why.",
-    );
-    rec.tool(
-        "call_1",
-        "bash",
-        json!({ "command": "python3 -m unittest -q" }),
-        1.2,
-    );
-    rec.stream_text(
-        "`test_median_even_length` fails: `median([1, 2, 3, 4])` returns `3` instead of \
-         `2.5`. With an even number of values the median is the mean of the two middle \
-         ones. Let me look at the implementation.\n\n",
-    );
-    rec.tool("call_2", "read", json!({ "path": "stats.py" }), 0.6);
-    rec.stream_thinking(
-        "median() always returns the upper middle element. For even lengths it should \
-         average ordered[mid - 1] and ordered[mid].",
-    );
-    rec.tool(
-        "call_3",
-        "edit",
-        json!({
-            "path": "stats.py",
-            "edits": [{
-                "oldText": "    return ordered[len(ordered) // 2]",
-                "newText": "    mid = len(ordered) // 2\n    if len(ordered) % 2 == 0:\n        return (ordered[mid - 1] + ordered[mid]) / 2\n    return ordered[mid]",
-            }],
-        }),
-        0.7,
-    );
+    fix_turn_tools(rec);
     rec.still("agent-run");
+    rec.framed_still("agent");
     if gallery {
         for id in ["call_1", "call_2"] {
             let persist =
@@ -368,17 +355,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     }
     crate::theme::apply_theme(&rec.harness.ctx, "mariana");
     rec.harness.run_steps(3);
-    rec.tool(
-        "call_4",
-        "bash",
-        json!({ "command": "python3 -m unittest -q" }),
-        1.0,
-    );
-    rec.stream_text(
-        "Fixed `median()` in `stats.py`: for an even number of values it now averages the \
-         two middle elements.\n\nAll 5 tests pass.",
-    );
-    rec.finish_turn();
+    fix_turn_finish(rec);
     rec.hold(2.2);
     rec.still("chat");
     if gallery {
@@ -925,6 +902,7 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
         rec.finish_turn();
         rec.hold(1.0);
         rec.still("plan-ready");
+        rec.framed_still("plan");
         assert!(rec.harness.query_by_label("Implement plan").is_some());
         let message_count = rec.app().active_session().messages.len();
         rec.app().conv.composer.editing_last_prompt = Some(super::state::PromptEditState {
@@ -943,10 +921,345 @@ fn run_demo(out: Option<PathBuf>, stills: Option<PathBuf>) {
     }
 }
 
+/// The scripted fix: run the suite, read the culprit, edit it.
+fn fix_turn_tools(rec: &mut Recorder<'_>) {
+    rec.stream_thinking(
+        "The user wants the failing test fixed. I'll run the suite first to see which test \
+         fails and why.",
+    );
+    rec.tool(
+        "call_1",
+        "bash",
+        json!({ "command": "python3 -m unittest -q" }),
+        1.2,
+    );
+    rec.stream_text(
+        "`test_median_even_length` fails: `median([1, 2, 3, 4])` returns `3` instead of \
+         `2.5`. With an even number of values the median is the mean of the two middle \
+         ones. Let me look at the implementation.\n\n",
+    );
+    rec.tool("call_2", "read", json!({ "path": "stats.py" }), 0.6);
+    rec.stream_thinking(
+        "median() always returns the upper middle element. For even lengths it should \
+         average ordered[mid - 1] and ordered[mid].",
+    );
+    rec.tool(
+        "call_3",
+        "edit",
+        json!({
+            "path": "stats.py",
+            "edits": [{
+                "oldText": "    return ordered[len(ordered) // 2]",
+                "newText": "    mid = len(ordered) // 2\n    if len(ordered) % 2 == 0:\n        return (ordered[mid - 1] + ordered[mid]) / 2\n    return ordered[mid]",
+            }],
+        }),
+        0.7,
+    );
+}
+
+/// The rest of the fix: the suite passes, the agent sums up.
+fn fix_turn_finish(rec: &mut Recorder<'_>) {
+    rec.tool(
+        "call_4",
+        "bash",
+        json!({ "command": "python3 -m unittest -q" }),
+        1.0,
+    );
+    rec.stream_text(
+        "Fixed `median()` in `stats.py`: for an even number of values it now averages the \
+         two middle elements.\n\nAll 5 tests pass.",
+    );
+    rec.finish_turn();
+}
+
+const TOUR_CHAPTERS: [&str; 7] = [
+    "Local models",
+    "Any provider",
+    "Agent",
+    "Review",
+    "Git",
+    "Plan mode",
+    "Themes",
+];
+
+/// The product video: one pass over the main features, a chapter each.
+fn tour(rec: &mut Recorder<'_>) {
+    {
+        let app = rec.app();
+        app.open_settings_page();
+        app.conv.settings_page.provider_tab = LlmProviderKind::LocalHf;
+    }
+    rec.harness.run_steps(6);
+    rec.card(Some(stage::Card::Intro), true);
+    rec.hold(2.4);
+
+    // 1. Local models.
+    rec.card(Some(stage::Card::Intro), false);
+    rec.chapter(
+        0,
+        "Run open models on your own machine",
+        "Pick a GGUF from HuggingFace. oxi installs llama.cpp, downloads the model and runs it.",
+    );
+    rec.hold(4.2);
+    rec.still("local-models");
+    rec.framed_still("local-models");
+
+    // 2. Providers: ACP agents and the Router.
+    crate::router::quota::set_snapshot_for_tests(
+        LlmProviderKind::ClaudeCodeAcp,
+        crate::router::quota::QuotaSnapshot {
+            windows: vec![
+                crate::router::quota::UsageWindow {
+                    label: "5h".into(),
+                    used_pct: 32.0,
+                    resets_at: Some(crate::router::quota::now_secs() + 4_200),
+                    model_scope: None,
+                },
+                crate::router::quota::UsageWindow {
+                    label: "7d".into(),
+                    used_pct: 61.0,
+                    resets_at: Some(crate::router::quota::now_secs() + 200_000),
+                    model_scope: None,
+                },
+            ],
+            plan: Some("max".into()),
+            source: "Claude usage (Claude Code login)".into(),
+            updated_at: crate::router::quota::now_secs(),
+            ..Default::default()
+        },
+    );
+    rec.crossfade(0.4);
+    {
+        let app = rec.app();
+        app.conv.settings_page.tab = super::state::SettingsTab::Providers;
+        app.conv.settings_page.provider_tab = LlmProviderKind::ClaudeCodeAcp;
+    }
+    rec.chapter(
+        1,
+        "Or use the subscription you already pay for",
+        "Claude Code, Codex and Cursor over ACP, ChatGPT sign-in, or any OpenAI-compatible API.",
+    );
+    rec.hold(3.4);
+    rec.still("providers-acp");
+    rec.crossfade(0.4);
+    rec.app().conv.settings_page.provider_tab = LlmProviderKind::Router;
+    rec.chapter(
+        1,
+        "Let the Router pick for every task",
+        "It sends each request to the right provider, and switches when a quota runs out.",
+    );
+    rec.hold(3.6);
+    rec.still("providers-router");
+    rec.framed_still("router");
+
+    // 3. The agent fixes a failing test.
+    rec.crossfade(0.4);
+    {
+        let app = rec.app();
+        app.conv.settings_page.open = false;
+        app.conv.settings_page.original = None;
+        app.conv.composer.focus_next_frame = true;
+    }
+    rec.chapter(
+        2,
+        "Ask, and watch it work",
+        "It runs your tests, reads the code and fixes it, with every step in view.",
+    );
+    rec.hold(1.2);
+    rec.type_text("Run the tests and fix the failing one", 1);
+    rec.hold(0.4);
+    rec.begin_turn("Run the tests and fix the failing one");
+    rec.hold(0.5);
+    fix_turn_tools(rec);
+    rec.still("agent-run");
+    rec.framed_still("agent");
+    fix_turn_finish(rec);
+    rec.hold(2.0);
+    rec.still("chat");
+
+    // 4. Review the change in the diff editor.
+    rec.crossfade(0.4);
+    {
+        let app = rec.app();
+        // Wide enough for the split view.
+        app.conv.git_ui.open = false;
+        assert!(app.open_diff_editor(
+            "stats.py",
+            crate::app::file_explorer::DiffSource::WorkTree,
+            None
+        ));
+    }
+    rec.wait_for_diff_editor();
+    rec.chapter(
+        3,
+        "Review every change side by side",
+        "The diff is a real editor. Stage or discard any block with one click.",
+    );
+    rec.hold(1.0);
+    // Over the end of the changed line, clear of its text.
+    let change = rec.diff_change_point(0) + egui::vec2(250.0, 0.0);
+    rec.move_pointer(change, 0.9);
+    rec.hold(2.4);
+    rec.still("diff-review");
+    rec.framed_still("review");
+    rec.crossfade(0.35);
+    rec.app().conv.editor.diff_inline = true;
+    rec.chapter(
+        3,
+        "Split or inline, your call",
+        "Word-level highlights, an overview ruler, and F7 to jump between changes.",
+    );
+    rec.hold(2.8);
+    rec.pointer(None);
+    rec.crossfade(0.4);
+    {
+        let app = rec.app();
+        app.conv.editor.diff_inline = false;
+        app.conv.git_ui.open = true;
+    }
+
+    // 5. Stage and commit from the Git panel.
+    rec.chapter(
+        4,
+        "Commit without leaving the window",
+        "Stage, write a message (or let the model write it), then commit and push.",
+    );
+    rec.app()
+        .request(crate::git::GitOp::Stage(vec!["stats.py".into()]));
+    rec.hold(0.8);
+    if let Some(heading) = rec.label_center("Message") {
+        rec.move_pointer(heading + egui::vec2(60.0, 32.0), 0.7);
+        rec.click();
+    }
+    for word in "Fix median() for even-length input".split_inclusive(' ') {
+        rec.app().conv.git_ui.commit_message.push_str(word);
+        rec.hold(0.08);
+    }
+    rec.hold(0.6);
+    if let Some(button) = rec.label_center("Commit") {
+        rec.move_pointer(button, 0.6);
+        rec.click();
+    }
+    rec.hold(1.0);
+    rec.crossfade(0.35);
+    rec.app().conv.git_ui.tab = crate::app::git_panel::GitTab::History;
+    rec.hold(2.2);
+    rec.still("git-commit");
+    rec.framed_still("git");
+
+    // 6. Plan mode, with its live checklist.
+    rec.pointer(None);
+    rec.crossfade(0.4);
+    {
+        let app = rec.app();
+        app.conv.git_ui.tab = crate::app::git_panel::GitTab::Changes;
+        app.conv.git_ui.open = false;
+        app.conv.editor.documents.clear();
+        app.conv.editor.active = None;
+        app.new_chat();
+        let key = app.active_session_key();
+        app.run_state_mut(key).plan_mode = true;
+        app.conv.composer.focus_next_frame = true;
+    }
+    rec.chapter(
+        5,
+        "Plan first, then build",
+        "/plan investigates without touching a file, with a live checklist. One click to implement.",
+    );
+    rec.hold(0.8);
+    rec.type_text("Add CSV export to the stats report", 1);
+    rec.hold(0.3);
+    let key = rec.app().active_session_key();
+    rec.app().run_state_mut(key).last_turn_planned = true;
+    rec.begin_turn("Add CSV export to the stats report");
+    rec.stream_thinking("I'll map how reports are produced before proposing changes.");
+    let todos = |done: usize| {
+        let items = [
+            "Map how reports are rendered",
+            "Find where output formats are chosen",
+            "Draft the CSV writer and CLI flag",
+            "List tests to add",
+        ];
+        json!({"todos": items.iter().enumerate().map(|(i, item)| json!({
+            "content": item,
+            "status": if i < done { "completed" } else if i == done { "in_progress" } else { "pending" },
+        })).collect::<Vec<_>>()})
+    };
+    rec.tool("todo1", "todo_write", todos(0), 0.3);
+    rec.tool("call_p1", "read", json!({ "path": "stats.py" }), 0.6);
+    rec.tool("todo2", "todo_write", todos(2), 0.3);
+    rec.tool("todo3", "todo_write", todos(4), 0.3);
+    rec.stream_text(
+        "## Plan\n\n1. Add `write_csv(report, path)` next to `mean`, `median` and \
+         `percentile` in `stats.py`.\n2. Add a `--format csv` flag to the report command.\n\
+         3. Tests: round-trip a small report through `csv.reader`.\n",
+    );
+    rec.finish_turn();
+    rec.hold(0.8);
+    if let Some(button) = rec.label_center("Implement plan") {
+        rec.move_pointer(button, 0.8);
+    }
+    rec.hold(2.2);
+    rec.still("plan-ready");
+    rec.framed_still("plan");
+
+    // 7. Themes.
+    rec.pointer(None);
+    rec.chapter(
+        6,
+        "Make it yours",
+        "Five themes, your own MCP servers, keyless web search and local voice dictation.",
+    );
+    for theme in ["light", "midnight", "sublime", "dark", "mariana"] {
+        rec.crossfade(0.3);
+        crate::theme::apply_theme(&rec.harness.ctx, theme);
+        rec.hold(1.25);
+        rec.still(&format!("theme-{theme}"));
+    }
+
+    // Outro: how to get it.
+    rec.card(Some(stage::Card::Outro), true);
+    rec.hold(1.2);
+    rec.framed_still("outro");
+    rec.hold(3.4);
+}
+
+/// The wgpu renderer minus the triangle kittest paints at the pointer: the video draws its own
+/// pointer, and stills are screenshots.
+struct NoCursor(egui_kittest::wgpu::WgpuTestRenderer);
+
+impl egui_kittest::TestRenderer for NoCursor {
+    fn setup_eframe(&self, cc: &mut eframe::CreationContext<'_>, frame: &mut eframe::Frame) {
+        self.0.setup_eframe(cc, frame);
+    }
+
+    fn handle_delta(&mut self, delta: &egui::TexturesDelta) {
+        self.0.handle_delta(delta);
+    }
+
+    fn render(
+        &mut self,
+        ctx: &egui::Context,
+        output: &egui::FullOutput,
+    ) -> Result<image::RgbaImage, String> {
+        let pointer = ctx.input(|i| i.pointer.hover_pos());
+        let is_cursor = |shape: &egui::epaint::ClippedShape| {
+            matches!(&shape.shape, egui::Shape::Path(path)
+                if path.points.len() == 3 && Some(path.points[0]) == pointer)
+        };
+        if output.shapes.last().is_some_and(is_cursor) {
+            let mut output = output.clone();
+            output.shapes.pop();
+            return self.0.render(ctx, &output);
+        }
+        self.0.render(ctx, output)
+    }
+}
+
 struct Recorder<'a> {
     harness: Harness<'a, OxiApp>,
-    /// Video frames go here; `None` renders stills only, as fast as possible.
-    out: Option<PathBuf>,
+    /// Video frames are composed here; `None` renders stills only, as fast as possible.
+    stage: Option<stage::Stage>,
     stills: Option<PathBuf>,
     frame: usize,
     project: PathBuf,
@@ -963,14 +1276,14 @@ impl Recorder<'_> {
     fn shot(&mut self) {
         let started = Instant::now();
         self.harness.step();
-        let Some(out) = self.out.clone() else {
+        if self.stage.is_none() {
             return;
-        };
+        }
         let mut image = self.harness.render().expect("render frame");
         paint_traffic_lights(&mut image);
-        image
-            .save(out.join(format!("frame_{:05}.png", self.frame)))
-            .expect("save frame");
+        if let Some(stage) = &mut self.stage {
+            stage.frame(image);
+        }
         self.frame += 1;
         if let Some(rest) = FRAME.checked_sub(started.elapsed()) {
             std::thread::sleep(rest);
@@ -1445,6 +1758,116 @@ impl Recorder<'_> {
         panic!("git diff {title:?} never arrived");
     }
 
+    /// Move to `chapter` of the rail with a new headline (no-op without a stage).
+    fn chapter(&mut self, chapter: usize, title: &str, subtitle: &str) {
+        let Some(stage) = &mut self.stage else {
+            return;
+        };
+        let state = stage.state();
+        state.chapter = Some(chapter);
+        state.previous = state.headline.take();
+        state.headline = Some((title.to_owned(), subtitle.to_owned()));
+        state.headline_t = 0.0;
+    }
+
+    /// Show (`on`) or hide a title card over the window; with nothing shown yet it starts
+    /// fully covered.
+    fn card(&mut self, card: Option<stage::Card>, on: bool) {
+        let Some(stage) = &mut self.stage else {
+            return;
+        };
+        let first = stage.state().headline.is_none() && stage.state().card.is_none();
+        let state = stage.state();
+        state.card = card;
+        state.card_target = if on { 1.0 } else { 0.0 };
+        if first {
+            state.card_t = state.card_target;
+        }
+    }
+
+    /// Also save the next composed video frame as `stage-{name}.png` among the stills.
+    fn framed_still(&mut self, name: &str) {
+        if let (Some(stage), Some(dir)) = (&mut self.stage, &self.stills) {
+            stage.save_next = Some(dir.join(format!("stage-{name}.png")));
+        }
+        self.shot();
+    }
+
+    /// Blend the window from what is on screen now to what comes next.
+    fn crossfade(&mut self, seconds: f32) {
+        if let Some(stage) = &mut self.stage {
+            stage.crossfade((seconds * FPS as f32).round() as usize);
+        }
+    }
+
+    fn pointer(&mut self, at: Option<egui::Pos2>) {
+        if at.is_none() {
+            self.harness.event(Event::PointerGone);
+        }
+        if let Some(stage) = &mut self.stage {
+            stage.pointer = at;
+        }
+    }
+
+    /// Glide the pointer to `to` (window points), hovering what it passes over.
+    fn move_pointer(&mut self, to: egui::Pos2, seconds: f32) {
+        let from = self
+            .stage
+            .as_ref()
+            .and_then(|stage| stage.pointer)
+            .unwrap_or(egui::pos2(SIZE.x * 0.62, SIZE.y * 0.82));
+        let frames = ((seconds * FPS as f32).round() as usize).max(1);
+        for i in 1..=frames {
+            let t = stage::ease(i as f32 / frames as f32);
+            // A slight arc reads as a hand move rather than a robot's.
+            let lift = (t * std::f32::consts::PI).sin() * 18.0;
+            let at = from.lerp(to, t) - egui::vec2(0.0, lift);
+            self.harness.event(Event::PointerMoved(at));
+            self.pointer(Some(at));
+            self.shot();
+        }
+    }
+
+    /// Press and release the primary button where the pointer is.
+    fn click(&mut self) {
+        let Some(at) = self.stage.as_ref().and_then(|stage| stage.pointer) else {
+            return;
+        };
+        let button = |pressed| Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.harness.event(button(true));
+        if let Some(stage) = &mut self.stage {
+            stage.pointer_down = true;
+        }
+        self.hold(0.12);
+        self.harness.event(button(false));
+        if let Some(stage) = &mut self.stage {
+            stage.pointer_down = false;
+        }
+        self.hold(0.1);
+    }
+
+    /// Center of the first on-screen widget labeled `label` (after an icon, for icon
+    /// buttons), in window points.
+    fn label_center(&mut self, label: &str) -> Option<egui::Pos2> {
+        let scale = self.harness.ctx.pixels_per_point();
+        let rect = self
+            .harness
+            .query_all_by_label_contains(label)
+            .filter(|node| {
+                node.accesskit_node()
+                    .label()
+                    .is_some_and(|text| text == label || text.ends_with(&format!(" {label}")))
+            })
+            .map(|node| node.rect())
+            .next()?;
+        Some((rect.center().to_vec2() / scale).to_pos2())
+    }
+
     fn hold(&mut self, seconds: f32) {
         for _ in 0..(seconds * FPS as f32).round() as usize {
             self.shot();
@@ -1619,6 +2042,8 @@ fn create_project(project: &Path) {
     std::fs::write(project.join(".gitignore"), "__pycache__/\n").unwrap();
     for args in [
         &["init", "-q", "-b", "main"][..],
+        &["config", "user.name", "Ana Ionescu"],
+        &["config", "user.email", "ana@example.invalid"],
         &["add", "."],
         &[
             "-c",
