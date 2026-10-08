@@ -31,30 +31,41 @@ fn thinking_timer_id(msg_idx: usize, salt: usize) -> Id {
 /// frozen once and reused thereafter. State lives in egui *temp* memory (not persisted):
 /// `Instant` isn't serializable and, like the turn-level `started_at`, the timer only
 /// matters for the live session that produced it.
-fn thinking_elapsed(ui: &Ui, msg_idx: usize, salt: usize, live: bool) -> Option<Duration> {
+///
+/// The id is per message position, so every chat shares it: a live group that finds a frozen
+/// entry is a new group (another chat's) and restarts, and a frozen time is only shown for the
+/// text it was measured on.
+fn thinking_elapsed(
+    ui: &Ui,
+    msg_idx: usize,
+    salt: usize,
+    text: &str,
+    live: bool,
+) -> Option<Duration> {
+    type Timer = (Option<Instant>, Option<(Duration, u64)>);
     let id = thinking_timer_id(msg_idx, salt);
-    let (start, frozen): (Option<Instant>, Option<Duration>) = ui
+    let (start, frozen): Timer = ui
         .ctx()
         .data_mut(|d| d.get_temp(id).unwrap_or((None, None)));
     if live {
         let now = Instant::now();
+        let start = start.filter(|_| frozen.is_none());
         if start.is_none() {
-            ui.ctx().data_mut(|d| {
-                d.insert_temp::<(Option<Instant>, Option<Duration>)>(id, (Some(now), None))
-            });
+            ui.ctx()
+                .data_mut(|d| d.insert_temp::<Timer>(id, (Some(now), None)));
         }
         Some(now.duration_since(start.unwrap_or(now)))
     } else {
+        let hash = egui::util::hash(text);
         match frozen {
-            Some(d) => Some(d),
+            Some((d, frozen_hash)) => (frozen_hash == hash).then_some(d),
             None => {
                 // Transition frame: freeze from the recorded start (or nothing if we
                 // never saw it live, e.g. a freshly-reloaded done group).
                 let d = start.map(|s| s.elapsed());
-                if start.is_some() {
-                    ui.ctx().data_mut(|dmap| {
-                        dmap.insert_temp::<(Option<Instant>, Option<Duration>)>(id, (start, d))
-                    });
+                if let Some(d) = d {
+                    ui.ctx()
+                        .data_mut(|dmap| dmap.insert_temp::<Timer>(id, (start, Some((d, hash)))));
                 }
                 d
             }
@@ -235,7 +246,7 @@ pub(super) fn render_thinking_group_block(
     // saw the group streaming; once thinking ends it freezes once into "Thought for Xs".
     // The caption id (`persist_id`) switches with the live/done tag, so the expand state
     // resets to folded at the live→done transition.
-    let elapsed = thinking_elapsed(ui, msg_idx, salt, live);
+    let elapsed = thinking_elapsed(ui, msg_idx, salt, &combined, live);
 
     // Reserve the caption row up front at a fixed height (like the activity-summary row) so the
     // live label and the done caption occupy exactly the same space, and hover can tint the
