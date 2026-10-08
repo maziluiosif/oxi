@@ -8,6 +8,24 @@ pub fn paint_selection(painter: &egui::Painter, rects: &[egui::Rect], fill: egui
 }
 
 pub fn selection_shape(rects: &[egui::Rect], fill: egui::Color32) -> egui::Shape {
+    // Rows apart (a diff's gap rows between them) get separate contours, so the selection does
+    // not bridge and cover what sits between them.
+    let mut shapes = Vec::new();
+    let mut start = 0;
+    for index in 1..=rects.len() {
+        if index == rects.len() || rects[index].top() - rects[index - 1].bottom() > 0.5 {
+            shapes.push(contiguous_selection_shape(&rects[start..index], fill));
+            start = index;
+        }
+    }
+    match shapes.len() {
+        0 => egui::Shape::Noop,
+        1 => shapes.pop().unwrap_or(egui::Shape::Noop),
+        _ => egui::Shape::Vec(shapes),
+    }
+}
+
+fn contiguous_selection_shape(rects: &[egui::Rect], fill: egui::Color32) -> egui::Shape {
     let mut shapes = Vec::new();
     const RADIUS: f32 = 2.0;
     let Some(first) = rects.first() else {

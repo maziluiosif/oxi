@@ -3,16 +3,31 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>oxi: a native, local-first coding agent</title>
-  <meta name="description" content="oxi is a desktop coding agent built in Rust with egui. One native binary, around 110 MB idle. It downloads and runs GGUF models for you, connects to LM Studio, Ollama or a GPU box over SSH, and works with hosted APIs or your existing Claude Code, Cursor and Codex subscriptions over ACP." />
+  <title>oxi: the native coding agent for any model</title>
+  <meta name="description" content="oxi is a free, open-source desktop coding agent built in Rust. Run open GGUF models on your own machine or a GPU box, or bring your Claude Code, Codex or Cursor subscription. Agent, diff review, Git and plan mode in one native window, around 110 MB of RAM." />
 
   <!-- Open Graph / social -->
-  <meta property="og:title" content="oxi: a native, local-first coding agent" />
-  <meta property="og:description" content="One Rust binary, around 110 MB idle. It downloads and runs GGUF models for you, locally or over SSH, and also talks to LM Studio, Ollama, hosted APIs, and agent CLIs over ACP." />
+  <meta property="og:title" content="oxi: the native coding agent for any model" />
+  <meta property="og:description" content="Run open models on your own machine, or bring the Claude Code, Codex or Cursor subscription you already pay for. One native Rust binary, free and open source." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://maziluiosif.github.io/oxi/" />
   <meta property="og:image" content="https://maziluiosif.github.io/oxi/media/poster.jpg" />
   <meta name="twitter:card" content="summary_large_image" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "oxi",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Linux, Windows",
+    "description": "A native, open-source desktop coding agent. Run open GGUF models locally or bring Claude Code, Codex or Cursor.",
+    "url": "https://maziluiosif.github.io/oxi/",
+    "downloadUrl": "https://github.com/maziluiosif/oxi/releases/latest",
+    "license": "https://opensource.org/licenses/MIT",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
 
   <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" />
 
@@ -120,14 +135,6 @@
     .btn-ghost { background: var(--card); color: var(--text); border-color: var(--border); }
     .hero-note { color: var(--muted); font-size: 0.85rem; }
 
-    /* App window frame around the demo */
-    .shot {
-      margin: 50px auto 0; max-width: 1040px; border: 1px solid var(--border); border-radius: 12px;
-      overflow: hidden; background: #22262e; position: relative;
-      box-shadow: 0 40px 100px -40px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.03) inset;
-    }
-    .shot video { width: 100%; aspect-ratio: 1600 / 1006; background: #22262e; }
-    .shot-caption { color: var(--muted); font-size: 0.85rem; margin-top: 14px; }
 
     /* Sections */
     section { padding: 88px 0; }
@@ -204,6 +211,75 @@
     .foot-inner { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
     .foot-links { display: flex; gap: 20px; }
 
+
+    /* Hero install line */
+    .quick-install {
+      display: flex; align-items: center; gap: 10px; max-width: 640px; margin: 0 auto 16px;
+      background: #0a0c0f; border: 1px solid var(--border); border-radius: 12px; padding: 6px 6px 6px 18px;
+      font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 0.9rem; color: #e6e9ef;
+      text-align: left;
+    }
+    @media (prefers-color-scheme: light) { .quick-install { background: #1c2027; } }
+    .quick-install .prompt { color: var(--rust-2); user-select: none; }
+    .quick-install code { flex: 1; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+    .quick-install code::-webkit-scrollbar { display: none; }
+    .copy {
+      font: inherit; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 0.82rem; font-weight: 650; color: #e6e9ef; background: #22272f; border: 1px solid #333a45;
+      border-radius: 8px; padding: 7px 12px; cursor: pointer; flex: none;
+    }
+    .copy:hover { background: #2b313b; }
+    .copy.done { color: #3fb97a; }
+    .os-switch { color: var(--muted); font-size: 0.85rem; margin-bottom: 26px; }
+    .os-switch button {
+      font: inherit; color: var(--muted); background: none; border: 0; padding: 0 2px; cursor: pointer;
+      text-decoration: underline; text-underline-offset: 3px;
+    }
+    .os-switch button[aria-pressed="true"] { color: var(--text); text-decoration: none; font-weight: 650; }
+
+    /* Demo player */
+    .player {
+      margin: 46px auto 0; max-width: 1120px; border-radius: 16px; overflow: hidden; position: relative;
+      border: 1px solid var(--border); background: #0b0d10; cursor: pointer;
+      box-shadow: 0 40px 120px -40px rgba(0,0,0,0.75);
+    }
+    .player video { width: 100%; aspect-ratio: 1920 / 1316; background: #0b0d10; }
+    .player .paused {
+      position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.25);
+    }
+    .player.is-paused .paused { display: flex; }
+    .player .paused span {
+      width: 74px; height: 74px; border-radius: 50%; background: rgba(226,106,44,0.92);
+      display: flex; align-items: center; justify-content: center; color: #fff; font-size: 1.7rem; padding-left: 6px;
+    }
+    .chapters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+    .chapters button {
+      font: inherit; font-size: 0.85rem; font-weight: 600; color: var(--muted); background: var(--card);
+      border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+      position: relative; overflow: hidden;
+    }
+    .chapters button:hover { color: var(--text); }
+    .chapters button[aria-current="true"] { color: var(--text); border-color: color-mix(in srgb, var(--rust) 60%, var(--border)); }
+    .chapters button .bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--rust-2); width: 0; }
+
+    /* FAQ */
+    .faq { max-width: 780px; margin: 0 auto; display: grid; gap: 12px; }
+    .faq details { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 4px 20px; }
+    .faq summary { cursor: pointer; font-weight: 650; padding: 14px 0; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::after { content: "+"; color: var(--muted); font-weight: 400; font-size: 1.2rem; line-height: 1; }
+    .faq details[open] summary::after { content: "−"; }
+    .faq details p { color: var(--muted); margin: 0 0 16px; }
+    .faq code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-size: 0.85em; color: var(--rust-2); }
+
+    /* Closing call to action */
+    .cta-band { text-align: center; }
+    .cta-band h2 { font-size: clamp(1.8rem, 4.5vw, 2.7rem); letter-spacing: -0.03em; margin: 0 0 12px; line-height: 1.1; }
+    .cta-band p { color: var(--muted); margin: 0 0 28px; font-size: 1.05rem; }
+    .install .code { position: relative; }
+    .install .code .copy { position: absolute; top: 12px; right: 12px; }
+
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
       .btn { transition: none; }
@@ -220,9 +296,10 @@
         oxi
       </a>
       <nav class="nav-links">
+        <a href="#demo">Tour</a>
         <a href="#how">How it works</a>
         <a href="#features">Features</a>
-        <a href="#install">Install</a>
+        <a href="#faq">FAQ</a>
         <a href="https://github.com/maziluiosif/oxi">GitHub</a>
         <a class="nav-cta" href="#install">Get oxi</a>
       </nav>
@@ -232,26 +309,39 @@
   <!-- HERO -->
   <div class="hero">
     <div class="wrap">
-      <span class="badge"><span class="dot"></span> Native Rust app · free and open source</span>
-      <h1>Run <span class="grad">any model</span>,<br>keep everything local</h1>
+      <span class="badge"><span class="dot"></span> Native Rust app · <b>free and open source</b></span>
+      <h1>The coding agent<br>for <span class="grad">any model</span></h1>
       <p class="subtitle">
-        A fast desktop coding agent. Pick a model and oxi downloads it and runs it for you,
-        on your machine or a GPU box. Or plug in Ollama, LM Studio, a hosted API, or the
-        Claude Code, Cursor or Codex subscription you already have.
+        Run open models on your own machine, or bring the Claude Code, Codex or Cursor
+        subscription you already pay for. Agent, diff review, Git and a terminal in one
+        fast native window.
       </p>
+
+      <div class="quick-install" aria-label="Install command">
+        <span class="prompt">$</span>
+        <code id="hero-cmd">curl -fsSL https://maziluiosif.github.io/oxi/install.sh | sh</code>
+        <button class="copy" type="button" data-copy="#hero-cmd">Copy</button>
+      </div>
+      <p class="os-switch">
+        <button type="button" data-os="unix" aria-pressed="true">macOS / Linux</button> ·
+        <button type="button" data-os="win" aria-pressed="false">Windows</button> ·
+        <a href="#install">Homebrew and other options</a>
+      </p>
+
       <div class="cta-row">
-        <a class="btn btn-primary" href="#install">Install oxi</a>
+        <a class="btn btn-primary" href="https://github.com/maziluiosif/oxi/releases/latest">Download the latest release</a>
         <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi">Star on GitHub</a>
       </div>
-      <p class="hero-note">macOS (Apple Silicon) · Linux (x86_64) · Windows (x86_64) · MIT licensed</p>
+      <p class="hero-note">macOS (Apple Silicon) · Linux (x86_64) · Windows (x86_64) · MIT licensed · no account</p>
 
-      <div class="shot">
-        <video id="demo" autoplay muted loop playsinline preload="metadata" poster="media/poster.jpg"
-               aria-label="oxi running the tests of a Python project with a local Qwen model, fixing the failing one, and showing the change in the editor and Git panel">
+      <div class="player" id="demo" title="Click to pause">
+        <video id="demo-video" autoplay muted loop playsinline preload="metadata" poster="media/poster.jpg"
+               aria-label="A one-minute tour of oxi: running a local model, choosing providers and the Router, the agent fixing a failing test, reviewing the diff, committing, plan mode and themes">
           <source src="media/demo.mp4" type="video/mp4" />
         </video>
+        <div class="paused" aria-hidden="true"><span>▶</span></div>
       </div>
-      <p class="shot-caption">A local Qwen 2.5 Coder model finds a failing test, fixes it, and hands you the diff.</p>
+      <div class="chapters" id="chapters" aria-label="Jump to a chapter"></div>
     </div>
   </div>
 
@@ -260,19 +350,19 @@
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">How it works</div>
-        <h2>From a model on HuggingFace to a reviewed fix</h2>
-        <p>Three steps, all in one window, with nothing leaving your machine unless you choose a hosted provider.</p>
+        <h2>From install to a reviewed fix in five minutes</h2>
+        <p>Everything happens in one window. Nothing leaves your machine unless you choose a hosted provider.</p>
       </div>
       <div class="steps">
         <div class="step">
           <div class="step-text">
             <span class="step-num">1</span>
-            <h3>Pick a model, click Run</h3>
-            <p>Local models are a guided setup instead of a wall of settings.</p>
+            <h3>Pick a model</h3>
+            <p>Local models are a guided setup, not a wall of settings.</p>
             <ul>
-              <li>Install the <code>llama.cpp</code> runtime with one button.</li>
-              <li>Search HuggingFace and download the GGUF you want. The usual choice is marked.</li>
-              <li><b>Run</b> starts the model and makes it the one new chats use.</li>
+              <li><b>Free and private:</b> install the <code>llama.cpp</code> runtime with one click, download a GGUF from HuggingFace, click <b>Run</b>.</li>
+              <li><b>Already subscribed?</b> Make Claude Code, Codex or Cursor active. They use your existing login.</li>
+              <li><b>Have a key?</b> OpenAI, OpenRouter, Azure, Anthropic-compatible and more.</li>
             </ul>
           </div>
           <div class="frame"><img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/local-models.png" alt="Local HF settings with the runtime installed and a Qwen model running" loading="lazy" /></div>
@@ -281,11 +371,11 @@
           <div class="step-text">
             <span class="step-num">2</span>
             <h3>Ask, and watch it work</h3>
-            <p>The agent reads, edits, and runs commands in your workspace, and every step stays visible.</p>
+            <p>The agent reads, edits and runs commands in your workspace, and every step stays visible.</p>
             <ul>
-              <li>Reasoning, tool calls, and their output as they happen.</li>
-              <li>Edits arrive as side-by-side diffs.</li>
-              <li>Output speed in tokens per second, next to the context gauge.</li>
+              <li>Reasoning, tool calls and their output as they happen.</li>
+              <li>Edits and shell commands can ask for your approval first.</li>
+              <li>Type <code>/plan</code> to investigate before changing anything.</li>
             </ul>
           </div>
           <div class="frame"><img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/agent-run.png" alt="The agent running tests, reading stats.py and showing its edit as a diff" loading="lazy" /></div>
@@ -294,13 +384,14 @@
           <div class="step-text">
             <span class="step-num">3</span>
             <h3>Review, then commit</h3>
-            <p>Changed lines are highlighted right in the editor, next to the source-control panel.</p>
+            <p>Every change opens in a real diff editor, next to the Git panel.</p>
             <ul>
-              <li>Stage, commit, and push, with AI commit messages if you want them.</li>
-              <li>A real editor with tabs, minimap, and find and replace, plus a terminal.</li>
+              <li>Side by side or inline, and editable in place.</li>
+              <li>Stage or discard any block with one click.</li>
+              <li>Commit and push, with AI-written messages if you want them.</li>
             </ul>
           </div>
-          <div class="frame"><img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/editor-git.png" alt="The fixed file open in the editor with changed lines highlighted and the Git panel listing it" loading="lazy" /></div>
+          <div class="frame"><img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/diff-review.png" alt="A side-by-side diff with Stage and Discard buttons on the change" loading="lazy" /></div>
         </div>
       </div>
     </div>
@@ -311,33 +402,33 @@
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Why oxi</div>
-        <h2>Your model, your machine</h2>
+        <h2>Your model, your machine, your workflow</h2>
         <p>Most coding tools assume their cloud and their subscription. oxi lets you bring your own.</p>
       </div>
       <div class="grid">
         <div class="card">
           <h3>It runs the models for you</h3>
-          <p>Find a GGUF on HuggingFace, click Run. oxi installs <code>llama-server</code> and starts the model, here or on a GPU box over SSH.</p>
+          <p>Find a GGUF on HuggingFace and click Run. oxi installs <code>llama-server</code> and starts the model, here or on a GPU box over SSH. LM Studio and Ollama work too.</p>
         </div>
         <div class="card">
-          <h3>Use a subscription you already have</h3>
-          <p>Drive Claude Code, Cursor, or Codex inside oxi over ACP, or sign in to ChatGPT directly.</p>
+          <h3>Use the subscription you have</h3>
+          <p>Drive Claude Code, Codex or Cursor inside oxi over ACP, or sign in with ChatGPT. The Router picks a provider per task and switches when a quota runs out.</p>
         </div>
         <div class="card">
-          <h3>Editor and Git built in</h3>
-          <p>Tabs, minimap, go to definition, inline diffs, hunk staging, branch compare, and a terminal.</p>
+          <h3>Review like in your editor</h3>
+          <p>An editable diff editor with word highlights and block staging, plus tabs, go to definition, find and replace, a minimap and a terminal.</p>
+        </div>
+        <div class="card">
+          <h3>Plan first, then build</h3>
+          <p><code>/plan</code> investigates without touching a file and keeps a live checklist. One click turns the plan into changes.</p>
         </div>
         <div class="card">
           <h3>Light and fast</h3>
-          <p>One native binary, no bundled browser. Around 110 MB of RAM at idle.</p>
-        </div>
-        <div class="card">
-          <h3>Make it yours</h3>
-          <p>Edit the system prompt, add MCP servers, search the web without an API key, and dictate with local Whisper.</p>
+          <p>One native binary, no bundled browser. Around 110 MB of RAM at idle, and a frame of a long chat draws in about a millisecond.</p>
         </div>
         <div class="card">
           <h3>Nothing phones home</h3>
-          <p>Chats, settings, and models stay on your machine. Keys go to the OS keychain. No account needed.</p>
+          <p>Chats, settings and models stay on your machine. Keys go to the OS keychain. Web search and voice dictation work without extra keys.</p>
         </div>
       </div>
     </div>
@@ -379,22 +470,24 @@
       <div class="section-head">
         <div class="eyebrow">Providers</div>
         <h2>Bring your own model</h2>
-        <p>Switch per chat from the composer, or pick the default in Settings.</p>
+        <p>Switch per chat from the composer, pick a default in Settings, or let the Router choose.</p>
       </div>
       <div class="providers">
+        <span class="chip"><b>Router</b> · picks per task</span>
         <span class="chip"><b>Local HF</b> · GGUF</span>
         <span class="chip"><b>Remote HF</b> · GGUF over SSH</span>
         <span class="chip">LM Studio</span>
         <span class="chip">Ollama</span>
+        <span class="chip">llama.cpp</span>
+        <span class="chip">Claude Code · ACP</span>
+        <span class="chip">Cursor · ACP</span>
+        <span class="chip">Codex · ACP</span>
+        <span class="chip">GPT Codex · ChatGPT sign-in</span>
         <span class="chip">OpenAI</span>
         <span class="chip">Azure OpenAI</span>
         <span class="chip">OpenRouter</span>
         <span class="chip">Anthropic-compatible</span>
-        <span class="chip">GPT Codex</span>
         <span class="chip">OpenCode Go</span>
-        <span class="chip">Claude Code · ACP</span>
-        <span class="chip">Cursor · ACP</span>
-        <span class="chip">Codex · ACP</span>
       </div>
     </div>
   </section>
@@ -417,16 +510,16 @@
           <figcaption>Dark</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-sublime.png" alt="oxi in the Sublime theme" loading="lazy" />
-          <figcaption>Sublime</figcaption>
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-light.png" alt="oxi in the Light theme" loading="lazy" />
+          <figcaption>Light</figcaption>
         </figure>
         <figure>
           <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-midnight.png" alt="oxi in the Midnight theme" loading="lazy" />
           <figcaption>Midnight</figcaption>
         </figure>
         <figure>
-          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-light.png" alt="oxi in the Light theme" loading="lazy" />
-          <figcaption>Light</figcaption>
+          <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/screenshots/theme-sublime.png" alt="oxi in the Sublime theme" loading="lazy" />
+          <figcaption>Sublime</figcaption>
         </figure>
       </div>
     </div>
@@ -438,7 +531,7 @@
       <div class="section-head">
         <div class="eyebrow">Install</div>
         <h2>Get it in a minute</h2>
-        <p>One command on macOS, Linux, or Windows.</p>
+        <p>One command on macOS, Linux or Windows. Run it again to update.</p>
       </div>
       <div class="install">
         <div class="tabs" role="tablist" aria-label="Install method">
@@ -448,19 +541,19 @@
           <button class="tab" role="tab" aria-selected="false" aria-controls="p-source" id="t-source" tabindex="-1">From source</button>
         </div>
         <div class="panel" role="tabpanel" id="p-quick" aria-labelledby="t-quick">
-          <div class="code"><span class="c"># macOS (Apple Silicon) and Linux (x86_64)</span>
+          <div class="code" id="c-quick"><span class="c"># macOS (Apple Silicon) and Linux (x86_64)</span>
 <span class="p">curl</span> -fsSL https://maziluiosif.github.io/oxi/install.sh | sh
 
 <span class="c"># Windows (x86_64), in PowerShell</span>
-<span class="p">irm</span> https://maziluiosif.github.io/oxi/install.ps1 | iex</div>
-          <p class="install-note">Run it again to update. Then run <code>oxi</code> in a project folder, or open it from your apps menu.</p>
+<span class="p">irm</span> https://maziluiosif.github.io/oxi/install.ps1 | iex<button class="copy" type="button" data-copy="#c-quick" data-copy-os="1">Copy</button></div>
+          <p class="install-note">Then run <code>oxi</code> in a project folder, or open it from your apps menu. <code>oxi update</code> updates it.</p>
         </div>
         <div class="panel" role="tabpanel" id="p-brew" aria-labelledby="t-brew" hidden>
-          <div class="code"><span class="p">brew</span> tap maziluiosif/tap
+          <div class="code" id="c-brew"><span class="p">brew</span> tap maziluiosif/tap
 <span class="p">brew</span> install --cask oxi
 
 <span class="c"># macOS only, once after installing</span>
-<span class="p">xattr</span> -cr /Applications/oxi.app</div>
+<span class="p">xattr</span> -cr /Applications/oxi.app<button class="copy" type="button" data-copy="#c-brew">Copy</button></div>
         </div>
         <div class="panel" role="tabpanel" id="p-release" aria-labelledby="t-release" hidden>
           <div class="code"><span class="c"># macOS: after moving oxi.app to /Applications</span>
@@ -470,12 +563,60 @@
           <p class="install-note">Get the archive for your platform from <a href="https://github.com/maziluiosif/oxi/releases/latest">the latest release</a>.</p>
         </div>
         <div class="panel" role="tabpanel" id="p-source" aria-labelledby="t-source" hidden>
-          <div class="code"><span class="c"># needs Rust 1.92 or newer, plus native C/C++ build tools</span>
+          <div class="code" id="c-source"><span class="c"># needs Rust 1.92 or newer, plus native C/C++ build tools</span>
 <span class="p">git</span> clone https://github.com/maziluiosif/oxi
 <span class="p">cd</span> oxi
-<span class="p">cargo</span> run --release</div>
+<span class="p">cargo</span> run --release<button class="copy" type="button" data-copy="#c-source">Copy</button></div>
           <p class="install-note">Install Rust with <a href="https://rustup.rs">rustup</a>. On Windows you also need LLVM, CMake, and the Visual Studio C++ build tools; see the <a href="https://github.com/maziluiosif/oxi#windows-prerequisites">README</a>.</p>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq" class="soft">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">FAQ</div>
+        <h2>Good questions</h2>
+      </div>
+      <div class="faq">
+        <details>
+          <summary>Is it really free?</summary>
+          <p>Yes. oxi is MIT licensed and has no account, no telemetry and no paid tier. You only pay for a hosted model if you choose one; local models cost nothing.</p>
+        </details>
+        <details>
+          <summary>Does my code leave my machine?</summary>
+          <p>Not with a local model: the model, your chats and your settings all stay on your computer. With a hosted provider, the prompt and the files the agent reads go to that provider, as with any coding assistant.</p>
+        </details>
+        <details>
+          <summary>Do I need a GPU?</summary>
+          <p>No. Apple Silicon Macs run 7B to 14B coding models well. On a laptop without a strong GPU, run the model on another machine over SSH with Remote HF, or use a hosted provider.</p>
+        </details>
+        <details>
+          <summary>I already pay for Claude Code, Codex or Cursor. Why use oxi?</summary>
+          <p>oxi drives them over ACP with your existing login, and adds a desktop UI around them: the diff editor, Git, plan mode with a checklist, and a Router that can switch to a local model or another subscription when a quota runs out.</p>
+        </details>
+        <details>
+          <summary>Why does macOS or Windows warn about the app?</summary>
+          <p>The app isn't signed with a paid Apple or Microsoft certificate. The one-line installers avoid the warning; with a manual download, run <code>xattr -cr /Applications/oxi.app</code> on macOS, or click More info → Run anyway on Windows.</p>
+        </details>
+        <details>
+          <summary>Is the agent safe to let loose?</summary>
+          <p>File edits and shell commands can ask for approval first, and that prompt is the real safety boundary: commands and MCP tools are not sandboxed. Plan mode lets the agent investigate without changing anything.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- CLOSING CTA -->
+  <section class="cta-band">
+    <div class="wrap">
+      <h2>Try it on your next bug</h2>
+      <p>One command, a minute to install, and your first fix a few minutes later.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#install">Install oxi</a>
+        <a class="btn btn-ghost" href="https://github.com/maziluiosif/oxi">Star on GitHub</a>
       </div>
     </div>
   </section>
@@ -489,6 +630,7 @@
       <div class="foot-links">
         <a href="https://github.com/maziluiosif/oxi">GitHub</a>
         <a href="https://github.com/maziluiosif/oxi/releases">Releases</a>
+        <a href="https://github.com/maziluiosif/oxi/issues">Issues</a>
         <a href="https://github.com/maziluiosif/oxi/blob/dev/LICENSE">MIT License</a>
       </div>
     </div>
@@ -514,13 +656,75 @@
       });
     });
 
-    // Respect reduced motion: show the first frame and let people press play.
-    const demo = document.getElementById('demo');
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      demo.removeAttribute('autoplay');
-      demo.pause();
-      demo.controls = true;
+    // The hero shows the command for the visitor's OS.
+    const commands = {
+      unix: 'curl -fsSL https://maziluiosif.github.io/oxi/install.sh | sh',
+      win: 'irm https://maziluiosif.github.io/oxi/install.ps1 | iex',
+    };
+    const heroCmd = document.getElementById('hero-cmd');
+    const osButtons = [...document.querySelectorAll('[data-os]')];
+    let currentOs = /Win/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent) ? 'win' : 'unix';
+    function setOs(os) {
+      currentOs = os;
+      heroCmd.textContent = commands[os];
+      osButtons.forEach((b) => b.setAttribute('aria-pressed', b.dataset.os === os));
     }
+    osButtons.forEach((b) => b.addEventListener('click', () => setOs(b.dataset.os)));
+    setOs(currentOs);
+
+    // Copy buttons: the command lines only (comments and the button label left out).
+    document.querySelectorAll('[data-copy]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const source = document.querySelector(button.dataset.copy);
+        let lines = source.innerText.replace(/Copy$|Copied$/, '').split('\n')
+          .map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+        if (button.dataset.copyOs) lines = [commands[currentOs]];
+        try {
+          await navigator.clipboard.writeText(lines.join('\n'));
+          button.textContent = 'Copied';
+          button.classList.add('done');
+          setTimeout(() => { button.textContent = 'Copy'; button.classList.remove('done'); }, 1600);
+        } catch { /* clipboard unavailable: the text stays selectable */ }
+      });
+    });
+
+    // Demo: click to pause, chapter buttons to jump.
+    const player = document.getElementById('demo');
+    const video = document.getElementById('demo-video');
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) {
+      video.removeAttribute('autoplay');
+      video.pause();
+    }
+    const syncPaused = () => player.classList.toggle('is-paused', video.paused);
+    video.addEventListener('play', syncPaused);
+    video.addEventListener('pause', syncPaused);
+    player.addEventListener('click', () => (video.paused ? video.play() : video.pause()));
+    syncPaused();
+
+    fetch('media/chapters.json').then((r) => r.json()).then((chapters) => {
+      const box = document.getElementById('chapters');
+      const buttons = chapters.map((chapter, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = chapter.title;
+        const bar = document.createElement('span');
+        bar.className = 'bar';
+        b.append(bar);
+        b.addEventListener('click', () => { video.currentTime = chapter.start + 0.05; video.play(); });
+        box.append(b);
+        return { b, bar, start: chapter.start, end: chapters[i + 1]?.start ?? null };
+      });
+      video.addEventListener('timeupdate', () => {
+        const t = video.currentTime;
+        for (const c of buttons) {
+          const end = c.end ?? video.duration;
+          const on = t >= c.start && t < end;
+          c.b.setAttribute('aria-current', on);
+          c.bar.style.width = on ? `${((t - c.start) / (end - c.start)) * 100}%` : '0';
+        }
+      });
+    }).catch(() => {});
   </script>
 </body>
 </html>

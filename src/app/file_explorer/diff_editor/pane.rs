@@ -11,6 +11,9 @@ use eframe::egui::{self, FontId, Galley, Margin, Rect, TextEdit, Ui, UiBuilder, 
 
 use crate::theme::*;
 
+use crate::ui::text_selection::selection_shape;
+
+use super::super::editor_paint::editor_selection_rects;
 use super::decor::{DiffDecor, PaneRows, Side, Underlay, ZoneText, apply_gaps};
 
 /// The pane's laid-out text, kept until the text, its colors or the gaps change.
@@ -18,6 +21,9 @@ use super::decor::{DiffDecor, PaneRows, Side, Underlay, ZoneText, apply_gaps};
 pub(crate) struct PaneCache {
     key: u64,
     galley: Option<Arc<Galley>>,
+    /// `galley` with transparent glyphs, for `TextEdit`: egui recolors selected glyphs with a
+    /// single color, so the colored text is painted on top of it instead.
+    geometry: Option<Arc<Galley>>,
     scroll_x: f32,
 }
 
@@ -73,10 +79,13 @@ pub(super) fn readonly_pane(
         });
         job.wrap.max_width = f32::INFINITY;
         let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-        cache.galley = Some(apply_gaps(&galley, 0, &gaps, row_h));
+        let galley = apply_gaps(&galley, 0, &gaps, row_h);
+        cache.geometry = Some(transparent_glyphs(&galley));
+        cache.galley = Some(galley);
         cache.key = key;
     }
     let galley = cache.galley.clone().expect("laid out above");
+    let geometry = cache.geometry.clone().expect("laid out above");
 
     let digit_w = ui.fonts_mut(|fonts| fonts.glyph_width(&font, '0').max(FS_SMALL * 0.5));
     let digits = (input.text.bytes().filter(|byte| *byte == b'\n').count() + 1)
@@ -124,12 +133,14 @@ pub(super) fn readonly_pane(
             // filled once TextEdit has placed the galley.
             let clip = ui.clip_rect();
             let underlay = ui.painter().add(egui::Shape::Noop);
-            let origin = ui
+            let (origin, selection) = ui
                 .scope(|ui| {
-                    ui.visuals_mut().selection.bg_fill = editor_selection_fill();
+                    // egui's selection would recolor the selected glyphs; it is painted in the
+                    // underlay instead, like the editor's.
+                    ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
                     ui.visuals_mut().selection.stroke = egui::Stroke::NONE;
-                    let laid_out = Arc::clone(&galley);
-                    TextEdit::multiline(&mut text_ref)
+                    let laid_out = Arc::clone(&geometry);
+                    let output = TextEdit::multiline(&mut text_ref)
                         .id(input.id.with("text"))
                         .font(font.clone())
                         .code_editor()
@@ -139,8 +150,11 @@ pub(super) fn readonly_pane(
                         .min_size(text_rect.size())
                         .margin(Margin::same(8))
                         .layouter(&mut |_, _, _| Arc::clone(&laid_out))
-                        .show(ui)
-                        .galley_pos
+                        .show(ui);
+                    let selection = output.cursor_range.filter(|range| !range.is_empty());
+                    ui.painter()
+                        .galley(output.galley_pos, Arc::clone(&galley), c_text());
+                    (output.galley_pos, selection)
                 })
                 .inner;
             let rows = PaneRows {
@@ -148,7 +162,7 @@ pub(super) fn readonly_pane(
                 origin,
                 row_h,
             };
-            let shapes = Underlay {
+            let mut shapes = Underlay {
                 decor: input.decor,
                 side: input.side,
                 inline: input.inline,
@@ -156,6 +170,10 @@ pub(super) fn readonly_pane(
                 zones: input.zones,
             }
             .shapes(ui.painter(), &rows, &font);
+            if let Some(selection) = selection {
+                let rects = editor_selection_rects(&galley, origin, clip, selection);
+                shapes.push(selection_shape(&rects, editor_selection_fill()));
+            }
             ui.painter().set(underlay, egui::Shape::Vec(shapes));
             let spans = input
                 .decor
@@ -219,4 +237,17 @@ pub(super) fn readonly_pane(
         content_h: output.content_size.y,
         viewport_h: output.inner_rect.height(),
     }
+}
+
+/// A copy of `galley` whose glyphs are transparent (backgrounds keep their colors).
+fn transparent_glyphs(galley: &Galley) -> Arc<Galley> {
+    let mut out = galley.clone();
+    for placed in &mut out.rows {
+        let row = Arc::make_mut(&mut placed.row);
+        let range = row.visuals.glyph_vertex_range.clone();
+        for vertex in &mut row.visuals.mesh.vertices[range] {
+            vertex.color = egui::Color32::TRANSPARENT;
+        }
+    }
+    Arc::new(out)
 }
