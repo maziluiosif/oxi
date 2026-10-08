@@ -256,9 +256,12 @@ impl OxiApp {
                     hairline(ui);
                 }
                 let selected_model = self.conv.settings.provider(kind).model_id.clone();
-                let router = &mut self.conv.settings.router;
                 let default_billing = Billing::default_for(kind);
-                let prefs = router.prefs_mut(kind);
+                // Edit a copy: inserting the defaults while drawing would mark the settings
+                // unsaved just for opening this tab.
+                let mut prefs = self.conv.settings.router.prefs(kind);
+                let before = prefs.clone();
+                'prefs: {
                 ui.horizontal(|ui| {
                     ui.checkbox(
                         &mut prefs.enabled,
@@ -283,7 +286,7 @@ impl OxiApp {
                     });
                 });
                 if !prefs.enabled {
-                    continue;
+                    break 'prefs;
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -313,6 +316,10 @@ impl OxiApp {
                     .size(FS_TINY)
                     .color(c_text_faint()),
                 );
+                }
+                if prefs != before {
+                    *self.conv.settings.router.prefs_mut(kind) = prefs;
+                }
             }
         });
     }
