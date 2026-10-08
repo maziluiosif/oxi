@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-10-08
+
+### Fixed
+- **Diff editor:** Selected text now stays visible and selection no longer hides content across multiple rows.
+- **Chat:** Thinking timer no longer carries over elapsed time from previous conversations.
+- **Settings:** Opening the Router tab no longer marks settings as unsaved.
+
+
 ## [1.11.0] - 2026-10-07
 
 ### Added
@@ -955,7 +963,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.11.1...HEAD
+[1.11.1]: https://github.com/maziluiosif/oxi/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/maziluiosif/oxi/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/maziluiosif/oxi/compare/v1.9.2...v1.10.0
 [1.9.2]: https://github.com/maziluiosif/oxi/compare/v1.9.1...v1.9.2
