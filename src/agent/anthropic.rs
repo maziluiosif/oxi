@@ -10,11 +10,11 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, Header
 use serde_json::{Value, json};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
-use super::dispatch::{run_gated_tool, spawn_readonly_tool};
+use super::dispatch::{parse_tool_args, replay_tool_args, run_gated_tool, spawn_readonly_tool};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::MAX_TOOL_OUTPUT_CHARS;
+use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult};
 
 /// Overwrite `dst` with the u64 field `key` from a `usage` JSON object, if present.
 fn read_usage_field(usage: &Value, key: &str, dst: &mut u64) {
@@ -430,7 +430,7 @@ pub async fn run_anthropic_loop(
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut tus: Vec<(u64, ToolUseAccum)> = tool_uses.into_iter().collect();
         tus.sort_by_key(|(i, _)| *i);
-        let tool_list: Vec<ToolUseAccum> = tus.into_iter().map(|(_, v)| v).collect();
+        let mut tool_list: Vec<ToolUseAccum> = tus.into_iter().map(|(_, v)| v).collect();
         if let Some(first) = tool_list.first()
             && !thinking_blocks.is_empty()
         {
@@ -438,6 +438,15 @@ pub async fn run_anthropic_loop(
         }
         let sr = stop_reason.as_deref().unwrap_or("");
         if sr == "tool_use" || !tool_list.is_empty() {
+            // Parse before recording the turn, so the replayed history only holds valid arguments.
+            let parsed_args: Vec<Result<Value, String>> = tool_list
+                .iter_mut()
+                .map(|t| {
+                    let parsed = parse_tool_args(&t.name, &t.input_json);
+                    t.input_json = replay_tool_args(&t.input_json, &parsed);
+                    parsed
+                })
+                .collect();
             let mut asst = json!({ "role": "assistant", "content": text_out });
             if !tool_list.is_empty() {
                 let arr: Vec<Value> = tool_list
@@ -467,15 +476,22 @@ pub async fn run_anthropic_loop(
                 id: String,
                 name: String,
                 args: Value,
+                /// Set when the arguments were not valid JSON: reported back instead of running.
+                bad_args: Option<String>,
             }
             let parsed: Vec<ToolCall> = tool_list
                 .into_iter()
-                .map(|tu| {
-                    let args: Value = serde_json::from_str(&tu.input_json).unwrap_or(json!({}));
+                .zip(parsed_args)
+                .map(|(tu, parsed)| {
+                    let (args, bad_args) = match parsed {
+                        Ok(args) => (args, None),
+                        Err(msg) => (json!({}), Some(msg)),
+                    };
                     ToolCall {
                         id: tu.id,
                         name: tu.name,
                         args,
+                        bad_args,
                     }
                 })
                 .collect();
@@ -485,9 +501,12 @@ pub async fn run_anthropic_loop(
                 if cancel.load(Ordering::SeqCst) {
                     break;
                 }
-                if is_readonly(&parsed[i].name) {
+                if parsed[i].bad_args.is_none() && is_readonly(&parsed[i].name) {
                     let batch_start = i;
-                    while i < parsed.len() && is_readonly(&parsed[i].name) {
+                    while i < parsed.len()
+                        && parsed[i].bad_args.is_none()
+                        && is_readonly(&parsed[i].name)
+                    {
                         i += 1;
                     }
                     let batch = &parsed[batch_start..i];
@@ -522,8 +541,17 @@ pub async fn run_anthropic_loop(
                         tool_call_id: tc.id.clone(),
                         args: Some(tc.args.clone()),
                     });
-                    let result =
-                        run_gated_tool(gate, tx, cancel, cwd, &tc.id, &tc.name, &tc.args, env);
+                    let result = match &tc.bad_args {
+                        Some(msg) => ToolResult {
+                            output: msg.clone(),
+                            is_error: true,
+                            diff: None,
+                            full_output_path: None,
+                        },
+                        None => {
+                            run_gated_tool(gate, tx, cancel, cwd, &tc.id, &tc.name, &tc.args, env)
+                        }
+                    };
                     let text = result.output.clone();
                     let is_err = result.is_error;
                     let _ = tx.send(AgentEvent::ToolOutput {

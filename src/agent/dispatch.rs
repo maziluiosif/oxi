@@ -279,3 +279,104 @@ pub(crate) fn spawn_readonly_tool(
         result
     })
 }
+
+/// Parse a model's tool-call `arguments`. Small local models often wrap the JSON in a code fence,
+/// add prose around it, or double-encode it as a string; those are repaired. Anything else comes
+/// back as an error naming what was received, so the model can retry the call instead of the tool
+/// running with empty arguments and failing with a misleading "missing path".
+pub(crate) fn parse_tool_args(name: &str, raw: &str) -> Result<Value, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Value::Object(Default::default()));
+    }
+    let first_err = match serde_json::from_str::<Value>(trimmed) {
+        Ok(v @ Value::Object(_)) => return Ok(v),
+        Ok(Value::String(inner)) => match serde_json::from_str::<Value>(inner.trim()) {
+            Ok(v @ Value::Object(_)) => return Ok(v),
+            _ => "expected a JSON object, got a string".to_string(),
+        },
+        Ok(_) => "expected a JSON object".to_string(),
+        Err(e) => e.to_string(),
+    };
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
+        && start < end
+        && let Ok(v @ Value::Object(_)) = serde_json::from_str::<Value>(&trimmed[start..=end])
+    {
+        return Ok(v);
+    }
+    const MAX_ECHO: usize = 500;
+    let echo: String = trimmed.chars().take(MAX_ECHO).collect();
+    let ellipsis = if trimmed.chars().count() > MAX_ECHO {
+        "…"
+    } else {
+        ""
+    };
+    Err(format!(
+        "The arguments for `{name}` were not valid JSON ({first_err}). Received: {echo}{ellipsis}\n\
+         Call `{name}` again with a single JSON object that matches its parameters."
+    ))
+}
+
+/// The `arguments` to record for a tool call in the assistant turn replayed next round:
+/// unchanged when they parsed as sent, the repaired JSON when [`parse_tool_args`] fixed them, `{}`
+/// when they were unusable (the tool result already echoes what was received). llama-server and
+/// Ollama reject a request whose history holds tool-call arguments that don't parse.
+pub(crate) fn replay_tool_args(raw: &str, parsed: &Result<Value, String>) -> String {
+    match parsed {
+        Ok(v) if serde_json::from_str::<Value>(raw).is_ok_and(|r| r == *v) => raw.to_string(),
+        Ok(v) => v.to_string(),
+        Err(_) => "{}".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_tool_args, replay_tool_args};
+    use serde_json::json;
+
+    #[test]
+    fn parse_tool_args_accepts_valid_and_empty() {
+        assert_eq!(
+            parse_tool_args("read", r#"{"path":"a.rs"}"#),
+            Ok(json!({"path": "a.rs"}))
+        );
+        assert_eq!(parse_tool_args("ls", "  "), Ok(json!({})));
+    }
+
+    #[test]
+    fn parse_tool_args_repairs_fences_prose_and_double_encoding() {
+        let fenced = "```json\n{\"path\": \"src/main.rs\"}\n```";
+        assert_eq!(
+            parse_tool_args("read", fenced),
+            Ok(json!({"path": "src/main.rs"}))
+        );
+        let prose = "Sure, reading it: {\"path\": \"x\"} hope that helps";
+        assert_eq!(parse_tool_args("read", prose), Ok(json!({"path": "x"})));
+        let doubled = r#""{\"path\": \"y\"}""#;
+        assert_eq!(parse_tool_args("read", doubled), Ok(json!({"path": "y"})));
+    }
+
+    #[test]
+    fn parse_tool_args_reports_garbage_with_what_was_sent() {
+        let err = parse_tool_args("edit", r#"{"path": "a.rs", "old": "x"#).unwrap_err();
+        assert!(err.contains("`edit`"), "{err}");
+        assert!(err.contains(r#"Received: {"path": "a.rs""#), "{err}");
+        assert!(parse_tool_args("bash", "[1, 2]").is_err());
+        let long = "x".repeat(2_000);
+        assert!(parse_tool_args("bash", &long).unwrap_err().contains('…'));
+    }
+
+    #[test]
+    fn replayed_arguments_are_always_valid_json() {
+        let raw = r#"{"path": "a.rs"}"#;
+        assert_eq!(replay_tool_args(raw, &parse_tool_args("read", raw)), raw);
+        let fenced = "```json\n{\"path\": \"a.rs\"}\n```";
+        assert_eq!(
+            replay_tool_args(fenced, &parse_tool_args("read", fenced)),
+            r#"{"path":"a.rs"}"#
+        );
+        let cut = r#"{"path": "a.rs"#;
+        assert_eq!(replay_tool_args(cut, &parse_tool_args("read", cut)), "{}");
+        assert_eq!(replay_tool_args("", &parse_tool_args("ls", "")), "{}");
+    }
+}

@@ -10,11 +10,11 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, Header
 use serde_json::{Value, json};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
-use super::dispatch::{run_gated_tool, spawn_readonly_tool};
+use super::dispatch::{parse_tool_args, replay_tool_args, run_gated_tool, spawn_readonly_tool};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::MAX_TOOL_OUTPUT_CHARS;
+use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult};
 
 pub(crate) fn openai_supports_reasoning_effort(model: &str) -> bool {
     let m = model
@@ -236,7 +236,7 @@ async fn run_chat_loop_at(
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut pairs: Vec<(u64, ToolCallAccum)> = tool_map.into_iter().collect();
         pairs.sort_by_key(|(i, _)| *i);
-        let tool_calls: Vec<ToolCallAccum> = pairs.into_iter().map(|(_, v)| v).collect();
+        let mut tool_calls: Vec<ToolCallAccum> = pairs.into_iter().map(|(_, v)| v).collect();
         if let (Some(first), Some(r)) = (tool_calls.first(), reasoning) {
             reasoning_by_call.insert(first.id.clone(), r);
         }
@@ -245,6 +245,15 @@ async fn run_chat_loop_at(
             return Err("Model requested tool_calls but no tool calls were parsed".into());
         }
         if fr == "tool_calls" || !tool_calls.is_empty() {
+            // Parse before recording the turn, so the replayed history only holds valid arguments.
+            let parsed_args: Vec<Result<Value, String>> = tool_calls
+                .iter_mut()
+                .map(|t| {
+                    let parsed = parse_tool_args(&t.name, &t.arguments);
+                    t.arguments = replay_tool_args(&t.arguments, &parsed);
+                    parsed
+                })
+                .collect();
             let mut msg = json!({ "role": "assistant", "content": assistant_text });
             if !tool_calls.is_empty() {
                 let arr: Vec<Value> = tool_calls
@@ -275,15 +284,22 @@ async fn run_chat_loop_at(
                 id: String,
                 name: String,
                 args: Value,
+                /// Set when the arguments were not valid JSON: reported back instead of running.
+                bad_args: Option<String>,
             }
             let parsed: Vec<ToolCall> = tool_calls
                 .into_iter()
-                .map(|tc| {
-                    let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
+                .zip(parsed_args)
+                .map(|(tc, parsed)| {
+                    let (args, bad_args) = match parsed {
+                        Ok(args) => (args, None),
+                        Err(msg) => (json!({}), Some(msg)),
+                    };
                     ToolCall {
                         id: tc.id,
                         name: tc.name,
                         args,
+                        bad_args,
                     }
                 })
                 .collect();
@@ -293,10 +309,13 @@ async fn run_chat_loop_at(
                 if cancel.load(Ordering::SeqCst) {
                     break;
                 }
-                if is_readonly(&parsed[i].name) {
+                if parsed[i].bad_args.is_none() && is_readonly(&parsed[i].name) {
                     // Collect consecutive readonly calls
                     let batch_start = i;
-                    while i < parsed.len() && is_readonly(&parsed[i].name) {
+                    while i < parsed.len()
+                        && parsed[i].bad_args.is_none()
+                        && is_readonly(&parsed[i].name)
+                    {
                         i += 1;
                     }
                     let batch = &parsed[batch_start..i];
@@ -332,8 +351,17 @@ async fn run_chat_loop_at(
                         tool_call_id: tc.id.clone(),
                         args: Some(tc.args.clone()),
                     });
-                    let result =
-                        run_gated_tool(gate, tx, cancel, cwd, &tc.id, &tc.name, &tc.args, env);
+                    let result = match &tc.bad_args {
+                        Some(msg) => ToolResult {
+                            output: msg.clone(),
+                            is_error: true,
+                            diff: None,
+                            full_output_path: None,
+                        },
+                        None => {
+                            run_gated_tool(gate, tx, cancel, cwd, &tc.id, &tc.name, &tc.args, env)
+                        }
+                    };
                     let text = result.output.clone();
                     let is_err = result.is_error;
                     let _ = tx.send(AgentEvent::ToolOutput {
@@ -941,5 +969,122 @@ mod integration_tests {
             .and_then(|m| m.get("content").and_then(Value::as_str))
             .unwrap_or_default();
         assert_eq!(content, crate::agent::approval::PLAN_MODE_REFUSAL);
+    }
+
+    /// First request returns a `read` call whose arguments are cut off mid-object, the way small
+    /// local models sometimes stop; later requests answer with text.
+    struct BrokenArgsResponder {
+        call_count: AtomicUsize,
+    }
+
+    impl Respond for BrokenArgsResponder {
+        fn respond(&self, _req: &Request) -> ResponseTemplate {
+            let n = self.call_count.fetch_add(1, AtomicOrdering::SeqCst);
+            let body = if n == 0 {
+                sse_body(&[
+                    json!({"choices": [{"index": 0, "delta": {"tool_calls": [
+                        {"index": 0, "id": "call_1", "type": "function",
+                         "function": {"name": "read", "arguments": "{\"path\": \"hello"}}
+                    ]}}]}),
+                    json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+                ])
+            } else {
+                sse_body(&[
+                    json!({"choices": [{"index": 0, "delta": {"content": "Retrying."}}]}),
+                    json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+                ])
+            };
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+    }
+
+    #[tokio::test]
+    async fn full_loop_reports_invalid_tool_arguments_back_to_the_model() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_matcher("/chat/completions"))
+            .respond_with(BrokenArgsResponder {
+                call_count: AtomicUsize::new(0),
+            })
+            .mount(&server)
+            .await;
+
+        let cwd = temp_workspace("full-loop-broken-args");
+        let client = reqwest::Client::new();
+        let (tx, rx) = mpsc::channel::<AgentEvent>();
+        let (_approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut gate = ApprovalGate::new(
+            ApprovalPolicy {
+                write_edit: true,
+                bash: true,
+            },
+            approval_rx,
+        );
+        let env = ToolEnv {
+            enabled: vec![true; ALL_TOOL_NAMES.len()],
+            web_search_url: String::new(),
+            web_search_backend: WebSearchBackend::default(),
+            bash_timeout_cap_secs: 300,
+            mcp: None,
+            undo_journal: None,
+            subagent: None,
+        };
+        let mut messages = vec![json!({"role": "user", "content": "read hello.txt"})];
+        let tools = vec![json!({
+            "type": "function",
+            "function": {"name": "read", "description": "read a file",
+                          "parameters": {"type": "object", "properties": {}}}
+        })];
+        let base_url = server.uri();
+
+        let mut ctx = LoopCtx {
+            client: &client,
+            base_url: &base_url,
+            model: "test-model",
+            cwd: &cwd,
+            env: &env,
+            tx: &tx,
+            cancel: &cancel,
+            gate: &mut gate,
+            max_rounds: 10,
+            effort_override: None,
+            context_char_budget: usize::MAX,
+            tools_chars: 0,
+        };
+        let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
+        assert!(result.is_ok(), "agent loop failed: {result:?}");
+
+        let content = messages
+            .iter()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("tool"))
+            .and_then(|m| m.get("content").and_then(Value::as_str))
+            .unwrap_or_default();
+        assert!(content.contains("not valid JSON"), "{content}");
+        assert!(
+            content.contains(r#"Received: {"path": "hello"#),
+            "{content}"
+        );
+        // The replayed assistant turn must not carry the unparseable arguments.
+        assert_eq!(
+            messages[1].pointer("/tool_calls/0/function/arguments"),
+            Some(&json!("{}"))
+        );
+
+        let events: Vec<AgentEvent> = rx.try_iter().collect();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolEnd {
+                is_error: Some(true),
+                ..
+            }
+        )));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ApprovalRequest { .. }))
+        );
     }
 }
