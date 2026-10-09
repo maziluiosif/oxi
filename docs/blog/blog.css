@@ -100,6 +100,8 @@ header.nav {
 .hljs-macro { color: var(--hl-macro); }
 .hljs-variable, .hljs-params { color: var(--text); }
 
+.note { color: var(--muted); font-style: italic; font-size: 0.95rem !important; margin-top: 32px; }
+
 /* Call to action */
 .cta { margin-top: 56px; padding: 26px 28px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
 .cta h3 { margin: 0 0 8px; font-size: 1.2rem; }
