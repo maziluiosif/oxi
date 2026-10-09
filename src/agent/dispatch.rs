@@ -317,9 +317,21 @@ pub(crate) fn parse_tool_args(name: &str, raw: &str) -> Result<Value, String> {
     ))
 }
 
+/// The `arguments` to record for a tool call in the assistant turn replayed next round:
+/// unchanged when they parsed as sent, the repaired JSON when [`parse_tool_args`] fixed them, `{}`
+/// when they were unusable (the tool result already echoes what was received). llama-server and
+/// Ollama reject a request whose history holds tool-call arguments that don't parse.
+pub(crate) fn replay_tool_args(raw: &str, parsed: &Result<Value, String>) -> String {
+    match parsed {
+        Ok(v) if serde_json::from_str::<Value>(raw).is_ok_and(|r| r == *v) => raw.to_string(),
+        Ok(v) => v.to_string(),
+        Err(_) => "{}".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_tool_args;
+    use super::{parse_tool_args, replay_tool_args};
     use serde_json::json;
 
     #[test]
@@ -352,5 +364,19 @@ mod tests {
         assert!(parse_tool_args("bash", "[1, 2]").is_err());
         let long = "x".repeat(2_000);
         assert!(parse_tool_args("bash", &long).unwrap_err().contains('…'));
+    }
+
+    #[test]
+    fn replayed_arguments_are_always_valid_json() {
+        let raw = r#"{"path": "a.rs"}"#;
+        assert_eq!(replay_tool_args(raw, &parse_tool_args("read", raw)), raw);
+        let fenced = "```json\n{\"path\": \"a.rs\"}\n```";
+        assert_eq!(
+            replay_tool_args(fenced, &parse_tool_args("read", fenced)),
+            r#"{"path":"a.rs"}"#
+        );
+        let cut = r#"{"path": "a.rs"#;
+        assert_eq!(replay_tool_args(cut, &parse_tool_args("read", cut)), "{}");
+        assert_eq!(replay_tool_args("", &parse_tool_args("ls", "")), "{}");
     }
 }

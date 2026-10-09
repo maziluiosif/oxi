@@ -10,7 +10,7 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, Header
 use serde_json::{Value, json};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
-use super::dispatch::{parse_tool_args, run_gated_tool, spawn_readonly_tool};
+use super::dispatch::{parse_tool_args, replay_tool_args, run_gated_tool, spawn_readonly_tool};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
@@ -430,7 +430,7 @@ pub async fn run_anthropic_loop(
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut tus: Vec<(u64, ToolUseAccum)> = tool_uses.into_iter().collect();
         tus.sort_by_key(|(i, _)| *i);
-        let tool_list: Vec<ToolUseAccum> = tus.into_iter().map(|(_, v)| v).collect();
+        let mut tool_list: Vec<ToolUseAccum> = tus.into_iter().map(|(_, v)| v).collect();
         if let Some(first) = tool_list.first()
             && !thinking_blocks.is_empty()
         {
@@ -438,6 +438,15 @@ pub async fn run_anthropic_loop(
         }
         let sr = stop_reason.as_deref().unwrap_or("");
         if sr == "tool_use" || !tool_list.is_empty() {
+            // Parse before recording the turn, so the replayed history only holds valid arguments.
+            let parsed_args: Vec<Result<Value, String>> = tool_list
+                .iter_mut()
+                .map(|t| {
+                    let parsed = parse_tool_args(&t.name, &t.input_json);
+                    t.input_json = replay_tool_args(&t.input_json, &parsed);
+                    parsed
+                })
+                .collect();
             let mut asst = json!({ "role": "assistant", "content": text_out });
             if !tool_list.is_empty() {
                 let arr: Vec<Value> = tool_list
@@ -472,8 +481,9 @@ pub async fn run_anthropic_loop(
             }
             let parsed: Vec<ToolCall> = tool_list
                 .into_iter()
-                .map(|tu| {
-                    let (args, bad_args) = match parse_tool_args(&tu.name, &tu.input_json) {
+                .zip(parsed_args)
+                .map(|(tu, parsed)| {
+                    let (args, bad_args) = match parsed {
                         Ok(args) => (args, None),
                         Err(msg) => (json!({}), Some(msg)),
                     };

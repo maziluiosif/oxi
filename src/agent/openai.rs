@@ -10,7 +10,7 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, Header
 use serde_json::{Value, json};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
-use super::dispatch::{parse_tool_args, run_gated_tool, spawn_readonly_tool};
+use super::dispatch::{parse_tool_args, replay_tool_args, run_gated_tool, spawn_readonly_tool};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
@@ -236,7 +236,7 @@ async fn run_chat_loop_at(
         let _ = tx.send(AgentEvent::AssistantMessageDone);
         let mut pairs: Vec<(u64, ToolCallAccum)> = tool_map.into_iter().collect();
         pairs.sort_by_key(|(i, _)| *i);
-        let tool_calls: Vec<ToolCallAccum> = pairs.into_iter().map(|(_, v)| v).collect();
+        let mut tool_calls: Vec<ToolCallAccum> = pairs.into_iter().map(|(_, v)| v).collect();
         if let (Some(first), Some(r)) = (tool_calls.first(), reasoning) {
             reasoning_by_call.insert(first.id.clone(), r);
         }
@@ -245,6 +245,15 @@ async fn run_chat_loop_at(
             return Err("Model requested tool_calls but no tool calls were parsed".into());
         }
         if fr == "tool_calls" || !tool_calls.is_empty() {
+            // Parse before recording the turn, so the replayed history only holds valid arguments.
+            let parsed_args: Vec<Result<Value, String>> = tool_calls
+                .iter_mut()
+                .map(|t| {
+                    let parsed = parse_tool_args(&t.name, &t.arguments);
+                    t.arguments = replay_tool_args(&t.arguments, &parsed);
+                    parsed
+                })
+                .collect();
             let mut msg = json!({ "role": "assistant", "content": assistant_text });
             if !tool_calls.is_empty() {
                 let arr: Vec<Value> = tool_calls
@@ -280,8 +289,9 @@ async fn run_chat_loop_at(
             }
             let parsed: Vec<ToolCall> = tool_calls
                 .into_iter()
-                .map(|tc| {
-                    let (args, bad_args) = match parse_tool_args(&tc.name, &tc.arguments) {
+                .zip(parsed_args)
+                .map(|(tc, parsed)| {
+                    let (args, bad_args) = match parsed {
                         Ok(args) => (args, None),
                         Err(msg) => (json!({}), Some(msg)),
                     };
@@ -1056,6 +1066,11 @@ mod integration_tests {
         assert!(
             content.contains(r#"Received: {"path": "hello"#),
             "{content}"
+        );
+        // The replayed assistant turn must not carry the unparseable arguments.
+        assert_eq!(
+            messages[1].pointer("/tool_calls/0/function/arguments"),
+            Some(&json!("{}"))
         );
 
         let events: Vec<AgentEvent> = rx.try_iter().collect();

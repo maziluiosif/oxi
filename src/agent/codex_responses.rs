@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
-use super::dispatch::{parse_tool_args, run_gated_tool, spawn_readonly_tool};
+use super::dispatch::{parse_tool_args, replay_tool_args, run_gated_tool, spawn_readonly_tool};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
@@ -425,8 +425,7 @@ fn process_responses_event(
                         // A second ToolStart updates the early pill with complete arguments. The
                         // app routes it by call id, so this never creates a duplicate block.
                         if !call_id.is_empty() && !name.is_empty() {
-                            let parsed_args: Value =
-                                serde_json::from_str(args).unwrap_or(json!({}));
+                            let parsed_args = parse_tool_args(name, args).unwrap_or(json!({}));
                             let _ = tx.send(AgentEvent::ToolStart {
                                 name: name.to_string(),
                                 tool_call_id: call_id.to_string(),
@@ -651,7 +650,7 @@ pub async fn run_codex_responses_loop(
         }
         let _ = tx.send(AgentEvent::AssistantMessageDone);
 
-        let tool_calls = pending_tools;
+        let mut tool_calls = pending_tools;
         if let Some(first) = tool_calls.first()
             && !sse_state.reasoning_items.is_empty()
         {
@@ -659,6 +658,15 @@ pub async fn run_codex_responses_loop(
         }
 
         if !tool_calls.is_empty() {
+            // Parse before recording the turn, so the replayed history only holds valid arguments.
+            let parsed_args: Vec<Result<Value, String>> = tool_calls
+                .iter_mut()
+                .map(|t| {
+                    let parsed = parse_tool_args(&t.name, &t.arguments);
+                    t.arguments = replay_tool_args(&t.arguments, &parsed);
+                    parsed
+                })
+                .collect();
             let mut msg = json!({ "role": "assistant", "content": assistant_text });
             let arr: Vec<Value> = tool_calls
                 .iter()
@@ -690,8 +698,9 @@ pub async fn run_codex_responses_loop(
             }
             let parsed: Vec<ToolCallP> = tool_calls
                 .into_iter()
-                .map(|tc| {
-                    let (args, bad_args) = match parse_tool_args(&tc.name, &tc.arguments) {
+                .zip(parsed_args)
+                .map(|(tc, parsed)| {
+                    let (args, bad_args) = match parsed {
                         Ok(args) => (args, None),
                         Err(msg) => (json!({}), Some(msg)),
                     };
@@ -844,5 +853,120 @@ mod tests {
             prompt_cache_key("sys", &first),
             prompt_cache_key("other", &first)
         );
+    }
+
+    #[tokio::test]
+    async fn malformed_arguments_are_reported_to_the_model_without_running_the_tool() {
+        use crate::agent::approval::{ApprovalGate, ApprovalPolicy};
+        use crate::agent::tools::ToolEnv;
+        use crate::settings::{ALL_TOOL_NAMES, WebSearchBackend};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        use std::sync::mpsc;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+        struct Rounds(AtomicUsize);
+        impl Respond for Rounds {
+            fn respond(&self, _req: &Request) -> ResponseTemplate {
+                let events = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let call =
+                        json!({"type": "function_call", "name": "write", "call_id": "call_1"});
+                    let mut done = call.clone();
+                    done["arguments"] = json!("{\"path\":\"hello.txt\",\"content\":\"hi");
+                    vec![
+                        json!({"type": "response.output_item.added", "item": call}),
+                        json!({"type": "response.output_item.done", "item": done}),
+                        json!({"type": "response.completed", "response": {}}),
+                    ]
+                } else {
+                    vec![
+                        json!({"type": "response.output_text.delta", "delta": "Done!"}),
+                        json!({"type": "response.completed", "response": {}}),
+                    ]
+                };
+                let body: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body)
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/codex/responses"))
+            .respond_with(Rounds(AtomicUsize::new(0)))
+            .mount(&server)
+            .await;
+        let cwd = std::env::temp_dir().join(format!(
+            "oxi-codex-garbage-args-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let client = reqwest::Client::new();
+        let (tx, rx) = mpsc::channel::<AgentEvent>();
+        let (_approval_tx, approval_rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut gate = ApprovalGate::new(ApprovalPolicy::disabled(), approval_rx);
+        let env = ToolEnv {
+            enabled: vec![true; ALL_TOOL_NAMES.len()],
+            web_search_url: String::new(),
+            web_search_backend: WebSearchBackend::default(),
+            bash_timeout_cap_secs: 300,
+            mcp: None,
+            undo_journal: None,
+            subagent: None,
+        };
+        let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
+        let tools = vec![json!({
+            "type": "function",
+            "function": {"name": "write", "description": "write a file",
+                          "parameters": {"type": "object", "properties": {}}}
+        })];
+        let base_url = server.uri();
+        let mut ctx = LoopCtx {
+            client: &client,
+            base_url: &base_url,
+            model: "test-model",
+            cwd: &cwd,
+            env: &env,
+            tx: &tx,
+            cancel: &cancel,
+            gate: &mut gate,
+            max_rounds: 10,
+            effort_override: None,
+            context_char_budget: usize::MAX,
+            tools_chars: 0,
+        };
+        let result =
+            run_codex_responses_loop(&mut ctx, "token", "account", &mut messages, &tools).await;
+        assert!(result.is_ok(), "agent loop failed: {result:?}");
+
+        assert!(!cwd.join("hello.txt").exists());
+        let content = messages
+            .iter()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("tool"))
+            .and_then(|m| m.get("content").and_then(Value::as_str))
+            .unwrap_or_default();
+        assert!(
+            content.contains("The arguments for `write` were not valid JSON ("),
+            "unexpected content: {content}"
+        );
+        assert_eq!(
+            messages[1].pointer("/tool_calls/0/function/arguments"),
+            Some(&json!("{}"))
+        );
+        let events: Vec<AgentEvent> = rx.try_iter().collect();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AgentEvent::ToolEnd {
+                is_error: Some(true),
+                ..
+            }
+        )));
+        assert!(matches!(messages.last(), Some(m) if m["content"] == "Done!"));
     }
 }
