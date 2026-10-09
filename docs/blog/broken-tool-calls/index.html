@@ -17,6 +17,8 @@
 
   <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" />
   <link rel="stylesheet" href="../blog.css" />
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script defer src="../highlight.js"></script>
 </head>
 <body>
   <header class="nav">
@@ -50,7 +52,7 @@
       a <em>string</em>, and the string is supposed to contain a JSON object that matches the
       tool's schema:
     </p>
-<pre><code>{
+<pre><code class="language-json">{
   "type": "function",
   "function": {
     "name": "read",
@@ -92,13 +94,13 @@
     <p>
       The tempting code, and the code oxi had until this week, is one line:
     </p>
-<pre><code>let args: Value = serde_json::from_str(&amp;tc.arguments).unwrap_or(json!({}));</code></pre>
+<pre><code class="language-rust">let args: Value = serde_json::from_str(&amp;tc.arguments).unwrap_or(json!({}));</code></pre>
     <p>
       It never crashes, which is why it looks fine. But think about what the model sees next. It
       asked to read <code>src/main.rs</code>, the arguments didn't parse, the tool ran with
       <code>{}</code>, and the result that came back was:
     </p>
-<pre><code>missing path</code></pre>
+<pre><code class="nohighlight">missing path</code></pre>
     <p>
       That is a lie about what happened. The model <em>did</em> send a path. A strong model shrugs
       and tries again. A small one reads it literally: maybe the file doesn't exist, maybe it
@@ -115,7 +117,7 @@
       what went wrong <em>and quotes what it sent</em>, and the tool doesn't run at all.
     </p>
     <p>This is the whole function in oxi (Rust, <code>serde_json</code>):</p>
-<pre><code>pub(crate) fn parse_tool_args(name: &amp;str, raw: &amp;str) -&gt; Result&lt;Value, String&gt; {
+<pre><code class="language-rust">pub(crate) fn parse_tool_args(name: &amp;str, raw: &amp;str) -&gt; Result&lt;Value, String&gt; {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(Value::Object(Default::default()));
@@ -153,7 +155,7 @@
       turn.
     </p>
     <p>Here is what the model now gets back for a truncated call:</p>
-<pre><code>The arguments for `read` were not valid JSON (EOF while parsing a string at line 1 column 21).
+<pre><code class="nohighlight">The arguments for `read` were not valid JSON (EOF while parsing a string at line 1 column 21).
 Received: {"path": "src/main.rs
 Call `read` again with a single JSON object that matches its parameters.</code></pre>
     <p>
