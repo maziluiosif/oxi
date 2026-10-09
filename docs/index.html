@@ -210,6 +210,7 @@
     footer { border-top: 1px solid var(--border); padding: 40px 0; color: var(--muted); font-size: 0.9rem; }
     .foot-inner { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
     .foot-links { display: flex; gap: 20px; }
+    .foot-badge { display: block; line-height: 0; }
 
 
     /* Hero install line */
@@ -633,6 +634,12 @@
         <a href="https://github.com/maziluiosif/oxi/issues">Issues</a>
         <a href="https://github.com/maziluiosif/oxi/blob/dev/LICENSE">MIT License</a>
       </div>
+      <a class="foot-badge" href="https://alternativeto.net/software/oxi/about/?utm_source=badge&amp;utm_medium=referral" target="_blank" rel="noopener">
+        <picture>
+          <source srcset="media/alternativeto-light.svg" media="(prefers-color-scheme: light)" />
+          <img src="media/alternativeto-dark.svg" alt="oxi on AlternativeTo" width="123" height="42" />
+        </picture>
+      </a>
     </div>
   </footer>
 
