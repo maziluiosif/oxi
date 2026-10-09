@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.2] - 2026-10-09
+
+### Fixed
+- **Agent:** Tool calls with malformed JSON are now automatically repaired (removing code fences, fixing double-encoding) or reported back to the model with the original arguments so it can retry.
+- **Agent:** Replayed tool calls in conversation history now use repaired arguments instead of empty objects, preventing failures when retrying with local models.
+
+
 ## [1.11.1] - 2026-10-08
 
 ### Fixed
@@ -963,7 +970,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.11.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.11.2...HEAD
+[1.11.2]: https://github.com/maziluiosif/oxi/compare/v1.11.1...v1.11.2
 [1.11.1]: https://github.com/maziluiosif/oxi/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/maziluiosif/oxi/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/maziluiosif/oxi/compare/v1.9.2...v1.10.0
