@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>When small models break tool-call JSON · oxi</title>
+  <meta name="description" content="Small local models often send tool calls that aren't valid JSON. Here is what goes wrong, what is safe to repair, and why the rest should go back to the model instead of being swallowed." />
+  <link rel="canonical" href="https://maziluiosif.github.io/oxi/blog/broken-tool-calls/" />
+
+  <meta property="og:title" content="When small models break tool-call JSON" />
+  <meta property="og:description" content="What goes wrong when small local models make tool calls, what is safe to repair, and why the rest should go back to the model." />
+  <meta property="og:type" content="article" />
+  <meta property="og:url" content="https://maziluiosif.github.io/oxi/blog/broken-tool-calls/" />
+  <meta property="og:image" content="https://maziluiosif.github.io/oxi/media/social-preview.png" />
+  <meta property="article:published_time" content="2026-10-09" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" />
+  <link rel="stylesheet" href="../blog.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="../../">
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" alt="" />
+        oxi
+      </a>
+      <nav class="nav-links">
+        <a href="../">Blog</a>
+        <a href="https://github.com/maziluiosif/oxi">GitHub</a>
+        <a class="nav-cta" href="../../#install">Get oxi</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap article">
+    <p class="meta"><time datetime="2026-10-09">October 9, 2026</time> · 7 min read</p>
+    <h1>When small models break tool&#8209;call JSON</h1>
+    <p class="lede">
+      A coding agent lives and dies by tool calls. With a frontier model you barely think about
+      them. With a 7B model running on your laptop, the JSON is where things fall apart. This is
+      what we ran into in <a href="https://github.com/maziluiosif/oxi">oxi</a>, what is safe to fix
+      on the client, and why everything else should go back to the model instead of being hidden.
+    </p>
+
+    <h2>How a tool call gets to your code</h2>
+    <p>
+      In an OpenAI-compatible API, the model doesn't run anything. It returns a message with a
+      <code>tool_calls</code> array: a tool name and an <code>arguments</code> field. That field is
+      a <em>string</em>, and the string is supposed to contain a JSON object that matches the
+      tool's schema:
+    </p>
+<pre><code>{
+  "type": "function",
+  "function": {
+    "name": "read",
+    "arguments": "{\"path\": \"src/main.rs\"}"
+  }
+}</code></pre>
+    <p>
+      With local models there is one more step. The model writes plain text in whatever format it
+      was trained on, and the server (llama-server, Ollama, LM Studio) uses the model's chat
+      template to recognise a tool call in that text and turn it into the structure above. oxi
+      relies on that native tool calling rather than inventing its own text protocol, because
+      the model was trained on that format and follows it best.
+    </p>
+    <p>
+      The weak spot is the <code>arguments</code> string. Nothing guarantees it is valid JSON. The
+      server extracts what the model wrote, and a small model doesn't always write what it meant.
+    </p>
+
+    <h2>What broken arguments look like</h2>
+    <p>The failures fall into a few recognisable shapes:</p>
+    <ul>
+      <li><strong>Markdown fences.</strong> The model is used to showing JSON to humans, so it
+        wraps it: <code>```json {"path": "src/main.rs"} ```</code>.</li>
+      <li><strong>Prose around the object.</strong> <code>Let me read the file: {"path": "src/main.rs"}</code>.</li>
+      <li><strong>Double encoding.</strong> The object arrives as a JSON <em>string</em> containing
+        JSON: <code>"{\"path\": \"src/main.rs\"}"</code>.</li>
+      <li><strong>Truncation.</strong> Generation stops mid-object, often on long <code>write</code>
+        or <code>edit</code> payloads: <code>{"path": "src/main.rs</code>.</li>
+      <li><strong>Not JSON at all.</strong> Unquoted strings, single quotes, trailing commas:
+        <code>{"path": src/main.rs}</code>.</li>
+    </ul>
+    <p>
+      The first three are formatting mistakes: the model knows what it wants to call, and the
+      intent is all there. The last two are real errors, and no amount of cleverness on the client
+      can recover the missing half of a file.
+    </p>
+
+    <h2>The worst fix: pretend it was empty</h2>
+    <p>
+      The tempting code, and the code oxi had until this week, is one line:
+    </p>
+<pre><code>let args: Value = serde_json::from_str(&amp;tc.arguments).unwrap_or(json!({}));</code></pre>
+    <p>
+      It never crashes, which is why it looks fine. But think about what the model sees next. It
+      asked to read <code>src/main.rs</code>, the arguments didn't parse, the tool ran with
+      <code>{}</code>, and the result that came back was:
+    </p>
+<pre><code>missing path</code></pre>
+    <p>
+      That is a lie about what happened. The model <em>did</em> send a path. A strong model shrugs
+      and tries again. A small one reads it literally: maybe the file doesn't exist, maybe it
+      should list the directory first, maybe it should apologise and stop. It burns rounds
+      solving a problem it doesn't have, and from the outside it looks like the model is dumb,
+      when the client threw away the evidence.
+    </p>
+
+    <h2>Repair what is unambiguous, report the rest</h2>
+    <p>
+      The rule we settled on: only repair a call when there is exactly one reasonable reading of
+      it. Fences, surrounding prose and double encoding all qualify, because the intended object
+      is sitting right there. Everything else is sent back to the model as a tool error that says
+      what went wrong <em>and quotes what it sent</em>, and the tool doesn't run at all.
+    </p>
+    <p>This is the whole function in oxi (Rust, <code>serde_json</code>):</p>
+<pre><code>pub(crate) fn parse_tool_args(name: &amp;str, raw: &amp;str) -&gt; Result&lt;Value, String&gt; {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Value::Object(Default::default()));
+    }
+    let first_err = match serde_json::from_str::&lt;Value&gt;(trimmed) {
+        Ok(v @ Value::Object(_)) =&gt; return Ok(v),
+        // Double-encoded: a JSON string that itself holds the object.
+        Ok(Value::String(inner)) =&gt; match serde_json::from_str::&lt;Value&gt;(inner.trim()) {
+            Ok(v @ Value::Object(_)) =&gt; return Ok(v),
+            _ =&gt; "expected a JSON object, got a string".to_string(),
+        },
+        Ok(_) =&gt; "expected a JSON object".to_string(),
+        Err(e) =&gt; e.to_string(),
+    };
+    // Fences or prose: try the span from the first `{` to the last `}`.
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
+        &amp;&amp; start &lt; end
+        &amp;&amp; let Ok(v @ Value::Object(_)) = serde_json::from_str::&lt;Value&gt;(&amp;trimmed[start..=end])
+    {
+        return Ok(v);
+    }
+    const MAX_ECHO: usize = 500;
+    let echo: String = trimmed.chars().take(MAX_ECHO).collect();
+    let ellipsis = if trimmed.chars().count() &gt; MAX_ECHO { "…" } else { "" };
+    Err(format!(
+        "The arguments for `{name}` were not valid JSON ({first_err}). Received: {echo}{ellipsis}\n\
+         Call `{name}` again with a single JSON object that matches its parameters."
+    ))
+}</code></pre>
+    <p>
+      A few details matter more than they look. The repair only accepts a result that is a JSON
+      <em>object</em>, since that's the only thing a tool's arguments can be. The error quotes the raw
+      input, capped at 500 characters, so a truncated 20 KB <code>write</code> doesn't flood the
+      context. And it names the tool, because the model may have made several calls in the same
+      turn.
+    </p>
+    <p>Here is what the model now gets back for a truncated call:</p>
+<pre><code>The arguments for `read` were not valid JSON (EOF while parsing a string at line 1 column 21).
+Received: {"path": "src/main.rs
+Call `read` again with a single JSON object that matches its parameters.</code></pre>
+    <p>
+      That message is true, specific and actionable. The model can see its own broken output and
+      exactly where parsing stopped, which is everything it needs to fix the call on the next try.
+      It's the same reason compilers quote the offending line.
+    </p>
+
+    <h2>Where the check runs matters</h2>
+    <p>
+      Parsing happens before anything else touches the call. A call with bad arguments:
+    </p>
+    <ul>
+      <li><strong>never asks for approval.</strong> There's nothing meaningful to approve, and an
+        approval prompt for <code>edit {}</code> would only confuse the person at the keyboard.</li>
+      <li><strong>is never batched with parallel read-only calls.</strong> It is handled on its own,
+        so one bad call can't hold up or mix into the others.</li>
+      <li><strong>shows up as a failed tool in the UI</strong>, with the same message the model got,
+        so when you're watching a run you can see exactly why it retried.</li>
+    </ul>
+    <p>
+      oxi talks to three wire formats (OpenAI-style chat completions, Anthropic messages and the
+      Codex responses API), and all three loops go through the same function, even though it's
+      the small local models that need it most.
+    </p>
+
+    <h2>Why not constrain the output instead?</h2>
+    <p>
+      The stronger fix is constrained decoding: llama.cpp can apply a grammar or a JSON schema at
+      the sampler, so the model physically cannot emit invalid JSON. It's a good tool, and worth
+      using when you control the server. We didn't start there for two reasons. oxi also runs
+      against Ollama, LM Studio, remote boxes over SSH and hosted APIs, so the client needs a
+      sensible answer for malformed output regardless of the backend. And constraints fix the
+      <em>syntax</em>, not the intent: a model forced into valid JSON can still send the wrong
+      field names, and that also has to come back as a clear error.
+    </p>
+    <p>The two approaches stack well: constrain where you can, and report clearly everywhere.</p>
+
+    <h2>If you're building on small models</h2>
+    <ul>
+      <li><strong>Never swallow a parse error.</strong> <code>unwrap_or_default()</code> on model
+        output is a bug that just hasn't shown up yet.</li>
+      <li><strong>Repair only what is unambiguous.</strong> Fences, prose and double encoding,
+        yes. Guessing at truncated or malformed content, no.</li>
+      <li><strong>Quote the input back.</strong> Models correct what they can see.</li>
+      <li><strong>Keep the tool surface small.</strong> Fewer tools and shorter schemas leave a
+        small model more room to get each call right.</li>
+      <li><strong>Test the sad path.</strong> oxi has an end-to-end test that streams a cut-off
+        tool call from a mock server and checks that the model receives the error and the tool
+        never runs.</li>
+    </ul>
+
+    <p>
+      The change shipped in <a href="https://github.com/maziluiosif/oxi/releases/tag/v1.11.2">oxi v1.11.2</a>.
+      It came from a question on X about small models drifting off the tool-call JSON, which is
+      the kind of feedback we're always happy to get.
+    </p>
+
+    <aside class="cta">
+      <h3>Try oxi</h3>
+      <p>
+        A native, open-source coding agent for any model. Run GGUF models on your own machine
+        (oxi sets up llama-server for you), use Ollama or LM Studio, or bring your Claude Code,
+        Codex or Cursor subscription. One Rust binary, around 110 MB of RAM, MIT licensed.
+      </p>
+      <p class="cta-links">
+        <a class="btn" href="../../#install">Install oxi</a>
+        <a class="btn ghost" href="https://github.com/maziluiosif/oxi">Star on GitHub</a>
+      </p>
+    </aside>
+  </main>
+
+  <footer>
+    <div class="wrap foot-inner">
+      <a class="brand" href="../../" style="font-size:1rem;">
+        <img src="https://raw.githubusercontent.com/maziluiosif/oxi/dev/assets/app-icon.png" alt="" style="width:22px;height:22px;border-radius:5px;" />
+        oxi
+      </a>
+      <div class="foot-links">
+        <a href="../">Blog</a>
+        <a href="https://github.com/maziluiosif/oxi">GitHub</a>
+        <a href="https://github.com/maziluiosif/oxi/releases">Releases</a>
+        <a href="https://github.com/maziluiosif/oxi/blob/dev/LICENSE">MIT License</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
