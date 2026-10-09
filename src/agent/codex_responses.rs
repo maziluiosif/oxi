@@ -11,11 +11,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::activity_log::{self, ActivityKind, StreamCapture};
-use super::dispatch::{run_gated_tool, spawn_readonly_tool};
+use super::dispatch::{parse_tool_args, run_gated_tool, spawn_readonly_tool};
 use super::events::{AgentEvent, TokenUsage};
 use super::loop_ctx::LoopCtx;
 use super::net::{MAX_STREAM_RETRIES, backoff_delay, send_with_retry, sleep_cancellable};
-use super::tools::MAX_TOOL_OUTPUT_CHARS;
+use super::tools::{MAX_TOOL_OUTPUT_CHARS, ToolResult};
 
 #[derive(Default, Clone)]
 struct ToolCallAccum {
@@ -685,15 +685,21 @@ pub async fn run_codex_responses_loop(
                 id: String,
                 name: String,
                 args: Value,
+                /// Set when the arguments were not valid JSON: reported back instead of running.
+                bad_args: Option<String>,
             }
             let parsed: Vec<ToolCallP> = tool_calls
                 .into_iter()
                 .map(|tc| {
-                    let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
+                    let (args, bad_args) = match parse_tool_args(&tc.name, &tc.arguments) {
+                        Ok(args) => (args, None),
+                        Err(msg) => (json!({}), Some(msg)),
+                    };
                     ToolCallP {
                         id: tc.id,
                         name: tc.name,
                         args,
+                        bad_args,
                     }
                 })
                 .collect();
@@ -703,9 +709,12 @@ pub async fn run_codex_responses_loop(
                 if cancel.load(Ordering::SeqCst) {
                     break;
                 }
-                if is_readonly(&parsed[i].name) {
+                if parsed[i].bad_args.is_none() && is_readonly(&parsed[i].name) {
                     let batch_start = i;
-                    while i < parsed.len() && is_readonly(&parsed[i].name) {
+                    while i < parsed.len()
+                        && parsed[i].bad_args.is_none()
+                        && is_readonly(&parsed[i].name)
+                    {
                         i += 1;
                     }
                     let batch = &parsed[batch_start..i];
@@ -738,8 +747,17 @@ pub async fn run_codex_responses_loop(
                         tool_call_id: tc.id.clone(),
                         args: Some(tc.args.clone()),
                     });
-                    let result =
-                        run_gated_tool(gate, tx, cancel, cwd, &tc.id, &tc.name, &tc.args, env);
+                    let result = match &tc.bad_args {
+                        Some(msg) => ToolResult {
+                            output: msg.clone(),
+                            is_error: true,
+                            diff: None,
+                            full_output_path: None,
+                        },
+                        None => {
+                            run_gated_tool(gate, tx, cancel, cwd, &tc.id, &tc.name, &tc.args, env)
+                        }
+                    };
                     let text = result.output.clone();
                     let is_err = result.is_error;
                     let _ = tx.send(AgentEvent::ToolOutput {

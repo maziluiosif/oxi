@@ -279,3 +279,78 @@ pub(crate) fn spawn_readonly_tool(
         result
     })
 }
+
+/// Parse a model's tool-call `arguments`. Small local models often wrap the JSON in a code fence,
+/// add prose around it, or double-encode it as a string; those are repaired. Anything else comes
+/// back as an error naming what was received, so the model can retry the call instead of the tool
+/// running with empty arguments and failing with a misleading "missing path".
+pub(crate) fn parse_tool_args(name: &str, raw: &str) -> Result<Value, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Value::Object(Default::default()));
+    }
+    let first_err = match serde_json::from_str::<Value>(trimmed) {
+        Ok(v @ Value::Object(_)) => return Ok(v),
+        Ok(Value::String(inner)) => match serde_json::from_str::<Value>(inner.trim()) {
+            Ok(v @ Value::Object(_)) => return Ok(v),
+            _ => "expected a JSON object, got a string".to_string(),
+        },
+        Ok(_) => "expected a JSON object".to_string(),
+        Err(e) => e.to_string(),
+    };
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
+        && start < end
+        && let Ok(v @ Value::Object(_)) = serde_json::from_str::<Value>(&trimmed[start..=end])
+    {
+        return Ok(v);
+    }
+    const MAX_ECHO: usize = 500;
+    let echo: String = trimmed.chars().take(MAX_ECHO).collect();
+    let ellipsis = if trimmed.chars().count() > MAX_ECHO {
+        "…"
+    } else {
+        ""
+    };
+    Err(format!(
+        "The arguments for `{name}` were not valid JSON ({first_err}). Received: {echo}{ellipsis}\n\
+         Call `{name}` again with a single JSON object that matches its parameters."
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tool_args;
+    use serde_json::json;
+
+    #[test]
+    fn parse_tool_args_accepts_valid_and_empty() {
+        assert_eq!(
+            parse_tool_args("read", r#"{"path":"a.rs"}"#),
+            Ok(json!({"path": "a.rs"}))
+        );
+        assert_eq!(parse_tool_args("ls", "  "), Ok(json!({})));
+    }
+
+    #[test]
+    fn parse_tool_args_repairs_fences_prose_and_double_encoding() {
+        let fenced = "```json\n{\"path\": \"src/main.rs\"}\n```";
+        assert_eq!(
+            parse_tool_args("read", fenced),
+            Ok(json!({"path": "src/main.rs"}))
+        );
+        let prose = "Sure, reading it: {\"path\": \"x\"} hope that helps";
+        assert_eq!(parse_tool_args("read", prose), Ok(json!({"path": "x"})));
+        let doubled = r#""{\"path\": \"y\"}""#;
+        assert_eq!(parse_tool_args("read", doubled), Ok(json!({"path": "y"})));
+    }
+
+    #[test]
+    fn parse_tool_args_reports_garbage_with_what_was_sent() {
+        let err = parse_tool_args("edit", r#"{"path": "a.rs", "old": "x"#).unwrap_err();
+        assert!(err.contains("`edit`"), "{err}");
+        assert!(err.contains(r#"Received: {"path": "a.rs""#), "{err}");
+        assert!(parse_tool_args("bash", "[1, 2]").is_err());
+        let long = "x".repeat(2_000);
+        assert!(parse_tool_args("bash", &long).unwrap_err().contains('…'));
+    }
+}
