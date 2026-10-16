@@ -461,7 +461,7 @@ fn extract_llama_server_zip_to(
         if file.is_dir() {
             continue;
         }
-        let name = file.name().replace('\\', "/");
+        let name = file.name().map_err(|e| e.to_string())?.replace('\\', "/");
         let Some(base) = name.rsplit('/').next() else {
             continue;
         };
