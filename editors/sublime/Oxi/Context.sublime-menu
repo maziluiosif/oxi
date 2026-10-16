@@ -1,3 +1,4 @@
 [
-    {"caption": "Add to oxi Chat", "command": "oxi_add_to_chat"}
+    {"caption": "Add to oxi Chat", "command": "oxi_add_to_chat"},
+    {"caption": "Delete Chat…", "command": "oxi_delete_listed_chat"}
 ]

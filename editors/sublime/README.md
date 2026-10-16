@@ -7,6 +7,14 @@ history are oxi's own. The package starts `oxi headless` and talks to it over st
 chat started in Sublime also appears in the oxi app for the same folder, and the other way
 round.
 
+`oxi headless` connects to one oxi daemon that every Sublime window and every other editor
+shares (it starts the daemon when none runs). A chat open in two places streams in both, an
+approval can be answered from either, and a turn keeps running when Sublime closes; reopen
+the chat to see where it got. The daemon exits after 15 minutes with no editor connected and
+nothing running. Chats the oxi app changes are read again as soon as their file changes.
+*Oxi: Restart oxi* stops the daemon (cancelling running turns everywhere); the next message
+starts it again, on the current oxi binary.
+
 ## Install
 
 The oxi installer adds the package when it finds Sublime Text:
@@ -54,9 +62,13 @@ ln -s "$PWD/editors/sublime/Oxi" ~/.config/sublime-text/Packages/Oxi
   plan mode, `/new` starts a chat.
 - The line above the composer picks the agent or provider, the model, the reasoning effort and
   plan mode.
+- **Cmd+V** / **Ctrl+V** in the composer with a screenshot or image in the clipboard attaches it;
+  *Oxi: Attach Image…* picks image files. Attached images sit above the toolbar: click one to
+  see it, ✕ to drop it. Images in sent messages open from the links after the message.
 - **Ctrl+Alt+L** (or *Add to oxi Chat* in the context menu) puts the selection, with its file
   and lines, into the composer.
-- Click a chat in the list to open it; **☰ Chats** and **＋ New chat** at the top of the
+- Click a chat in the list to open it; **Delete** / **Backspace** (or *Delete Chat…* in its
+  context menu) deletes the chat under the caret or the pointer, after asking. **☰ Chats** and **＋ New chat** at the top of the
   transcript bring the list back or start a chat. Errors show as a red card at the end of
   the transcript. Double-click (or Enter on) a tool or thinking line in
   the transcript to open its full input, output and diff. `diff` and `open` links sit next to
@@ -75,5 +87,10 @@ Everything is also in the command palette under `Oxi:`.
 
 `oxi headless` reads one JSON request per line on stdin (`{"id", "method", "params"}`) and
 writes one JSON object per line on stdout: responses (`{"id", "result" | "error"}`) and
-notifications (`{"method", "params"}`). See `src/headless.rs` for the methods; other editors
-can use the same server.
+notifications (`{"method", "params"}`). See `src/headless/mod.rs` for the methods; other
+editors can use the same server. Responses go to the editor that asked; notifications go to
+every connected editor, so filter them by `chat`. `shutdown` disconnects the caller and
+`daemon.stop` stops the daemon.
+
+`oxi headless --status` shows the running daemon, `--stop` stops it, and `--stdio` serves a
+single editor in its own process, without the daemon.

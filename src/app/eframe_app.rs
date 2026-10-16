@@ -77,6 +77,7 @@ impl eframe::App for OxiApp {
         self.drain_title_gen(ctx);
         self.drain_compaction(ctx);
         self.check_external_file_changes();
+        self.sync_chats_from_disk(ctx);
         self.poll_git_changes(ctx);
         self.attach_autonomous_turns(ctx);
         crate::agent::acp::set_reap_policy(

@@ -242,6 +242,8 @@ impl OxiApp {
         if text.is_empty() && !has_attachments {
             return;
         }
+        // A turn run from an editor (the headless daemon) a moment ago must not be overwritten.
+        self.reload_session_if_changed(key);
         if self
             .run_state(key)
             .is_some_and(|state| state.waiting_response)
@@ -623,11 +625,16 @@ impl OxiApp {
 
     fn start_autonomous_turn(&mut self, key: SessionKey, acp_session_key: String) {
         let session = self.session_by_key(key);
+        let disk_mtime = session
+            .session_file
+            .as_deref()
+            .and_then(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok());
         if !session.messages_loaded
             && let Some(file) = session.session_file.clone()
             && let Some((loaded, wire)) = session_store::load_session_messages_with_wire(&file)
         {
             let session = self.session_mut_by_key(key);
+            session.disk_mtime = disk_mtime;
             session.messages = loaded.messages;
             session.config = loaded.config;
             session.wire_cache = wire;
