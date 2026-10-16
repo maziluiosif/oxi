@@ -10,6 +10,7 @@ use crate::settings::AppSettings;
 
 mod activity_window;
 mod agent_handlers;
+mod chat_sync;
 mod chores;
 mod commands;
 mod compaction;
@@ -93,6 +94,8 @@ pub struct OxiApp {
     queued_actions: Vec<commands::QueuedAction>,
     /// App actions due this frame, run from `logic`.
     pending_app_actions: Vec<commands::AppAction>,
+    /// Notices chats another oxi process (the headless daemon) changed on disk.
+    chat_watch: chat_sync::ChatDiskWatch,
 }
 
 impl OxiApp {
@@ -280,6 +283,7 @@ impl OxiApp {
             menu_bar: None,
             queued_actions: Vec::new(),
             pending_app_actions: Vec::new(),
+            chat_watch: Default::default(),
             context_overhead_cache: Default::default(),
         };
         // The constructor doesn't have an egui::Context yet; it's bound on the first
@@ -571,6 +575,7 @@ impl OxiApp {
             chars_per_token: None,
             agent_context: None,
             wire_cache: None,
+            disk_mtime: None,
         }
     }
 
@@ -757,11 +762,16 @@ impl OxiApp {
             session.session_file.clone()
         };
 
+        // Stat before reading, so a write racing the read is noticed on the next disk check.
+        let disk_mtime = session_file
+            .as_deref()
+            .and_then(|f| std::fs::metadata(f).and_then(|m| m.modified()).ok());
         if let Some(session_file) = session_file
             && let Some((messages, wire)) =
                 session_store::load_session_messages_with_wire(&session_file)
         {
             let session = self.session_mut(active);
+            session.disk_mtime = disk_mtime;
             session.messages = messages.messages;
             session.config = messages.config;
             session.messages_loaded = true;

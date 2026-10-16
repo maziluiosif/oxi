@@ -1,4 +1,6 @@
-"""Talks to `oxi headless` over stdio: one JSON object per line each way.
+"""Talks to `oxi headless` over stdio: one JSON object per line each way. `oxi headless`
+relays to the oxi daemon that every editor shares, so notifications may be about chats this
+editor did not start.
 
 No `sublime` import: callbacks go through `schedule`, which the plugin points at
 `sublime.set_timeout` so they run on the UI thread in arrival order.

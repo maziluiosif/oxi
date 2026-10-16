@@ -2,16 +2,19 @@
 
 Three views make up the chat: the chat list in a column on the left, the transcript of the
 open chat on its right and the composer under the transcript. All the agent work happens in `oxi headless`, a subprocess this
-plugin starts on first use; see `lib/client.py` for the protocol and `src/headless.rs` in the
+plugin starts on first use; see `lib/client.py` for the protocol and `src/headless/` in the
 oxi repository for the other side.
 """
 
+import base64
+import hashlib
 import html
 import importlib
 import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 
 import sublime
@@ -38,6 +41,10 @@ IGNORED_DIRS = {
     "__pycache__", ".idea", ".next", ".cache", ".tox", ".mypy_cache", ".pytest_cache",
 }
 MAX_MENTION_FILES = 20000
+# The same limits as the oxi app (src/theme.rs).
+MAX_IMAGES = 8
+MAX_IMAGE_BYTES = 6 * 1024 * 1024
+IMAGE_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
 
 CLIENT = None
 READY = False
@@ -184,6 +191,8 @@ def on_notification(method, params):
                 sublime.status_message("oxi: a chat is waiting for your approval")
                 panel.refresh_chats()
             continue
+        # The other notifications come from any editor connected to oxi, this one included:
+        # a chat open in two windows (or in Sublime and another editor) stays in step.
         if method == "message":
             panel.on_message(params["index"], params["message"])
         elif method == "turn":
@@ -201,12 +210,32 @@ def on_notification(method, params):
         elif method == "context":
             panel.context = {"used": params.get("used"), "size": params.get("size")}
             panel.refresh_toolbar()
+        elif method == "config":
+            panel.config = params.get("config")
+            panel.refresh_toolbar()
+        elif method == "title":
+            panel.set_title(params.get("title"))
+        elif method == "chat_reloaded":
+            # The app (or an older oxi) wrote the chat; read it again, keeping the scroll.
+            panel.open_chat(chat, scroll=False)
+        elif method == "chat_removed":
+            panel.new_chat()
 
 
 def same_path(a, b):
     if not a or not b:
         return False
-    return os.path.realpath(a) == os.path.realpath(b)
+    return comparable_path(a) == comparable_path(b)
+
+
+def comparable_path(path):
+    # oxi canonicalizes roots, which on Windows gives verbatim `\\?\C:\...` paths that
+    # realpath keeps as they are, so strip the prefix and fold case before comparing.
+    if path.startswith("\\\\?\\UNC\\"):
+        path = "\\\\" + path[8:]
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
+    return os.path.normcase(os.path.realpath(path))
 
 
 def window_root(window):
@@ -308,6 +337,8 @@ class Panel:
         self.phantoms = {}
         # Shown as a red card at the end of the transcript until the next send.
         self.error = None
+        # Images attached to the next message, `{"mime", "data"}` with the data in base64.
+        self.images = []
 
     # ---- layout -------------------------------------------------------------------------
 
@@ -565,21 +596,81 @@ class Panel:
         row = rows.index(self.chat_id) if self.chat_id in rows else 0
         line = view.line(view.text_point(row, 0))
         view.add_regions("oxi_current", [line], "region.bluish", "", sublime.DRAW_NO_OUTLINE)
+        # Mid arrow walk, keep the caret on the chat about to open rather than the open one.
+        pending = getattr(self, "chat_pending", False)
+        if pending is not False and pending in rows:
+            row = rows.index(pending)
+        self.put_chat_caret(row)
 
-    def open_selected_chat(self):
+    def put_chat_caret(self, row):
+        """Caret at the start of a row, without the horizontal scroll a long title causes."""
+        view = self.views["chats"]
+        point = view.text_point(row, 0)
+        view.sel().clear()
+        view.sel().add(sublime.Region(point))
+        view.show(point, False)
+        x, y = view.viewport_position()
+        if x:
+            view.set_viewport_position((0, y), False)
+
+    def chat_caret_row(self):
         view = self.views["chats"]
         selection = view.sel()
         if not selection:
-            return
+            return None
         row, _ = view.rowcol(selection[0].begin())
-        if row >= len(self.chat_rows):
+        return row if row < len(self.chat_rows) else None
+
+    def open_selected_chat(self, focus=True):
+        row = self.chat_caret_row()
+        if row is None:
             return
         chat = self.chat_rows[row]
         if chat is None:
-            self.new_chat()
+            if self.chat_id is not None:
+                self.new_chat()
         elif chat != self.chat_id:
             self.open_chat(chat)
-        self.focus_composer()
+        if focus:
+            self.focus_composer()
+
+    def click_chat(self, row):
+        if row is None or row >= len(self.chat_rows):
+            row = self.chat_caret_row()
+            if row is not None:
+                self.put_chat_caret(row)
+            return
+        self.put_chat_caret(row)
+        self.open_selected_chat()
+
+    def move_chat(self, delta):
+        """Arrow keys walk the list; the chat opens once the caret rests for a moment."""
+        row = self.chat_caret_row()
+        row = 0 if row is None else max(0, min(len(self.chat_rows) - 1, row + delta))
+        self.put_chat_caret(row)
+        self.chat_pending = self.chat_rows[row]
+        self.chat_move_serial = getattr(self, "chat_move_serial", 0) + 1
+        serial = self.chat_move_serial
+
+        def open_later():
+            if serial == self.chat_move_serial and self.alive():
+                self.chat_pending = False
+                self.open_selected_chat(focus=False)
+
+        sublime.set_timeout(open_later, 150)
+
+    def delete_chat(self, chat_id):
+        """Asks first; the chat is closed in every window that has it open (`chat_removed`)."""
+        if chat_id is None:
+            return
+        title = self.title if chat_id == self.chat_id else next(
+            (chat.get("title") for chat in self.chats if chat.get("id") == chat_id), None
+        )
+        if not sublime.ok_cancel_dialog("Delete the chat “{}”?".format(title or "Chat"), "Delete"):
+            return
+        request("chat.delete", {"root": self.root, "chat": chat_id})
+        if chat_id == self.chat_id:
+            self.new_chat()
 
     # ---- chats --------------------------------------------------------------------------
 
@@ -611,7 +702,7 @@ class Panel:
         self.refresh_toolbar()
         self.update_placeholder()
 
-    def open_chat(self, chat_id):
+    def open_chat(self, chat_id, scroll=True):
         self.chat_id = chat_id
         self.loading = True
         self.window.settings().set("oxi_last_chat", chat_id)
@@ -635,17 +726,23 @@ class Panel:
             self.context = result.get("context")
             self.error = None
             self.views["transcript"].set_name("oxi · " + render.one_line(self.title, 40))
-            self.render_all(scroll=True)
+            self.render_all(scroll=scroll)
             self.update_approval()
             self.refresh_toolbar()
             self.render_chats()
 
         request("chat.open", {"root": self.root, "chat": chat_id}, done)
 
+    def set_title(self, title):
+        self.title = title or "Chat"
+        if self.alive():
+            self.views["transcript"].set_name("oxi · " + render.one_line(self.title, 40))
+        self.update_header()
+
     def send(self):
         composer = self.views["composer"]
         text = composer.substr(sublime.Region(0, composer.size())).strip()
-        if not text:
+        if not text and not self.images:
             return
         plan = None
         if text == "/new":
@@ -663,6 +760,10 @@ class Panel:
         self.error = None
         self.update_approval()
         params = {"root": self.root, "text": text}
+        images, self.images = self.images, []
+        if images:
+            params["attachments"] = images
+            self.refresh_toolbar()
         if self.chat_id is not None:
             params["chat"] = self.chat_id
         elif self.config:
@@ -681,6 +782,9 @@ class Panel:
             if error:
                 if composer.is_valid() and composer.size() == 0:
                     replace(composer, 0, 0, text)
+                if images and not self.images:
+                    self.images = images
+                    self.refresh_toolbar()
                 self.show_error("The message was not sent: " + error)
                 return
             if result.get("queued"):
@@ -830,9 +934,19 @@ class Panel:
     def tool_phantoms(self, first_message, end_message=None):
         phantoms = []
         for start, end, message, block_index, kind in self.links:
-            if message < first_message or kind != "tool":
+            if message < first_message or kind not in ("tool", "user"):
                 continue
             if end_message is not None and message >= end_message:
+                continue
+            if kind == "user":
+                images = self.messages[message].get("images") or []
+                actions = [
+                    '<a href="image:{}:{}">▣ image {}</a>'.format(message, image.get("index"), n + 1)
+                    for n, image in enumerate(images)
+                ]
+                if actions:
+                    content = '<body id="oxi-tool">{}&nbsp;&nbsp;{}</body>'.format(LINK_STYLE, " · ".join(actions))
+                    phantoms.append(sublime.Phantom(sublime.Region(end), content, sublime.LAYOUT_INLINE, self.on_link))
                 continue
             block = self.block(message, block_index)
             if block is None:
@@ -922,13 +1036,17 @@ class Panel:
                 render.format_tokens(self.context.get("size")),
             ))
         if composer.size() == 0 and not notes:
-            notes.append("Enter sends · Shift+Enter new line · @ attaches a file")
+            notes.append("Enter sends · Shift+Enter new line · @ attaches a file · paste an image")
+        attached = "".join(
+            '<a class="pill" href="image-open:{0}">▣ image {1}</a><a class="muted" href="image-remove:{0}"> ✕</a> '.format(i, i + 1)
+            for i in range(len(self.images))
+        )
         if config.get("provider") != self.quota_provider:
             self.quota = None
             self.refresh_quota()
         quota = self.quota_html()
-        content = '<body id="oxi-toolbar">{}{} <span class="muted">{}</span>{}</body>'.format(
-            TOOLBAR_STYLE, " ".join(items), html.escape(" · ".join(notes)),
+        content = '<body id="oxi-toolbar">{}{}{} <span class="muted">{}</span>{}</body>'.format(
+            TOOLBAR_STYLE, attached + "<br>" if attached else "", " ".join(items), html.escape(" · ".join(notes)),
             '<br><span class="muted">usage</span> ' + quota if quota else "",
         )
         # Under the last line, so it never splits a multi-line message.
@@ -964,9 +1082,21 @@ class Panel:
             self.focus_composer()
         elif href == "chats":
             self.show_chats()
+        elif href.startswith("image-open:"):
+            index = int(href.split(":")[1])
+            if index < len(self.images):
+                image = self.images[index]
+                self.show_image(image["data"], image["mime"], "attached-{}".format(index + 1))
+        elif href.startswith("image-remove:"):
+            index = int(href.split(":")[1])
+            if index < len(self.images):
+                del self.images[index]
+                self.refresh_toolbar()
         elif ":" in href:
             action, message, block = href.split(":", 2)
-            if action == "details":
+            if action == "image":
+                self.open_message_image(int(message), int(block))
+            elif action == "details":
                 self.open_details(int(message), int(block))
             elif action == "open":
                 self.open_location(int(message), int(block))
@@ -995,7 +1125,13 @@ class Panel:
             return
         line = view.line(view.sel()[0].begin())
         found = self.link_at(line.begin())
-        if found is not None:
+        if found is None:
+            return
+        if found[2] == "user":
+            images = self.messages[found[0]].get("images") or []
+            if images:
+                self.open_message_image(found[0], images[0].get("index"))
+        else:
             self.open_details(found[0], found[1])
 
     def open_details(self, message, block_index):
@@ -1030,6 +1166,83 @@ class Panel:
         target = "{}:{}".format(path, line) if line else path
         self.window.focus_group(self.editor_group())
         self.window.open_file(target, sublime.ENCODED_POSITION)
+
+    # ---- images -------------------------------------------------------------------------
+
+    def attach_image(self, mime, data):
+        if len(self.images) >= MAX_IMAGES:
+            sublime.status_message("oxi: at most {} images per message".format(MAX_IMAGES))
+            return
+        self.images.append({"mime": mime, "data": data})
+        self.refresh_toolbar()
+        self.focus_composer()
+
+    def paste_image(self):
+        """Attach the image in the clipboard; oxi reads it, as Sublime only sees text there."""
+
+        def done(result, error):
+            if error:
+                sublime.status_message("oxi: " + error)
+            elif not result:
+                sublime.status_message("oxi: no image in the clipboard")
+            elif self.alive():
+                self.attach_image(result["mime"], result["data"])
+
+        request("clipboard.image", {}, done)
+
+    def pick_images(self):
+        def chosen(paths):
+            if not paths:
+                return
+            for path in paths if isinstance(paths, list) else [paths]:
+                self.attach_image_file(path)
+
+        types = [("Images", sorted(IMAGE_TYPES))]
+        sublime.open_dialog(chosen, file_types=types, directory=self.root, multi_select=True)
+
+    def attach_image_file(self, path):
+        mime = IMAGE_TYPES.get(os.path.splitext(path)[1].lstrip(".").lower())
+        if mime is None:
+            sublime.status_message("oxi: not an image: " + os.path.basename(path))
+            return
+        try:
+            with open(path, "rb") as f:
+                data = f.read(MAX_IMAGE_BYTES + 1)
+        except OSError as e:
+            sublime.status_message("oxi: could not read {}: {}".format(os.path.basename(path), e))
+            return
+        if len(data) > MAX_IMAGE_BYTES:
+            sublime.status_message("oxi: image too large (max {} MB)".format(MAX_IMAGE_BYTES // (1024 * 1024)))
+            return
+        self.attach_image(mime, base64.b64encode(data).decode("ascii"))
+
+    def open_message_image(self, message, index):
+        chat = self.chat_id
+
+        def done(result, error):
+            if error:
+                sublime.status_message("oxi: " + error)
+            elif result and self.alive():
+                key = hashlib.sha1(chat.encode("utf-8")).hexdigest()[:10]
+                self.show_image(result["data"], result["mime"], "{}-{}-{}".format(key, message, index))
+
+        if chat is not None:
+            request("chat.image", {"root": self.root, "chat": chat, "message": message, "index": index}, done)
+
+    def show_image(self, data, mime, name):
+        """Open an image in the editor column; Sublime shows image files in an image tab."""
+        directory = os.path.join(tempfile.gettempdir(), "oxi-images")
+        extension = {"image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}.get(mime, "png")
+        path = os.path.join(directory, "{}.{}".format(name, extension))
+        try:
+            os.makedirs(directory, exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(base64.b64decode(data))
+        except (OSError, ValueError) as e:
+            sublime.status_message("oxi: could not show the image: {}".format(e))
+            return
+        self.window.focus_group(self.editor_group())
+        self.window.open_file(path)
 
     # ---- pickers ------------------------------------------------------------------------
 
@@ -1111,6 +1324,7 @@ class Panel:
 EMPTY_STATE = (
     "\nNew chat. Type your message in the box below and press Enter.\n\n"
     "  @path        attach a file or folder from the project\n"
+    "  Cmd/Ctrl+V   paste a screenshot or image as an attachment\n"
     "  /plan        toggle plan mode (or /plan <task>)\n"
     "  /new         start another chat\n"
     "  Shift+Enter  new line\n"
@@ -1428,11 +1642,49 @@ class OxiDeleteChatCommand(PanelCommand):
     needs_chat = True
 
     def act(self, panel):
-        chat = panel.chat_id
-        if not sublime.ok_cancel_dialog("Delete the chat “{}”?".format(panel.title), "Delete"):
-            return
-        request("chat.delete", {"root": panel.root, "chat": chat})
-        panel.new_chat()
+        panel.delete_chat(panel.chat_id)
+
+
+class OxiDeleteListedChatCommand(sublime_plugin.TextCommand):
+    """Delete / Backspace in the chat list, or its context menu: the chat under the caret or
+    the one right-clicked."""
+
+    def run(self, edit, event=None):
+        panel = view_panel(self.view)
+        row = self.row(event)
+        if panel is not None and row is not None and row < len(panel.chat_rows):
+            panel.delete_chat(panel.chat_rows[row])
+
+    def row(self, event):
+        if event:
+            return self.view.rowcol(self.view.window_to_text((event["x"], event["y"])))[0]
+        selection = self.view.sel()
+        return self.view.rowcol(selection[0].begin())[0] if selection else None
+
+    def is_visible(self, event=None):
+        return is_role(self.view, "chats")
+
+    def is_enabled(self, event=None):
+        panel = view_panel(self.view)
+        row = self.row(event)
+        return panel is not None and row is not None and 0 < row < len(panel.chat_rows)
+
+    def want_event(self):
+        return True
+
+
+class OxiAttachImageCommand(PanelCommand):
+    def act(self, panel):
+        panel.pick_images()
+
+
+class OxiPasteImageCommand(sublime_plugin.TextCommand):
+    """Paste into the composer with no text in the clipboard, or from the command palette."""
+
+    def run(self, edit):
+        panel = panel_for(self.view.window(), create=True)
+        if panel is not None:
+            panel.paste_image()
 
 
 class OxiOpenSelectedChatCommand(sublime_plugin.TextCommand):
@@ -1440,6 +1692,20 @@ class OxiOpenSelectedChatCommand(sublime_plugin.TextCommand):
         panel = view_panel(self.view)
         if panel is not None:
             panel.open_selected_chat()
+
+
+class OxiChatMoveCommand(sublime_plugin.TextCommand):
+    def run(self, edit, by):
+        panel = view_panel(self.view)
+        if panel is not None:
+            panel.move_chat(by)
+
+
+class OxiChatClickCommand(sublime_plugin.TextCommand):
+    def run(self, edit, row=None):
+        panel = view_panel(self.view)
+        if panel is not None:
+            panel.click_chat(row)
 
 
 class OxiOpenDetailsCommand(sublime_plugin.TextCommand):
@@ -1517,6 +1783,9 @@ class OxiRestartCommand(sublime_plugin.WindowCommand):
         global CLIENT, READY
         if CLIENT is not None:
             client, CLIENT, READY = CLIENT, None, False
+            # oxi runs as one daemon shared by every editor: stop it, not just this connection.
+            # Turns running in other windows or editors are cancelled with it.
+            client.request("daemon.stop")
             client.stop()
         for panel in list(PANELS.values()):
             panel.running = False
@@ -1545,6 +1814,20 @@ class OxiEvents(sublime_plugin.EventListener):
         return value == expected
 
     def on_text_command(self, view, command, args):
+        # A click in the chat list picks the row under the pointer and leaves the caret at its
+        # start; a click below the last chat is ignored instead of jumping to the end of it.
+        if command == "drag_select" and is_role(view, "chats"):
+            event = (args or {}).get("event")
+            if not event or (args or {}).get("additive") or (args or {}).get("extend"):
+                return ("oxi_chat_click", {})
+            point = view.window_to_text((event["x"], event["y"]))
+            row, _ = view.rowcol(point)
+            bottom = view.text_to_window(view.line(point).begin())[1] + view.line_height()
+            return ("oxi_chat_click", {"row": row if event["y"] < bottom else None})
+        # Sublime's clipboard holds text only: a paste with none of it may be a screenshot,
+        # which oxi reads and attaches.
+        if command == "paste" and is_role(view, "composer") and not sublime.get_clipboard():
+            return ("oxi_paste_image", {})
         # Safety net: whatever binding another package gives Enter, a plain new line typed
         # into the composer sends the message (Shift+Enter uses `oxi_newline`).
         if (
@@ -1577,11 +1860,7 @@ class OxiEvents(sublime_plugin.EventListener):
     def on_post_text_command(self, view, command, args):
         if command != "drag_select":
             return
-        if is_role(view, "chats"):
-            panel = view_panel(view)
-            if panel is not None:
-                panel.open_selected_chat()
-        elif is_role(view, "transcript") and (args or {}).get("by") == "words":
+        if is_role(view, "transcript") and (args or {}).get("by") == "words":
             panel = view_panel(view)
             if panel is not None:
                 panel.open_details_at_caret()

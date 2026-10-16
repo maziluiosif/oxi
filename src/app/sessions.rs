@@ -258,63 +258,21 @@ impl OxiApp {
             .push((mime.to_string(), bytes));
     }
 
-    /// Attach an image currently stored in the OS clipboard. egui's paste event carries text
-    /// only, so bitmap clipboard formats (notably Windows screenshots / Snipping Tool) must be
-    /// read explicitly and encoded into the same PNG byte format used by normal attachments.
+    /// Attach an image currently stored in the OS clipboard (see [`clipboard_image_png`]).
     pub(crate) fn paste_clipboard_image(&mut self) -> bool {
         if self.conv.composer.pending_images.len() >= MAX_PENDING_IMAGES {
             self.notify_composer(format!("At most {MAX_PENDING_IMAGES} images per message"));
             return true;
         }
 
-        // Keep the Clipboard value scoped to this operation. On Windows the clipboard is a
-        // process-global lock and retaining it can interfere with egui's normal text paste.
-        let Some(image) = (|| {
-            let mut clipboard = arboard::Clipboard::new().ok()?;
-            clipboard.get_image().ok()
-        })() else {
-            return false; // A normal text paste; let TextEdit handle it.
+        let bytes = match clipboard_image_png() {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return false, // A normal text paste; let TextEdit handle it.
+            Err(message) => {
+                self.notify_composer(message);
+                return true;
+            }
         };
-        if image.width == 0 || image.height == 0 {
-            return false;
-        }
-        let Some(expected_len) = image
-            .width
-            .checked_mul(image.height)
-            .and_then(|pixels| pixels.checked_mul(4))
-        else {
-            self.notify_composer("Clipboard image dimensions are too large");
-            return true;
-        };
-        if image.bytes.len() != expected_len {
-            self.notify_composer("Clipboard returned invalid image data");
-            return true;
-        }
-        let (Ok(width), Ok(height)) = (u32::try_from(image.width), u32::try_from(image.height))
-        else {
-            self.notify_composer("Clipboard image dimensions are too large");
-            return true;
-        };
-        let Some(rgba) = image::RgbaImage::from_raw(width, height, image.bytes.into_owned()) else {
-            self.notify_composer("Could not decode clipboard image");
-            return true;
-        };
-        let mut png = std::io::Cursor::new(Vec::new());
-        if image::DynamicImage::ImageRgba8(rgba)
-            .write_to(&mut png, image::ImageFormat::Png)
-            .is_err()
-        {
-            self.notify_composer("Could not encode clipboard image");
-            return true;
-        }
-        let bytes = png.into_inner();
-        if bytes.len() > MAX_IMAGE_ATTACHMENT_BYTES {
-            self.notify_composer(format!(
-                "Clipboard image too large (max {} MB)",
-                MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024)
-            ));
-            return true;
-        }
         self.conv
             .composer
             .pending_images
@@ -485,6 +443,7 @@ impl OxiApp {
             if deleting_current_backend_session {
                 self.flow.current_backend_session_file = None;
             }
+            self.chat_watch.forget_deleted(session_file.clone());
             // Moving to the trash runs an external tool; keep it off the frame.
             self.spawn_chore("Could not delete the chat file", move || {
                 delete_session_file_from_disk(Path::new(&session_file))
@@ -633,4 +592,52 @@ impl OxiApp {
 
         self.sync_workspaces_to_settings();
     }
+}
+
+/// The image in the OS clipboard as PNG bytes; `None` when it holds no image. egui's paste event
+/// carries text only, so bitmap formats (notably Windows screenshots / Snipping Tool) are read
+/// explicitly and encoded into the same PNG byte format used by normal attachments.
+pub(crate) fn clipboard_image_png() -> Result<Option<Vec<u8>>, String> {
+    // Keep the Clipboard value scoped to this operation. On Windows the clipboard is a
+    // process-global lock and retaining it can interfere with egui's normal text paste.
+    let Some(image) = (|| {
+        let mut clipboard = arboard::Clipboard::new().ok()?;
+        clipboard.get_image().ok()
+    })() else {
+        return Ok(None);
+    };
+    if image.width == 0 || image.height == 0 {
+        return Ok(None);
+    }
+    let Some(expected_len) = image
+        .width
+        .checked_mul(image.height)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return Err("Clipboard image dimensions are too large".to_string());
+    };
+    if image.bytes.len() != expected_len {
+        return Err("Clipboard returned invalid image data".to_string());
+    }
+    let (Ok(width), Ok(height)) = (u32::try_from(image.width), u32::try_from(image.height)) else {
+        return Err("Clipboard image dimensions are too large".to_string());
+    };
+    let Some(rgba) = image::RgbaImage::from_raw(width, height, image.bytes.into_owned()) else {
+        return Err("Could not decode clipboard image".to_string());
+    };
+    let mut png = std::io::Cursor::new(Vec::new());
+    if image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .is_err()
+    {
+        return Err("Could not encode clipboard image".to_string());
+    }
+    let bytes = png.into_inner();
+    if bytes.len() > MAX_IMAGE_ATTACHMENT_BYTES {
+        return Err(format!(
+            "Clipboard image too large (max {} MB)",
+            MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(Some(bytes))
 }

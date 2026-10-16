@@ -275,9 +275,12 @@ def render_message(message, options=None):
         if not header.startswith("▌"):
             header = "▌ " + header
         attachments = message.get("attachments") or []
+        # Images get links after the header instead (oxi.py: tool_phantoms).
+        if message.get("images"):
+            attachments = [a for a in attachments if not a.startswith("image (")]
         if attachments:
             header += "   + " + ", ".join(attachments)
-        out.add_line(header)
+        out.add_line(header, 0, "user")
         text = (message.get("text") or "").strip("\n")
         if text:
             out.add_line(text)

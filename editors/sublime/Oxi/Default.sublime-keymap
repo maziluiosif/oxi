@@ -22,6 +22,13 @@
     },
     // Chat list: Enter opens the chat under the caret.
     {"keys": ["enter"], "command": "oxi_open_selected_chat", "context": [{"key": "oxi.chats"}]},
+    // Up and Down move to the previous or next chat and open it.
+    {"keys": ["up"], "command": "oxi_chat_move", "args": {"by": -1}, "context": [{"key": "oxi.chats"}]},
+    {"keys": ["down"], "command": "oxi_chat_move", "args": {"by": 1}, "context": [{"key": "oxi.chats"}]},
+    // Delete or Backspace deletes the chat under the caret (after asking).
+    {"keys": ["delete"], "command": "oxi_delete_listed_chat", "context": [{"key": "oxi.chats"}]},
+    {"keys": ["backspace"], "command": "oxi_delete_listed_chat", "context": [{"key": "oxi.chats"}]},
+    {"keys": ["super+backspace"], "command": "oxi_delete_listed_chat", "context": [{"key": "oxi.chats"}]},
     // Transcript: Enter on a tool or thinking line opens its details.
     {"keys": ["enter"], "command": "oxi_open_details", "context": [{"key": "oxi.transcript"}]},
     // Anywhere: show or hide the oxi column, and send the selection to it.
