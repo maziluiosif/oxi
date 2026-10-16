@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Sublime Text:** Paste a screenshot with Cmd/Ctrl+V or attach image files from the composer; images in sent messages open from the transcript.
+- **Sublime Text:** Delete chats from the chat list with Delete/Backspace or its context menu.
+- **Headless mode:** One background daemon is shared by every editor and window, so a chat streams live wherever it is open and keeps running after the editor closes.
+
+### Changed
+- **Chat:** The app reloads chats changed by editors, and editors reload chats changed by the app, so neither overwrites the other.
+
+### Fixed
+- **Agents:** The installer adds agent SDK platform packages npm skipped, fixing sessions failing with a missing native binary.
+
 ## [1.19.0] - 2026-10-15
 
 ### Added
@@ -18,11 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Chat:** Image tabs now close cleanly without leaving orphaned files.
-
-
-### Added
-- **Sublime Text:** oxi chat inside Sublime Text: the chat list on the left, the transcript with the composer under it, files opened from the chat in their own column, with @file mentions, tool approvals, plan mode, agent/model pickers and Markdown styled like a preview. Chats are shared with the app. See `editors/sublime/README.md`.
-- **Editors:** `oxi headless` runs the chat engine without a window, driven over stdio, for editor integrations.
 
 ## [1.18.0] - 2026-10-14
 

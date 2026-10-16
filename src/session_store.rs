@@ -23,6 +23,29 @@ pub fn load_workspace_sessions(root_path: &str) -> Vec<Session> {
     load_workspace_sessions_from(root, &agent_dir())
 }
 
+/// The folder holding this workspace's session files.
+pub fn workspace_session_dir(root_path: &str) -> PathBuf {
+    let root = Path::new(root_path);
+    let agent_dir = agent_dir();
+    configured_session_dir(root, &agent_dir)
+        .unwrap_or_else(|| default_session_dir(root, &agent_dir))
+}
+
+/// The session files in `dir` with their mtimes, `None` when the folder can't be read. Cheap
+/// enough to poll: one directory read, no file is opened.
+pub fn list_session_files(dir: &Path) -> Option<Vec<(String, SystemTime)>> {
+    let entries = fs::read_dir(dir).ok()?;
+    let files = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((entry.path().to_string_lossy().to_string(), modified))
+        })
+        .collect();
+    Some(files)
+}
+
 fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Session> {
     let session_dir = configured_session_dir(root_path, agent_dir)
         .unwrap_or_else(|| default_session_dir(root_path, agent_dir));
@@ -39,23 +62,31 @@ fn load_workspace_sessions_from(root_path: &Path, agent_dir: &Path) -> Vec<Sessi
 
     sessions.sort_by_key(|b| std::cmp::Reverse(b.modified));
 
-    sessions
-        .into_iter()
-        .map(|session| Session {
-            title: session.title,
-            messages: Vec::new(),
-            config: session.config,
-            session_file: Some(session.path),
-            messages_loaded: false,
-            input_text: String::new(),
-            pending_images: Vec::new(),
-            pending_texts: Vec::new(),
-            modified: session.modified,
-            chars_per_token: None,
-            agent_context: None,
-            wire_cache: None,
-        })
-        .collect()
+    sessions.into_iter().map(unloaded_session).collect()
+}
+
+/// A sidebar entry for one session file: title and config only, the transcript is read when
+/// the chat is opened.
+pub fn load_session_summary(path: &str) -> Option<Session> {
+    parse_session_file(Path::new(path)).map(unloaded_session)
+}
+
+fn unloaded_session(session: LoadedSession) -> Session {
+    Session {
+        title: session.title,
+        messages: Vec::new(),
+        config: session.config,
+        session_file: Some(session.path),
+        messages_loaded: false,
+        input_text: String::new(),
+        pending_images: Vec::new(),
+        pending_texts: Vec::new(),
+        modified: session.modified,
+        chars_per_token: None,
+        agent_context: None,
+        wire_cache: None,
+        disk_mtime: Some(session.modified),
+    }
 }
 
 /// One chat read from its session file, transcript and provider cache included.
@@ -75,6 +106,7 @@ pub fn load_session(path: &str) -> Option<Session> {
         chars_per_token: None,
         agent_context: None,
         wire_cache,
+        disk_mtime: Some(summary.modified),
     })
 }
 
@@ -293,6 +325,7 @@ mod tests {
                 messages: vec![json!({"role":"system","content":"s"})],
             }),
             modified: SystemTime::now(),
+            disk_mtime: None,
         };
 
         save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
@@ -327,6 +360,7 @@ mod tests {
             chars_per_token: None,
             agent_context: None,
             wire_cache: None,
+            disk_mtime: None,
             modified: SystemTime::now(),
         };
 
@@ -359,6 +393,7 @@ mod tests {
             chars_per_token: None,
             agent_context: None,
             wire_cache: None,
+            disk_mtime: None,
             modified: SystemTime::now(),
         };
 
@@ -428,6 +463,7 @@ mod tests {
             chars_per_token: None,
             agent_context: None,
             wire_cache: None,
+            disk_mtime: None,
             modified: SystemTime::now(),
         };
 
@@ -481,6 +517,7 @@ mod tests {
             chars_per_token: None,
             agent_context: None,
             wire_cache: None,
+            disk_mtime: None,
             modified: SystemTime::now(),
         };
 

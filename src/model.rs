@@ -435,6 +435,9 @@ pub struct Session {
     /// Derived, dispensable provider-native history persisted for prompt-cache hits. The
     /// transcript in `messages` is authoritative and can rebuild this cache at any time.
     pub wire_cache: Option<WireCache>,
+    /// The session file's mtime when this process last read or wrote it. A different mtime
+    /// on disk means another oxi process (the `oxi headless` daemon editors share) changed it.
+    pub disk_mtime: Option<std::time::SystemTime>,
 }
 
 pub fn make_session_title(text: &str) -> String {

@@ -9,9 +9,12 @@
 //! Chats are the same session files the app uses, so a conversation started in the editor
 //! shows up in oxi and the other way round. A chat's id is its session file path. Logs go to
 //! stderr and `oxi.log`; stdout carries only the protocol.
+//!
+//! One server, the daemon in [`daemon`], serves every connected editor: replies go to the
+//! editor that asked, notifications go to all of them, so each one viewing a chat sees it
+//! stream. Chats changed on disk by the app are read again and announced (`chat_reloaded`).
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +32,8 @@ use crate::model::{
 use crate::session_store;
 use crate::settings::{AppSettings, LlmProviderKind};
 
+mod daemon;
+
 pub const SUBCOMMAND: &str = "headless";
 /// Bumped when a request or notification changes shape incompatibly.
 const PROTOCOL_VERSION: u32 = 1;
@@ -38,9 +43,22 @@ const FLUSH_EVERY: Duration = Duration::from_millis(60);
 const TOOL_OUTPUT_TAIL: usize = 4000;
 const TOOL_ARGS_MAX: usize = 4000;
 const DIFF_MAX: usize = 200_000;
+/// How often chats loaded here are checked for changes the app wrote to their files.
+const DISK_CHECK_EVERY: Duration = Duration::from_secs(1);
 
 enum Input {
-    Request(Value),
+    /// An editor connected; what the server sends it goes through `writer`.
+    Connected {
+        client: u64,
+        writer: Sender<Arc<str>>,
+    },
+    Disconnected {
+        client: u64,
+    },
+    Request {
+        client: u64,
+        request: Value,
+    },
     Agent {
         chat: String,
         run: u64,
@@ -53,12 +71,17 @@ enum Input {
     },
     /// Result of a request answered off the main thread.
     Reply {
-        id: Value,
+        to: ReplyTo,
         result: Result<Value, String>,
     },
     /// An ACP agent started a turn on its own.
     Autonomous,
-    Eof,
+}
+
+/// Who a reply goes to: the editor that asked, and its request id.
+struct ReplyTo {
+    client: u64,
+    id: Value,
 }
 
 struct Run {
@@ -86,6 +109,8 @@ struct Chat {
     terminals: Vec<crate::terminal::TerminalSession>,
     /// The streaming reply changed since the last snapshot was sent.
     dirty: bool,
+    /// The session file's mtime when this process last read or wrote it.
+    disk_mtime: Option<SystemTime>,
 }
 
 impl Chat {
@@ -100,6 +125,7 @@ impl Chat {
             status: None,
             terminals: Vec::new(),
             dirty: false,
+            disk_mtime: None,
         }
     }
 
@@ -123,8 +149,14 @@ impl Chat {
     }
 
     fn save(&mut self) -> Result<(), String> {
-        session_store::save_session_messages(&self.root, &mut self.session)
+        let result = session_store::save_session_messages(&self.root, &mut self.session);
+        self.disk_mtime = self.id().and_then(file_mtime);
+        result
     }
+}
+
+fn file_mtime(path: &str) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn empty_session(title: String, config: SessionConfig) -> Session {
@@ -141,12 +173,51 @@ fn empty_session(title: String, config: SessionConfig) -> Session {
         chars_per_token: None,
         agent_context: None,
         wire_cache: None,
+        disk_mtime: None,
     }
 }
 
 /// Process entry point for `oxi headless`; returns the exit code.
+///
+/// - no option: relay stdio to the daemon, starting it if needed (what editors run);
+/// - `--daemon`: be the daemon;
+/// - `--stdio`: serve one editor on stdio in this process;
+/// - `--status`, `--stop`: show or stop the running daemon.
 pub fn run() -> i32 {
     crate::logging::init();
+    match std::env::args().nth(2).as_deref() {
+        None => daemon::bridge().unwrap_or_else(|| serve(false)),
+        Some("--daemon") => serve(true),
+        Some("--stdio") => serve(false),
+        Some("--status") => daemon::status(),
+        Some("--stop") => daemon::stop(),
+        Some(other) => {
+            eprintln!("oxi headless: unknown option {other}");
+            2
+        }
+    }
+}
+
+/// Run the server: as the daemon, for every editor that connects, else for the one on stdio.
+fn serve(as_daemon: bool) -> i32 {
+    let (tx, rx) = mpsc::channel::<Input>();
+    let _guard = if as_daemon {
+        match daemon::listen(tx.clone()) {
+            Ok(Some(guard)) => Some(guard),
+            Ok(None) => {
+                log::info!("headless: a daemon already runs");
+                return 0;
+            }
+            Err(e) => {
+                log::error!("headless: could not start the daemon: {e}");
+                eprintln!("oxi headless: {e}");
+                return 1;
+            }
+        }
+    } else {
+        daemon::add_stdio_client(&tx);
+        None
+    };
     let executor = match AgentExecutor::new() {
         Ok(executor) => executor,
         Err(e) => {
@@ -154,50 +225,17 @@ pub fn run() -> i32 {
             return 1;
         }
     };
-    let (tx, rx) = mpsc::channel::<Input>();
-    {
-        let tx = tx.clone();
-        std::thread::Builder::new()
-            .name("oxi-headless-stdin".into())
-            .spawn(move || {
-                for line in std::io::stdin().lock().lines() {
-                    let Ok(line) = line else { break };
-                    if line.trim().is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<Value>(&line) {
-                        Ok(request) => {
-                            if tx.send(Input::Request(request)).is_err() {
-                                return;
-                            }
-                        }
-                        Err(e) => log::warn!("headless: ignoring malformed request: {e}"),
-                    }
-                }
-                let _ = tx.send(Input::Eof);
-            })
-            .expect("spawn stdin reader");
-    }
     {
         let tx = tx.clone();
         crate::agent::acp::set_autonomous_waker(move || {
             let _ = tx.send(Input::Autonomous);
         });
     }
-    let mut server = Server::new(tx, executor);
-    loop {
-        match rx.recv_timeout(FLUSH_EVERY) {
-            Ok(Input::Eof) | Err(RecvTimeoutError::Disconnected) => break,
-            Ok(input) => {
-                if !server.handle(input) {
-                    break;
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-        }
-        server.flush_if_due();
+    if as_daemon {
+        log::info!("headless: daemon {} listening", std::process::id());
     }
-    server.shutdown();
+    let mut server = Server::new(tx, executor, as_daemon);
+    server.run(&rx);
     0
 }
 
@@ -213,13 +251,21 @@ struct Server {
     /// Provider/model last picked in the editor; new chats start with it.
     last_config: Option<SessionConfig>,
     /// Git requests run one after another on their own thread, in the order they came.
-    git_jobs: Option<Sender<(Value, String, crate::git::GitOp)>>,
+    git_jobs: Option<Sender<(ReplyTo, String, crate::git::GitOp)>>,
     next_run: u64,
     last_flush: Instant,
+    /// Connected editors.
+    clients: HashMap<u64, Sender<Arc<str>>>,
+    /// Some editor has connected, so the stdio server can stop once none is left.
+    had_client: bool,
+    daemon: bool,
+    exe: Value,
+    idle_since: Option<Instant>,
+    last_disk_check: Instant,
 }
 
 impl Server {
-    fn new(tx: Sender<Input>, executor: AgentExecutor) -> Self {
+    fn new(tx: Sender<Input>, executor: AgentExecutor, daemon: bool) -> Self {
         crate::agent::tools::cleanup_stale_spill_files();
         let settings = AppSettings::load();
         crate::agent::activity_log::set_enabled(settings.activity_log_enabled);
@@ -236,6 +282,12 @@ impl Server {
             git_jobs: None,
             next_run: 1,
             last_flush: Instant::now(),
+            clients: HashMap::new(),
+            had_client: false,
+            daemon,
+            exe: daemon::exe_identity(),
+            idle_since: None,
+            last_disk_check: Instant::now(),
         }
     }
 
@@ -260,46 +312,105 @@ impl Server {
         self.settings_mtime = settings_mtime();
     }
 
-    fn send(&self, message: &Value) {
-        let mut out = std::io::stdout().lock();
-        let ok = serde_json::to_writer(&mut out, message).is_ok()
-            && out.write_all(b"\n").is_ok()
-            && out.flush().is_ok();
-        if !ok {
-            // The editor is gone; nothing is listening for the rest.
-            std::process::exit(0);
+    /// Serve until an editor stops the server or, see [`Self::should_exit`], it is done.
+    fn run(&mut self, rx: &mpsc::Receiver<Input>) {
+        loop {
+            match rx.recv_timeout(FLUSH_EVERY) {
+                Ok(input) => {
+                    if !self.handle(input) {
+                        break;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+            self.flush_if_due();
+            self.check_disk_if_due();
+            if self.should_exit() {
+                break;
+            }
         }
+        self.shutdown();
     }
 
+    /// Notifications go to every editor: any of them may be showing the chat.
     fn notify(&self, method: &str, params: Value) {
-        self.send(&json!({"method": method, "params": params}));
-    }
-
-    fn reply(&self, id: Value, result: Result<Value, String>) {
-        match result {
-            Ok(result) => self.send(&json!({"id": id, "result": result})),
-            Err(error) => self.send(&json!({"id": id, "error": error})),
+        let line: Arc<str> = json!({"method": method, "params": params})
+            .to_string()
+            .into();
+        for writer in self.clients.values() {
+            let _ = writer.send(line.clone());
         }
     }
 
-    /// Returns `false` when the editor asked oxi to exit.
+    fn reply(&self, to: ReplyTo, result: Result<Value, String>) {
+        let Some(writer) = self.clients.get(&to.client) else {
+            return;
+        };
+        let message = match result {
+            Ok(result) => json!({"id": to.id, "result": result}),
+            Err(error) => json!({"id": to.id, "error": error}),
+        };
+        let _ = writer.send(message.to_string().into());
+    }
+
+    /// A chat runs or has prompts waiting.
+    fn busy(&self) -> bool {
+        self.chats
+            .values()
+            .any(|chat| chat.run.is_some() || !chat.queued.is_empty())
+    }
+
+    /// The stdio server stops with its editor; the daemon once it was idle for a while.
+    fn should_exit(&mut self) -> bool {
+        if !self.clients.is_empty() || self.busy() {
+            self.idle_since = None;
+            return false;
+        }
+        if !self.daemon {
+            return self.had_client;
+        }
+        self.idle_since.get_or_insert_with(Instant::now).elapsed() >= daemon::IDLE_EXIT
+    }
+
+    /// Returns `false` when an editor asked the server to exit.
     fn handle(&mut self, input: Input) -> bool {
         match input {
-            Input::Request(request) => return self.handle_request(request),
+            Input::Connected { client, writer } => {
+                self.clients.insert(client, writer);
+                self.had_client = true;
+                log::info!(
+                    "headless: editor {client} connected ({} now)",
+                    self.clients.len()
+                );
+            }
+            Input::Disconnected { client } => {
+                if self.clients.remove(&client).is_some() {
+                    log::info!(
+                        "headless: editor {client} left ({} now)",
+                        self.clients.len()
+                    );
+                }
+            }
+            Input::Request { client, request } => return self.handle_request(client, request),
             Input::Agent { chat, run, event } => self.apply_event(&chat, run, event),
             Input::AgentGone { chat, run } => self.agent_gone(&chat, run),
-            Input::Reply { id, result } => self.reply(id, result),
+            Input::Reply { to, result } => self.reply(to, result),
             Input::Autonomous => self.attach_autonomous_turns(),
-            Input::Eof => return false,
         }
         true
     }
 
-    fn handle_request(&mut self, request: Value) -> bool {
+    fn handle_request(&mut self, client: u64, request: Value) -> bool {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let to = ReplyTo {
+            client,
+            id: id.clone(),
+        };
         let method = request["method"].as_str().unwrap_or_default().to_string();
         let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
         let result = match method.as_str() {
+            "daemon.hello" => Ok(self.hello(&params)),
             "initialize" => Ok(self.initialize()),
             "chats.list" => self.list_chats(&params),
             "chat.open" => self.open_chat(&params),
@@ -309,36 +420,57 @@ impl Server {
             "prompt.send" => self.send_prompt(&params),
             "approval.respond" => self.respond_to_approval(&params),
             "cancel" => self.cancel(&params),
-            "models.list" => match self.list_models(&params, id.clone()) {
+            "models.list" => match self.list_models(&params, to) {
                 // Answered from a worker thread once the agent is up.
                 Ok(None) => return true,
                 Ok(Some(result)) => Ok(result),
                 Err(e) => Err(e),
             },
             "chat.image" => self.chat_image(&params),
+            "clipboard.image" => clipboard_image(),
             // Answered from worker threads.
-            "git" => match self.git(&params, id.clone()) {
+            "git" => match self.git(&params, to) {
                 Ok(()) => return true,
                 Err(e) => Err(e),
             },
-            "git.commit_message" => match self.commit_message(&params, id.clone()) {
+            "git.commit_message" => match self.commit_message(&params, to) {
                 Ok(()) => return true,
                 Err(e) => Err(e),
             },
-            "quota.get" => match self.quota(&params, id.clone()) {
+            "quota.get" => match self.quota(&params, to) {
                 Ok(()) => return true,
                 Err(e) => Err(e),
             },
+            // The editor is leaving; the daemon carries on for the others and the turns running.
             "shutdown" => {
-                self.reply(id, Ok(Value::Null));
+                self.reply(to, Ok(Value::Null));
+                self.clients.remove(&client);
+                return true;
+            }
+            "daemon.stop" => {
+                log::info!("headless: editor {client} stopped the server");
+                self.reply(to, Ok(Value::Null));
                 return false;
             }
             other => Err(format!("unknown method: {other}")),
         };
         if !id.is_null() {
-            self.reply(id, result);
+            self.reply(ReplyTo { client, id }, result);
         }
         true
+    }
+
+    fn hello(&self, params: &Value) -> Value {
+        json!({
+            "protocol": PROTOCOL_VERSION,
+            "version": env!("CARGO_PKG_VERSION"),
+            "pid": std::process::id(),
+            "daemon": self.daemon,
+            "stale": self.daemon && params.get("exe").is_some_and(|exe| *exe != self.exe),
+            "busy": self.busy(),
+            "clients": self.clients.len(),
+            "chats_running": self.chats.values().filter(|c| c.run.is_some()).count(),
+        })
     }
 
     fn initialize(&mut self) -> Value {
@@ -389,15 +521,69 @@ impl Server {
         Ok(json!(chats))
     }
 
-    /// The chat with this id, read from disk on first use.
+    /// The chat with this id, read from disk on first use and again when the app changed it.
     fn load_chat(&mut self, root: &str, id: &str) -> Result<&mut Chat, String> {
+        if self.chats.contains_key(id) {
+            self.reload_if_changed(id);
+        }
         if !self.chats.contains_key(id) {
             let session =
                 session_store::load_session(id).ok_or_else(|| format!("Chat not found: {id}"))?;
-            self.chats
-                .insert(id.to_string(), Chat::new(root.to_string(), session));
+            let mut chat = Chat::new(root.to_string(), session);
+            chat.disk_mtime = file_mtime(id);
+            self.chats.insert(id.to_string(), chat);
         }
         Ok(self.chats.get_mut(id).expect("chat just inserted"))
+    }
+
+    /// Read an idle chat again when another process (the app) wrote its file, and tell the
+    /// editors; forget it when the file is gone.
+    fn reload_if_changed(&mut self, id: &str) {
+        let Some(chat) = self.chats.get(id) else {
+            return;
+        };
+        if chat.run.is_some() || !chat.queued.is_empty() {
+            return;
+        }
+        let root = chat.root.clone();
+        match std::fs::metadata(id) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.chats.remove(id);
+                self.acp.close(id);
+                self.notify("chat_removed", json!({"chat": id, "root": root}));
+                self.notify("chats_changed", json!({"root": root}));
+            }
+            Ok(meta) => {
+                let mtime = meta.modified().ok();
+                if mtime == chat.disk_mtime {
+                    return;
+                }
+                let Some(session) = session_store::load_session(id) else {
+                    return;
+                };
+                log::info!("headless: {id} changed on disk; reading it again");
+                let chat = self.chats.get_mut(id).expect("chat checked above");
+                chat.session = session;
+                chat.disk_mtime = mtime;
+                chat.status = None;
+                chat.dirty = false;
+                chat.pending_approval = None;
+                self.notify("chat_reloaded", json!({"chat": id}));
+                self.notify("chats_changed", json!({"root": root}));
+            }
+            Err(_) => {}
+        }
+    }
+
+    fn check_disk_if_due(&mut self) {
+        if self.clients.is_empty() || self.last_disk_check.elapsed() < DISK_CHECK_EVERY {
+            return;
+        }
+        self.last_disk_check = Instant::now();
+        let ids: Vec<String> = self.chats.keys().cloned().collect();
+        for id in ids {
+            self.reload_if_changed(&id);
+        }
     }
 
     fn open_chat(&mut self, params: &Value) -> Result<Value, String> {
@@ -494,6 +680,10 @@ impl Server {
             if chat.run.is_none() {
                 chat.save()?;
             }
+            self.notify(
+                "config",
+                json!({"chat": id, "config": config_json(&config)}),
+            );
         }
         Ok(config_json(&config))
     }
@@ -506,10 +696,11 @@ impl Server {
             return Err("The title is empty".into());
         }
         let chat = self.load_chat(&root, &id)?;
-        chat.session.title = title;
+        chat.session.title = title.clone();
         if chat.run.is_none() {
             chat.save()?;
         }
+        self.notify("title", json!({"chat": id, "title": title}));
         self.notify("chats_changed", json!({"root": root}));
         Ok(Value::Null)
     }
@@ -524,6 +715,7 @@ impl Server {
         }
         self.acp.close(&id);
         crate::app::sessions::delete_session_file_from_disk(Path::new(&id))?;
+        self.notify("chat_removed", json!({"chat": id, "root": root}));
         self.notify("chats_changed", json!({"root": root}));
         Ok(Value::Null)
     }
@@ -1025,7 +1217,7 @@ impl Server {
 
     /// Models the provider offers. ACP agents advertise theirs once launched, so this starts
     /// the chat's agent (which the next prompt then reuses) and answers from a worker thread.
-    fn list_models(&mut self, params: &Value, id: Value) -> Result<Option<Value>, String> {
+    fn list_models(&mut self, params: &Value, to: ReplyTo) -> Result<Option<Value>, String> {
         self.refresh_settings();
         let root = root_param(params)?;
         let kind = provider_from_slug(&str_param(params, "provider")?)?;
@@ -1050,7 +1242,7 @@ impl Server {
             let result = crate::runtime::runtime()
                 .and_then(|rt| rt.block_on(acp.warm(request)))
                 .map(|models| json!({"models": models, "current": cfg.model_id}));
-            let _ = tx.send(Input::Reply { id, result });
+            let _ = tx.send(Input::Reply { to, result });
         });
         Ok(None)
     }
@@ -1081,21 +1273,21 @@ impl Server {
 
     /// Queue a git operation on the workspace's repository; the reply is the repository
     /// state after it (see [`git_state_json`]).
-    fn git(&mut self, params: &Value, id: Value) -> Result<(), String> {
+    fn git(&mut self, params: &Value, to: ReplyTo) -> Result<(), String> {
         let root = root_param(params)?;
         let op = git_op_param(params)?;
         let jobs = match &self.git_jobs {
             Some(jobs) => jobs.clone(),
             None => {
-                let (jobs, rx) = mpsc::channel::<(Value, String, crate::git::GitOp)>();
+                let (jobs, rx) = mpsc::channel::<(ReplyTo, String, crate::git::GitOp)>();
                 let tx = self.tx.clone();
                 std::thread::Builder::new()
                     .name("oxi-headless-git".into())
                     .spawn(move || {
-                        for (id, root, op) in rx {
+                        for (to, root, op) in rx {
                             let state = crate::git::run_op(&root, op);
                             let result = Ok(git_state_json(&state));
-                            if tx.send(Input::Reply { id, result }).is_err() {
+                            if tx.send(Input::Reply { to, result }).is_err() {
                                 return;
                             }
                         }
@@ -1105,13 +1297,13 @@ impl Server {
                 jobs
             }
         };
-        jobs.send((id, root, op))
+        jobs.send((to, root, op))
             .map_err(|_| "The git worker stopped".to_string())
     }
 
     /// Write a commit message for the staged changes (or all of them when nothing is
     /// staged) with the model set for commit messages in the app.
-    fn commit_message(&mut self, params: &Value, id: Value) -> Result<(), String> {
+    fn commit_message(&mut self, params: &Value, to: ReplyTo) -> Result<(), String> {
         self.refresh_settings();
         let root = root_param(params)?;
         let settings = self.settings.clone();
@@ -1145,13 +1337,13 @@ impl Server {
                 }
                 Err("Generation stopped unexpectedly.".to_string())
             })();
-            let _ = tx.send(Input::Reply { id, result });
+            let _ = tx.send(Input::Reply { to, result });
         });
         Ok(())
     }
 
     /// The subscription usage windows (5h, weekly) of a provider whose usage oxi can read.
-    fn quota(&mut self, params: &Value, id: Value) -> Result<(), String> {
+    fn quota(&mut self, params: &Value, to: ReplyTo) -> Result<(), String> {
         use crate::router::quota;
         self.refresh_settings();
         let kind = provider_from_slug(&str_param(params, "provider")?)?;
@@ -1163,7 +1355,7 @@ impl Server {
             _ => None,
         };
         if enabled == Some(false) {
-            self.reply(id, Ok(quota_json(kind, enabled, None)));
+            self.reply(to, Ok(quota_json(kind, enabled, None)));
             return Ok(());
         }
         let settings = self.settings.clone();
@@ -1174,7 +1366,7 @@ impl Server {
                 rt.block_on(quota::refresh(&settings, false));
             }
             let result = Ok(quota_json(kind, enabled, quota::snapshot(kind)));
-            let _ = tx.send(Input::Reply { id, result });
+            let _ = tx.send(Input::Reply { to, result });
         });
         Ok(())
     }
@@ -1297,6 +1489,19 @@ fn provider_from_slug(slug: &str) -> Result<LlmProviderKind, String> {
         .into_iter()
         .find(|kind| kind.slug() == slug)
         .ok_or_else(|| format!("unknown provider: {slug}"))
+}
+
+/// The image in the clipboard, as an attachment for `prompt.send`; null when there is none.
+/// Editors read text from the clipboard themselves, but most cannot read images.
+fn clipboard_image() -> Result<Value, String> {
+    use base64::Engine as _;
+    Ok(match crate::app::sessions::clipboard_image_png()? {
+        Some(png) => json!({
+            "mime": "image/png",
+            "data": base64::engine::general_purpose::STANDARD.encode(png),
+        }),
+        None => Value::Null,
+    })
 }
 
 /// A prompt attachment: `{"name", "text"}` for text, `{"mime", "data"}` (base64) for images.

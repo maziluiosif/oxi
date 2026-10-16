@@ -54,7 +54,7 @@ ignore = "0.4"
 fontdb = "0.24"
 memmap2 = "0.9"
 # Same version egui reads font metrics with; used to center text faces optically in their rows.
-skrifa = "0.42"
+skrifa = "0.48"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 dirs = "7"
 sha2 = "0.11"

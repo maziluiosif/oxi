@@ -249,8 +249,101 @@ async fn update(adapter: &Adapter) -> Result<(), String> {
     }
     if adapter.installed_version().as_deref() != Some(latest) {
         install_latest(adapter).await?;
+    } else if let Some(version) = adapter.installed_version() {
+        // An install npm left without its native binary fails at every launch; repair it.
+        add_platform_packages(&adapter.root().join(version)).await?;
     }
     touch(&adapter.root().join("checked"))
+}
+
+/// The suffix npm platform packages carry for this machine, as in `claude-agent-sdk-darwin-arm64`.
+fn platform_suffix() -> Option<String> {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "linux" => "linux",
+        "windows" => "win32",
+        _ => return None,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        _ => return None,
+    };
+    Some(format!("-{os}-{arch}"))
+}
+
+/// Optional dependencies for this platform (`name@version`) that packages installed in
+/// `version_dir` declare but npm did not install. npm sometimes skips them, and an agent SDK
+/// without its native binary fails every session ("Claude native binary not found").
+fn missing_platform_packages(version_dir: &Path) -> Vec<String> {
+    let Some(suffix) = platform_suffix() else {
+        return Vec::new();
+    };
+    let modules = version_dir.join("node_modules");
+    let mut manifests = Vec::new();
+    for entry in std::fs::read_dir(&modules).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if entry.file_name().to_string_lossy().starts_with('@') {
+            for scoped in std::fs::read_dir(&path).into_iter().flatten().flatten() {
+                manifests.push(scoped.path().join("package.json"));
+            }
+        } else {
+            manifests.push(path.join("package.json"));
+        }
+    }
+    let mut missing = Vec::new();
+    for manifest in manifests {
+        let Some(manifest) = std::fs::read_to_string(&manifest)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        else {
+            continue;
+        };
+        let Some(optional) = manifest["optionalDependencies"].as_object() else {
+            continue;
+        };
+        for (name, version) in optional {
+            let spec = format!("{name}@{}", version.as_str().unwrap_or("latest"));
+            if name.ends_with(&suffix)
+                && !modules.join(name).join("package.json").exists()
+                && !missing.contains(&spec)
+            {
+                missing.push(spec);
+            }
+        }
+    }
+    missing
+}
+
+/// Install the platform packages npm skipped in `version_dir`; an error when they stay missing.
+async fn add_platform_packages(version_dir: &Path) -> Result<(), String> {
+    let missing = missing_platform_packages(version_dir);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    log::info!(
+        "ACP adapter in {} lacks {}; installing",
+        version_dir.display(),
+        missing.join(", ")
+    );
+    let dir = version_dir.to_string_lossy().into_owned();
+    let mut args = vec![
+        "install",
+        "--prefix",
+        &dir,
+        "--no-audit",
+        "--no-fund",
+        "--no-package-lock",
+        "--loglevel=error",
+    ];
+    args.extend(missing.iter().map(String::as_str));
+    npm_output(&args, version_dir, INSTALL_TIMEOUT).await?;
+    let still = missing_platform_packages(version_dir);
+    if still.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("npm did not install {}", still.join(", ")))
+    }
 }
 
 /// `npm install` the latest version into a fresh staging dir, move it to `<root>/<version>` and
@@ -279,7 +372,11 @@ async fn install_latest(adapter: &Adapter) -> Result<(), String> {
         &root,
         INSTALL_TIMEOUT,
     )
-    .await
+    .await;
+    let result = match result {
+        Ok(_) => add_platform_packages(&staging).await,
+        Err(e) => Err(e),
+    }
     .and_then(|_| {
         let manifest = staging
             .join("node_modules")
@@ -441,6 +538,35 @@ fn touch(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_platform_packages_npm_skipped() {
+        let Some(suffix) = platform_suffix() else {
+            return;
+        };
+        let dir = crate::app_dirs::test_root().join("acp-platform-packages");
+        let sdk = dir.join("node_modules/@anthropic-ai/claude-agent-sdk");
+        std::fs::create_dir_all(&sdk).unwrap();
+        let ours = format!("@anthropic-ai/claude-agent-sdk{suffix}");
+        let manifest = serde_json::json!({
+            "name": "@anthropic-ai/claude-agent-sdk",
+            "optionalDependencies": {
+                ours.clone(): "0.3.300",
+                "@anthropic-ai/claude-agent-sdk-other-arch": "0.3.300",
+                format!("@anthropic-ai/claude-agent-sdk{suffix}-musl"): "0.3.300",
+            },
+        });
+        std::fs::write(sdk.join("package.json"), manifest.to_string()).unwrap();
+        assert_eq!(
+            missing_platform_packages(&dir),
+            vec![format!("{ours}@0.3.300")]
+        );
+
+        let native = dir.join("node_modules").join(&ours);
+        std::fs::create_dir_all(&native).unwrap();
+        std::fs::write(native.join("package.json"), "{}").unwrap();
+        assert!(missing_platform_packages(&dir).is_empty());
+    }
 
     #[test]
     fn recognizes_default_adapter_commands() {

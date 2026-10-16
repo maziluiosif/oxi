@@ -5,6 +5,8 @@
     {"caption": "Oxi: New Chat", "command": "oxi_new_chat"},
     {"caption": "Oxi: Switch Chat…", "command": "oxi_switch_chat"},
     {"caption": "Oxi: Add Selection to Chat", "command": "oxi_add_to_chat"},
+    {"caption": "Oxi: Attach Image…", "command": "oxi_attach_image"},
+    {"caption": "Oxi: Paste Image from Clipboard", "command": "oxi_paste_image"},
     {"caption": "Oxi: Choose Agent / Provider…", "command": "oxi_choose_provider"},
     {"caption": "Oxi: Choose Model…", "command": "oxi_choose_model"},
     {"caption": "Oxi: Choose Reasoning Effort…", "command": "oxi_choose_effort"},
