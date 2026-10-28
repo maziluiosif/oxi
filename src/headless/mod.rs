@@ -35,6 +35,7 @@ use crate::settings::{AppSettings, LlmProviderKind};
 mod daemon;
 pub mod phone;
 mod remote_app;
+mod settings_api;
 pub use remote_app::HISTORY_MISMATCH;
 
 pub const SUBCOMMAND: &str = "headless";
@@ -525,6 +526,9 @@ impl Server {
             "client.features" => Ok(self.client_features(client, &params)),
             "server.info" => Ok(remote_app::server_info()),
             "chat.get" => self.get_chat(&params),
+            "settings.get" => self.settings_get(),
+            "settings.set" => self.settings_set(&params),
+            "settings.set_secret" => self.settings_set_secret(&params),
             "chat.save" => self.save_chat(&params),
             "daemon.stop" => {
                 log::info!("headless: editor {client} stopped the server");
