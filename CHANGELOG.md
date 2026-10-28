@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-10-27
+
+### Added
+- **Server:** Run oxi as a background service on macOS (LaunchAgent), Linux (systemd), and Windows (Run entry) to accept connections from phones.
+- **Android:** Native oxi app for Android with live chat, tool calls, approvals, QR pairing, and auto-update from GitHub releases.
+- **Phone pairing:** Connect Android devices to your desktop server over Tailscale using a pairing token, with optional local network mode.
+- **Settings:** New Server & phone panel to manage server startup, allow phone connections, and view the pairing QR code.
+- **Documentation:** Added server.md guide for running the server and pairing phones.
+
+
 ## [1.26.0] - 2026-10-26
 
 ### Added
@@ -1219,7 +1229,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.26.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.27.0...HEAD
+[1.27.0]: https://github.com/maziluiosif/oxi/compare/v1.26.0...v1.27.0
 [1.26.0]: https://github.com/maziluiosif/oxi/compare/v1.25.0...v1.26.0
 [1.25.0]: https://github.com/maziluiosif/oxi/compare/v1.24.0...v1.25.0
 [1.24.0]: https://github.com/maziluiosif/oxi/compare/v1.23.0...v1.24.0
