@@ -158,7 +158,7 @@ impl AppSettings {
         s
     }
 
-    pub(super) fn normalize(&mut self) {
+    pub(crate) fn normalize(&mut self) {
         // Resize to the current tool count: older settings files have fewer flags, and any
         // newly-added tools default to enabled.
         if self.tools_enabled.len() != ALL_TOOL_NAMES.len() {
