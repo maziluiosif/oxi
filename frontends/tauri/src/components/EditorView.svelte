@@ -132,7 +132,7 @@
 		if (!model) return;
 		const text = model.getValue();
 		try {
-			const current = await stat(tab.path).catch(() => null);
+			const current = await stat(tab.path);
 			if (current?.exists && diskModified && current.modified && current.modified !== diskModified) {
 				const overwrite = await overlay.confirm(
 					'The file changed on disk',

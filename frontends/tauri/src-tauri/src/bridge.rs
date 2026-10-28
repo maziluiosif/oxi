@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
 pub struct Bridge {
@@ -95,7 +95,13 @@ pub fn oxi_start(
                         let _ = app.emit("oxi://line", line);
                     }
                 }
-                let _ = app.emit("oxi://exit", generation);
+                // A stopped/replaced bridge must not disconnect its replacement.
+                // stop() removes Running before waiting for the old process.
+                let bridge = app.state::<Bridge>();
+                let inner = bridge.inner.lock().unwrap_or_else(|e| e.into_inner());
+                if inner.as_ref().is_some_and(|running| running.generation == generation) {
+                    let _ = app.emit("oxi://exit", generation);
+                }
             })
             .map_err(|e| e.to_string())?;
     }

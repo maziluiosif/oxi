@@ -17,11 +17,14 @@ class Rpc {
 	private stateHandlers = new Set<(state: ConnectionState, detail: string) => void>();
 	private restarts = 0;
 	private started = false;
+	private retryTimer: ReturnType<typeof setTimeout> | undefined;
 	state: ConnectionState = 'connecting';
 	binary = '';
 	readonly log: string[] = [];
 
 	async start(binary?: string) {
+		clearTimeout(this.retryTimer);
+		this.retryTimer = undefined;
 		if (!this.started) {
 			this.started = true;
 			await listen<string>('oxi://line', event => this.onLine(event.payload));
@@ -66,6 +69,9 @@ class Rpc {
 	}
 
 	async restart(binary?: string) {
+		clearTimeout(this.retryTimer);
+		this.retryTimer = undefined;
+		this.rejectPending();
 		await invoke('oxi_stop').catch(() => {});
 		await this.start(binary);
 	}
@@ -100,14 +106,19 @@ class Rpc {
 		else pending.resolve(message.result);
 	}
 
-	private onExit() {
+	private rejectPending() {
 		for (const pending of this.pending.values()) pending.reject(new Error('oxi stopped'));
 		this.pending.clear();
+	}
+
+	private onExit() {
+		this.rejectPending();
 		this.setState('down', 'oxi stopped');
 		// The bridge exits when a newer daemon replaces the old one; come back on our own.
 		if (this.restarts < 5) {
 			this.restarts++;
-			setTimeout(() => this.start(), 400 * this.restarts);
+			clearTimeout(this.retryTimer);
+			this.retryTimer = setTimeout(() => this.start(), 400 * this.restarts);
 		}
 	}
 }
