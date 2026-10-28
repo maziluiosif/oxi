@@ -128,7 +128,10 @@ mod tests {
     #[test]
     fn merge_patch_replaces_merges_and_removes() {
         let mut target = json!({"a": 1, "b": {"c": 2, "d": 3}, "e": [1]});
-        merge(&mut target, &json!({"a": 5, "b": {"c": null, "x": 1}, "e": [2, 3]}));
+        merge(
+            &mut target,
+            &json!({"a": 5, "b": {"c": null, "x": 1}, "e": [2, 3]}),
+        );
         assert_eq!(target, json!({"a": 5, "b": {"d": 3, "x": 1}, "e": [2, 3]}));
     }
 

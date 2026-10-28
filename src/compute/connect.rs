@@ -314,12 +314,3 @@ mod tests {
         }
     }
 }
-#[cfg(test)]
-#[test]
-#[ignore]
-fn tmp_live_key_auth() {
-    let cfg = SshConfig { host: "manus-mac-mini".into(), ..SshConfig::default() };
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
-    let out = rt.block_on(super::ssh_exec("tmp-live", &cfg, "", "echo key-auth-ok; whoami"));
-    println!("RESULT: {:?}", out.map(|o| format!("{o:?}")).map_err(|e| e.to_string()));
-}
