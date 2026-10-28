@@ -93,7 +93,12 @@ impl OxiApp {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         field_label_first(ui, "SSH user");
-                        settings_text_field_width(ui, &mut cfg.user, "e.g. ioan", 220.0);
+                        settings_text_field_width(
+                            ui,
+                            &mut cfg.user,
+                            "Empty uses your login name",
+                            220.0,
+                        );
                     });
                     if kind != LlmProviderKind::RemoteHf {
                         ui.add_space(8.0);
@@ -144,16 +149,18 @@ impl OxiApp {
             settings_card_header(
                 ui,
                 "SSH credentials",
-                Some("Password is stored in the OS keychain, never in settings.json."),
+                Some(
+                    "Your SSH keys (ssh-agent, ~/.ssh/id_*) are tried first; a password is only needed without one. It's stored in the OS keychain, never in settings.json.",
+                ),
             );
-            field_label_first(ui, "SSH password");
+            field_label_first(ui, "SSH password (optional)");
             let changed = self
                 .conv
                 .settings_page
                 .ssh_password_drafts
                 .get_mut(&kind)
                 .is_some_and(|password| {
-                    settings_password_field(ui, password, "SSH password").changed()
+                    settings_password_field(ui, password, "Password or key passphrase").changed()
                 });
             if changed {
                 let pw = self

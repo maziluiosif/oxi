@@ -73,8 +73,8 @@ pub fn take_observed_host_keys() -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-/// Connect to `config`'s host, verify its key against the pin, and authenticate with
-/// `password`. On success the observed fingerprint is recorded under `key` for pinning.
+/// Connect to `config`'s host, verify its key against the pin, and authenticate (see
+/// [`authenticate`]). On success the observed fingerprint is recorded under `key` for pinning.
 pub(super) async fn connect(
     key: &str,
     config: &SshConfig,
@@ -83,9 +83,7 @@ pub(super) async fn connect(
     if config.host.trim().is_empty() {
         return Err(TunnelError::Other("SSH host is empty".to_string()));
     }
-    if config.user.trim().is_empty() {
-        return Err(TunnelError::Other("SSH user is empty".to_string()));
-    }
+    let user = ssh_user(config)?;
     let addr = format!("{}:{}", config.host, config.port);
     let ssh_config = Arc::new(client::Config::default());
     let observed: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -113,21 +111,114 @@ pub(super) async fn connect(
             )));
         }
     };
-    let auth = session
-        .authenticate_password(&config.user, password)
-        .await
-        .map_err(|e| TunnelError::Other(format!("SSH auth failed: {e}")))?;
-    if !matches!(auth, AuthResult::Success) {
-        return Err(TunnelError::Other(
-            "SSH authentication rejected (check user/password)".to_string(),
-        ));
-    }
+    authenticate(&mut session, &user, password).await?;
     // Only pin a key once the host has also accepted our credentials, so a typo'd host that
     // happens to answer doesn't get its key remembered.
     if let Some(fp) = observed.lock().ok().and_then(|s| s.clone()) {
         record_observed_host_key(key, &fp);
     }
     Ok(session)
+}
+
+/// The configured SSH user, or the local login name when the field is left empty (what
+/// `ssh host` does).
+fn ssh_user(config: &SshConfig) -> Result<String, TunnelError> {
+    let user = config.user.trim();
+    if !user.is_empty() {
+        return Ok(user.to_string());
+    }
+    ["USER", "USERNAME", "LOGNAME"]
+        .iter()
+        .find_map(|var| std::env::var(var).ok().filter(|v| !v.trim().is_empty()))
+        .ok_or_else(|| TunnelError::Other("SSH user is empty".to_string()))
+}
+
+/// Default private keys `ssh` itself tries, in its order.
+fn default_identity_files() -> Vec<std::path::PathBuf> {
+    let Some(ssh_dir) = dirs::home_dir().map(|h| h.join(".ssh")) else {
+        return Vec::new();
+    };
+    ["id_ed25519", "id_ecdsa", "id_rsa"]
+        .iter()
+        .map(|name| ssh_dir.join(name))
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+/// Try public keys first, like `ssh` does: identities held by the SSH agent, then the
+/// default `~/.ssh/id_*` files (the password doubles as the passphrase of an encrypted
+/// one), then the password itself when one is set.
+async fn authenticate(
+    session: &mut Session,
+    user: &str,
+    password: &str,
+) -> Result<(), TunnelError> {
+    let rsa_hash = session
+        .best_supported_rsa_hash()
+        .await
+        .ok()
+        .flatten()
+        .flatten();
+    let mut offered_key = false;
+
+    #[cfg(unix)]
+    if let Ok(mut agent) = russh::keys::agent::client::AgentClient::connect_env().await {
+        let identities = agent.request_identities().await.unwrap_or_default();
+        for identity in identities {
+            let russh::keys::agent::AgentIdentity::PublicKey { key, .. } = identity else {
+                continue;
+            };
+            offered_key = true;
+            if let Ok(AuthResult::Success) = session
+                .authenticate_publickey_with(user, key, rsa_hash, &mut agent)
+                .await
+            {
+                return Ok(());
+            }
+        }
+    }
+
+    let mut locked_key = false;
+    for path in default_identity_files() {
+        let key = match russh::keys::load_secret_key(&path, None) {
+            Ok(key) => key,
+            Err(_) if !password.is_empty() => {
+                match russh::keys::load_secret_key(&path, Some(password)) {
+                    Ok(key) => key,
+                    Err(_) => continue,
+                }
+            }
+            Err(_) => {
+                locked_key = true;
+                continue;
+            }
+        };
+        offered_key = true;
+        let key = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), rsa_hash);
+        if let Ok(AuthResult::Success) = session.authenticate_publickey(user, key).await {
+            return Ok(());
+        }
+    }
+
+    if !password.is_empty() {
+        let auth = session
+            .authenticate_password(user, password)
+            .await
+            .map_err(|e| TunnelError::Other(format!("SSH auth failed: {e}")))?;
+        if matches!(auth, AuthResult::Success) {
+            return Ok(());
+        }
+        return Err(TunnelError::Other(
+            "SSH authentication rejected (check user, key, or password)".to_string(),
+        ));
+    }
+    Err(TunnelError::Other(if locked_key {
+        "SSH key is passphrase-protected: add it to ssh-agent (ssh-add) or enter the passphrase as the password".to_string()
+    } else if offered_key {
+        format!("SSH key rejected for {user} (is your public key in the host's authorized_keys?)")
+    } else {
+        "No SSH key found (agent or ~/.ssh/id_*) and no password set".to_string()
+    }))
 }
 
 #[cfg(test)]
@@ -202,18 +293,33 @@ mod tests {
     }
 
     #[test]
-    fn connect_rejects_missing_host_or_user_before_dialing() {
+    fn connect_rejects_missing_host_before_dialing() {
         let missing_host = SshConfig {
             user: "me".into(),
             ..SshConfig::default()
         };
         let err = block_on(connect("p", &missing_host, "pw")).err().unwrap();
         assert!(err.to_string().contains("host is empty"));
-        let missing_user = SshConfig {
-            host: "example.invalid".into(),
+    }
+
+    #[test]
+    fn empty_user_falls_back_to_login_name() {
+        let named = SshConfig {
+            user: " ioan ".into(),
             ..SshConfig::default()
         };
-        let err = block_on(connect("p", &missing_user, "pw")).err().unwrap();
-        assert!(err.to_string().contains("user is empty"));
+        assert_eq!(ssh_user(&named).unwrap(), "ioan");
+        if let Ok(login) = std::env::var("USER") {
+            assert_eq!(ssh_user(&SshConfig::default()).unwrap(), login);
+        }
     }
+}
+#[cfg(test)]
+#[test]
+#[ignore]
+fn tmp_live_key_auth() {
+    let cfg = SshConfig { host: "manus-mac-mini".into(), ..SshConfig::default() };
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let out = rt.block_on(super::ssh_exec("tmp-live", &cfg, "", "echo key-auth-ok; whoami"));
+    println!("RESULT: {:?}", out.map(|o| format!("{o:?}")).map_err(|e| e.to_string()));
 }
