@@ -42,6 +42,7 @@ mod notify;
 mod queue;
 mod remote;
 mod review;
+mod rewind;
 mod selection_to_chat;
 pub(crate) mod sessions;
 mod settings_ui;
@@ -265,6 +266,8 @@ impl OxiApp {
                 git: crate::git::GitState::default(),
                 confirm_prompt: None,
                 worktree_risk: None,
+                rewind_check: None,
+                rewind_jobs: Vec::new(),
                 title_gen: Vec::new(),
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),

@@ -88,6 +88,10 @@ impl OxiApp {
         changes: &TurnChanges,
         author: Option<crate::settings::LlmProviderKind>,
     ) {
+        if changes.before == changes.after {
+            // A snapshot pair kept for rewinding a turn that changed nothing.
+            return;
+        }
         let key = cache_key(changes);
         if !self.conv.transcript.turn_changes.entries.contains_key(&key) {
             let files = changes.files.clone().map(Ok);
@@ -527,7 +531,7 @@ mod tests {
         app.active_session_mut().messages = vec![reply];
 
         let ctx = egui::Context::default();
-        let mut frame = |app: &mut OxiApp| {
+        let frame = |app: &mut OxiApp| {
             let _ = ctx.run_ui(Default::default(), |ui| {
                 app.render_turn_changes(ui, &changes, None);
             });

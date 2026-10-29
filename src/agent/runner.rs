@@ -409,12 +409,16 @@ async fn report_acp_turn_changes(
             changes.before.clone(),
             changes.after.clone(),
         );
-        changes.files = tokio::task::spawn_blocking(move || {
-            crate::git::checkpoint::changed_files(&repo, &before, &after)
-        })
-        .await
-        .ok()
-        .and_then(Result::ok);
+        changes.files = if before == after {
+            Some(Vec::new())
+        } else {
+            tokio::task::spawn_blocking(move || {
+                crate::git::checkpoint::changed_files(&repo, &before, &after)
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+        };
         let _ = tx.send(AgentEvent::TurnChanges(Box::new(changes)));
     }
 }

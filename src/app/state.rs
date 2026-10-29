@@ -74,6 +74,14 @@ pub enum ConfirmAction {
     RemoveWorktree {
         wi: usize,
     },
+    /// Go back to before user message `index` of a chat (see [`super::rewind`]).
+    Rewind {
+        wi: usize,
+        si: usize,
+        index: usize,
+        /// Also put back the files the later turns changed.
+        restore_files: bool,
+    },
     GitDiscard {
         paths: Vec<String>,
     },
@@ -881,6 +889,10 @@ pub struct ConversationState {
     /// What removing the work tree behind [`Self::confirm_prompt`] would lose, and the
     /// user's choices about it.
     pub worktree_risk: Option<super::worktrees::WorktreeRiskCheck>,
+    /// What the rewind behind [`Self::confirm_prompt`] would restore, and its conflict check.
+    pub rewind_check: Option<super::rewind::RewindCheck>,
+    /// Rewinds waiting for their files to be restored.
+    pub rewind_jobs: Vec<super::rewind::RewindJob>,
     /// In-flight chat-title completions: (workspace root, session file, auto title it replaces).
     pub title_gen: Vec<(
         String,

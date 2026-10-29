@@ -129,12 +129,12 @@ impl TurnUndoJournal {
             .map(|c| (c.repo.clone(), c.before.clone()))
     }
 
-    /// Record the snapshot taken after the turn; returns the turn's changes when the work tree
-    /// differs from before.
+    /// Record the snapshot taken after the turn; returns the turn's snapshot pair, also when
+    /// nothing changed (equal trees), so a saved turn tells "no changes" from "no snapshot".
     pub fn set_checkpoint_after(&mut self, tree: String) -> Option<crate::model::TurnChanges> {
         let checkpoint = self.checkpoint.as_mut()?;
         checkpoint.after = Some(tree.clone());
-        (checkpoint.before != tree).then(|| crate::model::TurnChanges {
+        Some(crate::model::TurnChanges {
             repo: checkpoint.repo.to_string_lossy().into_owned(),
             before: checkpoint.before.clone(),
             after: tree,

@@ -65,6 +65,15 @@ pub fn serve(params: &Value) -> Result<Value, String> {
             &arg::<String>(params, "after")?,
             arg::<Option<String>>(params, "only")?.as_deref(),
         )),
+        "plan_restore" => answer(super::checkpoint::plan_restore(
+            Path::new(cwd),
+            &arg::<Vec<(String, String)>>(params, "turns")?,
+        )),
+        "restore_turns" => answer(super::checkpoint::restore_turns(
+            Path::new(cwd),
+            &arg::<Vec<(String, String)>>(params, "turns")?,
+            arg::<Option<String>>(params, "only")?.as_deref(),
+        )),
         other => Err(format!("unknown git call: {other}")),
     }
 }

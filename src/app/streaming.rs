@@ -35,15 +35,7 @@ impl OxiApp {
             );
             return;
         }
-        let Some(journal) = self.run_state(key).and_then(|run| run.undo_journal.clone()) else {
-            self.notify_composer("This older response has no restorable file checkpoint.");
-            return;
-        };
-        if let Some(reason) = journal
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .unavailable_reason()
-        {
+        if let Err(reason) = self.last_turn_rollback(key) {
             self.notify_composer(format!("Edit & retry is unavailable: {reason}"));
             return;
         }
@@ -102,18 +94,6 @@ impl OxiApp {
         {
             return;
         }
-        let journal = self.run_state(key).and_then(|r| r.undo_journal.clone());
-        if let Some(journal) = journal {
-            let root = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
-            if let Err(e) = journal
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .restore(&root)
-            {
-                self.notify_composer(format!("Cannot restore this response: {e}"));
-                return;
-            }
-        }
         let Some(user_idx) = self
             .active_session()
             .messages
@@ -122,11 +102,67 @@ impl OxiApp {
         else {
             return;
         };
+        let restored = self.last_turn_rollback(key).and_then(|files| {
+            let root = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
+            if let Some(repo) = &files.repo {
+                crate::git::checkpoint::restore_turns(repo, &files.turns, None)?;
+            }
+            match &files.journal {
+                Some(journal) => journal
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .restore(&root),
+                None => Ok(()),
+            }
+        });
+        if let Err(e) = restored {
+            self.notify_composer(format!("Cannot restore this response: {e}"));
+            return;
+        }
         self.active_session_mut().messages.truncate(user_idx);
         self.invalidate_wire_cache(key);
         self.reset_acp_session(key);
         self.conv.composer.editing_last_prompt = None;
         self.send_message_opts(true);
+    }
+
+    /// How the files of `key`'s latest response can be put back for Edit & retry: from the
+    /// in-memory journal of the run, or (also after a restart) from the snapshots saved with
+    /// the turn. `Err` says why they can't.
+    pub(crate) fn last_turn_rollback(
+        &self,
+        key: SessionKey,
+    ) -> Result<super::rewind::RewindFiles, String> {
+        if let Some(journal) = self
+            .run_state(key)
+            .and_then(|run| run.undo_journal.as_ref())
+            && let Some(reason) = journal
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .unavailable_reason()
+        {
+            return Err(reason.to_string());
+        }
+        let Some(user_idx) = self
+            .session_by_key(key)
+            .messages
+            .iter()
+            .rposition(|m| m.role == MsgRole::User && !m.is_summary)
+        else {
+            return Err("there is no prompt to edit".into());
+        };
+        let files = self.rewind_files(key, user_idx);
+        if files.unrestorable > 0 {
+            return Err(
+                "the response changed files without a snapshot to restore them from".into(),
+            );
+        }
+        // A remote chat's files are restored on its host: use Rewind, which waits for it off
+        // the UI thread.
+        if self.is_remote_key(key) && files.any() {
+            return Err("in a remote chat, use Rewind to here from the message's menu".into());
+        }
+        Ok(files)
     }
 
     /// Index of the most recent real (non-summary) user message in the active chat.

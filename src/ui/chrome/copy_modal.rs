@@ -134,7 +134,11 @@ pub fn confirm_modal(
                     }
                     extra(ui);
                     ui.add_space(14.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // A fixed-height row: a right-to-left layout would otherwise take the height
+                    // the area had last frame, and a shorter dialog after a taller one (the
+                    // same area) would keep a gap above its buttons.
+                    let row = egui::vec2(ui.available_width(), 28.0);
+                    ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
                         if ui
                             .add_enabled(
                                 confirm_enabled,

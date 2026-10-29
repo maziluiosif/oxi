@@ -10,6 +10,7 @@ use crate::theme::{FS_SMALL, FS_TINY, c_error_fg, c_text, c_text_muted, c_warnin
 use crate::ui::chrome::{ModalOutcome, confirm_modal};
 
 use super::OxiApp;
+use super::rewind::RewindCheck;
 use super::state::ConfirmAction;
 use super::worktrees::WorktreeRiskCheck;
 
@@ -42,6 +43,23 @@ impl OxiApp {
             | ConfirmAction::RemoveWorktree { wi } => self.start_worktree_risk_check(wi),
             _ => self.conv.worktree_risk = None,
         }
+        self.conv.rewind_check = None;
+        if let ConfirmAction::Rewind {
+            wi,
+            si,
+            index,
+            ref mut restore_files,
+        } = action
+        {
+            let ctx = self.conv.git_ctx.clone();
+            let key = self.session_key(wi, si);
+            self.start_rewind_check(&ctx, key, index);
+            *restore_files = self
+                .conv
+                .rewind_check
+                .as_ref()
+                .is_some_and(|c| c.files.any());
+        }
         self.conv.confirm_prompt = Some(action);
     }
 
@@ -56,6 +74,7 @@ impl OxiApp {
             return;
         };
         self.poll_worktree_risk();
+        self.poll_rewind_check();
 
         let (title, body, note, confirm_label) = self.confirm_texts(&action);
         let option_label = self.confirm_option_label(&action);
@@ -67,10 +86,25 @@ impl OxiApp {
             } | ConfirmAction::DeleteWorkspace {
                 remove_worktree: true,
                 ..
+            } | ConfirmAction::Rewind {
+                restore_files: true,
+                ..
             }
         );
+        let rewind = self.conv.rewind_check.take().filter(|c| match action {
+            ConfirmAction::Rewind { wi, si, index, .. } => {
+                c.key == self.session_key(wi, si) && c.index == index
+            }
+            _ => false,
+        });
+        let rewind_ready =
+            |restore: bool| !restore || rewind.as_ref().is_some_and(|c| c.files_ready());
+        let worktree_option = matches!(
+            action,
+            ConfirmAction::DeleteSession { .. } | ConfirmAction::DeleteWorkspace { .. }
+        );
         let removes_worktree = matches!(action, ConfirmAction::RemoveWorktree { .. })
-            || (option_value && option_label.is_some());
+            || (worktree_option && option_value && option_label.is_some());
         let check_root = match action {
             ConfirmAction::DeleteSession { wi, .. }
             | ConfirmAction::DeleteWorkspace { wi, .. }
@@ -84,8 +118,10 @@ impl OxiApp {
             .worktree_risk
             .take()
             .filter(|c| Some(&c.root) == check_root.as_ref());
-        let confirm_enabled =
-            !removes_worktree || check.as_ref().is_some_and(|c| c.allows_removal());
+        let restores_files = matches!(action, ConfirmAction::Rewind { .. }) && option_value;
+        let confirm_enabled = (!removes_worktree
+            || check.as_ref().is_some_and(|c| c.allows_removal()))
+            && rewind_ready(restores_files && option_label.is_some());
         let outcome = confirm_modal(
             ctx,
             "app_confirm_prompt",
@@ -100,8 +136,12 @@ impl OxiApp {
                         RichText::new(label).size(FS_SMALL).color(c_text()),
                     );
                 }
+                if let Some(rewind) = rewind.as_ref() {
+                    render_rewind_files(ui, rewind, option_value);
+                    return;
+                }
                 let removing = matches!(action, ConfirmAction::RemoveWorktree { .. })
-                    || (option_value && option_label.is_some());
+                    || (worktree_option && option_value && option_label.is_some());
                 if removing && let Some(check) = check.as_mut() {
                     render_worktree_risk(ui, check);
                 }
@@ -109,17 +149,17 @@ impl OxiApp {
             &confirm_label,
             confirm_enabled,
         );
-        if check.as_ref().is_some_and(|c| c.result.is_none()) {
+        if check.as_ref().is_some_and(|c| c.result.is_none())
+            || rewind
+                .as_ref()
+                .is_some_and(|c| c.plan.is_none() && !c.files.turns.is_empty())
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         let options = check.as_ref().map(|c| c.options()).unwrap_or_default();
         self.conv.worktree_risk = check;
-        if let Some(flag) = self
-            .conv
-            .confirm_prompt
-            .as_mut()
-            .and_then(remove_worktree_flag)
-        {
+        self.conv.rewind_check = rewind;
+        if let Some(flag) = self.conv.confirm_prompt.as_mut().and_then(option_flag) {
             *flag = option_value && option_label.is_some();
         }
         match outcome {
@@ -127,10 +167,12 @@ impl OxiApp {
             ModalOutcome::Cancelled => {
                 self.conv.confirm_prompt = None;
                 self.conv.worktree_risk = None;
+                self.conv.rewind_check = None;
             }
             ModalOutcome::Confirmed => {
                 if let Some(action) = self.conv.confirm_prompt.take() {
                     self.conv.worktree_risk = None;
+                    self.conv.rewind_check = None;
                     self.execute_confirmed(ctx, action, options);
                 }
             }
@@ -141,6 +183,17 @@ impl OxiApp {
     /// the work tree with it, unless another of its chats is still running; so can removing
     /// the work tree workspace (the sidebar only offers that while none of its chats run).
     fn confirm_option_label(&self, action: &ConfirmAction) -> Option<String> {
+        if let ConfirmAction::Rewind { .. } = action {
+            let check = self.conv.rewind_check.as_ref()?;
+            if !check.files.any() {
+                return None;
+            }
+            return Some(match check.files.files {
+                0 => "Also restore the files these responses changed".to_string(),
+                1 => "Also restore the 1 file these responses changed".to_string(),
+                n => format!("Also restore the {n} files these responses changed"),
+            });
+        }
         if let ConfirmAction::DeleteWorkspace { wi, .. } = action {
             let info = self.conv.workspaces.get(*wi)?.worktree.as_ref()?;
             return Some(format!(
@@ -245,6 +298,28 @@ impl OxiApp {
                     "Remove".to_string(),
                 )
             }
+            ConfirmAction::Rewind { wi, si, index, .. } => {
+                let later = self
+                    .conv
+                    .workspaces
+                    .get(*wi)
+                    .and_then(|w| w.sessions.get(*si))
+                    .map_or(0, |s| s.messages.len().saturating_sub(*index + 1));
+                (
+                    "Rewind chat?".to_string(),
+                    format!(
+                        "The chat goes back to before this message: it and {} after it are \
+                         removed, and the message returns to the composer to edit and send again.",
+                        if later == 1 {
+                            "the reply".to_string()
+                        } else {
+                            format!("{later} messages")
+                        }
+                    ),
+                    None,
+                    "Rewind".to_string(),
+                )
+            }
             ConfirmAction::GitDiscard { paths } => {
                 let body = if let [path] = paths.as_slice() {
                     format!("This will permanently discard changes in {path}.")
@@ -329,6 +404,15 @@ impl OxiApp {
             } => self.remove_worktree(wi, worktree),
             ConfirmAction::DeleteWorkspace { wi, .. } => self.delete_workspace(wi),
             ConfirmAction::RemoveWorktree { wi } => self.remove_worktree(wi, worktree),
+            ConfirmAction::Rewind {
+                wi,
+                si,
+                index,
+                restore_files,
+            } => {
+                let key = self.session_key(wi, si);
+                self.start_rewind(ctx, key, index, restore_files);
+            }
             ConfirmAction::GitDiscard { paths } => {
                 self.request(crate::git::GitOp::Discard(paths));
             }
@@ -368,6 +452,80 @@ fn remove_worktree_flag(action: &mut ConfirmAction) -> Option<&mut bool> {
             remove_worktree, ..
         } => Some(remove_worktree),
         _ => None,
+    }
+}
+
+/// The checkbox value of actions that offer one.
+fn option_flag(action: &mut ConfirmAction) -> Option<&mut bool> {
+    match action {
+        ConfirmAction::Rewind { restore_files, .. } => Some(restore_files),
+        other => remove_worktree_flag(other),
+    }
+}
+
+/// What restoring the files of a rewind does, and why it can't when it can't.
+fn render_rewind_files(ui: &mut egui::Ui, check: &RewindCheck, restore: bool) {
+    let note = |ui: &mut egui::Ui, text: String, color: egui::Color32| {
+        ui.add_space(6.0);
+        ui.label(RichText::new(text).size(FS_TINY).color(color));
+    };
+    if check.files.unrestorable > 0 {
+        note(
+            ui,
+            format!(
+                "{} changed files with no snapshot to restore from; those changes stay.",
+                if check.files.unrestorable == 1 {
+                    "1 later response".to_string()
+                } else {
+                    format!("{} later responses", check.files.unrestorable)
+                }
+            ),
+            c_warning_fg(),
+        );
+    }
+    if !restore || check.files.turns.is_empty() {
+        return;
+    }
+    match &check.plan {
+        None => {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                crate::theme::small_spinner(ui);
+                ui.label(
+                    RichText::new("Checking the files for later edits\u{2026}")
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                );
+            });
+        }
+        Some(Err(e)) => note(
+            ui,
+            format!("The files can't be restored: {e}"),
+            c_error_fg(),
+        ),
+        Some(Ok(plan)) if !plan.conflicts.is_empty() => note(
+            ui,
+            format!(
+                "Changed since, so restoring would overwrite them: {}. Rewind the chat only, \
+                 or undo those edits first.",
+                names(&plan.conflicts)
+            ),
+            c_error_fg(),
+        ),
+        Some(Ok(plan)) => note(
+            ui,
+            format!(
+                "{} back to how {} before this message: {}.",
+                plural(plan.paths.len(), "file goes", "files go"),
+                if plan.paths.len() == 1 {
+                    "it was"
+                } else {
+                    "they were"
+                },
+                names(&plan.paths)
+            ),
+            c_text_muted(),
+        ),
     }
 }
 

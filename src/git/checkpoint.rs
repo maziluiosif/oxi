@@ -2,9 +2,13 @@
 //!
 //! A snapshot is a git tree of the work tree as `git add -A` would stage it (tracked and
 //! untracked files, ignored ones left out), written to the object database from an in-memory
-//! copy of the index. Nothing visible changes: no commit, ref, stash or index update. Comparing
-//! the trees taken before and after a turn gives exactly what the turn changed, and the before
-//! tree can put those paths back.
+//! copy of the index. Nothing visible changes: no commit, stash, index or branch update.
+//! Comparing the trees taken before and after a turn gives exactly what the turn changed, and
+//! the before tree can put those paths back.
+//!
+//! Each snapshot tree is kept by a ref under `refs/oxi/checkpoints/` so `git gc` does not
+//! collect it while a chat can still show or restore that turn, also after oxi restarts. Refs
+//! older than [`RETENTION`], and the oldest beyond [`MAX_REFS`] per repository, are pruned.
 
 use std::path::{Path, PathBuf};
 
@@ -31,15 +35,140 @@ pub struct Snapshot {
     pub tree: String,
 }
 
+/// Namespace of the refs that keep snapshot trees reachable. Each is named
+/// `<unix seconds>-<tree id>`, the time it was last taken.
+pub const REF_PREFIX: &str = "refs/oxi/checkpoints/";
+/// Snapshots not taken again for this long lose their ref, and `git gc` may collect them.
+pub const RETENTION: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+/// Snapshot refs kept per repository at most; the oldest are pruned first.
+pub const MAX_REFS: usize = 2000;
+/// Pruning runs at most this often per repository and process.
+const PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+/// A snapshot ref younger than this is not renamed when the same tree is taken again.
+const REFRESH_AFTER: u64 = 24 * 60 * 60;
+
 /// Snapshot the work tree of the repository containing `cwd`.
 pub fn snapshot(cwd: &Path) -> Result<Snapshot, String> {
     let repo = open_repo(&cwd.to_string_lossy())?;
     let root = repo_root(&repo)?.to_path_buf();
     let tree = snapshot_tree(&repo)?;
+    // Best effort: an unwritable ref only means the snapshot is not protected from gc.
+    if let Err(e) = keep(&repo, tree) {
+        log::warn!("checkpoint ref for {tree}: {e}");
+    }
+    prune_if_due(&repo, &root);
     Ok(Snapshot {
         repo: root,
         tree: tree.to_string(),
     })
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Snapshot refs of `repo`: (ref name, seconds it was taken, tree id).
+fn checkpoint_refs(repo: &Repository) -> Result<Vec<(String, u64, String)>, String> {
+    let mut refs = Vec::new();
+    for reference in repo
+        .references_glob(&format!("{REF_PREFIX}*"))
+        .map_err(err)?
+        .flatten()
+    {
+        let Ok(name) = reference.name() else {
+            continue;
+        };
+        let Some((secs, tree)) = name
+            .strip_prefix(REF_PREFIX)
+            .and_then(|rest| rest.split_once('-'))
+        else {
+            continue;
+        };
+        if let Ok(secs) = secs.parse() {
+            refs.push((name.to_owned(), secs, tree.to_owned()));
+        }
+    }
+    Ok(refs)
+}
+
+/// Point a snapshot ref at `tree`, or refresh the time of the one that already does.
+fn keep(repo: &Repository, tree: Oid) -> Result<(), String> {
+    let now = now_secs();
+    let tree_id = tree.to_string();
+    let mut fresh = false;
+    for reference in repo
+        .references_glob(&format!("{REF_PREFIX}*-{tree_id}"))
+        .map_err(err)?
+        .flatten()
+    {
+        let Ok(name) = reference.name() else {
+            continue;
+        };
+        let taken = name
+            .strip_prefix(REF_PREFIX)
+            .and_then(|rest| rest.split_once('-'))
+            .and_then(|(secs, _)| secs.parse::<u64>().ok())
+            .unwrap_or(0);
+        if now.saturating_sub(taken) < REFRESH_AFTER && !fresh {
+            fresh = true;
+        } else {
+            let mut reference = reference;
+            let _ = reference.delete();
+        }
+    }
+    if !fresh {
+        repo.reference(
+            &format!("{REF_PREFIX}{now}-{tree_id}"),
+            tree,
+            true,
+            "oxi: keep turn snapshot",
+        )
+        .map_err(err)?;
+    }
+    Ok(())
+}
+
+/// Drop snapshot refs past [`RETENTION`] and beyond [`MAX_REFS`], at most once per
+/// [`PRUNE_EVERY`] for each repository in this process.
+fn prune_if_due(repo: &Repository, root: &Path) {
+    static LAST: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, std::time::Instant>>> =
+        std::sync::Mutex::new(None);
+    {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        let last = last.get_or_insert_with(Default::default);
+        if last.get(root).is_some_and(|at| at.elapsed() < PRUNE_EVERY) {
+            return;
+        }
+        last.insert(root.to_path_buf(), std::time::Instant::now());
+    }
+    if let Err(e) = prune(repo, now_secs(), RETENTION, MAX_REFS) {
+        log::warn!("pruning checkpoint refs: {e}");
+    }
+}
+
+/// Delete the snapshot refs older than `retention` (as of `now`) and all but the newest `max`.
+/// Returns how many were deleted.
+fn prune(
+    repo: &Repository,
+    now: u64,
+    retention: std::time::Duration,
+    max: usize,
+) -> Result<usize, String> {
+    let mut refs = checkpoint_refs(repo)?;
+    refs.sort_by_key(|(_, secs, _)| std::cmp::Reverse(*secs));
+    let mut deleted = 0;
+    for (i, (name, secs, _)) in refs.iter().enumerate() {
+        if i >= max || now.saturating_sub(*secs) > retention.as_secs() {
+            if let Ok(mut reference) = repo.find_reference(name) {
+                reference.delete().map_err(err)?;
+            }
+            deleted += 1;
+        }
+    }
+    Ok(deleted)
 }
 
 fn snapshot_tree(repo: &Repository) -> Result<Oid, String> {
@@ -156,30 +285,127 @@ pub fn restore(repo: &Path, before: &str, after: &str, only: Option<&str>) -> Re
     ) {
         return result.and_then(|r| r);
     }
+    restore_turns(repo, &[(before.to_string(), after.to_string())], only)
+}
+
+/// What putting back several turns would do: see [`plan_restore`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RestorePlan {
+    /// Paths that go back to how they were before the first turn that changed them.
+    pub paths: Vec<String>,
+    /// Paths changed since the last turn that touched them (by you or another program);
+    /// restoring is refused while there are any.
+    pub conflicts: Vec<String>,
+}
+
+/// Check what [`restore_turns`] would put back for `turns` (`(before, after)` snapshot pairs,
+/// oldest first) and which of those paths changed since, without writing anything.
+pub fn plan_restore(repo: &Path, turns: &[(String, String)]) -> Result<RestorePlan, String> {
+    if let Some(result) = super::remote::call::<Result<RestorePlan, String>>(
+        &repo.to_string_lossy(),
+        "plan_restore",
+        serde_json::json!({ "turns": turns }),
+    ) {
+        return result.and_then(|r| r);
+    }
+    let repo = open_repo(&repo.to_string_lossy())?;
+    let (plan, _) = plan_in(&repo, turns, None)?;
+    Ok(plan)
+}
+
+/// Where each path a run of turns changed goes back to: the index of the first turn that
+/// changed it (its `before` tree is the target) and of the last (its `after` tree is what the
+/// work tree must still hold).
+type PathTurns = std::collections::BTreeMap<String, (usize, usize)>;
+
+fn plan_in(
+    repo: &Repository,
+    turns: &[(String, String)],
+    only: Option<&str>,
+) -> Result<(RestorePlan, PathTurns), String> {
+    let mut paths = PathTurns::new();
+    for (i, (before, after)) in turns.iter().enumerate() {
+        for delta in tree_diff(repo, before, after)?.deltas() {
+            let path = delta_path(&delta);
+            if only.is_some_and(|o| o != path) {
+                continue;
+            }
+            paths.entry(path).and_modify(|e| e.1 = i).or_insert((i, i));
+        }
+    }
+    let mut plan = RestorePlan {
+        paths: paths.keys().cloned().collect(),
+        conflicts: Vec::new(),
+    };
+    if paths.is_empty() {
+        return Ok((plan, paths));
+    }
+    let now = repo.find_tree(snapshot_tree(repo)?).map_err(err)?;
+    let afters = turns
+        .iter()
+        .map(|(_, after)| find_tree(repo, after))
+        .collect::<Result<Vec<_>, _>>()?;
+    let entry = |tree: &git2::Tree<'_>, path: &str| {
+        tree.get_path(Path::new(path))
+            .ok()
+            .map(|e| (e.id(), e.filemode()))
+    };
+    for (path, (_, last)) in &paths {
+        if entry(&afters[*last], path) != entry(&now, path) {
+            plan.conflicts.push(path.clone());
+        }
+    }
+    Ok((plan, paths))
+}
+
+/// Put back the state from before `turns` (`(before, after)` snapshot pairs, oldest first),
+/// or only path `only`: every path they changed returns to its content before the first turn
+/// that changed it. Refused, before anything is written, when one of those paths no longer
+/// matches what the last turn that changed it left, so later edits are never overwritten.
+pub fn restore_turns(
+    repo: &Path,
+    turns: &[(String, String)],
+    only: Option<&str>,
+) -> Result<(), String> {
+    if let Some(result) = super::remote::call::<Result<(), String>>(
+        &repo.to_string_lossy(),
+        "restore_turns",
+        serde_json::json!({ "turns": turns, "only": only }),
+    ) {
+        return result.and_then(|r| r);
+    }
     let repo = open_repo(&repo.to_string_lossy())?;
     let root = repo_root(&repo)?.to_path_buf();
-    let changed: Vec<String> = tree_diff(&repo, before, after)?
-        .deltas()
-        .map(|d| delta_path(&d))
-        .filter(|p| only.is_none_or(|o| o == p))
-        .collect();
-    if changed.is_empty() {
-        return Ok(());
+    let (plan, paths) = plan_in(&repo, turns, only)?;
+    if let Some(path) = plan.conflicts.first() {
+        return Err(if turns.len() == 1 {
+            format!(
+                "{path} changed after the response; restore was cancelled to protect your edits."
+            )
+        } else {
+            format!(
+                "{} changed after the responses ({path}{}); restore was cancelled to protect \
+                 your edits.",
+                if plan.conflicts.len() == 1 {
+                    "1 file".to_string()
+                } else {
+                    format!("{} files", plan.conflicts.len())
+                },
+                if plan.conflicts.len() > 1 {
+                    ", …"
+                } else {
+                    ""
+                }
+            )
+        });
     }
-    let now = snapshot_tree(&repo)?;
-    let since: Vec<String> = tree_diff(&repo, after, &now.to_string())?
-        .deltas()
-        .map(|d| delta_path(&d))
-        .collect();
-    if let Some(path) = changed.iter().find(|p| since.contains(p)) {
-        return Err(format!(
-            "{path} changed after the response; restore was cancelled to protect your edits."
-        ));
-    }
-    let before_tree = find_tree(&repo, before)?;
-    for path in &changed {
+    let befores = turns
+        .iter()
+        .map(|(before, _)| find_tree(&repo, before))
+        .collect::<Result<Vec<_>, _>>()?;
+    for (path, (first, _)) in &paths {
         let target = root.join(path);
-        match before_tree.get_path(Path::new(path)) {
+        match befores[*first].get_path(Path::new(path)) {
             Ok(entry) => {
                 let blob = repo.find_blob(entry.id()).map_err(err)?;
                 if let Some(parent) = target.parent() {
@@ -414,6 +640,102 @@ mod tests {
             "one\n"
         );
         assert!(root.join("c.txt").exists());
+    }
+
+    #[test]
+    fn snapshots_are_kept_by_refs_until_pruned() {
+        let (_dir, root) = repo_with_file();
+        let first = snapshot(&root).unwrap();
+        let again = snapshot(&root).unwrap();
+        assert_eq!(first.tree, again.tree);
+        let repo = Repository::open(&root).unwrap();
+        let refs = checkpoint_refs(&repo).unwrap();
+        assert_eq!(
+            refs.len(),
+            1,
+            "the same tree taken twice keeps one ref: {refs:?}"
+        );
+        assert_eq!(refs[0].2, first.tree);
+        let target = repo.find_reference(&refs[0].0).unwrap().target().unwrap();
+        assert_eq!(target.to_string(), first.tree);
+
+        std::fs::write(root.join("a.txt"), "changed\n").unwrap();
+        let second = snapshot(&root).unwrap();
+        assert_eq!(checkpoint_refs(&repo).unwrap().len(), 2);
+        // Beyond the cap the oldest go; past the retention all of them.
+        let old = format!("{REF_PREFIX}100-{}", first.tree);
+        repo.reference(&old, Oid::from_str(&first.tree).unwrap(), true, "test")
+            .unwrap();
+        let now = now_secs();
+        assert_eq!(prune(&repo, now, RETENTION, 2).unwrap(), 1);
+        let kept: Vec<String> = checkpoint_refs(&repo)
+            .unwrap()
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect();
+        assert!(!kept.contains(&old), "{kept:?}");
+        assert!(kept.iter().any(|name| name.ends_with(&second.tree)));
+        assert_eq!(
+            prune(&repo, now + RETENTION.as_secs() + 1, RETENTION, MAX_REFS).unwrap(),
+            2
+        );
+        assert!(checkpoint_refs(&repo).unwrap().is_empty());
+    }
+
+    #[test]
+    fn git_gc_keeps_a_snapshot_its_ref_protects() {
+        let (_dir, root) = repo_with_file();
+        std::fs::write(root.join("only-in-snapshot.txt"), "precious\n").unwrap();
+        let kept = snapshot(&root).unwrap();
+        std::fs::remove_file(root.join("only-in-snapshot.txt")).unwrap();
+        let Ok(status) = std::process::Command::new("git")
+            .args(["gc", "--prune=now", "--quiet"])
+            .current_dir(&root)
+            .status()
+        else {
+            return; // No git binary to run gc with.
+        };
+        assert!(status.success());
+        let repo = Repository::open(&root).unwrap();
+        let tree = find_tree(&repo, &kept.tree).unwrap();
+        let entry = tree.get_path(Path::new("only-in-snapshot.txt")).unwrap();
+        assert_eq!(repo.find_blob(entry.id()).unwrap().content(), b"precious\n");
+    }
+
+    #[test]
+    fn restoring_several_turns_goes_back_to_before_the_first_after_a_conflict_check() {
+        let (_dir, root) = repo_with_file();
+        let t0 = snapshot(&root).unwrap().tree;
+        std::fs::write(root.join("a.txt"), "turn one\n").unwrap();
+        std::fs::write(root.join("b.txt"), "b\n").unwrap();
+        let t1 = snapshot(&root).unwrap().tree;
+        std::fs::write(root.join("a.txt"), "turn two\n").unwrap();
+        std::fs::write(root.join("c.txt"), "c\n").unwrap();
+        let t2 = snapshot(&root).unwrap().tree;
+        let turns = vec![(t0.clone(), t1.clone()), (t1, t2)];
+
+        let plan = plan_restore(&root, &turns).unwrap();
+        assert_eq!(plan.paths, ["a.txt", "b.txt", "c.txt"]);
+        assert!(plan.conflicts.is_empty());
+
+        // An edit made after the last turn blocks everything, and nothing is written.
+        std::fs::write(root.join("c.txt"), "yours\n").unwrap();
+        assert_eq!(plan_restore(&root, &turns).unwrap().conflicts, ["c.txt"]);
+        let error = restore_turns(&root, &turns, None).unwrap_err();
+        assert!(error.contains("c.txt"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "turn two\n"
+        );
+
+        std::fs::write(root.join("c.txt"), "c\n").unwrap();
+        restore_turns(&root, &turns, None).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "one\n"
+        );
+        assert!(!root.join("b.txt").exists());
+        assert!(!root.join("c.txt").exists());
     }
 
     #[test]

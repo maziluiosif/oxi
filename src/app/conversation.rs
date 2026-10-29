@@ -696,15 +696,8 @@ impl OxiApp {
                                 self.render_stall_notice(ui, quiet);
                             }
                             let rollback_available = self
-                                .run_state(self.active_session_key())
-                                .and_then(|run| run.undo_journal.as_ref())
-                                .is_some_and(|journal| {
-                                    journal
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner())
-                                        .unavailable_reason()
-                                        .is_none()
-                                });
+                                .last_turn_rollback(self.active_session_key())
+                                .is_ok();
                             let can_edit = !self.active_waiting_response()
                                 && !self.compaction_active_for(self.active_session_key())
                                 && self.conv.workspaces[wi].sessions[si]

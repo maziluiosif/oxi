@@ -5,10 +5,13 @@
 use std::process::Command;
 
 use super::Recorder;
+use super::fixtures::message;
 use crate::app::state::{ConfirmAction, Workspace};
+use crate::model::{AssistantBlock, MsgRole, TurnChanges};
 
 pub(super) fn run(rec: &mut Recorder<'_>) {
     worktree_removal(rec);
+    rewind(rec);
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -116,4 +119,103 @@ fn worktree_removal(rec: &mut Recorder<'_>) {
     rec.still("worktree-remove-dirty-forced");
     rec.app().conv.confirm_prompt = None;
     rec.app().conv.worktree_risk = None;
+}
+
+fn wait_for_rewind_check(rec: &mut Recorder<'_>) {
+    for _ in 0..200 {
+        rec.harness.step();
+        if rec
+            .app()
+            .conv
+            .rewind_check
+            .as_ref()
+            .is_some_and(|c| c.plan.is_some())
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    rec.harness.run_steps(3);
+}
+
+/// Rewinding to an earlier message after a restart: the saved snapshots restore the files.
+fn rewind(rec: &mut Recorder<'_>) {
+    let project = rec.project.clone();
+    let snap = |rec: &Recorder<'_>| crate::git::checkpoint::snapshot(&rec.project).unwrap();
+    let t0 = snap(rec);
+    std::fs::write(
+        project.join("export.py"),
+        "def export_csv(rows):\n    pass\n",
+    )
+    .unwrap();
+    let t1 = snap(rec);
+    std::fs::write(
+        project.join("stats.py"),
+        "def mean(xs):\n    return sum(xs) / len(xs)\n",
+    )
+    .unwrap();
+    let t2 = snap(rec);
+    let turn = |before: &str, after: &str| {
+        Some(Box::new(TurnChanges {
+            repo: t0.repo.to_string_lossy().into_owned(),
+            before: before.into(),
+            after: after.into(),
+            files: None,
+        }))
+    };
+    let reply = |text: &str| {
+        message(
+            MsgRole::Assistant,
+            "",
+            vec![AssistantBlock::Answer(text.into())],
+        )
+    };
+    {
+        let app = rec.app();
+        app.select_workspace(0);
+        app.new_chat();
+        let session = app.active_session_mut();
+        session.title = "Add CSV export".into();
+        let mut first = reply("Added `export.py` with a CSV writer.");
+        first.changes = turn(&t0.tree, &t1.tree);
+        let mut second = reply("`mean` now divides by the length.");
+        second.changes = turn(&t1.tree, &t2.tree);
+        session.messages = vec![
+            message(
+                MsgRole::User,
+                "Add a CSV export for the weekly report",
+                vec![],
+            ),
+            first,
+            message(MsgRole::User, "Also fix mean()", vec![]),
+            second,
+        ];
+    }
+    let key = rec.app().active_session_key();
+    rec.app().request_confirm(ConfirmAction::Rewind {
+        wi: key.workspace_idx,
+        si: key.session_idx,
+        index: 0,
+        restore_files: false,
+    });
+    wait_for_rewind_check(rec);
+    rec.still("rewind-confirm");
+    // An edit made since blocks restoring the files (the chat alone can still rewind).
+    std::fs::write(project.join("export.py"), "# my own edit\n").unwrap();
+    rec.app().conv.confirm_prompt = None;
+    rec.app().request_confirm(ConfirmAction::Rewind {
+        wi: key.workspace_idx,
+        si: key.session_idx,
+        index: 0,
+        restore_files: false,
+    });
+    wait_for_rewind_check(rec);
+    rec.still("rewind-conflict");
+    std::fs::write(
+        project.join("export.py"),
+        "def export_csv(rows):\n    pass\n",
+    )
+    .unwrap();
+    rec.app().conv.confirm_prompt = None;
+    rec.app().conv.rewind_check = None;
 }

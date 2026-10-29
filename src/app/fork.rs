@@ -149,8 +149,10 @@ impl OxiApp {
             return;
         }
         let is_user = self.active_session().messages[menu.start].role == MsgRole::User;
+        let rewindable = is_user && !self.active_session().messages[menu.start].is_summary;
         let busy = self.active_waiting_response();
         let mut fork = false;
+        let mut rewind = false;
         let mut copy = false;
         let mut copy_selection = false;
         let has_selection = self.conv.transcript.held_selection.is_some();
@@ -181,6 +183,19 @@ impl OxiApp {
                         .on_hover_text(hover)
                         .on_disabled_hover_text("Wait for the response to finish")
                         .clicked();
+                    if rewindable {
+                        rewind = ui
+                            .add_enabled(
+                                !busy,
+                                egui::Button::new(RichText::new("Rewind to here\u{2026}").size(FS_SMALL)),
+                            )
+                            .on_hover_text(
+                                "Go back to before this message in this chat, optionally \
+                                 restoring the files the later responses changed",
+                            )
+                            .on_disabled_hover_text("Wait for the response to finish")
+                            .clicked();
+                    }
                     copy = ui
                         .button(RichText::new("Copy message").size(FS_SMALL))
                         .clicked();
@@ -189,6 +204,7 @@ impl OxiApp {
         let just_opened = ctx.cumulative_pass_nr() == menu.opened_pass;
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         if fork
+            || rewind
             || copy
             || copy_selection
             || escape
@@ -208,6 +224,14 @@ impl OxiApp {
         }
         if fork {
             self.fork_active_chat(menu.start, menu.end, is_user);
+        }
+        if rewind {
+            self.request_confirm(super::state::ConfirmAction::Rewind {
+                wi: menu.workspace_idx,
+                si: menu.session_idx,
+                index: menu.start,
+                restore_files: false,
+            });
         }
     }
 
