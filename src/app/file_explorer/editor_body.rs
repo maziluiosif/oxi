@@ -1086,20 +1086,28 @@ impl OxiApp {
                                             (job, 0)
                                         }
                                         None => {
-                                            // Highlighting runs in the background; show
-                                            // plain text now and let a later frame pick the
-                                            // colors up.
+                                            // Highlighting runs in the background; show the
+                                            // previous colors (or plain text) now and let a
+                                            // later frame pick the new ones up.
                                             highlight_pending = true;
-                                            (
-                                                egui::text::LayoutJob::simple(
-                                                    document.content[window_bytes.clone()]
-                                                        .to_owned(),
-                                                    crate::theme::editor_font(),
-                                                    c_text(),
-                                                    f32::INFINITY,
-                                                ),
-                                                window_bytes.start,
-                                            )
+                                            if let Some(job) = crate::theme::stale_highlight(
+                                                &document.content,
+                                                &extension,
+                                                &crate::theme::editor_font(),
+                                            ) {
+                                                (job, 0)
+                                            } else {
+                                                (
+                                                    egui::text::LayoutJob::simple(
+                                                        document.content[window_bytes.clone()]
+                                                            .to_owned(),
+                                                        crate::theme::editor_font(),
+                                                        c_text(),
+                                                        f32::INFINITY,
+                                                    ),
+                                                    window_bytes.start,
+                                                )
+                                            }
                                         }
                                     },
                                 };
