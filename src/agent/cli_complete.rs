@@ -253,10 +253,14 @@ async fn run(
         .spawn()
         .map_err(|e| format!("Could not run {name}: {e}"))?;
     if let Some(mut input) = child.stdin.take() {
-        input
-            .write_all(stdin.as_bytes())
-            .await
-            .map_err(|e| format!("{name}: {e}"))?;
+        // A CLI that stops before reading (an unknown option) closes the pipe: its exit status
+        // and error output say what happened, not this write.
+        match input.write_all(stdin.as_bytes()).await {
+            Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+                return Err(format!("{name}: {e}"));
+            }
+            _ => {}
+        }
     }
     tokio::time::timeout(TIMEOUT, child.wait_with_output())
         .await

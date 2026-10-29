@@ -328,6 +328,16 @@ impl OxiApp {
         app.restore_drafts();
         app.ensure_active_session_loaded();
         app.restore_active_session_config();
+        // Chats read at start-up: what an earlier process left running (lazily loaded chats
+        // are checked when they are read).
+        for wi in 0..app.conv.workspaces.len() {
+            for si in 0..app.conv.workspaces[wi].sessions.len() {
+                if app.conv.workspaces[wi].sessions[si].messages_loaded {
+                    let key = app.session_key(wi, si);
+                    app.recover_interrupted_run(key);
+                }
+            }
+        }
         app
     }
 
@@ -850,6 +860,7 @@ impl OxiApp {
             if let Some(cache) = wire {
                 session.wire_cache = Some(cache);
             }
+            self.recover_interrupted_run(key);
         }
     }
 

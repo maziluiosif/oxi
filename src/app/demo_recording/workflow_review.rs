@@ -17,6 +17,7 @@ pub(super) fn run(rec: &mut Recorder<'_>) {
     steering(rec);
     worktree_setup(rec);
     diff_comments(rec);
+    interrupted_turn(rec);
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -419,4 +420,36 @@ fn diff_comments(rec: &mut Recorder<'_>) {
     rec.harness.run_steps(3);
     rec.still("diff-comments-attached");
     std::fs::write(project.join("stats.py"), stats).unwrap();
+}
+
+/// A chat whose turn an earlier oxi process was running when it closed.
+fn interrupted_turn(rec: &mut Recorder<'_>) {
+    use crate::session_store::run_journal::{Effect, TurnJournal};
+    rec.app().select_workspace(0);
+    rec.app().new_chat();
+    let key = rec.app().active_session_key();
+    let root = rec.project.to_string_lossy().into_owned();
+    {
+        let session = rec.app().active_session_mut();
+        session.title = "Make the percentile test deterministic".into();
+        session.messages = vec![message(
+            MsgRole::User,
+            "Make the percentile test deterministic",
+            vec![],
+        )];
+        crate::session_store::save_session_messages(&root, session).unwrap();
+    }
+    let file = rec.app().active_session().session_file.clone().unwrap();
+    let mut journal =
+        TurnJournal::start(&file, "Make the percentile test deterministic", None).unwrap();
+    journal.tool("t1", "read", "{\"path\":\"test_stats.py\"}", Effect::Read);
+    journal.tool_done("t1", false);
+    journal.tool("t2", "edit", "{\"path\":\"test_stats.py\"}", Effect::Write);
+    journal.tool("t3", "bash", "{\"command\":\"pytest -q\"}", Effect::Shell);
+    journal.queue(&["Then update the changelog".into()]);
+    drop(journal);
+    rec.app().recover_interrupted_run(key);
+    rec.harness.run_steps(5);
+    assert!(rec.app().run_state(key).unwrap().interrupted.is_some());
+    rec.still("interrupted-turn");
 }

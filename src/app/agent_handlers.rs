@@ -234,6 +234,26 @@ impl OxiApp {
                     update.metadata.status,
                     crate::model::ToolStatus::Completed | crate::model::ToolStatus::Failed
                 );
+                if let Some(journal) = self.run_state_mut(key).journal.as_mut() {
+                    if finished {
+                        journal.tool_done(
+                            &update.tool_call_id,
+                            update.metadata.status == crate::model::ToolStatus::Failed,
+                        );
+                    } else {
+                        let effect = crate::session_store::run_journal::Effect::of(
+                            &update.name,
+                            Some(update.metadata.kind.as_str()),
+                        );
+                        let args = update.args.as_ref().map(|a| a.to_string());
+                        journal.tool(
+                            &update.tool_call_id,
+                            &update.name,
+                            args.as_deref().unwrap_or(""),
+                            effect,
+                        );
+                    }
+                }
                 if let Some(message) = self.last_assistant_mut(key) {
                     crate::model::apply_tool_update(&mut message.blocks, *update);
                 }
@@ -251,6 +271,13 @@ impl OxiApp {
                 } else {
                     Some(tool_call_id.as_str())
                 };
+                if let Some(journal) = self.run_state_mut(key).journal.as_mut()
+                    && let Some(id) = id
+                {
+                    let summary = args.as_ref().map(|a| a.to_string()).unwrap_or_default();
+                    let effect = crate::session_store::run_journal::Effect::of(&name, None);
+                    journal.tool(id, &name, &summary, effect);
+                }
                 self.start_tool_block(key, &name, id, args.as_ref());
             }
             AgentEvent::ApprovalResolved => self.run_state_mut(key).pending_approval = None,
@@ -289,6 +316,11 @@ impl OxiApp {
                 } else {
                     Some(tool_call_id.as_str())
                 };
+                if let Some(journal) = self.run_state_mut(key).journal.as_mut()
+                    && let Some(id) = id
+                {
+                    journal.tool_done(id, is_error == Some(true));
+                }
                 self.finalize_tool_run(key, id, is_error, full_output_path, diff);
                 // The tool may have created, moved or deleted files: show them right away.
                 self.conv.explorer.cache.invalidate();
@@ -354,6 +386,12 @@ impl OxiApp {
                 };
                 let completion_unseen = !matches!(&outcome, AgentOutcome::Cancelled)
                     && (key != self.active_session_key() || !self.active_chat_is_visible(ctx));
+                // A remote prompt lost with the connection keeps its request id, so sending it
+                // again cannot run it twice; any other end makes the next send a new request.
+                let lost = matches!(&outcome, AgentOutcome::Failed { error } if error.starts_with("Not connected"));
+                if !lost {
+                    self.run_state_mut(key).remote_request = None;
+                }
                 match outcome {
                     AgentOutcome::Success { wire_cache } => {
                         self.session_mut_by_key(key).wire_cache = wire_cache;
@@ -379,6 +417,12 @@ impl OxiApp {
                             images: Vec::new(),
                             texts: Vec::new(),
                         });
+                    }
+                    // The turn ended: its journal keeps only what is still waiting to be sent.
+                    if let Some(journal) = run.journal.take() {
+                        let queued: Vec<String> =
+                            run.queued.iter().map(|q| q.text.clone()).collect();
+                        journal.end(&queued);
                     }
                 }
                 self.finish_assistant_stream(key);

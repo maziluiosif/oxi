@@ -3,6 +3,7 @@ mod format;
 pub(crate) use format::chat_message_to_json_entries;
 mod io;
 mod paths;
+pub mod run_journal;
 
 use std::fs;
 use std::path::{Path, PathBuf};

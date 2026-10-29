@@ -794,7 +794,13 @@ impl OxiApp {
             .as_deref()
             .map(|f| crate::remote::path_of(f).to_string());
         let history_json = protocol::messages_to_json(history);
+        let request = match self.run_state(key).and_then(|r| r.remote_request.clone()) {
+            Some((text, id)) if text == user.text => id,
+            _ => format!("{:016x}", rand::random::<u64>()),
+        };
+        let user_text = user.text.clone();
         let mut params = json!({
+            "requestId": request,
             "root": root_path,
             "chat": chat,
             "text": user.text,
@@ -816,6 +822,7 @@ impl OxiApp {
         let (pending, rx) = client.start_turn(params, history_json);
         let cancel = Arc::new(AtomicBool::new(false));
         let run = self.run_state_mut(key);
+        run.remote_request = Some((user_text, request));
         run.agent_rx = Some(rx);
         run.approval_tx = None;
         run.pending_approval = None;

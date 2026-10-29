@@ -434,6 +434,13 @@ pub struct SessionRunState {
     /// The running or last turn took messages sent into it: its undo journal spans more than
     /// its first prompt.
     pub steered: bool,
+    /// What the running turn started, on disk (see [`crate::session_store::run_journal`]).
+    pub journal: Option<crate::session_store::run_journal::TurnJournal>,
+    /// A turn that an earlier oxi process left unfinished, shown until dismissed.
+    pub interrupted: Option<crate::session_store::run_journal::Interrupted>,
+    /// A remote chat's last prompt and the request id it went with: sending the same prompt
+    /// again after the connection dropped reuses the id, so the server does not run it twice.
+    pub remote_request: Option<(String, String)>,
 }
 
 impl SessionRunState {

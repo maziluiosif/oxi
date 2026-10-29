@@ -268,6 +268,7 @@ impl OxiApp {
             });
         }
         ui.add_space(4.0);
+        let changed = action.is_some();
         match action {
             Some(QueueAction::Send(i)) => self.steer_queued(key, i),
             Some(QueueAction::Steer(i)) => self.steer_into_turn(key, i),
@@ -288,6 +289,127 @@ impl OxiApp {
                     self.conv.composer.focus_next_frame = true;
                 }
             }
+            None => {}
+        }
+        if changed {
+            self.persist_queue(key);
+        }
+    }
+
+    /// Keep `key`'s queued messages on disk with the chat, so a restart brings them back
+    /// (they were never sent; sending them later repeats nothing).
+    pub(crate) fn persist_queue(&mut self, key: SessionKey) {
+        if self.is_remote_key(key) || self.conn.no_session {
+            return;
+        }
+        let Some(file) = self.session_by_key(key).session_file.clone() else {
+            return;
+        };
+        let run = self.run_state_mut(key);
+        let queued: Vec<String> = run
+            .queued
+            .iter()
+            .map(|q| q.text.clone())
+            .filter(|t| !t.trim().is_empty())
+            .collect();
+        match run.journal.as_mut() {
+            Some(journal) => journal.queue(&queued),
+            None => crate::session_store::run_journal::save_queue(&file, &queued),
+        }
+    }
+
+    /// Show what an earlier oxi process left behind in `key`'s chat: a turn it was running
+    /// (marked in the transcript, with its unfinished calls) and the messages it had queued
+    /// (back in the queue, not sent). Nothing is resent by itself.
+    pub(crate) fn recover_interrupted_run(&mut self, key: SessionKey) {
+        if self.is_remote_key(key) || self.conn.no_session {
+            return;
+        }
+        if self.run_state(key).is_some_and(|r| r.waiting_response) {
+            return;
+        }
+        let Some(file) = self.session_by_key(key).session_file.clone() else {
+            return;
+        };
+        let Some(recovery) = crate::session_store::run_journal::recover(&file) else {
+            return;
+        };
+        if let Some(interrupted) = recovery.interrupted {
+            let root = self.conv.workspaces[key.workspace_idx].root_path.clone();
+            let session = self.session_mut_by_key(key);
+            if crate::session_store::run_journal::mark_interrupted(
+                &mut session.messages,
+                &interrupted,
+            ) && let Err(e) = crate::session_store::save_session_messages(&root, session)
+            {
+                log::warn!("saving the interrupted turn: {e}");
+            }
+            self.run_state_mut(key).interrupted = Some(interrupted);
+        }
+        let run = self.run_state_mut(key);
+        if run.queued.is_empty() {
+            run.queued = recovery
+                .queued
+                .into_iter()
+                .map(|text| QueuedSend {
+                    text,
+                    images: Vec::new(),
+                    texts: Vec::new(),
+                })
+                .collect();
+        }
+    }
+
+    /// The notice about a turn an earlier process left unfinished, with a way to continue it.
+    pub(super) fn render_interrupted_notice(&mut self, ui: &mut Ui) {
+        let key = self.active_session_key();
+        let Some(interrupted) = self.run_state(key).and_then(|r| r.interrupted.clone()) else {
+            return;
+        };
+        let mut action = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(
+                RichText::new(crate::session_store::run_journal::describe(&interrupted))
+                    .size(FS_SMALL)
+                    .color(crate::theme::c_warning_fg()),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Nothing was resent.")
+                    .size(FS_TINY)
+                    .color(c_text_muted()),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Dismiss").clicked() {
+                    action = Some(false);
+                }
+                if ui
+                    .small_button("Continue")
+                    .on_hover_text(
+                        "Ask the agent to check what the interrupted actions did, then carry on",
+                    )
+                    .clicked()
+                {
+                    action = Some(true);
+                }
+            });
+        });
+        ui.add_space(4.0);
+        match action {
+            Some(true) => {
+                self.run_state_mut(key).interrupted = None;
+                let draft = std::mem::replace(
+                    &mut self.conv.composer.input,
+                    crate::session_store::run_journal::continue_prompt(&interrupted),
+                );
+                self.send_message_for(key, false);
+                if self.conv.composer.input.is_empty() {
+                    self.conv.composer.input = draft;
+                }
+            }
+            Some(false) => self.run_state_mut(key).interrupted = None,
             None => {}
         }
     }
@@ -334,6 +456,49 @@ impl QueuedSend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_turn_an_earlier_process_left_running_is_shown_and_its_queue_restored() {
+        use crate::session_store::run_journal::{Effect, TurnJournal};
+        crate::secrets::use_mock_store();
+        let root = crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-recover", "d");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = OxiApp::new();
+        let key = app.active_session_key();
+        app.conv.workspaces[key.workspace_idx].root_path = root.to_string_lossy().into_owned();
+        app.active_session_mut().messages = vec![crate::model::ChatMessage::user("Fix it", &[])];
+        crate::session_store::save_session_messages(
+            &root.to_string_lossy(),
+            app.active_session_mut(),
+        )
+        .unwrap();
+        let file = app.active_session().session_file.clone().unwrap();
+        // An earlier process ran the turn and died mid-command.
+        let mut journal = TurnJournal::start(&file, "Fix it", None).unwrap();
+        journal.tool("t1", "bash", "{\"command\":\"cargo test\"}", Effect::Shell);
+        journal.queue(&["then commit".into()]);
+        drop(journal);
+
+        app.recover_interrupted_run(key);
+        let run = app.run_state(key).unwrap();
+        assert!(run.interrupted.is_some());
+        assert!(!run.waiting_response, "nothing was resent");
+        assert_eq!(run.queued.len(), 1);
+        assert_eq!(run.queued[0].text, "then commit");
+        let note = crate::model::last_answer(&app.active_session().messages).unwrap_or_default();
+        assert!(note.contains("bash cargo test"), "{note}");
+        assert!(
+            app.last_turn_rollback(key).is_err(),
+            "Edit & retry cannot undo what the interrupted command did"
+        );
+        // Saved with the note, and not reported again.
+        let saved = crate::session_store::load_session(&file).unwrap();
+        assert_eq!(saved.messages.len(), 2);
+        app.run_state_mut(key).interrupted = None;
+        app.recover_interrupted_run(key);
+        assert!(app.run_state(key).unwrap().interrupted.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn preview_uses_first_non_blank_line_and_counts_attachments() {

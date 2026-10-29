@@ -313,6 +313,7 @@ impl OxiApp {
             self.conv.composer.history_draft.clear();
             let queued = self.take_composer_payload();
             self.run_state_mut(key).queued.push_back(queued);
+            self.persist_queue(key);
             return;
         }
 
@@ -664,6 +665,16 @@ impl OxiApp {
         let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
         let evidence_mode = self.run_state_mut(key).evidence_mode.clone();
         self.run_state_mut(key).last_turn_planned = plan_mode;
+        // What the turn starts goes on disk, so a restart can tell what was lost with it.
+        if let Some(file) = session_file.as_deref() {
+            let prompt = chat.last().map(|m| m.text.clone()).unwrap_or_default();
+            let journal =
+                crate::session_store::run_journal::TurnJournal::start(file, &prompt, None);
+            let run = self.run_state_mut(key);
+            run.journal = journal;
+            run.interrupted = None;
+        }
+        self.persist_queue(key);
         // ACP agents run their own loop: there is nothing to hand a message to mid-turn.
         let steer = crate::agent::steer::SteerInbox::default();
         let steerable = !session_config.provider.is_acp();

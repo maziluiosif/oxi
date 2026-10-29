@@ -72,7 +72,7 @@ fn may_change_files(block: &AssistantBlock) -> bool {
     let AssistantBlock::Tool { name, metadata, .. } = block else {
         return false;
     };
-    match metadata.as_deref() {
+    match metadata.as_deref().filter(|meta| !meta.kind.is_empty()) {
         Some(meta) => matches!(meta.kind.as_str(), "edit" | "delete" | "move" | "execute"),
         None => {
             name != "scratchpad"

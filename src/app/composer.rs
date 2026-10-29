@@ -371,6 +371,7 @@ impl OxiApp {
                         // === Agent checklist and plan hand-off ===
                         self.render_task_panel(ui);
                         self.render_plan_ready_bar(ui);
+                        self.render_interrupted_notice(ui);
                         self.render_worktree_setup(ui);
                         self.render_review_comments(ui);
                         self.render_queue_panel(ui);
