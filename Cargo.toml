@@ -63,7 +63,7 @@ qrcode = { version = "0.14", default-features = false }
 webbrowser = "1"
 url = "2"
 portable-pty = "0.9"
-vt100 = "0.16"
+vt100 = "0.18"
 keyring-core = "1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
