@@ -878,6 +878,9 @@ pub struct ConversationState {
     /// Destructive action awaiting confirmation in the shared modal (delete chat /
     /// workspace / model, git discard). At most one at a time, app-wide.
     pub confirm_prompt: Option<ConfirmAction>,
+    /// What removing the work tree behind [`Self::confirm_prompt`] would lose, and the
+    /// user's choices about it.
+    pub worktree_risk: Option<super::worktrees::WorktreeRiskCheck>,
     /// In-flight chat-title completions: (workspace root, session file, auto title it replaces).
     pub title_gen: Vec<(
         String,

@@ -264,6 +264,7 @@ impl OxiApp {
                 },
                 git: crate::git::GitState::default(),
                 confirm_prompt: None,
+                worktree_risk: None,
                 title_gen: Vec::new(),
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),

@@ -26,6 +26,7 @@ use crate::settings::LlmProviderKind;
 mod fixtures;
 mod stage;
 mod switch;
+mod workflow_review;
 
 use fixtures::{
     chunks, create_project, heavy_transcript, message, paint_traffic_lights, seed_chats,
@@ -165,6 +166,10 @@ fn run_gallery(rec: &mut Recorder<'_>) {
 
     if std::env::var_os("OXI_SUBAGENT_REVIEW").is_some() {
         review_subagent_chats(rec);
+        return;
+    }
+    if std::env::var_os("OXI_WORKFLOW_REVIEW").is_some() {
+        workflow_review::run(rec);
         return;
     }
     if std::env::var_os("OXI_ACP_REVIEW").is_some() {

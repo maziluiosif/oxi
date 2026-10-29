@@ -3,10 +3,15 @@
 
 use eframe::egui;
 
+use eframe::egui::RichText;
+
+use crate::git::worktree::RemovalRisk;
+use crate::theme::{FS_SMALL, FS_TINY, c_error_fg, c_text, c_text_muted, c_warning_fg};
 use crate::ui::chrome::{ModalOutcome, confirm_modal};
 
 use super::OxiApp;
 use super::state::ConfirmAction;
+use super::worktrees::WorktreeRiskCheck;
 
 impl OxiApp {
     /// Queue a destructive action for confirmation. The modal renders on top of the
@@ -30,6 +35,13 @@ impl OxiApp {
         if let Some(flag) = remove_worktree_flag(&mut action) {
             *flag = default_remove;
         }
+        // Find out what removing the work tree would lose while the user reads the dialog.
+        match action {
+            ConfirmAction::DeleteSession { wi, .. }
+            | ConfirmAction::DeleteWorkspace { wi, .. }
+            | ConfirmAction::RemoveWorktree { wi } => self.start_worktree_risk_check(wi),
+            _ => self.conv.worktree_risk = None,
+        }
         self.conv.confirm_prompt = Some(action);
     }
 
@@ -43,6 +55,7 @@ impl OxiApp {
         let Some(action) = self.conv.confirm_prompt.clone() else {
             return;
         };
+        self.poll_worktree_risk();
 
         let (title, body, note, confirm_label) = self.confirm_texts(&action);
         let option_label = self.confirm_option_label(&action);
@@ -56,17 +69,51 @@ impl OxiApp {
                 ..
             }
         );
+        let removes_worktree = matches!(action, ConfirmAction::RemoveWorktree { .. })
+            || (option_value && option_label.is_some());
+        let check_root = match action {
+            ConfirmAction::DeleteSession { wi, .. }
+            | ConfirmAction::DeleteWorkspace { wi, .. }
+            | ConfirmAction::RemoveWorktree { wi } => {
+                self.conv.workspaces.get(wi).map(|w| w.root_path.clone())
+            }
+            _ => None,
+        };
+        let mut check = self
+            .conv
+            .worktree_risk
+            .take()
+            .filter(|c| Some(&c.root) == check_root.as_ref());
+        let confirm_enabled =
+            !removes_worktree || check.as_ref().is_some_and(|c| c.allows_removal());
         let outcome = confirm_modal(
             ctx,
             "app_confirm_prompt",
             &title,
             &body,
             note.as_deref(),
-            option_label
-                .as_deref()
-                .map(|label| (label, &mut option_value)),
+            |ui| {
+                if let Some(label) = option_label.as_deref() {
+                    ui.add_space(10.0);
+                    ui.checkbox(
+                        &mut option_value,
+                        RichText::new(label).size(FS_SMALL).color(c_text()),
+                    );
+                }
+                let removing = matches!(action, ConfirmAction::RemoveWorktree { .. })
+                    || (option_value && option_label.is_some());
+                if removing && let Some(check) = check.as_mut() {
+                    render_worktree_risk(ui, check);
+                }
+            },
             &confirm_label,
+            confirm_enabled,
         );
+        if check.as_ref().is_some_and(|c| c.result.is_none()) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        let options = check.as_ref().map(|c| c.options()).unwrap_or_default();
+        self.conv.worktree_risk = check;
         if let Some(flag) = self
             .conv
             .confirm_prompt
@@ -77,10 +124,14 @@ impl OxiApp {
         }
         match outcome {
             ModalOutcome::Open => {}
-            ModalOutcome::Cancelled => self.conv.confirm_prompt = None,
+            ModalOutcome::Cancelled => {
+                self.conv.confirm_prompt = None;
+                self.conv.worktree_risk = None;
+            }
             ModalOutcome::Confirmed => {
                 if let Some(action) = self.conv.confirm_prompt.take() {
-                    self.execute_confirmed(ctx, action);
+                    self.conv.worktree_risk = None;
+                    self.execute_confirmed(ctx, action, options);
                 }
             }
         }
@@ -136,7 +187,7 @@ impl OxiApp {
                 let body = if *remove_worktree {
                     format!(
                         "\u{201c}{name}\u{201d} and its history will be deleted, together with \
-                         the work tree folder and branch, including changes that were not merged."
+                         the work tree."
                     )
                 } else {
                     format!("\u{201c}{name}\u{201d} and its history will be deleted.")
@@ -163,8 +214,7 @@ impl OxiApp {
                         "Remove workspace?".to_string(),
                         format!(
                             "\u{201c}{name}\u{201d} will be removed from the sidebar, and its \
-                             work tree folder and branch deleted, including changes that were \
-                             not merged."
+                             work tree deleted."
                         ),
                         Some("This action cannot be undone.".to_string()),
                         "Remove".to_string(),
@@ -190,10 +240,7 @@ impl OxiApp {
                     .unwrap_or_default();
                 (
                     "Remove work tree?".to_string(),
-                    format!(
-                        "The work tree folder and branch \u{201c}{branch}\u{201d} will be \
-                         deleted, including changes that were not merged."
-                    ),
+                    format!("The work tree of \u{201c}{branch}\u{201d} will be deleted."),
                     Some("This action cannot be undone.".to_string()),
                     "Remove".to_string(),
                 )
@@ -255,7 +302,12 @@ impl OxiApp {
         }
     }
 
-    fn execute_confirmed(&mut self, ctx: &egui::Context, action: ConfirmAction) {
+    fn execute_confirmed(
+        &mut self,
+        ctx: &egui::Context,
+        action: ConfirmAction,
+        worktree: crate::git::worktree::RemoveOptions,
+    ) {
         match action {
             ConfirmAction::DeleteSession {
                 wi,
@@ -267,16 +319,16 @@ impl OxiApp {
                 if wi == self.conv.active_workspace {
                     self.delete_session(si);
                     if remove_worktree {
-                        self.remove_worktree(wi);
+                        self.remove_worktree(wi, worktree);
                     }
                 }
             }
             ConfirmAction::DeleteWorkspace {
                 wi,
                 remove_worktree: true,
-            } => self.remove_worktree(wi),
+            } => self.remove_worktree(wi, worktree),
             ConfirmAction::DeleteWorkspace { wi, .. } => self.delete_workspace(wi),
-            ConfirmAction::RemoveWorktree { wi } => self.remove_worktree(wi),
+            ConfirmAction::RemoveWorktree { wi } => self.remove_worktree(wi, worktree),
             ConfirmAction::GitDiscard { paths } => {
                 self.request(crate::git::GitOp::Discard(paths));
             }
@@ -317,4 +369,151 @@ fn remove_worktree_flag(action: &mut ConfirmAction) -> Option<&mut bool> {
         } => Some(remove_worktree),
         _ => None,
     }
+}
+
+/// Names listed per kind of lost work before "and N more".
+const RISK_NAMES_SHOWN: usize = 4;
+
+fn names(items: &[String]) -> String {
+    let mut shown = items
+        .iter()
+        .take(RISK_NAMES_SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if items.len() > RISK_NAMES_SHOWN {
+        shown.push_str(&format!(", and {} more", items.len() - RISK_NAMES_SHOWN));
+    }
+    shown
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// What deleting the work tree loses, with the explicit choices to keep the branch or to
+/// delete anyway.
+fn render_worktree_risk(ui: &mut egui::Ui, check: &mut WorktreeRiskCheck) {
+    ui.add_space(8.0);
+    let risk = match &check.result {
+        None => {
+            ui.horizontal(|ui| {
+                crate::theme::small_spinner(ui);
+                ui.label(
+                    RichText::new("Checking the work tree for unsaved work\u{2026}")
+                        .size(FS_SMALL)
+                        .color(c_text_muted()),
+                );
+            });
+            return;
+        }
+        Some(Err(e)) => {
+            ui.label(
+                RichText::new(format!("Could not check what would be lost: {e}"))
+                    .size(FS_SMALL)
+                    .color(c_error_fg()),
+            );
+            ui.checkbox(
+                &mut check.force,
+                RichText::new("Delete the work tree anyway")
+                    .size(FS_SMALL)
+                    .color(c_text()),
+            );
+            return;
+        }
+        Some(Ok(risk)) => risk.clone(),
+    };
+    if !risk.loses_files() && !risk.loses_commits() {
+        ui.label(
+            RichText::new(
+                "Nothing would be lost: no uncommitted files, and every commit of the branch \
+                 is on another branch.",
+            )
+            .size(FS_SMALL)
+            .color(c_text_muted()),
+        );
+        return;
+    }
+    let commits_lost = risk.loses_commits() && (!check.keep_branch || risk.detached);
+    if risk.loses_files() || commits_lost {
+        ui.label(
+            RichText::new("Deleting it loses:")
+                .size(FS_SMALL)
+                .color(c_warning_fg()),
+        );
+    }
+    let line = |ui: &mut egui::Ui, text: String| {
+        ui.label(
+            RichText::new(format!("\u{2022} {text}"))
+                .size(FS_TINY)
+                .color(c_text()),
+        );
+    };
+    if !risk.modified.is_empty() {
+        line(
+            ui,
+            format!(
+                "{} with uncommitted changes: {}",
+                plural(risk.modified.len(), "file", "files"),
+                names(&risk.modified)
+            ),
+        );
+    }
+    if !risk.untracked.is_empty() {
+        line(
+            ui,
+            format!(
+                "{}: {}",
+                plural(risk.untracked.len(), "untracked file", "untracked files"),
+                names(&risk.untracked)
+            ),
+        );
+    }
+    if commits_lost {
+        line(ui, unmerged_line(&risk));
+    }
+    if risk.loses_commits() && !risk.detached {
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut check.keep_branch,
+            RichText::new(format!(
+                "Keep the branch \u{201c}{}\u{201d} and its commits",
+                risk.branch
+            ))
+            .size(FS_SMALL)
+            .color(c_text()),
+        );
+        if check.keep_branch {
+            ui.label(
+                RichText::new(format!("Kept: {}", unmerged_line(&risk)))
+                    .size(FS_TINY)
+                    .color(c_text_muted()),
+            );
+        }
+    }
+    if risk.blocks(check.options()) {
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut check.force,
+            RichText::new("Delete anyway and lose the work listed above")
+                .size(FS_SMALL)
+                .color(c_text()),
+        );
+    } else {
+        check.force = false;
+    }
+}
+
+fn unmerged_line(risk: &RemovalRisk) -> String {
+    let count = if risk.more_unmerged {
+        format!("{}+ commits", risk.unmerged.len())
+    } else {
+        plural(risk.unmerged.len(), "commit", "commits")
+    };
+    let place = if risk.detached {
+        "on a detached HEAD".to_string()
+    } else {
+        format!("only on \u{201c}{}\u{201d}", risk.branch)
+    };
+    format!("{count} {place}: {}", names(&risk.unmerged))
 }
