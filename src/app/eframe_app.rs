@@ -66,6 +66,7 @@ impl eframe::App for OxiApp {
         self.drain_agent(ctx);
         self.drain_models(ctx);
         self.drain_worktree_ops(ctx);
+        self.drain_turn_changes();
         self.drain_chores(ctx);
         if let Some(command) = crate::ui::messages::take_terminal_command(ctx) {
             self.open_command_in_terminal(ctx, &command);

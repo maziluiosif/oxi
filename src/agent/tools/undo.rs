@@ -138,6 +138,7 @@ impl TurnUndoJournal {
             repo: checkpoint.repo.to_string_lossy().into_owned(),
             before: checkpoint.before.clone(),
             after: tree,
+            files: None,
         })
     }
 

@@ -1,8 +1,13 @@
 //! "N files changed" card under an agent turn that changed the workspace: the files with their
 //! line counts, a diff per file (against the snapshot taken before the turn, with per-block
 //! revert), and reverting one file or the whole turn.
+//!
+//! The file list is computed when the turn's snapshot is taken and saved with the turn. Turns
+//! saved before that (or by an older oxi) get theirs from a background diff of the snapshots;
+//! nothing here runs git, or asks an SSH host, on the UI thread.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui::{self, FontId, RichText, Sense, Ui};
 
@@ -15,13 +20,44 @@ use crate::theme::*;
 #[derive(Default)]
 pub(crate) struct TurnChangesCache {
     entries: HashMap<String, TurnEntry>,
+    /// Background diffs and reverts, applied by [`OxiApp::drain_turn_changes`].
+    jobs: Vec<Job>,
+}
+
+enum Job {
+    Load {
+        key: String,
+        rx: Receiver<Result<Vec<CompareFile>, String>>,
+    },
+    Revert {
+        key: String,
+        only: Option<String>,
+        rx: Receiver<Result<(), String>>,
+    },
 }
 
 struct TurnEntry {
-    files: Result<Vec<CompareFile>, String>,
+    /// `None` while the list is computed in the background.
+    files: Option<Result<Vec<CompareFile>, String>>,
     expanded: bool,
     /// Paths put back from this card ("*" for the whole turn).
     reverted: HashSet<String>,
+    /// A revert from this card is running.
+    reverting: bool,
+}
+
+/// Run `work` on a background thread; its result arrives on the returned channel.
+fn spawn<T: Send + 'static>(
+    ctx: &egui::Context,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Receiver<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+        ctx.request_repaint();
+    });
+    rx
 }
 
 /// Inset of the Revert button from the card's top, right and bottom edges.
@@ -53,30 +89,43 @@ impl OxiApp {
         author: Option<crate::settings::LlmProviderKind>,
     ) {
         let key = cache_key(changes);
-        let repo = self.turn_repo(&changes.repo);
-        let entry = self
-            .conv
-            .transcript
-            .turn_changes
-            .entries
-            .entry(key.clone())
-            .or_insert_with(|| TurnEntry {
-                files: crate::git::checkpoint::changed_files(
-                    &repo,
-                    &changes.before,
-                    &changes.after,
-                ),
-                expanded: false,
-                reverted: HashSet::new(),
-            });
+        if !self.conv.transcript.turn_changes.entries.contains_key(&key) {
+            let files = changes.files.clone().map(Ok);
+            if files.is_none() {
+                let repo = self.turn_repo(&changes.repo);
+                let (before, after) = (changes.before.clone(), changes.after.clone());
+                let rx = spawn(ui.ctx(), move || {
+                    crate::git::checkpoint::changed_files(&repo, &before, &after)
+                });
+                self.conv.transcript.turn_changes.jobs.push(Job::Load {
+                    key: key.clone(),
+                    rx,
+                });
+            }
+            self.conv.transcript.turn_changes.entries.insert(
+                key.clone(),
+                TurnEntry {
+                    files,
+                    expanded: false,
+                    reverted: HashSet::new(),
+                    reverting: false,
+                },
+            );
+        }
+        let entry = &self.conv.transcript.turn_changes.entries[&key];
         let files = match &entry.files {
-            Ok(files) if !files.is_empty() => files.clone(),
+            Some(Ok(files)) if !files.is_empty() => files.clone(),
+            None => {
+                render_loading_card(ui);
+                return;
+            }
             // Snapshot gone (gc'd) or nothing changed: no card.
             _ => return,
         };
         let expanded = entry.expanded;
         let all_reverted = entry.reverted.contains("*");
         let reverted = entry.reverted.clone();
+        let reverting = entry.reverting;
         let reviewers = if all_reverted {
             Vec::new()
         } else {
@@ -152,11 +201,15 @@ impl OxiApp {
                             .color(c_danger()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if all_reverted {
+                        if all_reverted || reverting {
                             ui.label(
-                                RichText::new("Reverted")
-                                    .size(FS_TINY)
-                                    .color(c_text_muted()),
+                                RichText::new(if reverting {
+                                    "Reverting…"
+                                } else {
+                                    "Reverted"
+                                })
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
                             );
                         } else if crate::ui::chrome::ghost_button_icon(
                             ui, ICON_UNDO, "Revert", true,
@@ -201,7 +254,8 @@ impl OxiApp {
                 if expanded {
                     ui.add_space(4.0);
                     for file in &files {
-                        let file_reverted = all_reverted || reverted.contains(&file.path);
+                        let file_reverted =
+                            all_reverted || reverting || reverted.contains(&file.path);
                         if let Some(a) = render_file_row(ui, file, file_reverted) {
                             action = Some(a);
                         }
@@ -238,9 +292,9 @@ impl OxiApp {
                 }
             }
             Some(CardAction::RevertFile(path)) => {
-                self.revert_turn_changes(changes, &key, Some(path));
+                self.revert_turn_changes(ui.ctx(), changes, &key, Some(path));
             }
-            Some(CardAction::RevertAll) => self.revert_turn_changes(changes, &key, None),
+            Some(CardAction::RevertAll) => self.revert_turn_changes(ui.ctx(), changes, &key, None),
             Some(CardAction::Review(reviewer)) => {
                 self.review_turn_changes(changes, author, reviewer)
             }
@@ -248,25 +302,128 @@ impl OxiApp {
         }
     }
 
-    fn revert_turn_changes(&mut self, changes: &TurnChanges, key: &str, only: Option<String>) {
-        let result = crate::git::checkpoint::restore(
-            &self.turn_repo(&changes.repo),
-            &changes.before,
-            &changes.after,
-            only.as_deref(),
-        );
-        match result {
-            Ok(()) => {
-                if let Some(entry) = self.conv.transcript.turn_changes.entries.get_mut(key) {
+    /// Put back the files of a turn (or one of them) in the background; the card shows the
+    /// outcome once [`Self::drain_turn_changes`] sees it.
+    fn revert_turn_changes(
+        &mut self,
+        ctx: &egui::Context,
+        changes: &TurnChanges,
+        key: &str,
+        only: Option<String>,
+    ) {
+        let cache = &mut self.conv.transcript.turn_changes;
+        let Some(entry) = cache.entries.get_mut(key) else {
+            return;
+        };
+        if entry.reverting {
+            return;
+        }
+        entry.reverting = true;
+        let repo = self.turn_repo(&changes.repo);
+        let (before, after) = (changes.before.clone(), changes.after.clone());
+        let path = only.clone();
+        let rx = spawn(ctx, move || {
+            crate::git::checkpoint::restore(&repo, &before, &after, path.as_deref())
+        });
+        self.conv.transcript.turn_changes.jobs.push(Job::Revert {
+            key: key.to_string(),
+            only,
+            rx,
+        });
+    }
+
+    /// Apply finished background diffs and reverts. A diffed file list is also stored on the
+    /// turns it belongs to, so the chat's next save keeps it.
+    pub(crate) fn drain_turn_changes(&mut self) {
+        let cache = &mut self.conv.transcript.turn_changes;
+        if cache.jobs.is_empty() {
+            return;
+        }
+        let mut loaded = Vec::new();
+        let mut reverts = Vec::new();
+        cache.jobs.retain(|job| match job {
+            Job::Load { key, rx } => {
+                let result = match rx.try_recv() {
+                    Ok(result) => result,
+                    Err(TryRecvError::Empty) => return true,
+                    Err(TryRecvError::Disconnected) => Err("The diff stopped".to_string()),
+                };
+                loaded.push((key.clone(), result));
+                false
+            }
+            Job::Revert { key, only, rx } => {
+                let result = match rx.try_recv() {
+                    Ok(result) => result,
+                    Err(TryRecvError::Empty) => return true,
+                    Err(TryRecvError::Disconnected) => Err("The revert stopped".to_string()),
+                };
+                reverts.push((key.clone(), only.clone(), result));
+                false
+            }
+        });
+        for (key, result) in loaded {
+            if let Ok(files) = &result {
+                for workspace in &mut self.conv.workspaces {
+                    for session in &mut workspace.sessions {
+                        for message in &mut session.messages {
+                            if let Some(changes) = message.changes.as_deref_mut()
+                                && changes.files.is_none()
+                                && cache_key(changes) == key
+                            {
+                                changes.files = Some(files.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(entry) = self.conv.transcript.turn_changes.entries.get_mut(&key) {
+                entry.files = Some(result);
+            }
+        }
+        for (key, only, result) in reverts {
+            if let Some(entry) = self.conv.transcript.turn_changes.entries.get_mut(&key) {
+                entry.reverting = false;
+                if result.is_ok() {
                     entry.reverted.insert(only.unwrap_or_else(|| "*".into()));
                 }
-                self.conv.explorer.cache.invalidate();
-                self.request(GitOp::Refresh);
-                self.notify_composer("Changes reverted.");
             }
-            Err(e) => self.notify_composer(format!("Revert failed: {e}")),
+            match result {
+                Ok(()) => {
+                    self.conv.explorer.cache.invalidate();
+                    self.request(GitOp::Refresh);
+                    self.notify_composer("Changes reverted.");
+                }
+                Err(e) => self.notify_composer(format!("Revert failed: {e}")),
+            }
         }
     }
+}
+
+/// Placeholder while an older turn's file list is diffed in the background.
+fn render_loading_card(ui: &mut Ui) {
+    egui::Frame::new()
+        .fill(c_bg_elevated())
+        .stroke(egui::Stroke::new(1.0, c_border()))
+        .corner_radius(crate::theme::RADIUS_PANEL)
+        .inner_margin(egui::Margin {
+            left: 12,
+            right: CARD_INSET as i8,
+            top: CARD_INSET as i8,
+            bottom: CARD_INSET as i8,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.set_min_height(HEADER_H);
+                crate::theme::small_spinner(ui);
+                ui.label(
+                    RichText::new("Changed files")
+                        .size(FS_SMALL)
+                        .color(c_text_muted()),
+                );
+            });
+        });
+    ui.add_space(12.0);
 }
 
 fn render_file_row(ui: &mut Ui, file: &CompareFile, reverted: bool) -> Option<CardAction> {
@@ -338,4 +495,67 @@ fn render_file_row(ui: &mut Ui, file: &CompareFile, reverted: bool) -> Option<Ca
         });
     });
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AssistantBlock, ChatMessage};
+
+    #[test]
+    fn older_turns_are_diffed_off_the_ui_thread_and_keep_the_result() {
+        crate::secrets::use_mock_store();
+        let root = crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-turn-card", "d");
+        std::fs::create_dir_all(&root).unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        let before = crate::git::checkpoint::snapshot(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one\ntwo\n").unwrap();
+        let after = crate::git::checkpoint::snapshot(&root).unwrap();
+        let changes = TurnChanges {
+            repo: before.repo.to_string_lossy().into_owned(),
+            before: before.tree,
+            after: after.tree,
+            files: None,
+        };
+
+        let mut app = OxiApp::new();
+        let mut reply = ChatMessage::streaming_assistant(None);
+        reply.blocks.push(AssistantBlock::Answer("done".into()));
+        reply.finish_streaming();
+        reply.changes = Some(Box::new(changes.clone()));
+        app.active_session_mut().messages = vec![reply];
+
+        let ctx = egui::Context::default();
+        let mut frame = |app: &mut OxiApp| {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                app.render_turn_changes(ui, &changes, None);
+            });
+        };
+        frame(&mut app);
+        assert!(
+            app.conv.transcript.turn_changes.entries[&cache_key(&changes)]
+                .files
+                .is_none(),
+            "the first frame only starts the diff"
+        );
+        for _ in 0..500 {
+            app.drain_turn_changes();
+            if app.conv.transcript.turn_changes.jobs.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let saved = app.active_session().messages[0]
+            .changes
+            .as_deref()
+            .and_then(|c| c.files.clone())
+            .expect("the diffed list is stored on the turn");
+        assert_eq!(saved.len(), 1);
+        assert_eq!((saved[0].path.as_str(), saved[0].added), ("a.txt", 1));
+        let json =
+            serde_json::to_value(app.active_session().messages[0].changes.as_deref()).unwrap();
+        assert_eq!(json["files"][0]["path"], "a.txt");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

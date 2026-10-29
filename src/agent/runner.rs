@@ -402,7 +402,19 @@ async fn report_acp_turn_changes(
             }
         }
     };
-    if let Some(changes) = changes {
+    if let Some(mut changes) = changes {
+        // The card's file list, computed here once rather than by whoever shows the turn.
+        let (repo, before, after) = (
+            std::path::PathBuf::from(&changes.repo),
+            changes.before.clone(),
+            changes.after.clone(),
+        );
+        changes.files = tokio::task::spawn_blocking(move || {
+            crate::git::checkpoint::changed_files(&repo, &before, &after)
+        })
+        .await
+        .ok()
+        .and_then(Result::ok);
         let _ = tx.send(AgentEvent::TurnChanges(Box::new(changes)));
     }
 }

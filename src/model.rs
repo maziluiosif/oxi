@@ -179,6 +179,10 @@ pub struct TurnChanges {
     pub repo: String,
     pub before: String,
     pub after: String,
+    /// The files that differ, with line counts, computed when the turn's snapshot was taken.
+    /// Missing for turns saved before oxi stored it; those are diffed when shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<crate::git::CompareFile>>,
 }
 
 #[derive(Clone)]
