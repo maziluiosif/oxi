@@ -44,16 +44,18 @@ pub async fn complete(
     let user = cap_prompt(user);
     let dir = crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-helper", "d");
     std::fs::create_dir_all(&dir).map_err(|e| format!("helper folder: {e}"))?;
+    // The login shell's PATH; waiting for it must not hold a runtime worker.
+    let path = crate::shell_env::path().await;
     let result = match cfg.provider {
         LlmProviderKind::ClaudeCodeAcp => {
-            let program = find_claude().ok_or(
+            let program = find_claude(path.as_deref()).ok_or(
                 "Claude Code's `claude` command was not found. Install Claude Code, or pick \
                  another model for commit messages in Settings.",
             )?;
             claude(&program, cfg, system, &user, &dir).await
         }
         LlmProviderKind::CodexAcp => {
-            let program = find_program("codex").ok_or(
+            let program = find_program("codex", path.as_deref()).ok_or(
                 "The `codex` command was not found. Install the Codex CLI, or pick another \
                  model for commit messages in Settings.",
             )?;
@@ -84,15 +86,14 @@ fn cap_prompt(prompt: &str) -> String {
 
 /// `claude` on the user's `PATH` (as their login shell sets it), else the one bundled with
 /// oxi's managed Claude adapter.
-fn find_claude() -> Option<PathBuf> {
-    find_program("claude").or_else(crate::agent::acp::bundled_claude_cli)
+fn find_claude(shell_path: Option<&str>) -> Option<PathBuf> {
+    find_program("claude", shell_path).or_else(crate::agent::acp::bundled_claude_cli)
 }
 
-/// `name` on the login shell's `PATH`, or in a folder installers commonly use.
-fn find_program(name: &str) -> Option<PathBuf> {
-    let path = crate::shell_env::vars()
-        .get("PATH")
-        .cloned()
+/// `name` on `shell_path` (the login shell's `PATH`; oxi's own when `None`), or in a folder
+/// installers commonly use.
+fn find_program(name: &str, shell_path: Option<&str>) -> Option<PathBuf> {
+    let path = shell_path
         .map(OsString::from)
         .or_else(|| std::env::var_os("PATH"))
         .unwrap_or_default();

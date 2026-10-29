@@ -490,7 +490,7 @@ fn delegation(rec: &mut Recorder<'_>) {
     )
     .unwrap();
     let ctx = rec.harness.ctx.clone();
-    rec.app().poll_delegations(&ctx);
+    rec.app().poll_delegations_now(&ctx);
     rec.harness.run_steps(3);
     rec.still("delegation-running");
     let _ = std::fs::remove_dir_all(dir);

@@ -22,6 +22,9 @@ const DELIVERY_DELAY: Duration = Duration::from_secs(2);
 /// How often the mailboxes are checked for requests while nothing else wakes the app.
 const WATCH_EVERY: Duration = Duration::from_millis(300);
 
+/// Set by the watcher when a mailbox has requests; the next frame reads them.
+static REQUESTS_WAITING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// One delegated task.
 pub(crate) struct DelegatedTask {
     /// The parent chat's mailbox.
@@ -69,6 +72,7 @@ fn start_watching(ctx: egui::Context) {
                             .is_ok_and(|mut entries| entries.next().is_some())
                     });
                 if waiting {
+                    REQUESTS_WAITING.store(true, std::sync::atomic::Ordering::SeqCst);
                     ctx.request_repaint();
                 }
             }
@@ -113,6 +117,18 @@ impl OxiApp {
 
     /// Pick up requests, follow running tasks and hand finished reports to their parents.
     pub(crate) fn poll_delegations(&mut self, ctx: &egui::Context) {
+        if REQUESTS_WAITING.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.take_delegation_requests();
+        }
+        if self.conv.delegations.is_empty() {
+            return;
+        }
+        self.follow_delegations();
+        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
+    /// Handle the requests waiting in this process's mailboxes.
+    fn take_delegation_requests(&mut self) {
         let own = format!("{}-", std::process::id());
         let dirs: Vec<PathBuf> = std::fs::read_dir(crate::delegation::root())
             .into_iter()
@@ -126,11 +142,12 @@ impl OxiApp {
                 self.handle_delegation_request(&dir, request);
             }
         }
-        if self.conv.delegations.is_empty() {
-            return;
-        }
-        self.follow_delegations();
-        ctx.request_repaint_after(Duration::from_millis(500));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn poll_delegations_now(&mut self, ctx: &egui::Context) {
+        self.take_delegation_requests();
+        self.poll_delegations(ctx);
     }
 
     fn handle_delegation_request(&mut self, dir: &Path, request: Request) {
@@ -554,7 +571,7 @@ mod tests {
         .unwrap();
         let sessions_before = app.conv.workspaces[parent.workspace_idx].sessions.len();
         let ctx = egui::Context::default();
-        app.poll_delegations(&ctx);
+        app.poll_delegations_now(&ctx);
 
         let status = crate::delegation::read_status(&dir, "dtest").unwrap();
         assert_eq!(status.state, TaskState::Running);
