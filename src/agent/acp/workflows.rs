@@ -114,9 +114,6 @@ impl Reader {
                 if input.metadata().is_ok_and(|m| m.len() < cursor.offset) {
                     cursor.offset = 0;
                 }
-                if cursor.offset == 0 {
-                    out.push(json!({"sessionId":child,"update":{"sessionUpdate":"workflow_transcript_reset"}}));
-                }
                 if input.seek(SeekFrom::Start(cursor.offset)).is_err() {
                     continue;
                 }
@@ -127,6 +124,12 @@ impl Reader {
                 let Some(end) = bytes.iter().rposition(|b| *b == b'\n') else {
                     continue;
                 };
+                // Re-read from the start (a new reader, or a rewritten file): replace the saved
+                // transcript. Only once a complete line is there, so a member whose first
+                // record is still being written does not reset its chat on every poll.
+                if cursor.offset == 0 {
+                    out.push(json!({"sessionId":child,"update":{"sessionUpdate":"workflow_transcript_reset"}}));
+                }
                 for line in bytes[..=end].split(|b| *b == b'\n') {
                     if let Ok(entry) = serde_json::from_slice::<Value>(line) {
                         out.push(json!({"sessionId":child,"update":{"sessionUpdate":"workflow_entry","entry":entry}}));
@@ -219,12 +222,14 @@ mod tests {
         let members = dir.join("subagents/workflows/wf-test");
         std::fs::create_dir_all(&members).unwrap();
         std::fs::write(dir.join("workflows/wf-test.json"),json!({"runId":"wf-test","taskId":"task1","status":"completed","workflowName":"Review","phases":[{"title":"Inspect"}],
-            "workflowProgress":[{"agentId":"a1","label":"Audit","model":"opus","state":"error","error":"quota"}]}).to_string()).unwrap();
+            "workflowProgress":[{"agentId":"a1","label":"Audit","model":"opus","state":"error","error":"quota"},{"agentId":"a2","label":"Docs","state":"running"}]}).to_string()).unwrap();
         let file = members.join("agent-a1.jsonl");
         let first = json!({"type":"user","uuid":"u","message":{"role":"user","content":"Task"}})
             .to_string();
         std::fs::write(&file, format!("{first}\n{{\"type\":")).unwrap();
         let mut reader = Reader::default();
+        let pending = members.join("agent-a2.jsonl");
+        std::fs::write(&pending, "{\"type\":").unwrap();
         let first = reader.poll(&dir, "root");
         assert_eq!(
             first
@@ -239,7 +244,13 @@ mod tests {
         }
         assert_eq!(chats.chats[1].status(), "failed");
         assert_eq!(chats.chats[1].messages[0].text, "Task");
+        // Nothing new, and a member file without one complete record yet: no updates at all.
         assert!(reader.poll(&dir, "root").is_empty());
+        assert!(
+            !first
+                .iter()
+                .any(|v| v["sessionId"] == "workflow/wf-test/a2")
+        );
         use std::io::Write;
         writeln!(std::fs::OpenOptions::new().append(true).open(&file).unwrap(),"\"assistant\",\"uuid\":\"a\",\"message\":{{\"role\":\"assistant\",\"content\":\"Result\"}}}}").unwrap();
         let next = reader.poll(&dir, "root");

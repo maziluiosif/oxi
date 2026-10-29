@@ -99,8 +99,9 @@ pub enum AgentEvent {
         tool_call_id: String,
         args: Option<Value>,
     },
-    /// A shell or built-in filesystem mutation tool is waiting for approval.
+    /// The approval prompt was answered, or withdrawn (the subagent asking was stopped).
     ApprovalResolved,
+    /// A shell or built-in filesystem mutation tool is waiting for approval.
     ApprovalRequest {
         name: String,
         args: Option<Value>,

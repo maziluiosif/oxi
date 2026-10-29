@@ -645,24 +645,16 @@ impl OxiApp {
         let waker = ctx.clone();
         crate::agent::acp::set_autonomous_waker(move || waker.request_repaint());
         self.apply_agent_titles(ctx);
-        let mut delegated_changed = std::collections::HashSet::new();
         for (acp_key, root, params) in crate::agent::acp::take_delegated() {
             if let Some(key) = self.session_key_for_acp(&acp_key) {
                 self.ensure_session_loaded(key);
-                self.session_mut_by_key(key).delegated.apply(&root, &params);
-                delegated_changed.insert(key);
-            }
-        }
-        for key in delegated_changed {
-            if !self.conn.no_session {
-                let root = self.conv.workspaces[key.workspace_idx].root_path.clone();
-                if let Err(e) =
-                    session_store::save_session_messages(&root, self.session_mut_by_key(key))
-                {
-                    log::warn!("saving subagent transcript: {e}");
+                let delegated = &mut self.session_mut_by_key(key).delegated;
+                if delegated.apply(&root, &params) {
+                    delegated.mark_unsaved();
                 }
             }
         }
+        self.save_delegated_chats(ctx);
         for acp_key in crate::agent::acp::pending_autonomous() {
             let Some(key) = self.session_key_for_acp(&acp_key) else {
                 crate::agent::acp::claim_autonomous(&acp_key);
@@ -677,6 +669,39 @@ impl OxiApp {
             }
             crate::agent::acp::claim_autonomous(&acp_key);
             self.start_autonomous_turn(key, acp_key);
+        }
+    }
+
+    /// Write chats whose subagent transcripts changed between turns, at most once per
+    /// [`crate::model::delegated::SAVE_DEBOUNCE`]: a running workflow reports every second, and
+    /// each save rewrites the whole transcript on this thread.
+    fn save_delegated_chats(&mut self, ctx: &egui::Context) {
+        if self.conn.no_session {
+            return;
+        }
+        let mut due = Vec::new();
+        for (wi, workspace) in self.conv.workspaces.iter().enumerate() {
+            for (si, session) in workspace.sessions.iter().enumerate() {
+                match session.delegated.save_wait() {
+                    Some(wait) if wait.is_zero() => due.push(self.session_key(wi, si)),
+                    Some(wait) => ctx.request_repaint_after(wait),
+                    None => {}
+                }
+            }
+        }
+        for key in due {
+            if self.is_remote_key(key) {
+                // The host's server saves a remote chat.
+                self.session_mut_by_key(key).delegated.unsaved_since = None;
+                continue;
+            }
+            let root = self.conv.workspaces[key.workspace_idx].root_path.clone();
+            if let Err(e) =
+                session_store::save_session_messages(&root, self.session_mut_by_key(key))
+            {
+                log::warn!("saving subagent transcript: {e}");
+                self.session_mut_by_key(key).delegated.unsaved_since = None;
+            }
         }
     }
 

@@ -403,18 +403,20 @@ impl Server {
         let _ = writer.send(message.to_string().into());
     }
 
-    /// A chat runs or has prompts waiting.
+    /// A chat runs, has prompts waiting, or has subagents still working after its turn.
     fn busy(&self) -> bool {
-        self.chats
-            .values()
-            .any(|chat| chat.run.is_some() || !chat.queued.is_empty())
+        self.chats.values().any(|chat| {
+            chat.run.is_some() || !chat.queued.is_empty() || chat.session.delegated.working()
+        })
     }
 
-    /// A turn is running and not stopped on an approval prompt (see `OxiApp::agent_is_working`).
+    /// A turn or a chat's background subagents are running and not stopped on an approval
+    /// prompt (see `OxiApp::agent_is_working`).
     fn working(&self) -> bool {
-        self.chats
-            .values()
-            .any(|chat| chat.run.is_some() && chat.pending_approval.is_none())
+        self.chats.values().any(|chat| {
+            (chat.run.is_some() || chat.session.delegated.working())
+                && chat.pending_approval.is_none()
+        })
     }
 
     /// The stdio server stops with its editor; the daemon once it was idle for a while.
@@ -1063,7 +1065,6 @@ impl Server {
     /// Show the turns ACP agents started on their own, as soon as each chat is free.
     fn attach_autonomous_turns(&mut self) {
         self.apply_agent_titles();
-        let mut changed = std::collections::HashSet::new();
         for (key, root, params) in crate::agent::acp::take_delegated() {
             self.forward_event(
                 &key,
@@ -1072,16 +1073,10 @@ impl Server {
                     params: params.clone(),
                 },
             );
-            if let Some(chat) = self.chats.get_mut(&key) {
-                chat.session.delegated.apply(&root, &params);
-                changed.insert(key);
-            }
-        }
-        for key in changed {
             if let Some(chat) = self.chats.get_mut(&key)
-                && let Err(e) = chat.save()
+                && chat.session.delegated.apply(&root, &params)
             {
-                log::warn!("saving subagent transcript: {e}");
+                chat.session.delegated.mark_unsaved();
             }
         }
         for key in crate::agent::acp::pending_autonomous() {
@@ -1666,6 +1661,19 @@ impl Server {
             .collect();
         for id in dirty {
             self.flush_chat(&id);
+        }
+        // Subagent transcripts that changed between turns; a turn's own save covers the rest.
+        for chat in self.chats.values_mut() {
+            if chat
+                .session
+                .delegated
+                .save_wait()
+                .is_some_and(|w| w.is_zero())
+                && let Err(e) = chat.save()
+            {
+                log::warn!("saving subagent transcript: {e}");
+                chat.session.delegated.unsaved_since = None;
+            }
         }
     }
 

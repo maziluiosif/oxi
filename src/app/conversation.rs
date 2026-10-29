@@ -86,13 +86,15 @@ impl OxiApp {
         self.conv.settings_page.provider_tab = provider;
     }
 
-    /// Approve/deny prompt for a shell or built-in filesystem mutation tool.
-    /// Rendered at the bottom of the transcript (above the floating composer) so it stays in
-    /// view while the run is paused — `stick_to_bottom` keeps the tail visible during a run.
+    /// The parent's approval prompt under an open sub-chat transcript: a subagent's requests
+    /// use the parent's approval channel.
     pub(super) fn render_subagent_approval(&mut self, ui: &mut Ui, pa: PendingApproval) {
         self.render_approval_card(ui, pa);
     }
 
+    /// Approve/deny prompt for a shell or built-in filesystem mutation tool.
+    /// Rendered at the bottom of the transcript (above the floating composer) so it stays in
+    /// view while the run is paused — `stick_to_bottom` keeps the tail visible during a run.
     fn render_approval_card(&mut self, ui: &mut Ui, pa: PendingApproval) {
         Frame::new()
             .fill(crate::theme::c_info_bg())
