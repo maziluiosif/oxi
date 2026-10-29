@@ -86,6 +86,9 @@ pub enum AgentEvent {
         params: Value,
     },
     AgentStart,
+    /// A message the user sent into the running turn reached the agent (see
+    /// [`crate::agent::steer`]); the rest of the turn answers it.
+    Steered(String),
     /// A command PTY to attach to this workspace's terminal panel.
     AcpTerminal(crate::terminal::PendingTerminal),
     TextStart,

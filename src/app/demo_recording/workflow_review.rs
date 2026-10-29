@@ -6,12 +6,15 @@ use std::process::Command;
 
 use super::Recorder;
 use super::fixtures::message;
+use crate::agent::AgentEvent;
+use crate::app::compaction::QueuedSend;
 use crate::app::state::{ConfirmAction, Workspace};
 use crate::model::{AssistantBlock, MsgRole, TurnChanges};
 
 pub(super) fn run(rec: &mut Recorder<'_>) {
     worktree_removal(rec);
     rewind(rec);
+    steering(rec);
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -218,4 +221,54 @@ fn rewind(rec: &mut Recorder<'_>) {
     .unwrap();
     rec.app().conv.confirm_prompt = None;
     rec.app().conv.rewind_check = None;
+}
+
+/// Messages written while oxi's own agent answers: steer one into the running turn.
+fn steering(rec: &mut Recorder<'_>) {
+    rec.app().new_chat();
+    rec.begin_turn("Refactor the CSV export into its own module");
+    let key = rec.app().active_session_key();
+    let inbox = crate::agent::steer::SteerInbox::default();
+    {
+        let run = rec.app().run_state_mut(key);
+        run.steer = Some(inbox.clone());
+        for text in [
+            "Keep the old function name as an alias",
+            "Then run the tests",
+        ] {
+            run.queued.push_back(QueuedSend {
+                text: text.into(),
+                images: Vec::new(),
+                texts: Vec::new(),
+            });
+        }
+    }
+    rec.send(AgentEvent::TextStart);
+    rec.send(AgentEvent::TextDelta(
+        "I'll move `export_csv` and its helpers into `export.py`.".into(),
+    ));
+    rec.harness.run_steps(4);
+    rec.still("steer-queue");
+    rec.app().steer_into_turn(key, 0);
+    rec.harness.run_steps(3);
+    assert_eq!(rec.app().run_state(key).unwrap().steer_pending.len(), 1);
+    rec.still("steer-pending");
+    // The agent reaches its next step and reads it.
+    for text in inbox.take() {
+        rec.send(AgentEvent::Steered(text));
+    }
+    rec.send(AgentEvent::TextStart);
+    rec.send(AgentEvent::TextDelta(
+        "Got it: `export_csv` stays importable from `stats` as an alias.".into(),
+    ));
+    rec.harness.run_steps(4);
+    {
+        let app = rec.app();
+        let messages = &app.active_session().messages;
+        assert!(messages[messages.len() - 2].role == MsgRole::User);
+        assert!(app.run_state(key).unwrap().steer_pending.is_empty());
+    }
+    rec.still("steer-delivered");
+    rec.finish_turn();
+    rec.harness.run_steps(4);
 }

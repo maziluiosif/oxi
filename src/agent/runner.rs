@@ -88,6 +88,8 @@ pub struct AgentRunRequest {
     /// Evidence mode: the change is to be proven with oxi's evidence tools.
     pub evidence_mode: crate::evidence::Mode,
     pub undo_journal: UndoJournal,
+    /// Messages the user sends into the turn (oxi's own agent loop only).
+    pub steer: crate::agent::steer::SteerInbox,
 }
 
 /// Spawns agent runs on the app-wide runtime ([`crate::runtime`]).
@@ -137,6 +139,7 @@ fn spawn_agent_attempt(
             plan_mode,
             evidence_mode,
             undo_journal,
+            steer,
         } = request;
 
         let cwd_ref = cwd.as_path();
@@ -324,6 +327,7 @@ fn spawn_agent_attempt(
                     effort_override,
                     context_char_budget: context_budget,
                     tools_chars,
+                    steer: Some(&steer),
                 },
                 &mut messages,
                 &tools,

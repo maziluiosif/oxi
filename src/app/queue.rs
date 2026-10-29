@@ -66,6 +66,75 @@ impl OxiApp {
         self.send_queued(key, next, false);
     }
 
+    /// Whether queued message `index` can be handed to `key`'s running turn: oxi's own agent is
+    /// answering, and the message is plain text.
+    pub(crate) fn can_steer(&self, key: SessionKey, index: usize) -> bool {
+        self.run_state(key).is_some_and(|run| {
+            run.waiting_response
+                && run.steer.is_some()
+                && run
+                    .queued
+                    .get(index)
+                    .is_some_and(|q| q.images.is_empty() && q.texts.is_empty())
+        })
+    }
+
+    /// Hand queued message `index` to the running turn: the agent reads it at its next step,
+    /// without stopping (see [`crate::agent::steer`]).
+    pub(crate) fn steer_into_turn(&mut self, key: SessionKey, index: usize) {
+        if !self.can_steer(key, index) {
+            return;
+        }
+        let cwd = std::path::PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
+        let run = self.run_state_mut(key);
+        let (Some(inbox), Some(item)) = (run.steer.clone(), run.queued.remove(index)) else {
+            return;
+        };
+        run.steer_pending.push(item.text.clone());
+        inbox.push(super::mentions::expand_at_mentions(&item.text, &cwd));
+    }
+
+    /// Take a message handed to the running turn back into the queue, if the agent has not
+    /// read it yet.
+    fn unsteer(&mut self, key: SessionKey, index: usize) {
+        let run = self.run_state_mut(key);
+        let Some(inbox) = run.steer.clone() else {
+            return;
+        };
+        if inbox.remove(index).is_some() && index < run.steer_pending.len() {
+            let text = run.steer_pending.remove(index);
+            run.queued.push_front(QueuedSend {
+                text,
+                images: Vec::new(),
+                texts: Vec::new(),
+            });
+        }
+    }
+
+    /// The running turn read a message sent into it: show it as a prompt, and the rest of the
+    /// turn as the reply to it.
+    pub(crate) fn show_steered_message(&mut self, key: SessionKey, text: &str) {
+        let route = self.last_assistant_mut(key).and_then(|m| {
+            m.finish_streaming();
+            m.route.clone()
+        });
+        let session = self.session_mut_by_key(key);
+        session
+            .messages
+            .push(crate::model::ChatMessage::user(text, &[]));
+        session
+            .messages
+            .push(crate::model::ChatMessage::streaming_assistant(route));
+        let run = self.run_state_mut(key);
+        run.steered = true;
+        if !run.steer_pending.is_empty() {
+            run.steer_pending.remove(0);
+        }
+        if key == self.active_session_key() {
+            self.conv.transcript.scroll_to_bottom_once = true;
+        }
+    }
+
     /// Send queued message `index` now, stopping the response in progress if there is one.
     pub(crate) fn steer_queued(&mut self, key: SessionKey, index: usize) {
         let Some(item) = self
@@ -82,27 +151,69 @@ impl OxiApp {
         self.send_queued(key, item, false);
     }
 
-    /// Queued messages for the active chat, each with Send now / Edit / Remove.
+    /// Messages handed to the running turn, then the queued ones: each queued message can go
+    /// into the response in progress (Steer, where the agent allows it), replace it (Stop &
+    /// send), or wait for it to finish (the default).
     pub(super) fn render_queue_panel(&mut self, ui: &mut Ui) {
         let key = self.active_session_key();
         let Some(run) = self.run_state(key) else {
             return;
         };
-        if run.queued.is_empty() {
+        if run.queued.is_empty() && run.steer_pending.is_empty() {
             return;
         }
         let running = run.waiting_response;
-        let rows: Vec<String> = run.queued.iter().map(QueuedSend::preview).collect();
+        let steering: Vec<String> = run.steer_pending.iter().map(|t| one_line(t)).collect();
+        let rows: Vec<(String, bool)> = (0..run.queued.len())
+            .map(|i| (run.queued[i].preview(), self.can_steer(key, i)))
+            .collect();
         let mut action = None;
-        for (i, preview) in rows.iter().enumerate() {
+        let icon = |ui: &mut Ui| {
+            ui.label(
+                RichText::new(ICON_SEND)
+                    .font(egui::FontId::new(FS_TINY, icon_font()))
+                    .color(c_text_muted()),
+            );
+        };
+        for (i, preview) in steering.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
+                icon(ui);
                 ui.label(
-                    RichText::new(ICON_SEND)
-                        .font(egui::FontId::new(FS_TINY, icon_font()))
-                        .color(c_text_muted()),
+                    RichText::new("Steering")
+                        .size(FS_SMALL)
+                        .color(crate::theme::c_accent()),
+                )
+                .on_hover_text(
+                    "Sent into the response in progress; the agent reads it at its next step",
                 );
-                ui.label(RichText::new("Queued").size(FS_SMALL).color(c_text_muted()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("Undo")
+                        .on_hover_text("Take it back to the queue (until the agent reads it)")
+                        .clicked()
+                    {
+                        action = Some(QueueAction::Unsteer(i));
+                    }
+                    ui.add(
+                        egui::Label::new(RichText::new(preview).size(FS_SMALL))
+                            .truncate()
+                            .selectable(false),
+                    )
+                    .on_hover_text(preview);
+                });
+            });
+        }
+        for (i, (preview, steerable)) in rows.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                icon(ui);
+                ui.label(RichText::new("Queued").size(FS_SMALL).color(c_text_muted()))
+                    .on_hover_text(if running {
+                        "Sent when the response finishes"
+                    } else {
+                        "Waiting to be sent"
+                    });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .small_button("×")
@@ -120,7 +231,7 @@ impl OxiApp {
                     }
                     let (label, hover) = if running {
                         (
-                            "Send now",
+                            "Stop & send",
                             "Stop the current response and send this instead",
                         )
                     } else {
@@ -128,6 +239,18 @@ impl OxiApp {
                     };
                     if ui.small_button(label).on_hover_text(hover).clicked() {
                         action = Some(QueueAction::Send(i));
+                    }
+                    if running
+                        && *steerable
+                        && ui
+                            .small_button("Steer")
+                            .on_hover_text(
+                                "Add this to the response in progress: the agent reads it at its \
+                                 next step, without stopping",
+                            )
+                            .clicked()
+                    {
+                        action = Some(QueueAction::Steer(i));
                     }
                     ui.add(
                         egui::Label::new(RichText::new(preview).size(FS_SMALL))
@@ -141,6 +264,8 @@ impl OxiApp {
         ui.add_space(4.0);
         match action {
             Some(QueueAction::Send(i)) => self.steer_queued(key, i),
+            Some(QueueAction::Steer(i)) => self.steer_into_turn(key, i),
+            Some(QueueAction::Unsteer(i)) => self.unsteer(key, i),
             Some(QueueAction::Remove(i)) => {
                 self.run_state_mut(key).queued.remove(i);
             }
@@ -162,8 +287,19 @@ impl OxiApp {
     }
 }
 
+/// First non-blank line of a message, for a one-line row.
+fn one_line(text: &str) -> String {
+    text.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
 enum QueueAction {
     Send(usize),
+    Steer(usize),
+    Unsteer(usize),
     Edit(usize),
     Remove(usize),
 }

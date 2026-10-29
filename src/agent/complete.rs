@@ -138,6 +138,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 effort_override: effort_override.as_deref(),
                 context_char_budget: usize::MAX,
                 tools_chars: 0,
+                steer: None,
             },
             &mut messages,
             &tools,

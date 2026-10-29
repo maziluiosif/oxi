@@ -204,6 +204,7 @@ impl OxiApp {
                 self.session_mut_by_key(key).delegated.apply(&root, &params);
             }
             AgentEvent::AgentStart => {}
+            AgentEvent::Steered(text) => self.show_steered_message(key, &text),
             AgentEvent::AcpTerminal(pending) => {
                 if let Some(terminal) = pending.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     if key.workspace_idx == self.conv.active_workspace {
@@ -364,6 +365,20 @@ impl OxiApp {
                     }
                     AgentOutcome::Cancelled => {
                         self.invalidate_wire_cache(key);
+                    }
+                }
+                // Messages sent into the turn that it ended before reading go to the queue.
+                {
+                    let run = self.run_state_mut(key);
+                    if let Some(inbox) = run.steer.take() {
+                        inbox.take();
+                    }
+                    for text in std::mem::take(&mut run.steer_pending).into_iter().rev() {
+                        run.queued.push_front(super::compaction::QueuedSend {
+                            text,
+                            images: Vec::new(),
+                            texts: Vec::new(),
+                        });
                     }
                 }
                 self.finish_assistant_stream(key);

@@ -1008,6 +1008,7 @@ impl Server {
             plan_mode: chat.plan_mode,
             evidence_mode: chat.evidence_mode.clone(),
             undo_journal,
+            steer: Default::default(),
         };
         let worker_tx = self.worker_channel(&id, run_id);
         let _join = crate::agent::spawn_agent_run(&self.executor, request, worker_tx);
@@ -1160,6 +1161,18 @@ impl Server {
                 chat.dirty = true;
             }
             AgentEvent::AgentStart | AgentEvent::AssistantMessageDone => {}
+            AgentEvent::Steered(text) => {
+                // The rest of the turn answers the message sent into it.
+                let route = chat.last_assistant_mut().and_then(|m| {
+                    m.finish_streaming();
+                    m.route.clone()
+                });
+                chat.session.messages.push(ChatMessage::user(&text, &[]));
+                chat.session
+                    .messages
+                    .push(ChatMessage::streaming_assistant(route));
+                chat.dirty = true;
+            }
             AgentEvent::AcpTerminal(pending) => {
                 if let Some(terminal) = pending.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     chat.terminals.push(terminal);

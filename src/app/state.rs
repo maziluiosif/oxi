@@ -423,6 +423,17 @@ pub struct SessionRunState {
     pub usage_target: Option<(crate::settings::LlmProviderKind, String)>,
     /// Messages written while this chat was answering, sent one per finished response.
     pub queued: std::collections::VecDeque<super::compaction::QueuedSend>,
+    /// Messages handed to the running turn of oxi's own agent, read at its next step (see
+    /// [`crate::agent::steer`]). `None` when the turn can't take any (an ACP agent, a remote
+    /// chat, no turn).
+    pub steer: Option<crate::agent::steer::SteerInbox>,
+    /// What the user wrote for each message waiting in [`Self::steer`] (before @mentions were
+    /// expanded), in the same order: shown above the composer, and queued again if the turn
+    /// ends without reading them.
+    pub steer_pending: Vec<String>,
+    /// The running or last turn took messages sent into it: its undo journal spans more than
+    /// its first prompt.
+    pub steered: bool,
 }
 
 impl SessionRunState {

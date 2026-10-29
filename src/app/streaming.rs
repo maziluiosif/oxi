@@ -151,6 +151,12 @@ impl OxiApp {
         else {
             return Err("there is no prompt to edit".into());
         };
+        if self.run_state(key).is_some_and(|run| run.steered) {
+            return Err(
+                "messages were sent into this response; rewind from its first message instead"
+                    .into(),
+            );
+        }
         let files = self.rewind_files(key, user_idx);
         if files.unrestorable > 0 {
             return Err(
@@ -650,6 +656,14 @@ impl OxiApp {
         let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
         let evidence_mode = self.run_state_mut(key).evidence_mode.clone();
         self.run_state_mut(key).last_turn_planned = plan_mode;
+        // ACP agents run their own loop: there is nothing to hand a message to mid-turn.
+        let steer = crate::agent::steer::SteerInbox::default();
+        let steerable = !session_config.provider.is_acp();
+        {
+            let run = self.run_state_mut(key);
+            run.steer = steerable.then(|| steer.clone());
+            run.steered = false;
+        }
         let request = AgentRunRequest {
             settings,
             tunnels: self.tunnels.clone(),
@@ -665,6 +679,7 @@ impl OxiApp {
             plan_mode,
             evidence_mode,
             undo_journal,
+            steer,
         };
         let _join = spawn_agent_run(&self.agent_executor, request, tx);
         let run = self.run_state_mut(key);

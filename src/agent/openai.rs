@@ -81,6 +81,7 @@ async fn run_chat_loop_at(
     let env = ctx.env;
     let tx = ctx.tx;
     let cancel = ctx.cancel;
+    let steer = ctx.steer;
     let max_rounds = ctx.max_rounds;
     let mut context_char_budget = ctx.context_char_budget;
     let gate = &mut *ctx.gate;
@@ -100,6 +101,10 @@ async fn run_chat_loop_at(
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
+        }
+        // Messages the user sent into this turn join it before the next request.
+        if round > 0 {
+            super::steer::deliver(steer, messages, tx);
         }
         round += 1;
         if max_rounds != 0 && round > max_rounds {
@@ -468,6 +473,10 @@ async fn run_chat_loop_at(
                 &mut evidence_followups,
             )
         {
+            continue;
+        }
+        // The model answered, but the user wrote to it meanwhile: go on in the same turn.
+        if (max_rounds == 0 || round < max_rounds) && super::steer::waiting(steer) {
             continue;
         }
         break;
@@ -951,6 +960,7 @@ mod integration_tests {
             effort_override: None,
             context_char_budget: usize::MAX,
             tools_chars: 0,
+            steer: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");
@@ -986,6 +996,107 @@ mod integration_tests {
                 .iter()
                 .any(|e| matches!(e, AgentEvent::AssistantMessageDone))
         );
+    }
+
+    /// Answers every request with plain text, keeping the request bodies.
+    struct RecordingResponder {
+        bodies: Arc<std::sync::Mutex<Vec<Value>>>,
+    }
+
+    impl Respond for RecordingResponder {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let mut bodies = self.bodies.lock().unwrap();
+            bodies.push(serde_json::from_slice(&req.body).unwrap_or_default());
+            let body = sse_body(&[
+                json!({"choices": [{"index": 0, "delta": {"content": format!("Answer {}", bodies.len())}}]}),
+                json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+            ]);
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_into_the_turn_is_answered_in_the_same_turn() {
+        let server = MockServer::start().await;
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+        Mock::given(method("POST"))
+            .and(path_matcher("/chat/completions"))
+            .respond_with(RecordingResponder {
+                bodies: bodies.clone(),
+            })
+            .mount(&server)
+            .await;
+        let cwd = temp_workspace("steer");
+        let client = reqwest::Client::new();
+        let (tx, rx) = mpsc::channel::<AgentEvent>();
+        let (_approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut gate = ApprovalGate::new(ApprovalPolicy::disabled(), approval_rx);
+        let env = ToolEnv {
+            enabled: vec![true; ALL_TOOL_NAMES.len()],
+            web_search_url: String::new(),
+            web_search_backend: WebSearchBackend::default(),
+            bash_timeout_cap_secs: 300,
+            mcp: None,
+            undo_journal: None,
+            subagent: None,
+            evidence: None,
+        };
+        let inbox = crate::agent::steer::SteerInbox::default();
+        // Written while the first request was on its way.
+        inbox.push("Use tabs, not spaces".into());
+        let mut messages = vec![json!({"role": "user", "content": "Format the file"})];
+        let base_url = server.uri();
+        let mut ctx = LoopCtx {
+            client: &client,
+            base_url: &base_url,
+            model: "test-model",
+            cwd: &cwd,
+            env: &env,
+            tx: &tx,
+            cancel: &cancel,
+            gate: &mut gate,
+            max_rounds: 10,
+            effort_override: None,
+            context_char_budget: usize::MAX,
+            tools_chars: 0,
+            steer: Some(&inbox),
+        };
+        run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &[])
+            .await
+            .unwrap();
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 2, "the turn went on after the first answer");
+        let second: Vec<(&str, &str)> = bodies[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                (
+                    m["role"].as_str().unwrap(),
+                    m["content"].as_str().unwrap_or(""),
+                )
+            })
+            .collect();
+        assert_eq!(
+            second,
+            [
+                ("user", "Format the file"),
+                ("assistant", "Answer 1"),
+                ("user", "Use tabs, not spaces"),
+            ]
+        );
+        let steered: Vec<String> = rx
+            .try_iter()
+            .filter_map(|e| match e {
+                AgentEvent::Steered(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(steered, ["Use tabs, not spaces"]);
+        assert!(inbox.is_empty());
     }
 
     #[tokio::test]
@@ -1044,6 +1155,7 @@ mod integration_tests {
             effort_override: None,
             context_char_budget: usize::MAX,
             tools_chars: 0,
+            steer: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");
@@ -1112,6 +1224,7 @@ mod integration_tests {
             effort_override: None,
             context_char_budget: usize::MAX,
             tools_chars: 0,
+            steer: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");
@@ -1207,6 +1320,7 @@ mod integration_tests {
             effort_override: None,
             context_char_budget: usize::MAX,
             tools_chars: 0,
+            steer: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         assert!(result.is_ok(), "agent loop failed: {result:?}");
@@ -1337,6 +1451,7 @@ mod integration_tests {
             effort_override: None,
             context_char_budget: usize::MAX,
             tools_chars: 0,
+            steer: None,
         };
         let result = run_chat_loop(&mut ctx, "test-key", &[], &mut messages, &tools).await;
         let bodies = server
@@ -1344,6 +1459,9 @@ mod integration_tests {
             .await
             .unwrap_or_default()
             .iter()
+            // Pooled mock servers are shared between tests: an earlier test's MCP client can
+            // still close its session (`DELETE /mcp`) on this one.
+            .filter(|r| r.url.path() == "/chat/completions")
             .map(|r| serde_json::from_slice(&r.body).unwrap())
             .collect();
         (result, messages, bodies, rx.try_iter().collect())

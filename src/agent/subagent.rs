@@ -147,6 +147,7 @@ impl SubagentRunner {
                 effort_override: (!effort.is_empty()).then_some(effort),
                 context_char_budget: self.context_char_budget,
                 tools_chars,
+                steer: None,
             },
             &mut messages,
             &tools,

@@ -167,6 +167,7 @@ async fn exercise(kind: LlmProviderKind, protocol: Protocol, missing: bool, max_
             effort_override: None,
             context_char_budget: usize::MAX,
             tools_chars: 0,
+            steer: None,
         },
         &mut messages,
         &tools,
@@ -277,6 +278,7 @@ async fn codex_responses_executes_native_evidence_tools() {
         effort_override: None,
         context_char_budget: usize::MAX,
         tools_chars: 0,
+        steer: None,
     };
     let mut messages = vec![json!({"role":"user","content":"Prove the check"})];
     crate::agent::codex_responses::run_codex_responses_loop(
@@ -343,6 +345,7 @@ async fn native_runner_enables_evidence_only_outside_plan_mode() {
                 plan_mode: plan,
                 evidence_mode: enabled.into(),
                 undo_journal: Arc::new(std::sync::Mutex::new(Default::default())),
+                steer: Default::default(),
             },
             tx,
         );
@@ -466,6 +469,7 @@ async fn partial_evidence_survives_provider_errors_and_cancellation() {
                 effort_override: None,
                 context_char_budget: usize::MAX,
                 tools_chars: 0,
+                steer: None,
             },
             &mut messages,
             &evidence::tools::native_definitions(),
@@ -570,6 +574,7 @@ async fn live_toggle_checks_this_response_with_tools_added_on_the_next_request()
                     effort_override: None,
                     context_char_budget: usize::MAX,
                     tools_chars: 0,
+                    steer: None,
                 };
                 crate::agent::codex_responses::run_codex_responses_loop(
                     &mut ctx,
@@ -605,6 +610,7 @@ async fn live_toggle_checks_this_response_with_tools_added_on_the_next_request()
                         effort_override: None,
                         context_char_budget: usize::MAX,
                         tools_chars: 0,
+                        steer: None,
                     },
                     &mut messages,
                     &tools,

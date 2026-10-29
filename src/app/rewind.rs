@@ -97,7 +97,7 @@ impl OxiApp {
         let journal = self
             .run_state(key)
             .and_then(|run| run.undo_journal.clone())
-            .filter(|_| last_user == Some(index))
+            .filter(|_| last_user == Some(index) && !self.run_state(key).is_some_and(|r| r.steered))
             .filter(|j| {
                 let j = j.lock().unwrap_or_else(|e| e.into_inner());
                 j.unavailable_reason().is_none() && j.checkpoint_base().is_none()
