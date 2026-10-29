@@ -946,6 +946,7 @@ mod tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({

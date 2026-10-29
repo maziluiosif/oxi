@@ -120,6 +120,7 @@ mod live_tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let tools = crate::agent::tools::tool_definitions_json(&enabled, 30);
         let inbox = SteerInbox::default();

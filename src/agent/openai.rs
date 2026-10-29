@@ -935,6 +935,7 @@ mod integration_tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1043,6 +1044,7 @@ mod integration_tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let inbox = crate::agent::steer::SteerInbox::default();
         // Written while the first request was on its way.
@@ -1133,6 +1135,7 @@ mod integration_tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1203,6 +1206,7 @@ mod integration_tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -1298,6 +1302,7 @@ mod integration_tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "read hello.txt"})];
         let tools = vec![json!({
@@ -1427,6 +1432,7 @@ mod integration_tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "make an app"})];
         let tools = vec![json!({

@@ -125,6 +125,7 @@ fn setup(
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         },
     }
 }

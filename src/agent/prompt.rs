@@ -45,6 +45,9 @@ fn tool_guidance(enabled: &[&str]) -> String {
     if enabled.contains(&"task") {
         out.push_str("\n- Delegation: use `task` to hand a self-contained, read-only investigation to a sub-agent with fresh context (e.g. mapping how a feature is wired across many files). Launch several at once for independent questions. Sub-agents cannot edit files and do not see this conversation, so give complete instructions, then verify key claims yourself before editing.");
     }
+    if enabled.contains(&"delegate_task") {
+        out.push_str("\n- Other agents: `delegate_task` hands a task to another provider or model (e.g. a second opinion or an independent review of your change) as a separate chat with the same approval rules. It returns at once; the report comes back to this chat as a message, or read it with `task_status`. Give it the complete task, and use `worktree` when it would change files.");
+    }
     if out.is_empty() {
         out
     } else {
@@ -205,7 +208,10 @@ mod tests {
         assert!(prompt.contains("use `scratchpad`"));
 
         for (on, name) in settings.tools_enabled.iter_mut().zip(ALL_TOOL_NAMES) {
-            *on = !matches!(name, "todo_write" | "diagnostics" | "task" | "scratchpad");
+            *on = !matches!(
+                name,
+                "todo_write" | "diagnostics" | "task" | "scratchpad" | "delegate_task"
+            );
         }
         let prompt =
             build_system_prompt_with_project_instructions(&settings, "/tmp/workspace", None, None);

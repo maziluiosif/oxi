@@ -124,6 +124,7 @@ fn fixture() -> (std::path::PathBuf, ToolEnv) {
         subagent: None,
         undo_journal: None,
         evidence: Some(context),
+        delegation: None,
     };
     (cwd, env)
 }

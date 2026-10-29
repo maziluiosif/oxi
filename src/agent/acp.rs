@@ -966,8 +966,13 @@ async fn spawn_conn(
     let caps = &init["agentCapabilities"];
     let mut mcp = mcp_servers::to_acp(&mcp_servers, caps);
     let evidence_dir = crate::evidence::new_conn_dir();
-    if let (Some(list), Some(todo)) = (mcp.as_array_mut(), oxi_mcp::acp_entry(Some(&evidence_dir)))
-    {
+    // Delegated tasks run in the app: agents of a headless server get no delegation tools.
+    let delegation_dir =
+        crate::delegation::available().then(|| crate::delegation::dir_for(session_key));
+    if let (Some(list), Some(todo)) = (
+        mcp.as_array_mut(),
+        oxi_mcp::acp_entry(Some(&evidence_dir), delegation_dir.as_deref()),
+    ) {
         list.push(todo);
     }
     let resumed = match sessions::lookup(session_key, command_line, cwd) {

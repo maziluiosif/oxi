@@ -18,6 +18,7 @@ pub(super) fn run(rec: &mut Recorder<'_>) {
     worktree_setup(rec);
     diff_comments(rec);
     interrupted_turn(rec);
+    delegation(rec);
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -452,4 +453,45 @@ fn interrupted_turn(rec: &mut Recorder<'_>) {
     rec.harness.run_steps(5);
     assert!(rec.app().run_state(key).unwrap().interrupted.is_some());
     rec.still("interrupted-turn");
+}
+
+/// A chat's agent delegating a review to another provider: the task shows above its composer.
+fn delegation(rec: &mut Recorder<'_>) {
+    rec.app().select_workspace(0);
+    rec.app().new_chat();
+    let parent = rec.app().active_session_key();
+    {
+        let session = rec.app().active_session_mut();
+        session.title = "Speed up the report export".into();
+        session.messages = vec![
+            message(MsgRole::User, "Speed up the report export", vec![]),
+            message(
+                MsgRole::Assistant,
+                "",
+                vec![AssistantBlock::Answer(
+                    "I batched the CSV writes. I asked another agent to review the change.".into(),
+                )],
+            ),
+        ];
+    }
+    let dir = crate::delegation::dir_for(&rec.app().acp_session_key(parent));
+    std::fs::create_dir_all(dir.join("requests")).unwrap();
+    let request = crate::delegation::Request::Delegate {
+        task: "d5f2a91c".into(),
+        provider: "openai".into(),
+        model: Some("gpt-5.1".into()),
+        prompt: "Review the batched CSV writes in export.py for correctness.".into(),
+        title: Some("Review the CSV batching".into()),
+        worktree: false,
+    };
+    std::fs::write(
+        dir.join("requests/1-d5f2a91c.json"),
+        serde_json::to_vec(&request).unwrap(),
+    )
+    .unwrap();
+    let ctx = rec.harness.ctx.clone();
+    rec.app().poll_delegations(&ctx);
+    rec.harness.run_steps(3);
+    rec.still("delegation-running");
+    let _ = std::fs::remove_dir_all(dir);
 }

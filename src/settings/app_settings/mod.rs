@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use super::provider::{LlmProviderKind, ProviderConfig, ToolDetail, UiDensity, WebSearchBackend};
 
-pub const ALL_TOOL_NAMES: [&str; 19] = [
+pub const ALL_TOOL_NAMES: [&str; 22] = [
     "read",
     "write",
     "edit",
@@ -27,6 +27,9 @@ pub const ALL_TOOL_NAMES: [&str; 19] = [
     "diagnostics",
     "task",
     "scratchpad",
+    "delegate_task",
+    "task_status",
+    "task_cancel",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

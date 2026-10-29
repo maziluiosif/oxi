@@ -103,6 +103,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         undo_journal: None,
         subagent: None,
         evidence: None,
+        delegation: None,
     };
 
     if cfg.is_acp() {

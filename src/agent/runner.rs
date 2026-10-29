@@ -276,6 +276,9 @@ fn spawn_agent_attempt(
             undo_journal: Some(undo_journal),
             subagent: None,
             evidence,
+            // Delegated tasks run as chats of the app (not of a headless server).
+            delegation: crate::delegation::available()
+                .then(|| crate::delegation::dir_for(&acp_session_key)),
         };
         let mut gate = ApprovalGate::new(
             ApprovalPolicy {

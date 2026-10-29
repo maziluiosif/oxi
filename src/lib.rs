@@ -11,6 +11,7 @@ mod app;
 mod app_dirs;
 mod code_nav;
 mod compute;
+mod delegation;
 mod desktop_entry;
 mod evidence;
 pub mod fsutil;

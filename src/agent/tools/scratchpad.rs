@@ -62,6 +62,7 @@ mod tests {
             mcp: None,
             subagent: None,
             evidence: None,
+            delegation: None,
             undo_journal: Some(journal.clone()),
         };
         for args in [

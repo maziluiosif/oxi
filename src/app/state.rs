@@ -893,6 +893,8 @@ pub struct ConversationState {
     pub transcript: TranscriptState,
     /// Work tree create/merge operations running in the background.
     pub worktree_ops: Vec<std::sync::mpsc::Receiver<super::worktrees::WorktreeResult>>,
+    /// Tasks chats' agents delegated to other agents (see [`super::delegation`]).
+    pub delegations: Vec<super::delegation::DelegatedTask>,
     /// Comments on diff lines, sent with the next message of their workspace's chat.
     pub review_comments: Vec<super::review_comments::ReviewComment>,
     /// The diff comment being written.

@@ -20,6 +20,7 @@ mod composer_helpers;
 mod confirm;
 mod connection;
 mod conversation;
+mod delegation;
 #[cfg(test)]
 mod demo_recording;
 mod drafts;
@@ -259,6 +260,7 @@ impl OxiApp {
                 worktree_ops: Vec::new(),
                 worktree_setups: Vec::new(),
                 review_comments: Vec::new(),
+                delegations: Vec::new(),
                 comment_draft: None,
                 setup_script_editor: None,
                 split: None,

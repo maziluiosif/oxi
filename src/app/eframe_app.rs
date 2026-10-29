@@ -67,6 +67,7 @@ impl eframe::App for OxiApp {
         self.drain_models(ctx);
         self.drain_worktree_ops(ctx);
         self.drain_worktree_setups(ctx);
+        self.poll_delegations(ctx);
         self.drain_turn_changes();
         self.drain_rewind_jobs();
         self.drain_chores(ctx);
@@ -83,6 +84,7 @@ impl eframe::App for OxiApp {
         self.drain_update_check(ctx);
         self.drain_update_install();
         self.bind_git_ctx(ctx);
+        super::delegation::watch(ctx);
         self.ensure_active_models_fetched(ctx);
         self.drain_git(ctx);
         self.drain_commit_gen(ctx);
