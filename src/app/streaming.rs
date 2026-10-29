@@ -645,6 +645,24 @@ impl OxiApp {
         let waker = ctx.clone();
         crate::agent::acp::set_autonomous_waker(move || waker.request_repaint());
         self.apply_agent_titles(ctx);
+        let mut delegated_changed = std::collections::HashSet::new();
+        for (acp_key, root, params) in crate::agent::acp::take_delegated() {
+            if let Some(key) = self.session_key_for_acp(&acp_key) {
+                self.ensure_session_loaded(key);
+                self.session_mut_by_key(key).delegated.apply(&root, &params);
+                delegated_changed.insert(key);
+            }
+        }
+        for key in delegated_changed {
+            if !self.conn.no_session {
+                let root = self.conv.workspaces[key.workspace_idx].root_path.clone();
+                if let Err(e) =
+                    session_store::save_session_messages(&root, self.session_mut_by_key(key))
+                {
+                    log::warn!("saving subagent transcript: {e}");
+                }
+            }
+        }
         for acp_key in crate::agent::acp::pending_autonomous() {
             let Some(key) = self.session_key_for_acp(&acp_key) else {
                 crate::agent::acp::claim_autonomous(&acp_key);
@@ -686,6 +704,7 @@ impl OxiApp {
         {
             let session = self.session_mut_by_key(key);
             session.disk_mtime = disk_mtime;
+            session.delegated = loaded.delegated;
             session.messages = loaded.messages;
             session.config = loaded.config;
             session.wire_cache = wire;

@@ -16,7 +16,7 @@ const PLAN_TOOL_CALL_ID: &str = "acp-plan";
 
 /// Translate one ACP `session/update` payload into oxi [`AgentEvent`]s.
 #[derive(Default)]
-pub(super) struct UpdateState {
+pub(crate) struct UpdateState {
     tools: HashMap<String, ToolAccumulator>,
     /// The turn's answer text so far, to tell whether a plan was already written out.
     message: String,
@@ -36,7 +36,52 @@ struct ToolAccumulator {
 }
 
 impl UpdateState {
-    pub(super) fn emit_update(&mut self, update: &Value, tx: &Sender<AgentEvent>) {
+    /// Rebuild merge state when a persisted/remote child transcript resumes mid-tool.
+    pub(crate) fn restore_tools(&mut self, messages: &[crate::model::ChatMessage]) {
+        for block in messages.iter().flat_map(|m| &m.blocks) {
+            let crate::model::AssistantBlock::Tool {
+                tool_call_id,
+                name,
+                args_summary,
+                output,
+                diff,
+                metadata,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            let meta = metadata.as_deref().cloned().unwrap_or_default();
+            let mut fields = serde_json::Map::new();
+            fields.insert("name".into(), json!(meta.name.as_deref().unwrap_or(name)));
+            fields.insert("title".into(), json!(meta.title));
+            fields.insert("kind".into(), json!(meta.kind));
+            fields.insert("status".into(), json!(meta.status));
+            fields.insert("locations".into(), json!(meta.locations));
+            if let Some(args) = args_summary
+                .as_deref()
+                .and_then(|a| serde_json::from_str::<Value>(a).ok())
+            {
+                fields.insert("rawInput".into(), args);
+            }
+            fields.insert("rawOutput".into(), json!(output));
+            let tool = ToolAccumulator {
+                fields,
+                content: ToolContent {
+                    diff: diff.clone(),
+                    ..Default::default()
+                },
+                terminal: if meta.kind == "execute" {
+                    output.clone()
+                } else {
+                    String::new()
+                },
+                ..Default::default()
+            };
+            self.tools.insert(tool_call_id.clone(), tool);
+        }
+    }
+    pub(crate) fn emit_update(&mut self, update: &Value, tx: &Sender<AgentEvent>) {
         let kind = update.get("sessionUpdate").and_then(|v| v.as_str());
         match kind {
             Some("agent_message_chunk") => {

@@ -200,6 +200,9 @@ impl OxiApp {
         }
         self.run_state_mut(key).last_event_at = Some(std::time::Instant::now());
         match ev {
+            AgentEvent::Delegated { root, params } => {
+                self.session_mut_by_key(key).delegated.apply(&root, &params);
+            }
             AgentEvent::AgentStart => {}
             AgentEvent::AcpTerminal(pending) => {
                 if let Some(terminal) = pending.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -249,6 +252,7 @@ impl OxiApp {
                 };
                 self.start_tool_block(key, &name, id, args.as_ref());
             }
+            AgentEvent::ApprovalResolved => self.run_state_mut(key).pending_approval = None,
             AgentEvent::ApprovalRequest { name, args } => {
                 let summary = crate::agent::approval_summary(&name, &args);
                 let allow_prefix = (name == "bash")

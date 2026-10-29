@@ -162,6 +162,9 @@ pub(super) async fn read_loop(
     flush_chunks(&mut chunks, &mut chunk_count);
     terminals.close();
     alive.store(false, Ordering::SeqCst);
+    if super::reaper::is_current(held.session_key(), &alive) {
+        held.disconnected();
+    }
     let mut p = pending.lock().await;
     for (_, tx) in p.drain() {
         let _ = tx.send(Err("ACP agent closed the connection".to_string()));
@@ -201,6 +204,14 @@ pub(super) async fn dispatch(
         } else if method == "session/update" {
             let update = &v["params"]["update"];
             let session_id = v["params"]["sessionId"].as_str().unwrap_or_default();
+            let delegated = held.note_child(&v["params"]);
+            if delegated {
+                match prompt_ctx.lock().await.as_mut() {
+                    Some(ctx) => ctx.emit_notification(&v["params"]),
+                    None => held.hold(&v["params"]),
+                }
+                return;
+            }
             if super::session_info::note(held.session_key(), session_id, update) {
                 super::autonomous::wake();
             }
@@ -274,10 +285,12 @@ pub(super) async fn handle_agent_request(
             let forwarded = {
                 let mut ctx = prompt_ctx.lock().await;
                 match ctx.as_mut() {
-                    Some(c) => (params["sessionId"].as_str() == Some(c.session_id.as_str()))
+                    Some(c) => c
+                        .accepts_session(&params)
                         .then(|| {
-                            c.updates.emit_tool(&params["toolCall"], &c.event_tx);
+                            c.emit_permission_tool(&params);
                             c.perm_tx.send(PermReq {
+                                child_cancel: held.permission_cancel(&params),
                                 id: id.clone(),
                                 params,
                             })

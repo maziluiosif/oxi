@@ -79,6 +79,12 @@ pub enum AgentOutcome {
 
 #[derive(Debug)]
 pub enum AgentEvent {
+    /// An ACP child-session or background workflow notification. Kept separate from the
+    /// parent's answer, tools and usage (tool ids are only unique within a session).
+    Delegated {
+        root: String,
+        params: Value,
+    },
     AgentStart,
     /// A command PTY to attach to this workspace's terminal panel.
     AcpTerminal(crate::terminal::PendingTerminal),
@@ -94,6 +100,7 @@ pub enum AgentEvent {
         args: Option<Value>,
     },
     /// A shell or built-in filesystem mutation tool is waiting for approval.
+    ApprovalResolved,
     ApprovalRequest {
         name: String,
         args: Option<Value>,

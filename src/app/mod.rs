@@ -50,6 +50,7 @@ mod split_view;
 mod state;
 mod status_bar;
 mod streaming;
+mod subagents;
 mod task_runner;
 mod terminal_panel;
 mod title_gen;
@@ -597,6 +598,7 @@ impl OxiApp {
 
     pub(crate) fn blank_session(title: impl Into<String>) -> Session {
         Session {
+            delegated: Default::default(),
             title: title.into(),
             messages: vec![],
             config: None,
@@ -817,6 +819,7 @@ impl OxiApp {
         {
             let session = self.session_mut_by_key(key);
             session.disk_mtime = disk_mtime;
+            session.delegated = messages.delegated;
             session.messages = messages.messages;
             session.config = messages.config;
             session.messages_loaded = true;

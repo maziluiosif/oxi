@@ -463,6 +463,7 @@ impl OxiApp {
                             }
                         } else {
                             if response.clicked() {
+                                self.close_subagent(ui.ctx());
                                 if split_partner == Some(self.session_key(wi, si)) {
                                     self.focus_split_partner();
                                 } else {
@@ -589,6 +590,7 @@ impl OxiApp {
                 });
             });
             row_advance.get_or_insert(ui.cursor().min.y - row_top);
+            self.render_sidebar_subagents(ui, self.session_key(wi, si));
             if sidebar_changed {
                 return true;
             }

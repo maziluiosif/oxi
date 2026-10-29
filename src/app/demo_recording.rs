@@ -163,6 +163,10 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         return;
     }
 
+    if std::env::var_os("OXI_SUBAGENT_REVIEW").is_some() {
+        review_subagent_chats(rec);
+        return;
+    }
     if std::env::var_os("OXI_ACP_REVIEW").is_some() {
         review_acp_ui(rec);
         return;
@@ -4014,4 +4018,100 @@ fn review_remote_panels(rec: &mut Recorder<'_>, root: &str) {
     let _ = std::process::Command::new("ssh")
         .args([host, &format!("cd '{path}' && git checkout -q README.md && printf '\\nAn uncommitted line.\\n' >> README.md")])
         .status();
+}
+
+/// Child transcripts reuse the same message renderer, including narrow layouts.
+fn review_subagent_chats(rec: &mut Recorder<'_>) {
+    use serde_json::json;
+    fn click_label(rec: &mut Recorder<'_>, label: &str) {
+        // Accessibility bounds use physical pixels; pointer events use logical points.
+        let rect = rec.harness.get_by_label(label).rect();
+        let pos = (rect.center().to_vec2() / rec.harness.ctx.pixels_per_point()).to_pos2();
+        rec.harness.hover_at(pos);
+        rec.harness.step();
+        for pressed in [true, false] {
+            rec.harness.event(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            rec.harness.step();
+        }
+    }
+    {
+        let app = rec.app();
+        app.active_session_mut().title = "Audit the editor".into();
+        app.active_session_mut().messages = vec![
+            message(MsgRole::User,"Review the editor using two agents",vec![]),
+            message(MsgRole::Assistant,"I started a workflow with two reviewers. Open their sub-chats to follow the analysis.",vec![AssistantBlock::Answer("I started a workflow with two reviewers. Open their sub-chats to follow the analysis.".into())]),
+        ];
+        for value in [
+            json!({"sessionId":"root","update":{"sessionUpdate":"async_task_spawned","asyncTaskId":"workflow","name":"Editor review","description":"Inspect correctness and responsiveness","taskType":"workflow","canStop":true}}),
+            json!({"sessionId":"root","update":{"sessionUpdate":"async_task_progress","asyncTaskId":"workflow","phases":[{"title":"Inspect"},{"title":"Review"}],"summary":"Inspect · 1 of 2 agents completed"}}),
+            json!({"sessionId":"workflow","update":{"sessionUpdate":"subagent_update","sessionId":"reader","title":"Code inspection","description":"Inspect editor buffer updates and file saves.","capabilities":{"cancel":{}},"state":{"state":"running"},"model":"Claude Opus"}}),
+            json!({"sessionId":"reader","update":{"sessionUpdate":"session_message","messageId":"p1","recipientSessionId":"reader","content":[{"type":"text","text":"Inspect the editor update path. Report concrete issues and validation."}]}}),
+            json!({"sessionId":"reader","update":{"sessionUpdate":"tool_call","toolCallId":"read","kind":"read","title":"Read editor.rs","status":"completed","rawInput":{"path":"src/app/editor.rs"},"rawOutput":"Buffer writes are published after the file is saved."}}),
+            json!({"sessionId":"reader","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"The save path preserves **buffer consistency**. I am checking the concurrent update path next.\n\n- File write finishes first.\n- The buffer revision is then published.\n- Other chats observe the updated state."}}}),
+            json!({"sessionId":"reader","update":{"sessionUpdate":"usage_update","used":18400,"size":200000}}),
+            json!({"sessionId":"workflow","update":{"sessionUpdate":"subagent_update","sessionId":"reviewer","title":"Responsiveness review","description":"Verified the editor stays responsive during tool updates.","state":{"state":"idle","outcome":"completed"},"model":"Codex"}}),
+            json!({"sessionId":"reviewer","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"No responsiveness regressions found."}}}),
+        ] {
+            app.active_session_mut().delegated.apply("root", &value);
+        }
+    }
+    for width in [1240.0, 760.0, 520.0] {
+        rec.harness.set_size(egui::vec2(width, 720.0));
+        rec.harness.run_steps(5);
+        rec.still(&format!("subagents-parent-{width}"));
+        click_label(rec, "Agents · 2  ▾");
+        rec.harness.run_steps(3);
+        rec.still(&format!("subagents-menu-{width}"));
+        rec.harness.event(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        rec.harness.run_steps(3);
+        click_label(rec, "Editor review");
+        rec.harness.run_steps(5);
+        rec.still(&format!("subagents-workflow-{width}"));
+        click_label(rec, "Code inspection");
+        rec.harness.run_steps(5);
+        rec.still(&format!("subagents-child-{width}"));
+        assert!(rec.harness.query_by_label("Send message").is_none());
+        click_label(rec, "← Chat");
+        rec.harness.run_steps(3);
+        assert!(rec.harness.query_by_label("Send message").is_some());
+    }
+    if let Ok(dir) = std::env::var("OXI_SUBAGENT_SAVED_ROOT") {
+        rec.app().active_session_mut().delegated = crate::agent::acp::saved_workflow_snapshot(
+            std::path::Path::new(&dir),
+            "saved-workflow",
+        );
+        assert!(!rec.app().active_session().delegated.chats.is_empty());
+        rec.harness.set_size(egui::vec2(1240.0, 780.0));
+        rec.harness.run_steps(5);
+        rec.still("subagents-real-saved-workflow");
+        let ctx = rec.harness.ctx.clone();
+        {
+            let app = rec.app();
+            let key = app.active_session_key();
+            let c = app
+                .active_session()
+                .delegated
+                .chats
+                .iter()
+                .find(|c| c.task)
+                .unwrap();
+            app.select_subagent(&ctx, key, &c.root, &c.id);
+        }
+        for width in [1240.0, 760.0, 520.0] {
+            rec.harness.set_size(egui::vec2(width, 780.0));
+            rec.harness.run_steps(5);
+            rec.still(&format!("subagents-real-detail-{width}"));
+        }
+    }
 }

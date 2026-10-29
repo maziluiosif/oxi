@@ -17,6 +17,9 @@ pub const FEATURE: &str = "remote-app-1";
 /// running the agent (a command PTY).
 pub fn event_to_json(event: &AgentEvent) -> Option<Value> {
     Some(match event {
+        AgentEvent::Delegated { root, params } => {
+            json!({"type": "delegated", "root": root, "params": params})
+        }
         AgentEvent::AgentStart => json!({"type": "agent_start"}),
         AgentEvent::AcpTerminal(_) => return None,
         AgentEvent::TextStart => json!({"type": "text_start"}),
@@ -28,6 +31,7 @@ pub fn event_to_json(event: &AgentEvent) -> Option<Value> {
             tool_call_id,
             args,
         } => json!({"type": "tool_start", "name": name, "id": tool_call_id, "args": args}),
+        AgentEvent::ApprovalResolved => json!({"type":"approval_resolved"}),
         AgentEvent::ApprovalRequest { name, args } => {
             json!({"type": "approval_request", "name": name, "args": args})
         }
@@ -88,6 +92,10 @@ pub fn event_from_json(v: &Value) -> Option<AgentEvent> {
         serde_json::from_value(v[key].clone()).ok()
     }
     Some(match v["type"].as_str()? {
+        "delegated" => AgentEvent::Delegated {
+            root: s(v, "root"),
+            params: v["params"].clone(),
+        },
         "agent_start" => AgentEvent::AgentStart,
         "text_start" => AgentEvent::TextStart,
         "text_delta" => AgentEvent::TextDelta(s(v, "d")),
@@ -98,6 +106,7 @@ pub fn event_from_json(v: &Value) -> Option<AgentEvent> {
             tool_call_id: s(v, "id"),
             args: args(v),
         },
+        "approval_resolved" => AgentEvent::ApprovalResolved,
         "approval_request" => AgentEvent::ApprovalRequest {
             name: s(v, "name"),
             args: args(v),

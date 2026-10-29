@@ -168,6 +168,7 @@ fn file_mtime(path: &str) -> Option<SystemTime> {
 
 fn empty_session(title: String, config: SessionConfig) -> Session {
     Session {
+        delegated: Default::default(),
         title,
         messages: Vec::new(),
         config: Some(config),
@@ -496,6 +497,10 @@ impl Server {
             "prompt.send" => self.send_prompt(&params),
             "approval.respond" => self.respond_to_approval(&params),
             "cancel" => self.cancel(&params),
+            "subagent.cancel" => match self.cancel_subagent(&params, to) {
+                Ok(()) => return true,
+                Err(e) => Err(e),
+            },
             "models.list" => match self.list_models(&params, to) {
                 // Answered from a worker thread once the agent is up.
                 Ok(None) => return true,
@@ -1058,6 +1063,27 @@ impl Server {
     /// Show the turns ACP agents started on their own, as soon as each chat is free.
     fn attach_autonomous_turns(&mut self) {
         self.apply_agent_titles();
+        let mut changed = std::collections::HashSet::new();
+        for (key, root, params) in crate::agent::acp::take_delegated() {
+            self.forward_event(
+                &key,
+                &AgentEvent::Delegated {
+                    root: root.clone(),
+                    params: params.clone(),
+                },
+            );
+            if let Some(chat) = self.chats.get_mut(&key) {
+                chat.session.delegated.apply(&root, &params);
+                changed.insert(key);
+            }
+        }
+        for key in changed {
+            if let Some(chat) = self.chats.get_mut(&key)
+                && let Err(e) = chat.save()
+            {
+                log::warn!("saving subagent transcript: {e}");
+            }
+        }
         for key in crate::agent::acp::pending_autonomous() {
             // Agents of chats this process never ran belong to another oxi process.
             let Some(chat) = self.chats.get_mut(&key) else {
@@ -1134,6 +1160,10 @@ impl Server {
             return;
         };
         match event {
+            AgentEvent::Delegated { root, params } => {
+                chat.session.delegated.apply(&root, &params);
+                chat.dirty = true;
+            }
             AgentEvent::AgentStart | AgentEvent::AssistantMessageDone => {}
             AgentEvent::AcpTerminal(pending) => {
                 if let Some(terminal) = pending.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -1192,6 +1222,10 @@ impl Server {
                 if let Some(m) = chat.last_assistant_mut() {
                     m.finish_tool(non_empty(&tool_call_id), is_error, full_output_path, diff);
                 }
+            }
+            AgentEvent::ApprovalResolved => {
+                chat.pending_approval = None;
+                self.notify("approval", json!({"chat":id,"approval":null}));
             }
             AgentEvent::ApprovalRequest { name, args } => {
                 let summary = crate::agent::approval_summary(&name, &args);
@@ -1446,6 +1480,34 @@ impl Server {
             })),
             _ => Err("No image there".into()),
         }
+    }
+
+    fn cancel_subagent(&mut self, params: &Value, to: ReplyTo) -> Result<(), String> {
+        let root = root_param(params)?;
+        let id = str_param(params, "chat")?;
+        let native = str_param(params, "sessionId")?;
+        let child = str_param(params, "child")?;
+        let task = params["task"].as_bool().unwrap_or(false);
+        let chat = self.load_chat(&root, &id)?;
+        if !chat
+            .session
+            .delegated
+            .chats
+            .iter()
+            .any(|c| c.root == native && c.id == child && c.task == task)
+        {
+            return Err("Unknown subagent in this conversation".into());
+        }
+        let acp = self.acp.clone();
+        let tx = self.tx.clone();
+        crate::runtime::runtime()?.spawn(async move {
+            let result = acp
+                .cancel_child(id, native, child, task)
+                .await
+                .map(|_| Value::Null);
+            let _ = tx.send(Input::Reply { to, result });
+        });
+        Ok(())
     }
 
     /// Queue a git operation on the workspace's repository; the reply is the repository

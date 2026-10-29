@@ -123,6 +123,7 @@ async fn load_with(
         // Nothing the replay asks for may change anything.
         plan_mode: true,
         updates: UpdateState::default(),
+        children: Default::default(),
         event_tx,
         perm_tx,
         cycle_end: None,

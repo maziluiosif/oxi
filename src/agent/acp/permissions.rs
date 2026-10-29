@@ -43,6 +43,7 @@ pub(super) fn is_plan_file_edit(tool: &Value) -> bool {
 pub(super) struct PermReq {
     pub(super) id: Value,
     pub(super) params: Value,
+    pub(super) child_cancel: Option<Arc<AtomicBool>>,
 }
 
 /// Resolve one forwarded `session/request_permission` request: ask the UI (unless approval is
@@ -91,7 +92,7 @@ pub(super) async fn handle_permission(
         Some(ApprovalDecision::Approve)
     } else {
         let _ = event_tx.send(AgentEvent::ApprovalRequest { name, args });
-        wait_decision(approval_rx, cancel).await
+        wait_decision(approval_rx, cancel, pr.child_cancel.as_deref()).await
     };
 
     let outcome = match decision {
@@ -118,6 +119,7 @@ pub(super) async fn handle_permission(
             }
         }
     };
+    let _ = event_tx.send(AgentEvent::ApprovalResolved);
     let _ = write_line(
         stdin,
         &json!({"jsonrpc":"2.0","id": pr.id, "result": { "outcome": outcome }}),
@@ -129,9 +131,10 @@ pub(super) async fn handle_permission(
 async fn wait_decision(
     rx: &mut StdReceiver<ApprovalDecision>,
     cancel: &Arc<AtomicBool>,
+    child_cancel: Option<&AtomicBool>,
 ) -> Option<ApprovalDecision> {
     loop {
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.load(Ordering::SeqCst) || child_cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
             return None;
         }
         match rx.try_recv() {

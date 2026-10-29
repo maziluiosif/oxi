@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod delegated;
 mod tool;
 pub use tool::{ToolLocation, ToolMetadata, ToolStatus, ToolUpdate, apply_tool_update};
 
@@ -431,6 +432,8 @@ impl ChatMessage {
 }
 
 pub struct Session {
+    /// Provider-owned child conversations, saved with their parent rather than independent agents.
+    pub delegated: delegated::DelegatedChats,
     pub title: String,
     pub messages: Vec<ChatMessage>,
     /// Provider/model choices pinned to this chat. Legacy sessions without this metadata inherit

@@ -61,6 +61,7 @@ impl Server {
         Ok(json!({
             "id": id,
             "title": chat.session.title,
+            "delegated": chat.session.delegated,
             "config": config,
             "modified": unix_secs(chat.session.modified),
             "from": from,

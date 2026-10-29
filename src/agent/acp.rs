@@ -40,7 +40,13 @@ use crate::settings::McpServerConfig;
 mod autonomous;
 pub use autonomous::{
     claim as claim_autonomous, pending as pending_autonomous, set_waker as set_autonomous_waker,
+    take_delegated,
 };
+
+#[path = "acp/workflows.rs"]
+mod workflows;
+#[cfg(test)]
+pub(crate) use workflows::saved_workflow_snapshot;
 
 #[path = "acp/chat_archive.rs"]
 mod chat_archive;
@@ -103,7 +109,7 @@ pub use session_info::{defer_title, reported_cost, take_titles as take_agent_tit
 
 #[path = "acp/update_events.rs"]
 mod update_events;
-use update_events::UpdateState;
+pub(crate) use update_events::UpdateState;
 
 /// Tool call ids codex-acp gives its Guardian Review: Codex vetting an action before it runs,
 /// reported as a tool call of its own.
@@ -270,6 +276,13 @@ struct LaunchSpec<'a> {
 }
 
 enum AcpCommand {
+    CancelChild {
+        session_key: String,
+        root: String,
+        child: String,
+        task: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     Prompt {
         req: Box<AcpPrompt>,
         reply: oneshot::Sender<Result<(), String>>,
@@ -357,6 +370,27 @@ impl AcpManager {
                 }
                 while let Some(cmd) = rx.recv().await {
                     match cmd {
+                        AcpCommand::CancelChild { session_key, root, child, task, reply } => {
+                            let handles = agents.conns.lock().await.get(&session_key)
+                                .filter(|c| c.alive.load(Ordering::SeqCst) && c.handles.session_id == root)
+                                .map(|c| c.handles.clone());
+                            tokio::spawn(async move {
+                                let result = match handles {
+                                    Some(h) if h.held.can_cancel(&child) => {
+                                        h.held.cancel_permissions(&child);
+                                        if task {
+                                            tokio::time::timeout(Duration::from_secs(15), request(&h.stdin, &h.next_id, &h.pending,
+                                                "_session/async_task/stop", json!({"sessionId": root, "asyncTaskId": child})))
+                                                .await.map_err(|_| "Stopping the task timed out".to_string()).and_then(|r| r.map(|_| ()))
+                                        } else {
+                                            write_line(&h.stdin, &json!({"jsonrpc":"2.0", "method":"session/cancel", "params":{"sessionId":child}})).await
+                                        }
+                                    }
+                                    _ => Err("This subagent is disconnected or does not allow stopping".into()),
+                                };
+                                let _ = reply.send(result);
+                            });
+                        }
                         AcpCommand::Prompt { req, reply } => {
                             let agents = agents.clone();
                             tokio::spawn(async move {
@@ -434,6 +468,26 @@ impl AcpManager {
             });
         });
         Self { tx }
+    }
+
+    pub async fn cancel_child(
+        &self,
+        session_key: String,
+        root: String,
+        child: String,
+        task: bool,
+    ) -> Result<(), String> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(AcpCommand::CancelChild {
+                session_key,
+                root,
+                child,
+                task,
+                reply,
+            })
+            .map_err(|_| "ACP manager closed".to_string())?;
+        rx.await.map_err(|_| "ACP manager closed".to_string())?
     }
 
     /// Run one prompt turn against the session's agent, launching the subprocess on first use.
@@ -570,6 +624,7 @@ struct PromptCtx {
     cwd: PathBuf,
     plan_mode: bool,
     updates: UpdateState,
+    children: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     event_tx: StdSender<AgentEvent>,
     perm_tx: mpsc::UnboundedSender<PermReq>,
     /// For a turn attached to a cycle the agent started itself: fired when that cycle ends.
@@ -580,8 +635,30 @@ struct PromptCtx {
 }
 
 impl PromptCtx {
+    fn accepts_session(&self, params: &Value) -> bool {
+        params["sessionId"].as_str().is_some_and(|id| {
+            id == self.session_id
+                || self
+                    .children
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(id)
+        })
+    }
+    fn emit_permission_tool(&mut self, params: &Value) {
+        if params["sessionId"].as_str() == Some(&self.session_id) {
+            self.updates.emit_tool(&params["toolCall"], &self.event_tx);
+        } else {
+            let mut update = params["toolCall"].clone();
+            update["sessionUpdate"] = json!("tool_call");
+            let _ = self.event_tx.send(AgentEvent::Delegated {
+                root: self.session_id.clone(),
+                params: json!({"sessionId": params["sessionId"], "update": update}),
+            });
+        }
+    }
     fn write_text_file(&self, params: &Value) -> Result<(), String> {
-        if params["sessionId"].as_str() != Some(self.session_id.as_str()) {
+        if !self.accepts_session(params) {
             return Err("fs/write_text_file: session is not the active prompt".into());
         }
         if self.plan_mode {
@@ -596,20 +673,64 @@ impl PromptCtx {
         let requests = held.drain_permissions();
         let any = !requests.is_empty();
         for (id, params) in requests {
-            self.updates.emit_tool(&params["toolCall"], &self.event_tx);
-            let _ = self.perm_tx.send(PermReq { id, params });
+            self.emit_permission_tool(&params);
+            let _ = self.perm_tx.send(PermReq {
+                id,
+                child_cancel: held.permission_cancel(&params),
+                params,
+            });
         }
         any
     }
 
     fn emit_notification(&mut self, params: &Value) {
+        let kind = params["update"]["sessionUpdate"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches('_');
+        if self.replay.is_none()
+            && (kind.starts_with("subagent_")
+                || kind.starts_with("async_task_")
+                || params["sessionId"].as_str().is_some_and(|id| {
+                    self.children
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .contains(id)
+                }))
+        {
+            self.last_update = std::time::Instant::now();
+            let _ = self.event_tx.send(AgentEvent::Delegated {
+                root: self.session_id.clone(),
+                params: params.clone(),
+            });
+            return;
+        }
         if params["sessionId"].as_str() == Some(self.session_id.as_str()) {
             self.last_update = std::time::Instant::now();
             if let Some(replay) = &self.replay {
                 let _ = replay.send(params["update"].clone());
                 return;
             }
-            self.updates.emit_update(&params["update"], &self.event_tx);
+            if kind == "session_message" {
+                let u = &params["update"];
+                let incoming = u["recipientSessionId"].as_str() == Some(&self.session_id);
+                let other = if incoming {
+                    &u["senderSessionId"]
+                } else {
+                    &u["recipientSessionId"]
+                };
+                self.updates.emit_tool(
+                    &json!({
+                        "toolCallId": u["messageId"], "kind": "other", "name": "subagent_message",
+                        "title": if incoming { "Subagent report" } else { "Delegate task" },
+                        "status": "completed", "rawInput": {"session_id": other, "root_session_id":self.session_id},
+                        "rawOutput": crate::model::delegated::content_text(&u["content"])
+                    }),
+                    &self.event_tx,
+                );
+            } else {
+                self.updates.emit_update(&params["update"], &self.event_tx);
+            }
             if autonomous::ends_cycle(&params["update"])
                 && let Some(end) = self.cycle_end.take()
             {
@@ -794,11 +915,12 @@ async fn spawn_conn(
     ));
 
     // initialize
-    let init_params = json!({
+    let mut init_params = json!({
         "protocolVersion": PROTOCOL_VERSION,
         "clientCapabilities": {
             "fs": { "readTextFile": true, "writeTextFile": true },
             "terminal": true,
+            "subagents": {},
             // Fast mode and similar switches arrive as `type: "boolean"` options.
             "session": { "configOptions": { "boolean": {} } },
             // Command output as appended chunks on the tool call (Claude Code and Codex). Codex
@@ -806,6 +928,11 @@ async fn spawn_conn(
             "_meta": { "terminal_output_delta": true }
         }
     });
+    if command_line.to_ascii_lowercase().contains("claude") {
+        init_params["clientCapabilities"]["_meta"]["jetbrains"] = json!({
+            "air": {"version": 1, "capabilities": ["asyncTasks"]}
+        });
+    }
     let init = tokio::time::timeout(
         Duration::from_secs(30),
         request(&stdin, &next_id, &pending, "initialize", init_params),
@@ -933,7 +1060,9 @@ async fn spawn_conn(
         activity,
         evidence_dir,
     };
+    handles.held.set_root(&handles.session_id);
     handles.held.arm();
+    workflows::watch(&handles, cwd, command_line);
     Ok(Conn {
         command_line: command_line.to_string(),
         model: model.to_string(),
@@ -1284,6 +1413,7 @@ async fn run_prompt(
             cwd: cwd.clone(),
             plan_mode,
             updates: UpdateState::default(),
+            children: handles.held.children.clone(),
             event_tx: event_tx.clone(),
             perm_tx,
             cycle_end: None,
@@ -1291,8 +1421,33 @@ async fn run_prompt(
             replay: None,
         });
         let _ = event_tx.send(AgentEvent::AgentStart);
-        // A turn the agent started on its own that no attached turn showed yet opens this one.
-        for params in handles.held.drain() {
+        let held_updates = handles.held.drain();
+        if handles.held.take_replay() {
+            let sessions: std::collections::HashSet<&str> = held_updates
+                .iter()
+                .filter(|p| {
+                    matches!(
+                        p["update"]["sessionUpdate"].as_str(),
+                        Some(
+                            "session_message"
+                                | "agent_message_chunk"
+                                | "user_message_chunk"
+                                | "tool_call"
+                                | "tool_call_update"
+                        )
+                    )
+                })
+                .filter_map(|p| p["sessionId"].as_str())
+                .filter(|id| *id != handles.session_id)
+                .collect();
+            let _ = event_tx.send(AgentEvent::Delegated {
+                root: handles.session_id.clone(),
+                params: json!({"update": {"sessionUpdate": "delegation_replay", "sessions":sessions}}),
+            });
+        }
+        // Replace only child histories actually replayed; metadata-only announcements must
+        // not erase a saved transcript the adapter can no longer recover.
+        for params in held_updates {
             ctx.emit_notification(&params);
         }
         ctx.forward_held_permissions(&handles.held);
@@ -1499,6 +1654,7 @@ async fn run_attach(
             cwd,
             plan_mode,
             updates: UpdateState::default(),
+            children: handles.held.children.clone(),
             event_tx: event_tx.clone(),
             perm_tx,
             cycle_end: Some(end_tx),
