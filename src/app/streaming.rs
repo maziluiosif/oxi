@@ -666,6 +666,11 @@ impl OxiApp {
         let evidence_mode = self.run_state_mut(key).evidence_mode.clone();
         self.run_state_mut(key).last_turn_planned = plan_mode;
         // What the turn starts goes on disk, so a restart can tell what was lost with it.
+        // A journal still held by an earlier turn that ended without its end being seen is
+        // closed first (it holds the file's lock).
+        if let Some(journal) = self.run_state_mut(key).journal.take() {
+            journal.end(&[]);
+        }
         if let Some(file) = session_file.as_deref() {
             let prompt = chat.last().map(|m| m.text.clone()).unwrap_or_default();
             let journal =

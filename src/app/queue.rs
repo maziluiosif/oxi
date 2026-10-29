@@ -296,6 +296,28 @@ impl OxiApp {
         }
     }
 
+    /// A turn of `key`'s chat ended, however it ended: messages sent into it that it did not
+    /// read go back to the queue, and its journal keeps only what is still waiting to be sent.
+    pub(crate) fn close_turn_bookkeeping(&mut self, key: SessionKey) {
+        let Some(run) = self.flow.sessions.get_mut(&key) else {
+            return;
+        };
+        if let Some(inbox) = run.steer.take() {
+            inbox.take();
+        }
+        for text in std::mem::take(&mut run.steer_pending).into_iter().rev() {
+            run.queued.push_front(QueuedSend {
+                text,
+                images: Vec::new(),
+                texts: Vec::new(),
+            });
+        }
+        if let Some(journal) = run.journal.take() {
+            let queued: Vec<String> = run.queued.iter().map(|q| q.text.clone()).collect();
+            journal.end(&queued);
+        }
+    }
+
     /// Keep `key`'s queued messages on disk with the chat, so a restart brings them back
     /// (they were never sent; sending them later repeats nothing).
     pub(crate) fn persist_queue(&mut self, key: SessionKey) {
@@ -497,6 +519,16 @@ mod tests {
         app.run_state_mut(key).interrupted = None;
         app.recover_interrupted_run(key);
         assert!(app.run_state(key).unwrap().interrupted.is_none());
+
+        // A turn the user stopped is not reported as interrupted later.
+        app.run_state_mut(key).journal = TurnJournal::start(&file, "Again", None);
+        app.run_state_mut(key).begin_waiting_response();
+        app.stop_agent_run(key);
+        let recovery = crate::session_store::run_journal::recover(&file);
+        assert!(
+            recovery.as_ref().is_none_or(|r| r.interrupted.is_none()),
+            "{recovery:?}"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

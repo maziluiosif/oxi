@@ -77,6 +77,7 @@ impl OxiApp {
                 .run_state(key)
                 .is_some_and(|state| state.waiting_response)
             {
+                self.close_turn_bookkeeping(key);
                 self.invalidate_wire_cache(key);
                 self.append_assistant_answer(key, "\n[Error] Agent stopped unexpectedly.\n");
                 let completion_unseen =
@@ -405,26 +406,7 @@ impl OxiApp {
                         self.invalidate_wire_cache(key);
                     }
                 }
-                // Messages sent into the turn that it ended before reading go to the queue.
-                {
-                    let run = self.run_state_mut(key);
-                    if let Some(inbox) = run.steer.take() {
-                        inbox.take();
-                    }
-                    for text in std::mem::take(&mut run.steer_pending).into_iter().rev() {
-                        run.queued.push_front(super::compaction::QueuedSend {
-                            text,
-                            images: Vec::new(),
-                            texts: Vec::new(),
-                        });
-                    }
-                    // The turn ended: its journal keeps only what is still waiting to be sent.
-                    if let Some(journal) = run.journal.take() {
-                        let queued: Vec<String> =
-                            run.queued.iter().map(|q| q.text.clone()).collect();
-                        journal.end(&queued);
-                    }
-                }
+                self.close_turn_bookkeeping(key);
                 self.finish_assistant_stream(key);
                 self.run_state_mut(key).completion_unseen = completion_unseen;
                 if succeeded {
