@@ -159,8 +159,10 @@ impl UpdateState {
         let oxi_tool = [field("title"), field("name")]
             .into_iter()
             .find_map(super::oxi_mcp::oxi_tool_name);
+        let guardian = id.starts_with(super::GUARDIAN_REVIEW_ID_PREFIX);
         let name = match oxi_tool {
             Some(oxi) => oxi,
+            None if guardian => "guardian_review",
             None => match kind {
                 "execute" => "bash",
                 "search" => "grep",
@@ -198,7 +200,10 @@ impl UpdateState {
         let _ = tx.send(AgentEvent::ToolUpdate(Box::new(ToolUpdate {
             tool_call_id: id.to_owned(),
             name,
-            args: tool.fields.get("rawInput").cloned(),
+            // A review's input is the whole review event; its verdict text says what it vetted.
+            args: (!guardian)
+                .then(|| tool.fields.get("rawInput").cloned())
+                .flatten(),
             output: output.chars().take(limit).collect(),
             diff: tool.content.diff.clone(),
             output_truncated,

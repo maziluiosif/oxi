@@ -35,7 +35,7 @@ pub enum ToolSideEffect {
 pub fn tool_side_effect(name: &str) -> ToolSideEffect {
     match name {
         "read" | "grep" | "find" | "ls" | "codebase_search" | "git_status" | "git_diff"
-        | "web_search" | "web_fetch" | "todo_write" | "task" | "scratchpad_read" => {
+        | "web_search" | "web_fetch" | "todo_write" | "task" | "scratchpad_read" | "chat_read" => {
             ToolSideEffect::ReadOnly
         }
         "write" | "edit" | "delete" | "move" | "mkdir" | "scratchpad" => {

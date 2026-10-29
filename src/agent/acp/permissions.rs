@@ -64,11 +64,12 @@ pub(super) async fn handle_permission(
     let options = pr.params["options"].as_array().cloned().unwrap_or_default();
     let kind = pr.params["toolCall"]["kind"].as_str().unwrap_or("");
 
-    // oxi's own checklist tool only updates the UI; reading the scratchpad changes nothing;
+    // oxi's own checklist tool only updates the UI; reading the scratchpad or the chat changes
+    // nothing;
     // evidence tools that run no command only capture and record.
     let decision = if matches!(
         super::oxi_mcp::oxi_tool(&pr.params["toolCall"]),
-        Some("todo_write" | super::oxi_mcp::SCRATCHPAD_READ)
+        Some("todo_write" | super::oxi_mcp::SCRATCHPAD_READ | super::chat_archive::TOOL)
     ) || crate::evidence::tools::NAMES.contains(&name.as_str())
         || plan_mode && is_plan_file_edit(&pr.params["toolCall"])
     {

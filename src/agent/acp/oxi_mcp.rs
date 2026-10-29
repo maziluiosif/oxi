@@ -2,7 +2,8 @@
 //! Agents do not reliably bring a checklist tool (Claude Code turns its todo tools off for some
 //! models), so every session gets `todo_write`, whose calls drive oxi's native checklist. The
 //! global scratchpad comes along (`scratchpad_read`, `scratchpad`) unless the user turned the
-//! scratchpad tool off in Settings > Agent.
+//! scratchpad tool off in Settings > Agent. `chat_read` hands back earlier turns of the chat that
+//! a handoff transcript trimmed (see [`super::chat_archive`]).
 
 use std::io::{BufRead as _, Write as _};
 
@@ -59,6 +60,7 @@ pub(super) fn oxi_tool_name(s: &str) -> Option<&'static str> {
     // Claude: `mcp__oxi__todo_write`; Codex and others: `oxi.todo_write`, `oxi/todo_write`, ...
     TOOL_NAMES
         .into_iter()
+        .chain([super::chat_archive::TOOL])
         .chain(crate::evidence::tools::NAMES)
         .find(|tool| {
             s.strip_suffix(tool)
@@ -141,6 +143,9 @@ fn instructions() -> String {
         text.push_str(" scratchpad_read and scratchpad reach the user's global notes in oxi.");
     }
     if crate::evidence::tools::conn_dir().is_some() {
+        text.push_str(
+            " chat_read returns earlier turns of this conversation in full when a transcript oxi sent you left them out.",
+        );
         text.push(' ');
         text.push_str(crate::evidence::tools::INSTRUCTIONS);
     }
@@ -187,6 +192,7 @@ fn handle(msg: &Value) -> Option<Value> {
                 tools.extend(scratchpad_tools());
             }
             if crate::evidence::tools::conn_dir().is_some() {
+                tools.push(super::chat_archive::definition());
                 tools.extend(crate::evidence::tools::definitions());
             }
             json!({ "tools": tools })
@@ -194,6 +200,13 @@ fn handle(msg: &Value) -> Option<Value> {
         "tools/call" if msg["params"]["name"] == TOOL_NAME => {
             let args = &msg["params"]["arguments"];
             let (text, is_error) = match crate::agent::tools::tool_todo_write(args) {
+                Ok(text) => (text, false),
+                Err(e) => (e, true),
+            };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+        }
+        "tools/call" if msg["params"]["name"] == super::chat_archive::TOOL => {
+            let (text, is_error) = match super::chat_archive::call(&msg["params"]["arguments"]) {
                 Ok(text) => (text, false),
                 Err(e) => (e, true),
             };
@@ -261,6 +274,7 @@ mod tests {
         assert_eq!(oxi_tool_name("mcp__oxi__scratchpad"), Some(SCRATCHPAD));
         assert_eq!(oxi_tool_name("oxi.scratchpad_read"), Some(SCRATCHPAD_READ));
         assert_eq!(oxi_tool_name("scratchpad"), None);
+        assert_eq!(oxi_tool_name("mcp__oxi__chat_read"), Some("chat_read"));
         assert_eq!(
             oxi_tool(
                 &json!({"title": "Scratchpad", "_meta": {"claudeCode": {"toolName": "mcp__oxi__scratchpad"}}})
