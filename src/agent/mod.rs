@@ -4,6 +4,7 @@ pub mod acp;
 pub mod activity_log;
 mod anthropic;
 mod approval;
+pub mod cli_complete;
 mod codex_responses;
 pub mod complete;
 mod dispatch;

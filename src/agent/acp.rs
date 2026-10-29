@@ -66,6 +66,11 @@ mod antigravity;
 #[path = "acp/install.rs"]
 mod install;
 
+/// The `claude` binary bundled with oxi's managed install of the Claude adapter, if any.
+pub(crate) fn bundled_claude_cli() -> Option<std::path::PathBuf> {
+    install::bundled_claude_cli()
+}
+
 /// Whether `cfg`'s agent can start without installing anything first, i.e. it is set up on this
 /// machine. Failover only moves a turn to agents that are.
 pub async fn is_ready(cfg: &crate::settings::ProviderConfig) -> bool {
