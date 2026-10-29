@@ -3563,8 +3563,8 @@ fn review_composer_pickers(rec: &mut Recorder<'_>) {
                 .label_center("Context usage")
                 .expect("context usage ring");
             assert!(
-                (context.y - send.y).abs() < 0.5 && context.x < send.x,
-                "{width} {scale}: context usage must remain beside Send"
+                context.y > send.y,
+                "{width} {scale}: context usage lives in the status bar, below the composer"
             );
             let controls: Vec<_> = rec
                 .harness

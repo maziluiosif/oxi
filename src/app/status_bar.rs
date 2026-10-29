@@ -1,6 +1,6 @@
 //! Persistent bottom status bar: thin strip below the terminal panel with quick
-//! toggles for the chats/explorer/search sidebar, Settings, terminal/git panels, and the current
-//! git branch.
+//! toggles for the chats/explorer/search sidebar, Settings, terminal/git panels, the active chat's
+//! context and usage limits, and the current git branch.
 
 use eframe::egui::{self, Align, Layout, Stroke};
 
@@ -99,6 +99,10 @@ impl OxiApp {
                     if file_shown {
                         ui.add_space(10.0);
                         self.render_caret_status(ui);
+                    }
+                    if !settings_on {
+                        ui.add_space(10.0);
+                        self.render_chat_status(ui);
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
