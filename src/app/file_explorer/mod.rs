@@ -47,7 +47,7 @@ pub(crate) use multi_cursor::text_point;
 pub(crate) use project_search::{FIND_REFERENCES_REQUEST, ProjectSearchState, search_json};
 pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
 
-pub(crate) use diff_editor::{DiffSource, DocumentDiff};
+pub(crate) use diff_editor::{Change as DiffChange, DiffSource, DocumentDiff};
 pub(crate) use explorer_tree::{ExplorerCache, git_status_color};
 pub(crate) use layout_cache::EditorLayoutCache;
 pub(crate) use media_view::MediaKind;

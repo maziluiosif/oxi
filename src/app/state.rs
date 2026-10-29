@@ -886,6 +886,10 @@ pub struct ConversationState {
     pub transcript: TranscriptState,
     /// Work tree create/merge operations running in the background.
     pub worktree_ops: Vec<std::sync::mpsc::Receiver<super::worktrees::WorktreeResult>>,
+    /// Comments on diff lines, sent with the next message of their workspace's chat.
+    pub review_comments: Vec<super::review_comments::ReviewComment>,
+    /// The diff comment being written.
+    pub comment_draft: Option<super::review_comments::CommentDraft>,
     /// Setup scripts running (or just finished) in new work trees.
     pub worktree_setups: Vec<super::worktree_setup::WorktreeSetup>,
     /// The work tree setup script being edited: (main checkout root, draft).

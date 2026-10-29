@@ -372,6 +372,7 @@ impl OxiApp {
                         self.render_task_panel(ui);
                         self.render_plan_ready_bar(ui);
                         self.render_worktree_setup(ui);
+                        self.render_review_comments(ui);
                         self.render_queue_panel(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);

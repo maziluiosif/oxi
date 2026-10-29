@@ -16,6 +16,8 @@ use crate::session_store;
 
 impl OxiApp {
     pub(crate) fn send_message(&mut self) {
+        // Diff comments go out with the next message the user sends.
+        self.attach_review_comments();
         if self.conv.composer.editing_last_prompt.is_some() {
             self.submit_edited_last_prompt();
         } else {

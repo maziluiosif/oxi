@@ -16,6 +16,7 @@ pub(super) fn run(rec: &mut Recorder<'_>) {
     rewind(rec);
     steering(rec);
     worktree_setup(rec);
+    diff_comments(rec);
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -215,13 +216,10 @@ fn rewind(rec: &mut Recorder<'_>) {
     });
     wait_for_rewind_check(rec);
     rec.still("rewind-conflict");
-    std::fs::write(
-        project.join("export.py"),
-        "def export_csv(rows):\n    pass\n",
-    )
-    .unwrap();
     rec.app().conv.confirm_prompt = None;
     rec.app().conv.rewind_check = None;
+    std::fs::remove_file(project.join("export.py")).unwrap();
+    git(&project, &["checkout", "-q", "--", "stats.py"]);
 }
 
 /// Messages written while oxi's own agent answers: steer one into the running turn.
@@ -331,4 +329,94 @@ fn worktree_setup(rec: &mut Recorder<'_>) {
         !rec.app().active_waiting_response(),
         "a failed setup holds the agent"
     );
+}
+
+/// Move the pointer onto the widget labelled `label` and click it.
+fn click(rec: &mut Recorder<'_>, label: &str) {
+    use egui_kittest::kittest::Queryable;
+    // Accessibility bounds are in physical pixels; pointer events in points.
+    let rect = rec.harness.get_by_label(label).rect();
+    let pos = (rect.center().to_vec2() / rec.harness.ctx.pixels_per_point()).to_pos2();
+    rec.harness.hover_at(pos);
+    rec.harness.step();
+    for pressed in [true, false] {
+        rec.harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        rec.harness.step();
+    }
+    rec.harness.run_steps(3);
+}
+
+/// Comments on diff lines collected for the agent.
+fn diff_comments(rec: &mut Recorder<'_>) {
+    use egui_kittest::kittest::Queryable;
+    let project = rec.project.clone();
+    let stats = std::fs::read_to_string(project.join("stats.py")).unwrap();
+    std::fs::write(
+        project.join("stats.py"),
+        stats.replacen(
+            "def ",
+            "# Summary statistics for the weekly report.\n\ndef ",
+            1,
+        ),
+    )
+    .unwrap();
+    rec.app().select_workspace(0);
+    rec.app().new_chat();
+    assert!(rec.app().open_diff_editor(
+        "stats.py",
+        crate::app::file_explorer::DiffSource::WorkTree,
+        None
+    ));
+    rec.harness.run_steps(10);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    rec.harness.run_steps(10);
+    // Hover down the new side until the change offers its buttons.
+    let rect = rec.harness.ctx.content_rect();
+    let mut found = false;
+    for step in 0..60 {
+        let pos = egui::pos2(rect.center().x + 200.0, 50.0 + step as f32 * 10.0);
+        rec.harness.hover_at(pos);
+        rec.harness.run_steps(2);
+        if rec.harness.query_by_label("Comment").is_some() {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "a hovered change offers Comment");
+    rec.still("diff-comment-button");
+    // A real pointer click: the button only exists while its change is hovered.
+    click(rec, "Comment");
+    assert!(rec.app().conv.comment_draft.is_some());
+    rec.app().conv.comment_draft.as_mut().unwrap().text =
+        "Use a module docstring instead of a comment.".into();
+    rec.harness.run_steps(3);
+    rec.still("diff-comment-draft");
+    click(rec, "Add comment");
+    let comment = rec.app().conv.review_comments[0].clone();
+    rec.app()
+        .conv
+        .review_comments
+        .push(crate::app::review_comments::ReviewComment {
+            new_lines: Some((14, 16)),
+            old_lines: Some((12, 14)),
+            note: "Guard against an empty list here.".into(),
+            ..comment
+        });
+    rec.app().reveal_chat_view();
+    rec.harness.run_steps(4);
+    rec.still("diff-comments-composer");
+    rec.app().attach_review_comments();
+    let texts = &rec.app().conv.composer.pending_texts;
+    assert!(
+        matches!(texts.last(), Some(crate::model::UserAttachment::Text { name, text })
+        if name == "Review comments (2)" && text.contains("Use a module docstring"))
+    );
+    rec.harness.run_steps(3);
+    rec.still("diff-comments-attached");
+    std::fs::write(project.join("stats.py"), stats).unwrap();
 }

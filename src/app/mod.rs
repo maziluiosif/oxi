@@ -42,6 +42,7 @@ mod notify;
 mod queue;
 mod remote;
 mod review;
+mod review_comments;
 mod rewind;
 mod selection_to_chat;
 pub(crate) mod sessions;
@@ -257,6 +258,8 @@ impl OxiApp {
                 transcript: state::TranscriptState::default(),
                 worktree_ops: Vec::new(),
                 worktree_setups: Vec::new(),
+                review_comments: Vec::new(),
+                comment_draft: None,
                 setup_script_editor: None,
                 split: None,
                 pending_split: None,
