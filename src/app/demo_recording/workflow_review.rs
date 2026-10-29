@@ -15,6 +15,7 @@ pub(super) fn run(rec: &mut Recorder<'_>) {
     worktree_removal(rec);
     rewind(rec);
     steering(rec);
+    worktree_setup(rec);
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -271,4 +272,63 @@ fn steering(rec: &mut Recorder<'_>) {
     rec.still("steer-delivered");
     rec.finish_turn();
     rec.harness.run_steps(4);
+}
+
+fn wait_until(rec: &mut Recorder<'_>, done: impl Fn(&mut crate::app::OxiApp) -> bool) {
+    for _ in 0..400 {
+        rec.harness.step();
+        if done(rec.app()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    rec.harness.run_steps(3);
+}
+
+/// A repository's setup script running in a new work tree, then failing.
+fn worktree_setup(rec: &mut Recorder<'_>) {
+    let project = rec.project.to_string_lossy().into_owned();
+    rec.app().select_workspace(0);
+    rec.app().edit_worktree_setup(0);
+    rec.app().conv.setup_script_editor.as_mut().unwrap().1 =
+        "echo \"Installing dependencies...\"\nsleep 1\nnpm ci".into();
+    rec.harness.run_steps(3);
+    rec.still("setup-editor");
+    rec.app().conv.setup_script_editor = None;
+    rec.app().conv.settings.worktree_setup_scripts.insert(
+        project.clone(),
+        "echo \"Installing dependencies...\"\nsleep 1\necho \"npm ERR! Missing script: ci\" >&2\nexit 1".into(),
+    );
+    let before = rec.app().conv.workspaces.len();
+    let root = rec.project.clone();
+    rec.app().start_worktree_chat_at(root);
+    wait_until(rec, |app| {
+        app.conv.workspaces.len() > before && !app.conv.worktree_setups.is_empty()
+    });
+    rec.app().conv.composer.input = "Add a --json flag to the report command".into();
+    rec.app().send_message();
+    rec.app().conv.worktree_setups[0].show_output = true;
+    rec.harness.run_steps(4);
+    {
+        let app = rec.app();
+        let key = app.active_session_key();
+        assert_eq!(
+            app.run_state(key).unwrap().queued.len(),
+            1,
+            "held until setup is done"
+        );
+        assert!(!app.active_waiting_response());
+    }
+    rec.still("setup-running");
+    wait_until(rec, |app| {
+        app.conv
+            .worktree_setups
+            .first()
+            .is_some_and(|s| !matches!(s.state, crate::app::worktree_setup::SetupState::Running))
+    });
+    rec.still("setup-failed");
+    assert!(
+        !rec.app().active_waiting_response(),
+        "a failed setup holds the agent"
+    );
 }

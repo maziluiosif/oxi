@@ -227,6 +227,8 @@ impl OxiApp {
         });
         self.select_workspace(self.conv.workspaces.len() - 1);
         self.sync_workspaces_to_settings();
+        let root = self.active_workspace().root_path.clone();
+        self.start_worktree_setup(&root);
         self.new_chat();
         self.finish_pending_split();
     }

@@ -295,10 +295,16 @@ impl OxiApp {
                 super::compaction::parse_slash_command(&text),
                 Some(super::compaction::SlashCommand::Evidence(None))
             );
+        // A new work tree still being set up: the agent starts once setup is done.
+        let setup_holds = self.setup_holding_agent(key.workspace_idx).is_some();
+        if setup_holds {
+            self.notify_composer("Queued: the agent starts once the work tree setup finishes.");
+        }
         if !live_evidence_toggle
-            && self
-                .run_state(key)
-                .is_some_and(|state| state.waiting_response)
+            && (setup_holds
+                || self
+                    .run_state(key)
+                    .is_some_and(|state| state.waiting_response))
         {
             self.push_input_history(&text);
             self.conv.composer.history_index = None;

@@ -886,6 +886,10 @@ pub struct ConversationState {
     pub transcript: TranscriptState,
     /// Work tree create/merge operations running in the background.
     pub worktree_ops: Vec<std::sync::mpsc::Receiver<super::worktrees::WorktreeResult>>,
+    /// Setup scripts running (or just finished) in new work trees.
+    pub worktree_setups: Vec<super::worktree_setup::WorktreeSetup>,
+    /// The work tree setup script being edited: (main checkout root, draft).
+    pub setup_script_editor: Option<(String, String)>,
     /// A second chat shown next to the active one (see [`super::split_view`]).
     pub split: Option<super::split_view::SplitView>,
     /// The chat to show next to the work tree chat being created.

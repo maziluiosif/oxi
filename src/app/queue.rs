@@ -52,7 +52,9 @@ impl OxiApp {
 
     /// After a response completes, send the next queued message for that chat.
     pub(crate) fn send_next_queued(&mut self, key: SessionKey) {
-        if self.run_state(key).is_some_and(|r| r.waiting_response) {
+        if self.run_state(key).is_some_and(|r| r.waiting_response)
+            || self.setup_holding_agent(key.workspace_idx).is_some()
+        {
             return;
         }
         let Some(next) = self
@@ -137,6 +139,10 @@ impl OxiApp {
 
     /// Send queued message `index` now, stopping the response in progress if there is one.
     pub(crate) fn steer_queued(&mut self, key: SessionKey, index: usize) {
+        if self.setup_holding_agent(key.workspace_idx).is_some() {
+            self.notify_composer("The agent starts once the work tree setup finishes.");
+            return;
+        }
         let Some(item) = self
             .flow
             .sessions

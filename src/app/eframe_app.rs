@@ -66,6 +66,7 @@ impl eframe::App for OxiApp {
         self.drain_agent(ctx);
         self.drain_models(ctx);
         self.drain_worktree_ops(ctx);
+        self.drain_worktree_setups(ctx);
         self.drain_turn_changes();
         self.drain_rewind_jobs();
         self.drain_chores(ctx);
@@ -186,6 +187,7 @@ impl eframe::App for OxiApp {
 
         // Shared destructive-action confirmation modal, on top of everything.
         self.render_confirm_prompt(ui.ctx());
+        self.render_setup_script_editor(ui.ctx());
         self.render_remote_dialog(ui.ctx());
         self.render_editor_prompt(ui.ctx());
         crate::ui::image_viewer::show(ui.ctx());

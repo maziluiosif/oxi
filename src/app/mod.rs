@@ -57,6 +57,7 @@ mod terminal_panel;
 mod title_gen;
 mod turn_changes;
 mod update_check;
+pub(crate) mod worktree_setup;
 mod worktrees;
 
 pub use state::{
@@ -255,6 +256,8 @@ impl OxiApp {
                 diff_view: state::DiffViewState::default(),
                 transcript: state::TranscriptState::default(),
                 worktree_ops: Vec::new(),
+                worktree_setups: Vec::new(),
+                setup_script_editor: None,
                 split: None,
                 pending_split: None,
                 chores: Vec::new(),
