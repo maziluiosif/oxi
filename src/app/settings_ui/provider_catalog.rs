@@ -35,6 +35,7 @@ pub(in crate::app) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
             LlmProviderKind::CodexAcp,
             LlmProviderKind::MuseCodeAcp,
             LlmProviderKind::CopilotAcp,
+            LlmProviderKind::OpenCodeAcp,
             LlmProviderKind::AntigravityAcp,
         ],
     ),
@@ -76,6 +77,9 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         }
         LlmProviderKind::CopilotAcp => {
             "Drive GitHub Copilot CLI (your Copilot plan) through its built-in Agent Client Protocol server."
+        }
+        LlmProviderKind::OpenCodeAcp => {
+            "Drive the OpenCode CLI (any provider it is logged into, free models included) through its built-in Agent Client Protocol server."
         }
         LlmProviderKind::AntigravityAcp => {
             "Drive Google Antigravity through its official native Agent Client Protocol server."

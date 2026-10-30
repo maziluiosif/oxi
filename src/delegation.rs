@@ -215,6 +215,7 @@ pub fn parse_provider(name: &str) -> Option<LlmProviderKind> {
         "copilot" | "github copilot" => Some(LlmProviderKind::CopilotAcp),
         "gemini" | "antigravity" => Some(LlmProviderKind::AntigravityAcp),
         "muse" | "muse code" => Some(LlmProviderKind::MuseCodeAcp),
+        "opencode" | "open code" => Some(LlmProviderKind::OpenCodeAcp),
         _ => None,
     };
     alias.or_else(|| {

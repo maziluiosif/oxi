@@ -156,6 +156,71 @@ impl Agents {
         reaper::mark_stopped(session_key);
     }
 
+    /// Relaunch the idle agents whose managed adapter has a newer install, resuming their
+    /// sessions, so the next prompt finds them on it instead of waiting for the relaunch.
+    async fn refresh_outdated(&self) {
+        let keys: Vec<String> = self
+            .conns
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, c)| c.alive.load(Ordering::SeqCst) && c.outdated())
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
+            // A prompt for this session waits here and then finds the new agent.
+            let launch = self.launch_lock(&key);
+            let _launching = launch.lock().await;
+            let saved = {
+                let map = self.conns.lock().await;
+                map.get(&key)
+                    .filter(|c| c.alive.load(Ordering::SeqCst) && c.outdated())
+                    .map(|c| {
+                        (
+                            c.command_line.clone(),
+                            c.cwd.clone(),
+                            c.env.clone(),
+                            c.model.clone(),
+                            c.effort.clone(),
+                            c.mcp_servers.clone(),
+                        )
+                    })
+            };
+            let Some((command_line, cwd, env, model, effort, mcp_servers)) = saved else {
+                continue;
+            };
+            let spec = LaunchSpec {
+                session_key: &key,
+                command_line: &command_line,
+                cwd: &cwd,
+                env: &env,
+                model: &model,
+                effort: &effort,
+                mcp_servers: &mcp_servers,
+            };
+            let conn = match spawn_conn(&spec, mcp_servers.clone()).await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    log::warn!("could not move the ACP agent of {key} to the new adapter: {e}");
+                    continue;
+                }
+            };
+            let mut map = self.conns.lock().await;
+            // Stopped meanwhile, or it started work of its own: keep things as they are.
+            let replace = map.get(&key).is_some_and(|old| {
+                old.alive.load(Ordering::SeqCst)
+                    && !old.handles.busy()
+                    && !old.handles.activity.background()
+            });
+            if replace {
+                log::info!("moved the idle ACP agent of {key} to the new adapter");
+                reaper::mark_live(&key, conn.alive.clone());
+                // Dropping the old Conn kills its subprocess (kill_on_drop).
+                map.insert(key, conn);
+            }
+        }
+    }
+
     /// Stop the agents the policy says nobody needs running any more. Picked and taken out
     /// under one lock: a prompt reusing an agent marks it used under the same lock, so it is
     /// either seen as in use here or relaunched there.
@@ -168,10 +233,7 @@ impl Agents {
                 .filter(|(_, c)| c.alive.load(Ordering::SeqCst))
                 .map(|(key, c)| {
                     let h = &c.handles;
-                    let busy = h.turn_lock.try_lock().is_err()
-                        || !h.held.is_empty()
-                        || h.pending.try_lock().map_or(true, |p| !p.is_empty());
-                    reaper::Candidate::of(key, &h.activity, busy, now)
+                    reaper::Candidate::of(key, &h.activity, h.busy(), now)
                 })
                 .collect();
             let mut stopped: Vec<(String, Conn)> = reaper::victims(agents)
@@ -361,14 +423,24 @@ impl AcpManager {
                 return;
             };
             rt.block_on(async move {
-                // Keep the managed npm adapters current without involving the user.
-                tokio::spawn(async {
-                    loop {
-                        install::update_installed().await;
-                        tokio::time::sleep(Duration::from_secs(60 * 60)).await;
-                    }
-                });
                 let agents = Agents::default();
+                // Keep the managed npm adapters current without involving the user. The first
+                // pass runs at every start, however recently the last check ran, so a restart
+                // picks up adapter releases right away; idle agents then move to the new install
+                // in the background, before anyone prompts them.
+                {
+                    let agents = agents.clone();
+                    tokio::spawn(async move {
+                        let mut force = true;
+                        loop {
+                            if install::update_installed(force).await {
+                                agents.refresh_outdated().await;
+                            }
+                            force = false;
+                            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+                        }
+                    });
+                }
                 {
                     let agents = agents.clone();
                     tokio::spawn(async move {
@@ -580,6 +652,12 @@ impl AcpManager {
 /// child (via `kill_on_drop`) and ends the reader tasks.
 struct Conn {
     command_line: String,
+    /// What was actually spawned for `command_line`: for a managed adapter, the path of the
+    /// installed version, so a newer install can be told apart.
+    launch_line: String,
+    /// Where and with what environment it was launched, to relaunch it on a newer adapter.
+    cwd: PathBuf,
+    env: Vec<(String, String)>,
     /// Requested session configuration. A change relaunches the session so every adapter starts
     /// with a deterministic model and reasoning level.
     model: String,
@@ -627,6 +705,25 @@ struct ConnHandles {
     activity: Arc<reaper::Activity>,
     /// Shared with oxi's MCP server in this session: where its evidence tools file captures.
     evidence_dir: PathBuf,
+}
+
+impl ConnHandles {
+    /// In a turn, holding a turn of its own, or answering a request.
+    fn busy(&self) -> bool {
+        self.turn_lock.try_lock().is_err()
+            || !self.held.is_empty()
+            || self.pending.try_lock().map_or(true, |p| !p.is_empty())
+    }
+}
+
+impl Conn {
+    /// A newer version of its managed adapter was installed since it was launched, and nothing
+    /// running in it would be lost by relaunching: no turn, request, or background work.
+    fn outdated(&self) -> bool {
+        install::installed_launch(&self.command_line).is_some_and(|line| line != self.launch_line)
+            && !self.handles.busy()
+            && !self.handles.activity.background()
+    }
 }
 
 /// The event/approval context for the in-flight prompt, shared with the reader task so it can
@@ -767,13 +864,15 @@ async fn ensure_conn(agents: &Agents, spec: &LaunchSpec<'_>) -> Result<ConnHandl
             && c.model == spec.model
             && c.effort == spec.effort
             && c.mcp_servers == mcp_servers
+            && !c.outdated()
         {
             // Under the map lock, so a sweep running now sees it in use.
             c.handles.activity.touch();
             return Ok(c.handles.clone());
         }
     }
-    // A new subprocess (or one whose launch command / model / MCP servers changed): spawn it and
+    // A new subprocess (or one whose launch command / model / MCP servers / adapter version
+    // changed): spawn it and
     // replace any previous entry, whose Conn is dropped here and killed (kill_on_drop). The
     // agent session itself is resumed, so the conversation carries over.
     let conn = spawn_conn(spec, mcp_servers).await?;
@@ -1083,6 +1182,9 @@ async fn spawn_conn(
     workflows::watch(&handles, cwd, command_line);
     Ok(Conn {
         command_line: command_line.to_string(),
+        launch_line,
+        cwd: cwd.to_path_buf(),
+        env: env.to_vec(),
         model: model.to_string(),
         effort: effort.to_string(),
         mcp_servers,

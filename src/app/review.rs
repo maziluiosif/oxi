@@ -17,13 +17,14 @@ const TURN_LINE: &str = "# oxi turn ";
 /// Diff budget for the attachment; bigger files are listed for the reviewer to read itself.
 const REVIEW_DIFF_BYTES: usize = 120_000;
 /// Reviewers offered after the other agent already in the chat, best known first.
-const REVIEWERS: [LlmProviderKind; 6] = [
+const REVIEWERS: [LlmProviderKind; 7] = [
     LlmProviderKind::CodexAcp,
     LlmProviderKind::ClaudeCodeAcp,
     LlmProviderKind::AntigravityAcp,
     LlmProviderKind::CursorAcp,
     LlmProviderKind::CopilotAcp,
     LlmProviderKind::MuseCodeAcp,
+    LlmProviderKind::OpenCodeAcp,
 ];
 
 /// A finished review at the end of the chat: who wrote the changes and who reviewed them.

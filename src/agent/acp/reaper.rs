@@ -69,6 +69,11 @@ impl Activity {
         now.saturating_duration_since(*self.last.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
+    /// Whether the agent started work that keeps running after its turns.
+    pub(super) fn background(&self) -> bool {
+        self.background.load(Ordering::Relaxed)
+    }
+
     /// Record a message from the agent: it is in use, and it may have started background work.
     pub(super) fn note(&self, msg: &Value) {
         self.touch();
@@ -106,7 +111,7 @@ impl Candidate {
             key: key.to_owned(),
             idle: activity.idle(now),
             busy,
-            background: activity.background.load(Ordering::Relaxed),
+            background: activity.background(),
         }
     }
 }
