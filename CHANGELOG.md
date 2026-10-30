@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.33.0] - 2026-10-30
+
+### Added
+- **Scratchpad:** Save scratchpad content as files directly from the editor
+
+### Changed
+- **File handling:** File saves now use atomic writes to prevent data loss on interruption
+- **Remote files:** Improved remote file system operations for better reliability
+
+### Fixed
+- **Authentication:** Removed unnecessary password prompts on macOS
+- **Claude integration:** Fixed token usage reporting
+
+
 ## [1.32.0] - 2026-10-30
 
 ### Added
@@ -1310,7 +1324,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.32.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.33.0...HEAD
+[1.33.0]: https://github.com/maziluiosif/oxi/compare/v1.32.0...v1.33.0
 [1.32.0]: https://github.com/maziluiosif/oxi/compare/v1.31.2...v1.32.0
 [1.31.2]: https://github.com/maziluiosif/oxi/compare/v1.31.1...v1.31.2
 [1.31.1]: https://github.com/maziluiosif/oxi/compare/v1.31.0...v1.31.1
