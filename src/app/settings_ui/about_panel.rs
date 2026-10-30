@@ -265,13 +265,27 @@ fn render_shortcuts(ui: &mut Ui) {
     } else {
         format!("F7 / {shift}F7")
     };
-    let shortcuts: [(String, &str); 35] = [
+    let shortcuts: [(String, &str); 40] = [
         (format!("{cmd}N"), "New chat"),
         (format!("{cmd},"), "Settings"),
         (format!("{cmd}."), "Stop the running reply"),
         ("Enter".into(), "Send message"),
         (format!("{shift}Enter"), "New line in the message"),
         ("↑ / ↓".into(), "Previous / next sent message"),
+        (
+            format!("{cmd}Enter"),
+            "While the agent answers: queue instead of steering (or the reverse)",
+        ),
+        (
+            format!("{cmd}{shift}Enter"),
+            "Steer the first queued message into the reply",
+        ),
+        (format!("{alt}↑"), "Edit the last queued message"),
+        (format!("{cmd}{alt}Enter"), "Send, then start another chat"),
+        (
+            format!("{cmd}{shift}S"),
+            "Stash the draft / bring the last one back",
+        ),
         ("Hold Space".into(), "Dictate (when voice is on)"),
         (format!("{cmd}B"), "Show or hide chats"),
         (format!("{cmd}E"), "Show or hide the file explorer"),

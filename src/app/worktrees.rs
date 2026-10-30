@@ -222,6 +222,7 @@ impl OxiApp {
             active: 0,
             sidebar_folded: false,
             pinned: Vec::new(),
+            archived: Vec::new(),
             folded_groups: Vec::new(),
             worktree,
         });

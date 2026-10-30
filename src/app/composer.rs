@@ -330,6 +330,35 @@ impl OxiApp {
         ui.add_space(COMPOSER_GAP);
     }
 
+    /// What waits on the chat above its text field, scrolling past a third of the window, with
+    /// a hairline under it when there is anything.
+    fn render_composer_tray(&mut self, ui: &mut Ui) {
+        let max_h = (ui.ctx().content_rect().height() * 0.33).clamp(120.0, 320.0);
+        let out = egui::ScrollArea::vertical()
+            .id_salt("composer_tray")
+            .max_height(max_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                self.render_task_panel(ui);
+                self.render_plan_ready_bar(ui);
+                self.render_interrupted_notice(ui);
+                self.render_delegations(ui);
+                self.render_worktree_setup(ui);
+                self.render_review_comments(ui);
+                self.render_queue_panel(ui);
+                self.render_stash(ui);
+            });
+        if out.content_size.y > 0.5 {
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), 7.0), Sense::hover());
+            ui.painter().hline(
+                rect.x_range(),
+                rect.center().y,
+                Stroke::new(1.0, c_border_subtle()),
+            );
+        }
+    }
+
     pub(crate) fn render_composer(&mut self, ui: &mut Ui, column_center_w: f32) {
         let chat_column_max = crate::theme::chat_column_max_width(ui.ctx());
         let pad = ((column_center_w - chat_column_max.min(column_center_w)) * 0.5).max(0.0);
@@ -341,6 +370,10 @@ impl OxiApp {
         // Focus state persists in egui memory across frames, so reading it here (before
         // the TextEdit runs) is exact, not one frame late.
         let composer_focused = ui.ctx().memory(|m| m.has_focus(input_id));
+        if composer_focused {
+            self.handle_queue_keys(ui);
+            self.handle_stash_key(ui);
+        }
         let focus_t =
             ui.ctx()
                 .animate_bool_with_time(Id::new("composer_focus_anim"), composer_focused, 0.12);
@@ -368,14 +401,10 @@ impl OxiApp {
                         bottom: 6,
                     })
                     .show(ui, |ui| {
-                        // === Agent checklist and plan hand-off ===
-                        self.render_task_panel(ui);
-                        self.render_plan_ready_bar(ui);
-                        self.render_interrupted_notice(ui);
-                        self.render_delegations(ui);
-                        self.render_worktree_setup(ui);
-                        self.render_review_comments(ui);
-                        self.render_queue_panel(ui);
+                        // === Tray: checklist, plan hand-off, recovery, delegated tasks, work
+                        // tree setup, review comments, queue. Capped in height so the text
+                        // field never gets pushed out of reach.
+                        self.render_composer_tray(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
                         self.render_next_agent_hint(ui);
@@ -476,9 +505,20 @@ impl OxiApp {
                             }
                             let can_send_now = !self.conv.composer.input.trim().is_empty()
                                 || !self.conv.composer.pending_images.is_empty()
-                                || !self.conv.composer.pending_texts.is_empty();
+                                || !self.conv.composer.pending_texts.is_empty()
+                                || self.has_review_comments();
                             if can_send_now {
+                                let (command, alt) =
+                                    ui.input(|i| (i.modifiers.command, i.modifiers.alt));
+                                // Cmd/Ctrl+Alt+Enter: send, then start another chat right away.
+                                self.conv.composer.alternate_send = command && !alt;
                                 self.send_message();
+                                if command && alt && self.conv.composer.input.is_empty() {
+                                    self.new_chat();
+                                    self.notify_composer(
+                                        "Sent. The previous chat keeps working in the sidebar.",
+                                    );
+                                }
                             }
                         }
                         if te_output.response.has_focus() {
@@ -491,7 +531,8 @@ impl OxiApp {
                         // text editor's height and the selected provider's label length.
                         let can_send = !self.conv.composer.input.trim().is_empty()
                             || !self.conv.composer.pending_images.is_empty()
-                            || !self.conv.composer.pending_texts.is_empty();
+                            || !self.conv.composer.pending_texts.is_empty()
+                            || self.has_review_comments();
                         controls_rect = ui.scope(|ui| {
                             ui.spacing_mut().interact_size.y = CONTROL_HEIGHT;
                             self.render_controls_row(ui, can_send, composer_focused);
@@ -650,13 +691,21 @@ impl OxiApp {
             let active_session_streaming = self.active_waiting_response();
             // While streaming, a typed message is queued instead of replacing Stop.
             let queue_instead = active_session_streaming && can_send;
+            let steers = self.conv.settings.steer_follow_ups
+                && self
+                    .run_state(self.active_session_key())
+                    .is_some_and(|run| run.steer.is_some());
             let (fill, fg, enabled, icon, hover) = if queue_instead {
                 (
                     c_accent(),
                     crate::theme::c_on_accent(),
                     true,
                     ICON_SEND,
-                    "Queue message — sent when the current response finishes",
+                    if steers {
+                        "Send into the response in progress (Cmd/Ctrl+Enter: queue it instead)"
+                    } else {
+                        "Queue message — sent when the current response finishes"
+                    },
                 )
             } else if active_session_streaming {
                 (

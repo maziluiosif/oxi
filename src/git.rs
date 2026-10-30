@@ -32,6 +32,9 @@ mod hunk;
 
 #[path = "git/remote.rs"]
 pub mod remote;
+
+#[path = "git/pull_request.rs"]
+pub mod pull_request;
 pub use hunk::{BlockEdit, BlockTarget, DiffBase, diff_texts, splice_lines, text_hunks};
 pub use system::version as system_git_version;
 

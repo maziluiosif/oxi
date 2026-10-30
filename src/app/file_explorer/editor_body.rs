@@ -193,6 +193,15 @@ impl OxiApp {
         let diff_inline = diff_mode.as_ref().is_some_and(|(inline, ..)| *inline);
         let diff_scroll_request = diff_mode.as_ref().and_then(|(_, _, request, _)| *request);
         let diff_decor = diff_mode.and_then(|(_, _, _, decor)| decor);
+        // Review comments waiting to be sent, marked on the lines they cover.
+        let comment_lines: Vec<(usize, usize, String)> = if diff_decor.is_some() {
+            self.comments_on(&relative_path)
+                .into_iter()
+                .filter_map(|c| c.new_lines.map(|(a, b)| (a, b, c.note.clone())))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let disk_git_line_changes = self
             .git_gutter_line_changes(&relative_path)
             .cloned()
@@ -1232,6 +1241,36 @@ impl OxiApp {
                                 })
                                 .collect();
                             diff.frame.new_clip = clip;
+                            // A light accent wash over the commented lines, with a bar at the
+                            // text's left edge (the gutter is painted over anything left of it).
+                            let painter = ui.painter().with_clip_rect(clip);
+                            for (n, (first, last, note)) in comment_lines.iter().enumerate() {
+                                let top = rows.top(first.saturating_sub(1));
+                                let bottom = rows.top(*last).max(top + rows.row_h);
+                                if bottom < clip.top() || top > clip.bottom() {
+                                    continue;
+                                }
+                                let lines = egui::Rect::from_min_max(
+                                    egui::pos2(clip.left(), top),
+                                    egui::pos2(clip.right(), bottom),
+                                );
+                                painter.rect_filled(
+                                    lines,
+                                    0.0,
+                                    crate::theme::c_accent().gamma_multiply(0.10),
+                                );
+                                let bar = egui::Rect::from_min_max(
+                                    egui::pos2(clip.left(), top),
+                                    egui::pos2(clip.left() + 3.0, bottom),
+                                );
+                                painter.rect_filled(bar, 0.0, crate::theme::c_accent());
+                                ui.interact(
+                                    bar.expand2(egui::vec2(4.0, 0.0)),
+                                    ui.id().with(("diff_comment_marker", index, n)),
+                                    egui::Sense::hover(),
+                                )
+                                .on_hover_text(format!("Review comment: {note}"));
+                            }
                             diff.frame.zone_numbers = if diff_inline {
                                 decor.zone_numbers(&rows, clip.y_range())
                             } else {

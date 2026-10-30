@@ -291,6 +291,12 @@ const ENTRIES: &[Entry] = &[
         "Keep the computer awake while an agent works",
         "sleep caffeinate power",
     ),
+    (
+        SettingsTab::Appearance,
+        "While agents work",
+        "Send follow-ups into the running response",
+        "steer queue follow up interrupt mid-turn",
+    ),
     // About
     (
         SettingsTab::About,

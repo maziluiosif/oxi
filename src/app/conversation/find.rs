@@ -91,6 +91,15 @@ impl OxiApp {
         find.reveal = true;
     }
 
+    /// Open the find bar on `query`, to show where a search result matched.
+    pub(crate) fn find_in_chat(&mut self, query: &str) {
+        self.open_chat_find();
+        if let Some(find) = self.conv.transcript.find.as_mut() {
+            find.query = query.to_owned();
+            find.current = 0;
+        }
+    }
+
     pub(crate) fn close_chat_find(&mut self) {
         self.conv.transcript.find = None;
         self.focus_active_view_next_frame();

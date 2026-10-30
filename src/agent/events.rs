@@ -89,6 +89,12 @@ pub enum AgentEvent {
     /// A message the user sent into the running turn reached the agent (see
     /// [`crate::agent::steer`]); the rest of the turn answers it.
     Steered(String),
+    /// The running turn takes messages mid-turn (sent before the first [`AgentEvent::Steered`]
+    /// for agents that only tell once they are connected, like ACP adapters).
+    SteerAvailable,
+    /// A message sent into the running turn did not reach it (the turn had just ended, or the
+    /// agent refused it); it goes back to the front of the chat's queue.
+    SteerReturned,
     /// A command PTY to attach to this workspace's terminal panel.
     AcpTerminal(crate::terminal::PendingTerminal),
     TextStart,

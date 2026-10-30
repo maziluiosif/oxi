@@ -306,19 +306,20 @@ impl OxiApp {
                 return true;
             }
             // While searching, every match is listed and date groups ignore their fold.
-            let group_folded = !folded
-                && !searching
-                && self.conv.workspaces[wi]
-                    .folded_groups
-                    .iter()
-                    .any(|key| key == group.key());
+            // The Archived group is folded unless its key is stored (it starts folded).
+            let key_stored = self.conv.workspaces[wi]
+                .folded_groups
+                .iter()
+                .any(|key| key == group.key());
+            let group_folded =
+                !folded && !searching && key_stored != (group == super::SidebarGroup::Archived);
             // Headers of a folded group still show (that is how it unfolds); while searching
             // only groups with a match get one.
             if !folded && !searching && last_group != Some(group) {
                 last_group = Some(group);
                 if sidebar_group_header(ui, group, group_folded, group_counts[&group]) {
                     let list = &mut self.conv.workspaces[wi].folded_groups;
-                    if group_folded {
+                    if key_stored {
                         list.retain(|key| key != group.key());
                     } else {
                         list.push(group.key().to_string());
@@ -354,7 +355,9 @@ impl OxiApp {
             // Rows are all the same height: once one has been measured, a row scrolled out
             // of view only reserves its space. Long histories otherwise cost a full layout
             // of every row on every frame (~1.5 ms at 400 chats).
+            // Search results show an excerpt under some rows, so they are laid out in full.
             if let Some(advance) = row_advance
+                && !searching
                 && self.conv.sidebar.renaming_session != Some((wi, si))
                 && !ui.is_rect_visible(egui::Rect::from_min_size(
                     ui.cursor().min,
@@ -487,6 +490,10 @@ impl OxiApp {
                                     self.focus_split_partner();
                                 } else {
                                     self.select_session_in_workspace(wi, si);
+                                    // Opened from a search: show where it matched.
+                                    if searching && self.content_search_hit(wi, si, q).is_some() {
+                                        self.find_in_chat(q);
+                                    }
                                 }
                             }
                             response.context_menu(|ui| {
@@ -505,11 +512,36 @@ impl OxiApp {
                                     let pinned = self.conv.workspaces[wi].pinned.contains(&file);
                                     let label = if pinned { "Unpin chat" } else { "Pin chat" };
                                     if ui.button(label).clicked() {
-                                        let list = &mut self.conv.workspaces[wi].pinned;
+                                        let ws = &mut self.conv.workspaces[wi];
                                         if pinned {
-                                            list.retain(|f| f != &file);
+                                            ws.pinned.retain(|f| f != &file);
                                         } else {
-                                            list.push(file);
+                                            ws.archived.retain(|f| f != &file);
+                                            ws.pinned.push(file.clone());
+                                        }
+                                        self.sync_workspaces_to_settings();
+                                    }
+                                    let archived =
+                                        self.conv.workspaces[wi].archived.contains(&file);
+                                    let label = if archived {
+                                        "Unarchive chat"
+                                    } else {
+                                        "Archive chat"
+                                    };
+                                    if ui
+                                        .button(label)
+                                        .on_hover_text(
+                                            "Archived chats are kept, listed under Archived at \
+                                             the end; sending a message brings one back",
+                                        )
+                                        .clicked()
+                                    {
+                                        let ws = &mut self.conv.workspaces[wi];
+                                        if archived {
+                                            ws.archived.retain(|f| f != &file);
+                                        } else {
+                                            ws.pinned.retain(|f| f != &file);
+                                            ws.archived.push(file);
                                         }
                                         self.sync_workspaces_to_settings();
                                     }
@@ -609,6 +641,26 @@ impl OxiApp {
                 });
             });
             row_advance.get_or_insert(ui.cursor().min.y - row_top);
+            if searching && let Some(excerpt) = self.content_search_hit(wi, si, q) {
+                let response = ui
+                    .horizontal(|ui| {
+                        ui.add_space(14.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(excerpt).size(FS_TINY).color(c_text_muted()),
+                            )
+                            .truncate()
+                            .sense(Sense::click()),
+                        )
+                        .on_hover_text(excerpt)
+                    })
+                    .inner;
+                if response.clicked() {
+                    self.select_session_in_workspace(wi, si);
+                    self.find_in_chat(q);
+                    return true;
+                }
+            }
             self.render_sidebar_subagents(ui, self.session_key(wi, si));
             if sidebar_changed {
                 return true;
@@ -616,7 +668,14 @@ impl OxiApp {
         }
         // A folded workspace with no exceptional rows is intentionally just its header;
         // "No chats yet" would otherwise make folding look as if the workspace were empty.
-        if visible_sessions == 0 && !hidden_by_group_fold && (!folded || !q.is_empty()) {
+        // An empty work tree is just its header too: it sits under its repository, where a
+        // line per empty work tree only adds noise.
+        let empty_worktree = self.conv.workspaces[wi].worktree.is_some() && q.is_empty();
+        if visible_sessions == 0
+            && !hidden_by_group_fold
+            && !empty_worktree
+            && (!folded || !q.is_empty())
+        {
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
                 let msg = if q.is_empty() {

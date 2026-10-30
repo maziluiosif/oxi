@@ -10,6 +10,7 @@ use crate::settings::AppSettings;
 
 mod activity_window;
 mod agent_handlers;
+mod chat_search;
 mod chat_status;
 mod chat_sync;
 mod chores;
@@ -27,6 +28,8 @@ mod drafts;
 mod eframe_app;
 mod evidence_card;
 mod file_explorer;
+mod pull_requests;
+mod stash;
 pub(crate) use file_explorer::{search_json, workspace_file_list};
 mod focus_mode;
 mod fork;
@@ -114,6 +117,8 @@ pub struct OxiApp {
     keep_awake: crate::keep_awake::KeepAwake,
     /// Unsent composer text, saved for the next start (see [`drafts`]).
     drafts: drafts::DraftStore,
+    content_search: chat_search::ContentSearch,
+    pull_requests: pull_requests::PullRequests,
     /// Set while Distraction Free mode hides the panels, with the ones it hid.
     distraction_free: Option<focus_mode::PanelsBefore>,
     /// Connections to the hosts of remote workspaces (see [`remote`]).
@@ -176,6 +181,7 @@ impl OxiApp {
             active: 0,
             sidebar_folded: entry.folded,
             pinned: entry.pinned.clone(),
+            archived: entry.archived.clone(),
             folded_groups: entry.folded_groups.clone(),
             worktree: (!crate::remote::is_remote(&entry.root_path))
                 .then(|| crate::git::worktree::info(std::path::Path::new(&entry.root_path)))
@@ -195,6 +201,7 @@ impl OxiApp {
                     root_path: root_path.clone(),
                     folded: false,
                     pinned: Vec::new(),
+                    archived: Vec::new(),
                     folded_groups: Vec::new(),
                 }),
             );
@@ -235,6 +242,7 @@ impl OxiApp {
                 no_workspace,
                 composer: state::ComposerState {
                     focus_next_frame: true,
+                    stash: stash::load(),
                     ..Default::default()
                 },
                 sidebar: state::SidebarState {
@@ -259,7 +267,7 @@ impl OxiApp {
                 transcript: state::TranscriptState::default(),
                 worktree_ops: Vec::new(),
                 worktree_setups: Vec::new(),
-                review_comments: Vec::new(),
+                review_comments: review_comments::load_comments(),
                 delegations: Vec::new(),
                 comment_draft: None,
                 setup_script_editor: None,
@@ -320,6 +328,8 @@ impl OxiApp {
             chat_watch: Default::default(),
             keep_awake: Default::default(),
             drafts: Default::default(),
+            content_search: Default::default(),
+            pull_requests: Default::default(),
             distraction_free: None,
             context_overhead_cache: Default::default(),
             remote: Default::default(),
@@ -663,6 +673,7 @@ impl OxiApp {
             active: 0,
             sidebar_folded: false,
             pinned: Vec::new(),
+            archived: Vec::new(),
             folded_groups: Vec::new(),
             worktree: None,
         }

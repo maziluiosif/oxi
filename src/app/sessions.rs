@@ -181,6 +181,7 @@ impl OxiApp {
             active: 0,
             sidebar_folded: false,
             pinned: Vec::new(),
+            archived: Vec::new(),
             folded_groups: Vec::new(),
             worktree,
         });
@@ -241,6 +242,7 @@ impl OxiApp {
                 root_path: w.root_path.clone(),
                 folded: w.sidebar_folded,
                 pinned: w.pinned.clone(),
+                archived: w.archived.clone(),
                 folded_groups: w.folded_groups.clone(),
             })
             .collect();

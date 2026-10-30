@@ -106,6 +106,11 @@ pub struct AppSettings {
     /// Hold off idle sleep while an agent works, so a long unattended turn is not frozen.
     #[serde(default = "default_true")]
     pub keep_awake_while_working: bool,
+    /// A message sent while the chat answers goes into the running turn (when its agent takes
+    /// messages mid-turn) instead of waiting for the response to finish. Cmd/Ctrl+Enter does the
+    /// other.
+    #[serde(default = "default_true")]
+    pub steer_follow_ups: bool,
     /// Legacy single approval switch. Migrated in `AppSettings::normalize` and no longer saved.
     #[serde(default, skip_serializing)]
     pub require_approval: Option<bool>,
@@ -351,6 +356,7 @@ impl Default for AppSettings {
             acp_max_live_agents: default_acp_max_live_agents(),
             notify_in_background: true,
             keep_awake_while_working: true,
+            steer_follow_ups: true,
             require_approval: None,
             sidebar_width: default_sidebar_width(),
             terminal_height: default_terminal_height(),

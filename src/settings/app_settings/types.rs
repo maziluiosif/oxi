@@ -196,6 +196,9 @@ pub struct WorkspaceEntry {
     /// Session files pinned to the top of this workspace's chat list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinned: Vec<String>,
+    /// Session files archived: listed under a folded "Archived" group at the end.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived: Vec<String>,
     /// Sidebar date groups ("today", "older", …) folded in this workspace's chat list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folded_groups: Vec<String>,

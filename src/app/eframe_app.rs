@@ -102,6 +102,8 @@ impl eframe::App for OxiApp {
         self.keep_awake
             .set(self.conv.settings.keep_awake_while_working && self.agent_is_working());
         self.persist_drafts(ctx);
+        self.poll_content_search(ctx);
+        self.poll_pull_requests(ctx);
 
         // A focus event runs these checks again when returning to an idle background window.
         if ctx.input(|i| i.focused)
@@ -191,6 +193,7 @@ impl eframe::App for OxiApp {
         self.render_confirm_prompt(ui.ctx());
         self.render_setup_script_editor(ui.ctx());
         self.render_comment_draft(ui.ctx());
+        self.render_pr_dialog(ui.ctx());
         self.render_remote_dialog(ui.ctx());
         self.render_editor_prompt(ui.ctx());
         crate::ui::image_viewer::show(ui.ctx());

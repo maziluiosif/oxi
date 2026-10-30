@@ -23,6 +23,8 @@ pub fn event_to_json(event: &AgentEvent) -> Option<Value> {
         AgentEvent::AgentStart => json!({"type": "agent_start"}),
         AgentEvent::Steered(text) => json!({"type": "steered", "text": text}),
         AgentEvent::AcpTerminal(_) => return None,
+        // Remote chats do not steer: the server's inbox is never written to.
+        AgentEvent::SteerAvailable | AgentEvent::SteerReturned => return None,
         AgentEvent::TextStart => json!({"type": "text_start"}),
         AgentEvent::TextDelta(d) => json!({"type": "text_delta", "d": d}),
         AgentEvent::ThinkingDelta(d) => json!({"type": "thinking_delta", "d": d}),
