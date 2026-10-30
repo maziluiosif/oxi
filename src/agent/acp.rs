@@ -110,7 +110,9 @@ pub use import::{AcpImport, ExternalSession, bind_session, list_sessions, load_s
 
 #[path = "acp/session_info.rs"]
 mod session_info;
-pub use session_info::{defer_title, reported_cost, take_titles as take_agent_titles};
+pub use session_info::{
+    defer_title, has_title as has_agent_title, reported_cost, take_titles as take_agent_titles,
+};
 
 #[path = "acp/update_events.rs"]
 mod update_events;

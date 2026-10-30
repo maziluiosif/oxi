@@ -79,6 +79,11 @@ pub fn take_titles() -> Vec<(String, String)> {
     })
 }
 
+/// Whether the agent sent `session_key` a title the UI has not applied yet.
+pub fn has_title(session_key: &str) -> bool {
+    with(|info| info.get(session_key).is_some_and(|i| i.title.is_some()))
+}
+
 /// Put back a title the UI could not apply yet (the chat is answering).
 pub fn defer_title(session_key: &str, title: String) {
     with(|info| {
@@ -151,7 +156,9 @@ mod tests {
             .collect();
         assert_eq!(taken, vec![(key.to_owned(), "Fix login".to_owned())]);
         assert!(take_titles().iter().all(|(k, _)| k != key));
+        assert!(!has_title(key));
         defer_title(key, "Fix login".into());
+        assert!(has_title(key));
         assert!(take_titles().iter().any(|(k, _)| k == key));
         forget(key);
     }
