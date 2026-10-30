@@ -88,6 +88,8 @@ pub struct AgentRunRequest {
     /// Evidence mode: the change is to be proven with oxi's evidence tools.
     pub evidence_mode: crate::evidence::Mode,
     pub undo_journal: UndoJournal,
+    /// Messages the user sends into the turn (oxi's own agent loop only).
+    pub steer: crate::agent::steer::SteerInbox,
 }
 
 /// Spawns agent runs on the app-wide runtime ([`crate::runtime`]).
@@ -137,6 +139,7 @@ fn spawn_agent_attempt(
             plan_mode,
             evidence_mode,
             undo_journal,
+            steer,
         } = request;
 
         let cwd_ref = cwd.as_path();
@@ -273,6 +276,9 @@ fn spawn_agent_attempt(
             undo_journal: Some(undo_journal),
             subagent: None,
             evidence,
+            // Delegated tasks run as chats of the app (not of a headless server).
+            delegation: crate::delegation::available()
+                .then(|| crate::delegation::dir_for(&acp_session_key)),
         };
         let mut gate = ApprovalGate::new(
             ApprovalPolicy {
@@ -324,6 +330,7 @@ fn spawn_agent_attempt(
                     effort_override,
                     context_char_budget: context_budget,
                     tools_chars,
+                    steer: Some(&steer),
                 },
                 &mut messages,
                 &tools,
@@ -402,7 +409,23 @@ async fn report_acp_turn_changes(
             }
         }
     };
-    if let Some(changes) = changes {
+    if let Some(mut changes) = changes {
+        // The card's file list, computed here once rather than by whoever shows the turn.
+        let (repo, before, after) = (
+            std::path::PathBuf::from(&changes.repo),
+            changes.before.clone(),
+            changes.after.clone(),
+        );
+        changes.files = if before == after {
+            Some(Vec::new())
+        } else {
+            tokio::task::spawn_blocking(move || {
+                crate::git::checkpoint::changed_files(&repo, &before, &after)
+            })
+            .await
+            .ok()
+            .and_then(Result::ok)
+        };
         let _ = tx.send(AgentEvent::TurnChanges(Box::new(changes)));
     }
 }

@@ -66,6 +66,10 @@ impl eframe::App for OxiApp {
         self.drain_agent(ctx);
         self.drain_models(ctx);
         self.drain_worktree_ops(ctx);
+        self.drain_worktree_setups(ctx);
+        self.poll_delegations(ctx);
+        self.drain_turn_changes();
+        self.drain_rewind_jobs();
         self.drain_chores(ctx);
         if let Some(command) = crate::ui::messages::take_terminal_command(ctx) {
             self.open_command_in_terminal(ctx, &command);
@@ -80,6 +84,7 @@ impl eframe::App for OxiApp {
         self.drain_update_check(ctx);
         self.drain_update_install();
         self.bind_git_ctx(ctx);
+        super::delegation::watch(ctx);
         self.ensure_active_models_fetched(ctx);
         self.drain_git(ctx);
         self.drain_commit_gen(ctx);
@@ -184,6 +189,8 @@ impl eframe::App for OxiApp {
 
         // Shared destructive-action confirmation modal, on top of everything.
         self.render_confirm_prompt(ui.ctx());
+        self.render_setup_script_editor(ui.ctx());
+        self.render_comment_draft(ui.ctx());
         self.render_remote_dialog(ui.ctx());
         self.render_editor_prompt(ui.ctx());
         crate::ui::image_viewer::show(ui.ctx());

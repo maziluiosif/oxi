@@ -11,6 +11,15 @@ pub fn tool_definitions_json(enabled: &[bool], bash_timeout_cap_secs: u32) -> Ve
             continue;
         }
         let def = match *name {
+            "delegate_task" | "task_status" | "task_cancel" => {
+                match crate::delegation::tool_definitions()
+                    .into_iter()
+                    .find(|d| d["function"]["name"] == *name)
+                {
+                    Some(def) => def,
+                    None => continue,
+                }
+            }
             "read" => serde_json::json!({
                 "type": "function",
                 "function": {

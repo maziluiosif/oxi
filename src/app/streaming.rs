@@ -16,6 +16,8 @@ use crate::session_store;
 
 impl OxiApp {
     pub(crate) fn send_message(&mut self) {
+        // Diff comments go out with the next message the user sends.
+        self.attach_review_comments();
         if self.conv.composer.editing_last_prompt.is_some() {
             self.submit_edited_last_prompt();
         } else {
@@ -35,15 +37,7 @@ impl OxiApp {
             );
             return;
         }
-        let Some(journal) = self.run_state(key).and_then(|run| run.undo_journal.clone()) else {
-            self.notify_composer("This older response has no restorable file checkpoint.");
-            return;
-        };
-        if let Some(reason) = journal
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .unavailable_reason()
-        {
+        if let Err(reason) = self.last_turn_rollback(key) {
             self.notify_composer(format!("Edit & retry is unavailable: {reason}"));
             return;
         }
@@ -102,18 +96,6 @@ impl OxiApp {
         {
             return;
         }
-        let journal = self.run_state(key).and_then(|r| r.undo_journal.clone());
-        if let Some(journal) = journal {
-            let root = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
-            if let Err(e) = journal
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .restore(&root)
-            {
-                self.notify_composer(format!("Cannot restore this response: {e}"));
-                return;
-            }
-        }
         let Some(user_idx) = self
             .active_session()
             .messages
@@ -122,11 +104,73 @@ impl OxiApp {
         else {
             return;
         };
+        let restored = self.last_turn_rollback(key).and_then(|files| {
+            let root = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
+            if let Some(repo) = &files.repo {
+                crate::git::checkpoint::restore_turns(repo, &files.turns, None)?;
+            }
+            match &files.journal {
+                Some(journal) => journal
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .restore(&root),
+                None => Ok(()),
+            }
+        });
+        if let Err(e) = restored {
+            self.notify_composer(format!("Cannot restore this response: {e}"));
+            return;
+        }
         self.active_session_mut().messages.truncate(user_idx);
         self.invalidate_wire_cache(key);
         self.reset_acp_session(key);
         self.conv.composer.editing_last_prompt = None;
         self.send_message_opts(true);
+    }
+
+    /// How the files of `key`'s latest response can be put back for Edit & retry: from the
+    /// in-memory journal of the run, or (also after a restart) from the snapshots saved with
+    /// the turn. `Err` says why they can't.
+    pub(crate) fn last_turn_rollback(
+        &self,
+        key: SessionKey,
+    ) -> Result<super::rewind::RewindFiles, String> {
+        if let Some(journal) = self
+            .run_state(key)
+            .and_then(|run| run.undo_journal.as_ref())
+            && let Some(reason) = journal
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .unavailable_reason()
+        {
+            return Err(reason.to_string());
+        }
+        let Some(user_idx) = self
+            .session_by_key(key)
+            .messages
+            .iter()
+            .rposition(|m| m.role == MsgRole::User && !m.is_summary)
+        else {
+            return Err("there is no prompt to edit".into());
+        };
+        if self.run_state(key).is_some_and(|run| run.steered) {
+            return Err(
+                "messages were sent into this response; rewind from its first message instead"
+                    .into(),
+            );
+        }
+        let files = self.rewind_files(key, user_idx);
+        if files.unrestorable > 0 {
+            return Err(
+                "the response changed files without a snapshot to restore them from".into(),
+            );
+        }
+        // A remote chat's files are restored on its host: use Rewind, which waits for it off
+        // the UI thread.
+        if self.is_remote_key(key) && files.any() {
+            return Err("in a remote chat, use Rewind to here from the message's menu".into());
+        }
+        Ok(files)
     }
 
     /// Index of the most recent real (non-summary) user message in the active chat.
@@ -253,16 +297,23 @@ impl OxiApp {
                 super::compaction::parse_slash_command(&text),
                 Some(super::compaction::SlashCommand::Evidence(None))
             );
+        // A new work tree still being set up: the agent starts once setup is done.
+        let setup_holds = self.setup_holding_agent(key.workspace_idx).is_some();
+        if setup_holds {
+            self.notify_composer("Queued: the agent starts once the work tree setup finishes.");
+        }
         if !live_evidence_toggle
-            && self
-                .run_state(key)
-                .is_some_and(|state| state.waiting_response)
+            && (setup_holds
+                || self
+                    .run_state(key)
+                    .is_some_and(|state| state.waiting_response))
         {
             self.push_input_history(&text);
             self.conv.composer.history_index = None;
             self.conv.composer.history_draft.clear();
             let queued = self.take_composer_payload();
             self.run_state_mut(key).queued.push_back(queued);
+            self.persist_queue(key);
             return;
         }
 
@@ -614,6 +665,29 @@ impl OxiApp {
         let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
         let evidence_mode = self.run_state_mut(key).evidence_mode.clone();
         self.run_state_mut(key).last_turn_planned = plan_mode;
+        // What the turn starts goes on disk, so a restart can tell what was lost with it.
+        // A journal still held by an earlier turn that ended without its end being seen is
+        // closed first (it holds the file's lock).
+        if let Some(journal) = self.run_state_mut(key).journal.take() {
+            journal.end(&[]);
+        }
+        if let Some(file) = session_file.as_deref() {
+            let prompt = chat.last().map(|m| m.text.clone()).unwrap_or_default();
+            let journal =
+                crate::session_store::run_journal::TurnJournal::start(file, &prompt, None);
+            let run = self.run_state_mut(key);
+            run.journal = journal;
+            run.interrupted = None;
+        }
+        self.persist_queue(key);
+        // ACP agents run their own loop: there is nothing to hand a message to mid-turn.
+        let steer = crate::agent::steer::SteerInbox::default();
+        let steerable = !session_config.provider.is_acp();
+        {
+            let run = self.run_state_mut(key);
+            run.steer = steerable.then(|| steer.clone());
+            run.steered = false;
+        }
         let request = AgentRunRequest {
             settings,
             tunnels: self.tunnels.clone(),
@@ -629,6 +703,7 @@ impl OxiApp {
             plan_mode,
             evidence_mode,
             undo_journal,
+            steer,
         };
         let _join = spawn_agent_run(&self.agent_executor, request, tx);
         let run = self.run_state_mut(key);
@@ -645,24 +720,16 @@ impl OxiApp {
         let waker = ctx.clone();
         crate::agent::acp::set_autonomous_waker(move || waker.request_repaint());
         self.apply_agent_titles(ctx);
-        let mut delegated_changed = std::collections::HashSet::new();
         for (acp_key, root, params) in crate::agent::acp::take_delegated() {
             if let Some(key) = self.session_key_for_acp(&acp_key) {
                 self.ensure_session_loaded(key);
-                self.session_mut_by_key(key).delegated.apply(&root, &params);
-                delegated_changed.insert(key);
-            }
-        }
-        for key in delegated_changed {
-            if !self.conn.no_session {
-                let root = self.conv.workspaces[key.workspace_idx].root_path.clone();
-                if let Err(e) =
-                    session_store::save_session_messages(&root, self.session_mut_by_key(key))
-                {
-                    log::warn!("saving subagent transcript: {e}");
+                let delegated = &mut self.session_mut_by_key(key).delegated;
+                if delegated.apply(&root, &params) {
+                    delegated.mark_unsaved();
                 }
             }
         }
+        self.save_delegated_chats(ctx);
         for acp_key in crate::agent::acp::pending_autonomous() {
             let Some(key) = self.session_key_for_acp(&acp_key) else {
                 crate::agent::acp::claim_autonomous(&acp_key);
@@ -677,6 +744,39 @@ impl OxiApp {
             }
             crate::agent::acp::claim_autonomous(&acp_key);
             self.start_autonomous_turn(key, acp_key);
+        }
+    }
+
+    /// Write chats whose subagent transcripts changed between turns, at most once per
+    /// [`crate::model::delegated::SAVE_DEBOUNCE`]: a running workflow reports every second, and
+    /// each save rewrites the whole transcript on this thread.
+    fn save_delegated_chats(&mut self, ctx: &egui::Context) {
+        if self.conn.no_session {
+            return;
+        }
+        let mut due = Vec::new();
+        for (wi, workspace) in self.conv.workspaces.iter().enumerate() {
+            for (si, session) in workspace.sessions.iter().enumerate() {
+                match session.delegated.save_wait() {
+                    Some(wait) if wait.is_zero() => due.push(self.session_key(wi, si)),
+                    Some(wait) => ctx.request_repaint_after(wait),
+                    None => {}
+                }
+            }
+        }
+        for key in due {
+            if self.is_remote_key(key) {
+                // The host's server saves a remote chat.
+                self.session_mut_by_key(key).delegated.unsaved_since = None;
+                continue;
+            }
+            let root = self.conv.workspaces[key.workspace_idx].root_path.clone();
+            if let Err(e) =
+                session_store::save_session_messages(&root, self.session_mut_by_key(key))
+            {
+                log::warn!("saving subagent transcript: {e}");
+                self.session_mut_by_key(key).delegated.unsaved_since = None;
+            }
         }
     }
 

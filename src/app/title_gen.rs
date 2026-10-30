@@ -27,7 +27,10 @@ impl OxiApp {
             self.conv.settings.commit_msg_config(),
             TITLE_PROMPT_CHARS,
         );
-        if config.is_acp() || config.provider == crate::settings::LlmProviderKind::Router {
+        // Agents other than Claude Code and Codex have no one-shot CLI to title with.
+        if (config.is_acp() && !crate::agent::cli_complete::supports(config.provider))
+            || config.provider == crate::settings::LlmProviderKind::Router
+        {
             return;
         }
         let root = self.conv.workspaces[key.workspace_idx].root_path.clone();

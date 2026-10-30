@@ -10,11 +10,16 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
 
-/// Keys of the sessions holding updates that no turn has shown yet.
+/// Subagent and workflow notifications that arrived with no turn in flight, as
+/// `(session key, root session id, params)`, for the UI to apply to the parent chat.
 static DELEGATED: Mutex<Vec<(String, String, Value)>> = Mutex::new(Vec::new());
+
+/// Take the subagent notifications received between turns, oldest first.
 pub fn take_delegated() -> Vec<(String, String, Value)> {
     std::mem::take(&mut *DELEGATED.lock().unwrap_or_else(|e| e.into_inner()))
 }
+
+/// Keys of the sessions holding updates that no turn has shown yet.
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Wakes the UI when a session starts holding updates.
@@ -257,21 +262,18 @@ impl Held {
             wake();
             return;
         }
+        // A subagent reporting back (`session_message`) wakes the parent too.
         let starts_cycle = matches!(
             params["update"]["sessionUpdate"].as_str(),
-            Some("session_message")
+            Some(
+                "agent_message_chunk"
+                    | "agent_thought_chunk"
+                    | "tool_call"
+                    | "tool_call_update"
+                    | "plan"
+                    | "session_message"
+            )
         );
-        let starts_cycle = starts_cycle
-            || matches!(
-                params["update"]["sessionUpdate"].as_str(),
-                Some(
-                    "agent_message_chunk"
-                        | "agent_thought_chunk"
-                        | "tool_call"
-                        | "tool_call_update"
-                        | "plan"
-                )
-            );
         {
             let mut updates = self.updates.lock().unwrap_or_else(|e| e.into_inner());
             if !starts_cycle && updates.is_empty() {

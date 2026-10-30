@@ -31,6 +31,7 @@ fn all_enabled() -> ToolEnv {
         undo_journal: None,
         subagent: None,
         evidence: None,
+        delegation: None,
     }
 }
 

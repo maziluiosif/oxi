@@ -438,6 +438,7 @@ pub fn spawn_agent_run(
                     plan_mode: request.plan_mode,
                     evidence_mode: request.evidence_mode.clone(),
                     undo_journal: request.undo_journal.clone(),
+                    steer: request.steer.clone(),
                 },
                 event_tx,
             );

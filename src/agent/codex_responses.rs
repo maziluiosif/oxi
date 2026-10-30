@@ -492,6 +492,7 @@ pub async fn run_codex_responses_loop(
     let env = ctx.env;
     let tx = ctx.tx;
     let cancel = ctx.cancel;
+    let steer = ctx.steer;
     let max_rounds = ctx.max_rounds;
     let gate = &mut *ctx.gate;
     let effort_override = ctx.effort_override;
@@ -504,6 +505,10 @@ pub async fn run_codex_responses_loop(
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
+        }
+        // Messages the user sent into this turn join it before the next request.
+        if round > 0 {
+            super::steer::deliver(steer, messages, tx);
         }
         round += 1;
         if max_rounds != 0 && round > max_rounds {
@@ -811,6 +816,10 @@ pub async fn run_codex_responses_loop(
         {
             continue;
         }
+        // The model answered, but the user wrote to it meanwhile: go on in the same turn.
+        if (max_rounds == 0 || round < max_rounds) && super::steer::waiting(steer) {
+            continue;
+        }
         break;
     }
     Ok(())
@@ -937,6 +946,7 @@ mod tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let mut messages = vec![json!({"role": "user", "content": "write hello.txt"})];
         let tools = vec![json!({
@@ -958,6 +968,7 @@ mod tests {
             effort_override: None,
             context_char_budget: usize::MAX,
             tools_chars: 0,
+            steer: None,
         };
         let result =
             run_codex_responses_loop(&mut ctx, "token", "account", &mut messages, &tools).await;

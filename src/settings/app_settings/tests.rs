@@ -275,11 +275,19 @@ fn tools_enabled_default_all_true() {
 
 #[test]
 fn all_tool_names_has_expected_tools() {
-    assert_eq!(ALL_TOOL_NAMES.len(), 19);
+    assert_eq!(ALL_TOOL_NAMES.len(), 22);
     // Positional flags: new tools are appended after the original ones.
     assert_eq!(
         &ALL_TOOL_NAMES[15..],
-        ["todo_write", "diagnostics", "task", "scratchpad"]
+        [
+            "todo_write",
+            "diagnostics",
+            "task",
+            "scratchpad",
+            "delegate_task",
+            "task_status",
+            "task_cancel"
+        ]
     );
     assert!(ALL_TOOL_NAMES.contains(&"bash"));
     assert!(ALL_TOOL_NAMES.contains(&"codebase_search"));

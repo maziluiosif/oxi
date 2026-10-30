@@ -21,7 +21,11 @@ const TOOL_NAMES: [&str; 3] = [TOOL_NAME, SCRATCHPAD_READ, SCRATCHPAD];
 
 /// The ACP `McpServer` entry that launches this server from the running oxi binary.
 /// `evidence_dir`: the connection's evidence folder, which turns on the evidence tools.
-pub(super) fn acp_entry(evidence_dir: Option<&std::path::Path>) -> Option<Value> {
+/// `delegation_dir`: the chat's delegation mailbox, which turns on the delegation tools.
+pub(super) fn acp_entry(
+    evidence_dir: Option<&std::path::Path>,
+    delegation_dir: Option<&std::path::Path>,
+) -> Option<Value> {
     let exe = std::env::current_exe().ok()?;
     // Test binaries live in `target/<profile>/deps/`; the app binary sits one level up.
     #[cfg(test)]
@@ -29,6 +33,9 @@ pub(super) fn acp_entry(evidence_dir: Option<&std::path::Path>) -> Option<Value>
     let env: Vec<Value> = evidence_dir
         .map(|dir| json!({ "name": crate::evidence::DIR_ENV, "value": dir.to_string_lossy() }))
         .into_iter()
+        .chain(delegation_dir.map(
+            |dir| json!({ "name": crate::delegation::DIR_ENV, "value": dir.to_string_lossy() }),
+        ))
         .collect();
     Some(json!({
         "name": SERVER_NAME,
@@ -134,6 +141,11 @@ fn call_scratchpad(name: &str, args: &Value) -> Result<String, String> {
     ))
 }
 
+/// The chat's delegation mailbox, when oxi handed this server one.
+fn delegation_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os(crate::delegation::DIR_ENV).map(std::path::PathBuf::from)
+}
+
 fn instructions() -> String {
     let mut text = String::from(
         "oxi shows the todo_write checklist live above the user's composer. \
@@ -148,6 +160,12 @@ fn instructions() -> String {
         );
         text.push(' ');
         text.push_str(crate::evidence::tools::INSTRUCTIONS);
+    }
+    if delegation_dir().is_some() {
+        text.push_str(
+            " delegate_task hands a task to another agent (another provider or model) through \
+             oxi; its report comes back to this chat.",
+        );
     }
     text
 }
@@ -195,7 +213,30 @@ fn handle(msg: &Value) -> Option<Value> {
                 tools.push(super::chat_archive::definition());
                 tools.extend(crate::evidence::tools::definitions());
             }
+            if delegation_dir().is_some() {
+                tools.extend(crate::delegation::tool_definitions().iter().map(|def| {
+                    json!({
+                        "name": def["function"]["name"],
+                        "description": def["function"]["description"],
+                        "inputSchema": def["function"]["parameters"],
+                    })
+                }));
+            }
             json!({ "tools": tools })
+        }
+        "tools/call"
+            if msg["params"]["name"]
+                .as_str()
+                .is_some_and(|name| crate::delegation::NAMES.contains(&name)) =>
+        {
+            let name = msg["params"]["name"].as_str().unwrap_or_default();
+            let dir = delegation_dir();
+            let (text, is_error) =
+                match crate::delegation::call(dir.as_deref(), name, &msg["params"]["arguments"]) {
+                    Ok(text) => (text, false),
+                    Err(e) => (e, true),
+                };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
         }
         "tools/call" if msg["params"]["name"] == TOOL_NAME => {
             let args = &msg["params"]["arguments"];

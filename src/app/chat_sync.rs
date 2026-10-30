@@ -282,7 +282,7 @@ impl OxiApp {
 
     /// The chat is in use here: a turn is streaming or about to, it is being compacted, or its
     /// last prompt is being edited. Its file is this app's to write.
-    pub(super) fn chat_is_busy(&self, key: SessionKey) -> bool {
+    pub(crate) fn chat_is_busy(&self, key: SessionKey) -> bool {
         self.run_state(key)
             .is_some_and(|run| run.waiting_response || run.agent_rx.is_some())
             || self.compaction_active_for(key)

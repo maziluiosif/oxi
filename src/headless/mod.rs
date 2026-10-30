@@ -100,6 +100,8 @@ struct Prompt {
     attachments: Vec<UserAttachment>,
     plan: Option<bool>,
     evidence: Option<bool>,
+    /// The client's id for this request, so a retransmission is recognized.
+    request: Option<String>,
 }
 
 struct Chat {
@@ -117,6 +119,8 @@ struct Chat {
     dirty: bool,
     /// The session file's mtime when this process last read or wrote it.
     disk_mtime: Option<SystemTime>,
+    /// What the running turn started, on disk (see `session_store::run_journal`).
+    journal: Option<session_store::run_journal::TurnJournal>,
 }
 
 impl Chat {
@@ -133,6 +137,7 @@ impl Chat {
             terminals: Vec::new(),
             dirty: false,
             disk_mtime: None,
+            journal: None,
         }
     }
 
@@ -164,6 +169,32 @@ impl Chat {
 
 fn file_mtime(path: &str) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Show in `chat` (file `id`) a turn an earlier server process was running when it went away,
+/// with what was queued behind it. Nothing is resent.
+fn recover_interrupted(chat: &mut Chat, id: &str) {
+    let Some(recovery) = session_store::run_journal::recover(id) else {
+        return;
+    };
+    let Some(interrupted) = recovery.interrupted else {
+        return;
+    };
+    let messages = &mut chat.session.messages;
+    if !session_store::run_journal::mark_interrupted(messages, &interrupted) {
+        return;
+    }
+    if !recovery.queued.is_empty()
+        && let Some(reply) = messages.last_mut()
+    {
+        reply.append_answer(&format!(
+            "[Interrupted] Not sent: {}\n",
+            recovery.queued.join(" · ")
+        ));
+    }
+    if let Err(e) = chat.save() {
+        log::warn!("headless: saving the interrupted turn of {id}: {e}");
+    }
 }
 
 fn empty_session(title: String, config: SessionConfig) -> Session {
@@ -302,7 +333,12 @@ struct Server {
     idle_since: Option<Instant>,
     last_disk_check: Instant,
     keep_awake: crate::keep_awake::KeepAwake,
+    /// Recent `prompt.send` request ids and the chat each went to, newest last.
+    receipts: VecDeque<(String, String)>,
 }
+
+/// `prompt.send` request ids remembered in memory.
+const MAX_RECEIPTS: usize = 256;
 
 impl Server {
     fn new(tx: Sender<Input>, executor: AgentExecutor, daemon: bool) -> Self {
@@ -330,6 +366,7 @@ impl Server {
             idle_since: None,
             last_disk_check: Instant::now(),
             keep_awake: Default::default(),
+            receipts: VecDeque::new(),
         }
     }
 
@@ -403,18 +440,20 @@ impl Server {
         let _ = writer.send(message.to_string().into());
     }
 
-    /// A chat runs or has prompts waiting.
+    /// A chat runs, has prompts waiting, or has subagents still working after its turn.
     fn busy(&self) -> bool {
-        self.chats
-            .values()
-            .any(|chat| chat.run.is_some() || !chat.queued.is_empty())
+        self.chats.values().any(|chat| {
+            chat.run.is_some() || !chat.queued.is_empty() || chat.session.delegated.working()
+        })
     }
 
-    /// A turn is running and not stopped on an approval prompt (see `OxiApp::agent_is_working`).
+    /// A turn or a chat's background subagents are running and not stopped on an approval
+    /// prompt (see `OxiApp::agent_is_working`).
     fn working(&self) -> bool {
-        self.chats
-            .values()
-            .any(|chat| chat.run.is_some() && chat.pending_approval.is_none())
+        self.chats.values().any(|chat| {
+            (chat.run.is_some() || chat.session.delegated.working())
+                && chat.pending_approval.is_none()
+        })
     }
 
     /// The stdio server stops with its editor; the daemon once it was idle for a while.
@@ -652,6 +691,7 @@ impl Server {
                 session_store::load_session(id).ok_or_else(|| format!("Chat not found: {id}"))?;
             let mut chat = Chat::new(root.to_string(), session);
             chat.disk_mtime = file_mtime(id);
+            recover_interrupted(&mut chat, id);
             self.chats.insert(id.to_string(), chat);
         }
         Ok(self.chats.get_mut(id).expect("chat just inserted"))
@@ -857,9 +897,26 @@ impl Server {
                 .unwrap_or_default(),
             plan: params["plan"].as_bool(),
             evidence: params["evidence"].as_bool(),
+            request: params["requestId"]
+                .as_str()
+                .filter(|r| !r.is_empty())
+                .map(str::to_owned),
         };
         if prompt.text.is_empty() && prompt.attachments.is_empty() {
             return Err("Nothing to send".into());
+        }
+        // A retransmission of a prompt already accepted (the reply was lost with the
+        // connection): report that chat instead of running the prompt a second time.
+        if let Some(request) = prompt.request.as_deref()
+            && let Some(chat) = self.received(request, params["chat"].as_str())
+        {
+            let state = self.chats.get(&chat);
+            return Ok(json!({
+                "chat": chat,
+                "duplicate": true,
+                "running": state.is_some_and(|c| c.run.is_some()),
+                "queued": state.map_or(0, |c| c.queued.len()),
+            }));
         }
         let chat = match params["chat"].as_str() {
             Some(id) => {
@@ -867,8 +924,12 @@ impl Server {
                 let chat = self.chats.get_mut(id).expect("chat loaded");
                 remote_app::check_app_history(chat, params)?;
                 if chat.run.is_some() {
+                    let request = prompt.request.clone();
                     chat.queued.push_back(prompt);
                     let queued = chat.queued.len();
+                    if let Some(request) = request {
+                        self.remember_request(request, id.to_string());
+                    }
                     self.notify(
                         "turn",
                         json!({"chat": id, "running": true, "queued": queued}),
@@ -885,7 +946,11 @@ impl Server {
         };
         let mut chat = chat;
         self.apply_app_prompt_params(&mut chat, params)?;
+        let request = prompt.request.clone();
         let id = self.start_turn(chat, prompt)?;
+        if let Some(request) = request {
+            self.remember_request(request, id.clone());
+        }
         let session = &self.chats[&id].session;
         let title = session.title.clone();
         // The prompt as stored here, with its @mentions expanded, for the app's copy.
@@ -894,6 +959,28 @@ impl Server {
             user.map(|i| crate::remote::protocol::messages_to_json(&session.messages[i..i + 1]));
         self.notify("chats_changed", json!({"root": root}));
         Ok(json!({"chat": id, "title": title, "queued": 0, "user_index": user, "user": stored}))
+    }
+
+    fn remember_request(&mut self, request: String, chat: String) {
+        if self.receipts.len() == MAX_RECEIPTS {
+            self.receipts.pop_front();
+        }
+        self.receipts.push_back((request, chat));
+    }
+
+    /// The chat request `request` already went to: remembered here, or (after a restart) in
+    /// the journal of `chat`.
+    fn received(&self, request: &str, chat: Option<&str>) -> Option<String> {
+        if let Some((_, chat)) = self.receipts.iter().find(|(r, _)| r == request) {
+            return Some(chat.clone());
+        }
+        let chat = chat?;
+        let queued = self.chats.get(chat).is_some_and(|c| {
+            c.queued
+                .iter()
+                .any(|p| p.request.as_deref() == Some(request))
+        });
+        (queued || session_store::run_journal::has_receipt(chat, request)).then(|| chat.to_string())
     }
 
     fn worker_channel(&self, chat: &str, run: u64) -> Sender<AgentEvent> {
@@ -977,6 +1064,11 @@ impl Server {
             log::warn!("headless: save session: {e}");
         }
         let id = chat.id().expect("saved chat has a file").to_string();
+        chat.journal = session_store::run_journal::TurnJournal::start(
+            &id,
+            &prompt.text,
+            prompt.request.as_deref(),
+        );
 
         let mut settings = self.settings.clone();
         config.apply_to_settings(&mut settings);
@@ -1006,6 +1098,7 @@ impl Server {
             plan_mode: chat.plan_mode,
             evidence_mode: chat.evidence_mode.clone(),
             undo_journal,
+            steer: Default::default(),
         };
         let worker_tx = self.worker_channel(&id, run_id);
         let _join = crate::agent::spawn_agent_run(&self.executor, request, worker_tx);
@@ -1063,7 +1156,6 @@ impl Server {
     /// Show the turns ACP agents started on their own, as soon as each chat is free.
     fn attach_autonomous_turns(&mut self) {
         self.apply_agent_titles();
-        let mut changed = std::collections::HashSet::new();
         for (key, root, params) in crate::agent::acp::take_delegated() {
             self.forward_event(
                 &key,
@@ -1072,16 +1164,10 @@ impl Server {
                     params: params.clone(),
                 },
             );
-            if let Some(chat) = self.chats.get_mut(&key) {
-                chat.session.delegated.apply(&root, &params);
-                changed.insert(key);
-            }
-        }
-        for key in changed {
             if let Some(chat) = self.chats.get_mut(&key)
-                && let Err(e) = chat.save()
+                && chat.session.delegated.apply(&root, &params)
             {
-                log::warn!("saving subagent transcript: {e}");
+                chat.session.delegated.mark_unsaved();
             }
         }
         for key in crate::agent::acp::pending_autonomous() {
@@ -1165,6 +1251,18 @@ impl Server {
                 chat.dirty = true;
             }
             AgentEvent::AgentStart | AgentEvent::AssistantMessageDone => {}
+            AgentEvent::Steered(text) => {
+                // The rest of the turn answers the message sent into it.
+                let route = chat.last_assistant_mut().and_then(|m| {
+                    m.finish_streaming();
+                    m.route.clone()
+                });
+                chat.session.messages.push(ChatMessage::user(&text, &[]));
+                chat.session
+                    .messages
+                    .push(ChatMessage::streaming_assistant(route));
+                chat.dirty = true;
+            }
             AgentEvent::AcpTerminal(pending) => {
                 if let Some(terminal) = pending.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     chat.terminals.push(terminal);
@@ -1186,6 +1284,28 @@ impl Server {
                 }
             }
             AgentEvent::ToolUpdate(update) => {
+                if let Some(journal) = chat.journal.as_mut() {
+                    use crate::model::ToolStatus;
+                    match update.metadata.status {
+                        ToolStatus::Completed | ToolStatus::Failed => journal.tool_done(
+                            &update.tool_call_id,
+                            update.metadata.status == ToolStatus::Failed,
+                        ),
+                        _ => journal.tool(
+                            &update.tool_call_id,
+                            &update.name,
+                            &update
+                                .args
+                                .as_ref()
+                                .map(|a| a.to_string())
+                                .unwrap_or_default(),
+                            session_store::run_journal::Effect::of(
+                                &update.name,
+                                Some(update.metadata.kind.as_str()),
+                            ),
+                        ),
+                    }
+                }
                 if let Some(m) = chat.last_assistant_mut() {
                     crate::model::apply_tool_update(&mut m.blocks, *update);
                 }
@@ -1195,6 +1315,16 @@ impl Server {
                 tool_call_id,
                 args,
             } => {
+                if let Some(journal) = chat.journal.as_mut()
+                    && !tool_call_id.is_empty()
+                {
+                    journal.tool(
+                        &tool_call_id,
+                        &name,
+                        &args.as_ref().map(|a| a.to_string()).unwrap_or_default(),
+                        session_store::run_journal::Effect::of(&name, None),
+                    );
+                }
                 if let Some(m) = chat.last_assistant_mut() {
                     m.start_tool(&name, non_empty(&tool_call_id), args.as_ref());
                 }
@@ -1219,6 +1349,11 @@ impl Server {
                 full_output_path,
                 diff,
             } => {
+                if let Some(journal) = chat.journal.as_mut()
+                    && !tool_call_id.is_empty()
+                {
+                    journal.tool_done(&tool_call_id, is_error == Some(true));
+                }
                 if let Some(m) = chat.last_assistant_mut() {
                     m.finish_tool(non_empty(&tool_call_id), is_error, full_output_path, diff);
                 }
@@ -1342,6 +1477,9 @@ impl Server {
         };
         if let Some(m) = chat.last_assistant_mut() {
             m.finish_streaming();
+        }
+        if let Some(journal) = chat.journal.take() {
+            journal.end(&[]);
         }
         chat.run = None;
         chat.pending_approval = None;
@@ -1666,6 +1804,19 @@ impl Server {
             .collect();
         for id in dirty {
             self.flush_chat(&id);
+        }
+        // Subagent transcripts that changed between turns; a turn's own save covers the rest.
+        for chat in self.chats.values_mut() {
+            if chat
+                .session
+                .delegated
+                .save_wait()
+                .is_some_and(|w| w.is_zero())
+                && let Err(e) = chat.save()
+            {
+                log::warn!("saving subagent transcript: {e}");
+                chat.session.delegated.unsaved_since = None;
+            }
         }
     }
 
@@ -2054,6 +2205,50 @@ fn message_json(message: &ChatMessage) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_retransmitted_prompt_is_recognized_and_a_lost_turn_is_reported() {
+        crate::secrets::use_mock_store();
+        let root = crate::app_dirs::test_root().join("headless-retransmit");
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap().to_string_lossy().to_string();
+        let server = || {
+            let (tx, _rx) = mpsc::channel();
+            Server::new(tx, AgentExecutor::new().unwrap(), false)
+        };
+        let mut first = server();
+        let sent = first
+            .send_prompt(&json!({"root": root, "text": "hello", "requestId": "r1"}))
+            .unwrap();
+        let chat = sent["chat"].as_str().unwrap().to_string();
+        assert!(sent.get("duplicate").is_none());
+        // The reply was lost, so the client does not know the chat yet and sends it again.
+        let again = first
+            .send_prompt(&json!({"root": root, "text": "hello", "requestId": "r1"}))
+            .unwrap();
+        assert_eq!(
+            (again["chat"].as_str(), again["duplicate"].as_bool()),
+            (Some(chat.as_str()), Some(true))
+        );
+        // The server process goes away with the turn running.
+        drop(first);
+
+        let mut second = server();
+        let again = second
+            .send_prompt(&json!({"root": root, "chat": chat, "text": "hello", "requestId": "r1"}))
+            .unwrap();
+        assert_eq!(
+            again["duplicate"], true,
+            "the chat's journal remembers the request"
+        );
+        assert_eq!(again["running"], false);
+        let reloaded = second.load_chat(&root, &chat).unwrap();
+
+        let note = crate::model::last_answer(&reloaded.session.messages).unwrap_or_default();
+        assert!(note.contains("[Interrupted]"), "{note}");
+        let _ = std::fs::remove_file(&chat);
+        let _ = std::fs::remove_file(session_store::run_journal::path_for(&chat));
+    }
 
     #[test]
     fn head_and_tail_cut_on_char_boundaries() {

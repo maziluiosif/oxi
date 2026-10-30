@@ -4,6 +4,7 @@ pub mod acp;
 pub mod activity_log;
 mod anthropic;
 mod approval;
+pub mod cli_complete;
 mod codex_responses;
 pub mod complete;
 mod dispatch;
@@ -16,6 +17,7 @@ mod net;
 mod openai;
 pub mod prompt;
 pub mod runner;
+pub mod steer;
 pub mod subagent;
 pub mod tools;
 

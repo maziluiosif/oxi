@@ -242,6 +242,7 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
     session.disk_mtime = fs::metadata(&session_path).and_then(|m| m.modified()).ok();
     session.session_file = Some(session_path.to_string_lossy().to_string());
     session.messages_loaded = true;
+    session.delegated.unsaved_since = None;
     Ok(())
 }
 

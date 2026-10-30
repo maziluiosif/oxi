@@ -20,6 +20,7 @@ mod composer_helpers;
 mod confirm;
 mod connection;
 mod conversation;
+mod delegation;
 #[cfg(test)]
 mod demo_recording;
 mod drafts;
@@ -42,6 +43,8 @@ mod notify;
 mod queue;
 mod remote;
 mod review;
+mod review_comments;
+mod rewind;
 mod selection_to_chat;
 pub(crate) mod sessions;
 mod settings_ui;
@@ -56,6 +59,7 @@ mod terminal_panel;
 mod title_gen;
 mod turn_changes;
 mod update_check;
+pub(crate) mod worktree_setup;
 mod worktrees;
 
 pub use state::{
@@ -254,6 +258,11 @@ impl OxiApp {
                 diff_view: state::DiffViewState::default(),
                 transcript: state::TranscriptState::default(),
                 worktree_ops: Vec::new(),
+                worktree_setups: Vec::new(),
+                review_comments: Vec::new(),
+                delegations: Vec::new(),
+                comment_draft: None,
+                setup_script_editor: None,
                 split: None,
                 pending_split: None,
                 chores: Vec::new(),
@@ -264,6 +273,9 @@ impl OxiApp {
                 },
                 git: crate::git::GitState::default(),
                 confirm_prompt: None,
+                worktree_risk: None,
+                rewind_check: None,
+                rewind_jobs: Vec::new(),
                 title_gen: Vec::new(),
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),
@@ -318,6 +330,16 @@ impl OxiApp {
         app.restore_drafts();
         app.ensure_active_session_loaded();
         app.restore_active_session_config();
+        // Chats read at start-up: what an earlier process left running (lazily loaded chats
+        // are checked when they are read).
+        for wi in 0..app.conv.workspaces.len() {
+            for si in 0..app.conv.workspaces[wi].sessions.len() {
+                if app.conv.workspaces[wi].sessions[si].messages_loaded {
+                    let key = app.session_key(wi, si);
+                    app.recover_interrupted_run(key);
+                }
+            }
+        }
         app
     }
 
@@ -400,22 +422,36 @@ impl OxiApp {
         &mut self.conv.workspaces[self.conv.active_workspace]
     }
 
-    /// Ground truth for "model still running" on a session row (`workspace_idx`, session index in that workspace).
+    /// Ground truth for "model still running" on a session row (`workspace_idx`, session index in that workspace):
+    /// a streaming reply, or subagents and workflows still working after the turn.
     pub(crate) fn session_row_is_running(&self, workspace_idx: usize, session_idx: usize) -> bool {
         self.conv
             .workspaces
             .get(workspace_idx)
             .and_then(|w| w.sessions.get(session_idx))
-            .and_then(|s| s.messages.last())
-            .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
+            .is_some_and(|s| {
+                s.delegated.working()
+                    || s.messages
+                        .last()
+                        .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
+            })
     }
 
-    /// Some chat's agent is running a turn (or compacting it). A turn stopped on an approval
-    /// prompt does not count: it waits for the user, and sleeping does not lose anything.
+    /// Some chat's agent is running a turn (or compacting it), or its subagents and workflows
+    /// keep working after the turn ended. A chat stopped on an approval prompt does not count:
+    /// it waits for the user, and sleeping does not lose anything.
     pub(crate) fn agent_is_working(&self) -> bool {
         self.conv.compaction.is_some()
             || self.flow.sessions.values().any(|run| {
                 (run.waiting_response || run.agent_rx.is_some()) && run.pending_approval.is_none()
+            })
+            || self.conv.workspaces.iter().enumerate().any(|(wi, w)| {
+                w.sessions.iter().enumerate().any(|(si, s)| {
+                    s.delegated.working()
+                        && self
+                            .run_state(self.session_key(wi, si))
+                            .is_none_or(|run| run.pending_approval.is_none())
+                })
             })
     }
 
@@ -826,6 +862,7 @@ impl OxiApp {
             if let Some(cache) = wire {
                 session.wire_cache = Some(cache);
             }
+            self.recover_interrupted_run(key);
         }
     }
 
@@ -877,5 +914,44 @@ mod keep_awake_tests {
         app.run_state_mut(key).pending_approval = None;
         app.run_state_mut(key).end_waiting_response();
         assert!(!app.agent_is_working());
+    }
+
+    #[test]
+    fn background_subagents_count_until_they_stop_or_wait_for_approval() {
+        crate::secrets::use_mock_store();
+        let mut app = OxiApp::new();
+        app.flow.sessions.clear();
+        app.conv.compaction = None;
+        let key = SessionKey {
+            workspace_idx: 0,
+            session_idx: 0,
+        };
+        let announce = |state: &str| {
+            serde_json::json!({"sessionId":"root","update":{"sessionUpdate":"subagent_update",
+                "sessionId":"child","state":{"state":state}}})
+        };
+        let delegated = &mut app.session_mut_by_key(key).delegated;
+        delegated.apply("root", &announce("running"));
+        assert!(
+            app.agent_is_working(),
+            "the parent's turn ended; its subagent did not"
+        );
+        assert!(app.session_row_is_running(0, 0));
+
+        app.run_state_mut(key).pending_approval = Some(PendingApproval {
+            name: "bash".into(),
+            summary: "cargo test".into(),
+            allow_prefix: None,
+        });
+        assert!(!app.agent_is_working(), "waiting on the user may sleep");
+        app.run_state_mut(key).pending_approval = None;
+
+        let delegated = &mut app.session_mut_by_key(key).delegated;
+        delegated.apply(
+            "root",
+            &serde_json::json!({"update":{"sessionUpdate":"delegation_disconnected"}}),
+        );
+        assert!(!app.agent_is_working(), "a lost connection is not work");
+        assert!(!app.session_row_is_running(0, 0));
     }
 }

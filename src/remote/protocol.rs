@@ -21,6 +21,7 @@ pub fn event_to_json(event: &AgentEvent) -> Option<Value> {
             json!({"type": "delegated", "root": root, "params": params})
         }
         AgentEvent::AgentStart => json!({"type": "agent_start"}),
+        AgentEvent::Steered(text) => json!({"type": "steered", "text": text}),
         AgentEvent::AcpTerminal(_) => return None,
         AgentEvent::TextStart => json!({"type": "text_start"}),
         AgentEvent::TextDelta(d) => json!({"type": "text_delta", "d": d}),
@@ -97,6 +98,7 @@ pub fn event_from_json(v: &Value) -> Option<AgentEvent> {
             params: v["params"].clone(),
         },
         "agent_start" => AgentEvent::AgentStart,
+        "steered" => AgentEvent::Steered(s(v, "text")),
         "text_start" => AgentEvent::TextStart,
         "text_delta" => AgentEvent::TextDelta(s(v, "d")),
         "thinking_delta" => AgentEvent::ThinkingDelta(s(v, "d")),

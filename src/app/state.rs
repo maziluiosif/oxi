@@ -74,6 +74,14 @@ pub enum ConfirmAction {
     RemoveWorktree {
         wi: usize,
     },
+    /// Go back to before user message `index` of a chat (see [`super::rewind`]).
+    Rewind {
+        wi: usize,
+        si: usize,
+        index: usize,
+        /// Also put back the files the later turns changed.
+        restore_files: bool,
+    },
     GitDiscard {
         paths: Vec<String>,
     },
@@ -415,6 +423,24 @@ pub struct SessionRunState {
     pub usage_target: Option<(crate::settings::LlmProviderKind, String)>,
     /// Messages written while this chat was answering, sent one per finished response.
     pub queued: std::collections::VecDeque<super::compaction::QueuedSend>,
+    /// Messages handed to the running turn of oxi's own agent, read at its next step (see
+    /// [`crate::agent::steer`]). `None` when the turn can't take any (an ACP agent, a remote
+    /// chat, no turn).
+    pub steer: Option<crate::agent::steer::SteerInbox>,
+    /// What the user wrote for each message waiting in [`Self::steer`] (before @mentions were
+    /// expanded), in the same order: shown above the composer, and queued again if the turn
+    /// ends without reading them.
+    pub steer_pending: Vec<String>,
+    /// The running or last turn took messages sent into it: its undo journal spans more than
+    /// its first prompt.
+    pub steered: bool,
+    /// What the running turn started, on disk (see [`crate::session_store::run_journal`]).
+    pub journal: Option<crate::session_store::run_journal::TurnJournal>,
+    /// A turn that an earlier oxi process left unfinished, shown until dismissed.
+    pub interrupted: Option<crate::session_store::run_journal::Interrupted>,
+    /// A remote chat's last prompt and the request id it went with: sending the same prompt
+    /// again after the connection dropped reuses the id, so the server does not run it twice.
+    pub remote_request: Option<(String, String)>,
 }
 
 impl SessionRunState {
@@ -867,6 +893,16 @@ pub struct ConversationState {
     pub transcript: TranscriptState,
     /// Work tree create/merge operations running in the background.
     pub worktree_ops: Vec<std::sync::mpsc::Receiver<super::worktrees::WorktreeResult>>,
+    /// Tasks chats' agents delegated to other agents (see [`super::delegation`]).
+    pub delegations: Vec<super::delegation::DelegatedTask>,
+    /// Comments on diff lines, sent with the next message of their workspace's chat.
+    pub review_comments: Vec<super::review_comments::ReviewComment>,
+    /// The diff comment being written.
+    pub comment_draft: Option<super::review_comments::CommentDraft>,
+    /// Setup scripts running (or just finished) in new work trees.
+    pub worktree_setups: Vec<super::worktree_setup::WorktreeSetup>,
+    /// The work tree setup script being edited: (main checkout root, draft).
+    pub setup_script_editor: Option<(String, String)>,
     /// A second chat shown next to the active one (see [`super::split_view`]).
     pub split: Option<super::split_view::SplitView>,
     /// The chat to show next to the work tree chat being created.
@@ -878,6 +914,13 @@ pub struct ConversationState {
     /// Destructive action awaiting confirmation in the shared modal (delete chat /
     /// workspace / model, git discard). At most one at a time, app-wide.
     pub confirm_prompt: Option<ConfirmAction>,
+    /// What removing the work tree behind [`Self::confirm_prompt`] would lose, and the
+    /// user's choices about it.
+    pub worktree_risk: Option<super::worktrees::WorktreeRiskCheck>,
+    /// What the rewind behind [`Self::confirm_prompt`] would restore, and its conflict check.
+    pub rewind_check: Option<super::rewind::RewindCheck>,
+    /// Rewinds waiting for their files to be restored.
+    pub rewind_jobs: Vec<super::rewind::RewindJob>,
     /// In-flight chat-title completions: (workspace root, session file, auto title it replaces).
     pub title_gen: Vec<(
         String,

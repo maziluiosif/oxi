@@ -10,7 +10,14 @@ use std::collections::HashSet;
 #[serde(default)]
 pub struct DelegatedChats {
     pub chats: Vec<DelegatedChat>,
+    /// When the oldest change not written to disk yet arrived. Background workflows report
+    /// every second; saves are spaced by [`SAVE_DEBOUNCE`] instead of one per update.
+    #[serde(skip)]
+    pub unsaved_since: Option<std::time::Instant>,
 }
+
+/// Longest a subagent change waits before its parent chat is saved.
+pub const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -39,7 +46,15 @@ pub struct DelegatedChat {
     /// Replayed/persisted running states do not prove a process is still alive.
     #[serde(skip)]
     pub live: bool,
+    /// When the provider last reported anything about this child in this process.
+    #[serde(skip)]
+    last_update: Option<std::time::Instant>,
 }
+
+/// A running child that reported nothing for this long no longer counts as background work
+/// (keep-awake, the daemon's idle exit): its provider may never send the final state, and a
+/// history replay can bring back the "running" state of a child that is long gone.
+pub const BACKGROUND_QUIET_LIMIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 impl DelegatedChat {
     pub fn running(&self) -> bool {
@@ -47,6 +62,16 @@ impl DelegatedChat {
             self.state.as_str(),
             "running" | "requires_action" | "paused"
         )
+    }
+    /// Working in the background right now: running (not waiting for the user or paused) on
+    /// a live connection, and heard from recently.
+    pub fn working(&self) -> bool {
+        self.live
+            && self.state == "running"
+            && self.outcome.is_empty()
+            && self
+                .last_update
+                .is_some_and(|at| at.elapsed() < BACKGROUND_QUIET_LIMIT)
     }
     pub fn label(&self) -> &str {
         if self.title.is_empty() {
@@ -233,6 +258,24 @@ impl DelegatedChat {
 }
 
 impl DelegatedChats {
+    /// Some subagent or workflow of this chat is working (see [`DelegatedChat::working`]).
+    pub fn working(&self) -> bool {
+        self.chats.iter().any(DelegatedChat::working)
+    }
+
+    /// Note a change that still has to be saved.
+    pub fn mark_unsaved(&mut self) {
+        self.unsaved_since
+            .get_or_insert_with(std::time::Instant::now);
+    }
+
+    /// How long until unsaved changes are due to be written: `None` when there are none,
+    /// zero when the save is due now.
+    pub fn save_wait(&self) -> Option<std::time::Duration> {
+        self.unsaved_since
+            .map(|since| SAVE_DEBOUNCE.saturating_sub(since.elapsed()))
+    }
+
     /// Apply only announcements or notifications belonging to an already announced child.
     /// Returns false for ordinary root-session updates.
     pub fn apply(&mut self, root: &str, params: &Value) -> bool {
@@ -288,6 +331,7 @@ impl DelegatedChats {
         };
         let c = &mut self.chats[index];
         c.live = true;
+        c.last_update = Some(std::time::Instant::now());
         if announcement || task {
             if kind == "subagent_spawned" && c.state.is_empty() {
                 c.state = "running".into();
@@ -480,6 +524,39 @@ mod tests {
         );
         assert!(!chats.chats[1].capabilities["cancel"].is_object());
         assert_eq!(chats.chats[1].status(), "running");
+    }
+    #[test]
+    fn only_live_running_children_count_as_background_work() {
+        let mut chats = DelegatedChats::default();
+        apply(
+            &mut chats,
+            "root",
+            json!({"sessionUpdate":"subagent_update","sessionId":"c","state":{"state":"running"}}),
+        );
+        assert!(chats.working());
+        apply(
+            &mut chats,
+            "root",
+            json!({"sessionUpdate":"subagent_update","sessionId":"c","state":{"state":"requires_action"}}),
+        );
+        assert!(!chats.working(), "waiting for the user");
+        apply(
+            &mut chats,
+            "root",
+            json!({"sessionUpdate":"subagent_update","sessionId":"c","state":{"state":"running"}}),
+        );
+        let restored: DelegatedChats =
+            serde_json::from_value(serde_json::to_value(&chats).unwrap()).unwrap();
+        assert!(
+            !restored.working(),
+            "a saved running state proves nothing after a restart"
+        );
+        apply(
+            &mut chats,
+            "root",
+            json!({"sessionUpdate":"subagent_update","sessionId":"c","state":{"state":"idle","outcome":"completed"}}),
+        );
+        assert!(!chats.working());
     }
     #[test]
     fn air_tasks_and_workflow_entries_survive_roundtrip() {

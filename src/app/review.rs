@@ -235,6 +235,7 @@ mod tests {
             repo: "/r".into(),
             before: before.into(),
             after: after.into(),
+            files: None,
         }));
         m
     }

@@ -16,6 +16,7 @@ impl OxiApp {
             return;
         }
         self.invalidate_wire_cache(key);
+        self.close_turn_bookkeeping(key);
         if let Some(state) = self.flow.sessions.get_mut(&key) {
             state.clear_agent();
             state.reset_after_disconnect();
