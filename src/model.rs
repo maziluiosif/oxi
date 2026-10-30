@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod delegated;
 mod tool;
 pub use tool::{ToolLocation, ToolMetadata, ToolStatus, ToolUpdate, apply_tool_update};
 
@@ -171,13 +172,18 @@ pub enum AssistantBlock {
 }
 
 /// Workspace snapshots (git tree ids) taken right before and after one assistant turn, so the
-/// turn's file changes can be reviewed and reverted. Persisted with the message.
+/// turn's file changes can be reviewed and reverted. Persisted with the message; equal trees
+/// record a turn that changed nothing (one without this had no snapshot taken).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnChanges {
     /// Work tree of the repository the trees were written to.
     pub repo: String,
     pub before: String,
     pub after: String,
+    /// The files that differ, with line counts, computed when the turn's snapshot was taken.
+    /// Missing for turns saved before oxi stored it; those are diffed when shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<crate::git::CompareFile>>,
 }
 
 #[derive(Clone)]
@@ -431,6 +437,8 @@ impl ChatMessage {
 }
 
 pub struct Session {
+    /// Provider-owned child conversations, saved with their parent rather than independent agents.
+    pub delegated: delegated::DelegatedChats,
     pub title: String,
     pub messages: Vec<ChatMessage>,
     /// Provider/model choices pinned to this chat. Legacy sessions without this metadata inherit

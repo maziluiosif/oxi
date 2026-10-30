@@ -229,6 +229,7 @@ fn acp_end_to_end_applies_model() {
             .to_string(),
         history: String::new(),
         missed: String::new(),
+        archive: Vec::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,
@@ -548,6 +549,7 @@ fn notifications_are_scoped_to_the_active_session() {
         cwd: std::env::temp_dir(),
         plan_mode: false,
         updates: UpdateState::default(),
+        children: Default::default(),
         event_tx: tx,
         perm_tx,
         cycle_end: None,
@@ -575,6 +577,7 @@ fn client_fs_writes_respect_plan_mode_and_session_identity() {
         cwd: std::env::temp_dir(),
         plan_mode: true,
         updates: UpdateState::default(),
+        children: Default::default(),
         event_tx: tx,
         perm_tx,
         cycle_end: None,
@@ -898,6 +901,7 @@ fn acp_live_features() {
         text,
         history: String::new(),
         missed: String::new(),
+        archive: Vec::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,
@@ -1017,6 +1021,7 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
         text: "build it".into(),
         history: String::new(),
         missed: String::new(),
+        archive: Vec::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx: ev_tx,
@@ -1254,6 +1259,7 @@ for line in sys.stdin:
             text: "Answer the task".into(),
             history: String::new(),
             missed: String::new(),
+            archive: Vec::new(),
             images: vec![],
             resources: vec![],
             event_tx: tx,
@@ -1371,6 +1377,7 @@ async fn sessions_run_outside_oxi_are_listed_imported_and_forked() {
         text: "Take another direction".into(),
         history: "User: Fix the login bug\nAssistant: Fixed it.".into(),
         missed: String::new(),
+        archive: Vec::new(),
         images: Vec::new(),
         resources: Vec::new(),
         event_tx,
@@ -1404,4 +1411,165 @@ async fn sessions_run_outside_oxi_are_listed_imported_and_forked() {
     sessions::forget(&chat);
     sessions::forget(&fork);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn delegated_sessions_route_replay_permissions_cancel_and_late_updates() {
+    const ADAPTER: &str = r#"
+import json,sys,threading,time
+prompt=None
+cancelled=False
+def send(v): print(json.dumps(dict(jsonrpc='2.0',**v)),flush=True)
+def update(s,u): send(dict(method='session/update',params=dict(sessionId=s,update=u)))
+def late():
+    time.sleep(.15)
+    update('background',dict(sessionUpdate='agent_message_chunk',content=dict(type='text',text='late child output')))
+    update('root',dict(sessionUpdate='subagent_update',sessionId='background',state=dict(state='idle',outcome='completed')))
+for line in sys.stdin:
+    m=json.loads(line); method=m.get('method')
+    if method=='initialize':
+        assert isinstance(m['params']['clientCapabilities'].get('subagents'),dict)
+        send(dict(id=m['id'],result=dict(protocolVersion=1,agentCapabilities={})))
+    elif method=='session/new':
+        update('root',dict(sessionUpdate='subagent_update',sessionId='worker',title='Reviewer',capabilities=dict(cancel={}),state=dict(state='running')))
+        update('worker',dict(sessionUpdate='session_message',messageId='launch',recipientSessionId='worker',senderSessionId='root',content=[dict(type='text',text='Review the patch')]))
+        update('root',dict(sessionUpdate='subagent_update',sessionId='background',title='Background',state=dict(state='running')))
+        send(dict(id=m['id'],result=dict(sessionId='root')))
+    elif method=='session/prompt':
+        prompt=m['id']
+        update('worker',dict(sessionUpdate='agent_message_chunk',content=dict(type='text',text='child-only output')))
+        update('unannounced',dict(sessionUpdate='agent_message_chunk',content=dict(type='text',text='foreign output')))
+        send(dict(id=77,method='session/request_permission',params=dict(sessionId='worker',toolCall=dict(toolCallId='exec',title='Run tests',kind='execute',rawInput=dict(command='echo child')),options=[dict(optionId='yes',kind='allow_once') ,dict(optionId='no',kind='reject_once') ])))
+    elif method=='session/cancel':
+        assert m['params']['sessionId']=='worker'
+        cancelled=True
+    elif method is None and m.get('id')==77:
+        assert cancelled and m['result']['outcome']['outcome']=='cancelled'
+        update('root',dict(sessionUpdate='subagent_update',sessionId='worker',state=dict(state='idle',outcome='cancelled')))
+        update('root',dict(sessionUpdate='agent_message_chunk',content=dict(type='text',text='parent-only output')))
+        send(dict(id=prompt,result=dict(stopReason='end_turn')))
+        threading.Thread(target=late,daemon=True).start()
+    elif 'id' in m: send(dict(id=m['id'],result={}))
+"#;
+    let dir = crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-acp-delegated", "d");
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("agent.py");
+    std::fs::write(&script, ADAPTER).unwrap();
+    let key = format!("delegated-{}", rand::random::<u64>());
+    let manager = AcpManager::spawn();
+    let (tx, rx) = channel();
+    let (_approval_tx, approval_rx) = channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let req = AcpPrompt {
+        session_key: key.clone(),
+        cwd: dir.clone(),
+        command_line: format!(
+            "{} {}",
+            crate::agent::test_python_executable().display(),
+            script.display()
+        ),
+        env: vec![],
+        model: String::new(),
+        effort: String::new(),
+        mcp_servers: vec![],
+        text: "Delegate".into(),
+        history: String::new(),
+        missed: String::new(),
+        archive: vec![],
+        images: vec![],
+        resources: vec![],
+        event_tx: tx,
+        approval_rx,
+        approval_policy: ApprovalPolicy {
+            write_edit: true,
+            bash: true,
+        },
+        bash_allowlist: vec![],
+        allowed_tools: vec![],
+        cancel: cancel.clone(),
+        plan_mode: false,
+        evidence_policy: Default::default(),
+        evidence_base: None,
+    };
+    let worker = manager.clone();
+    let prompt = tokio::spawn(async move { worker.prompt(req).await });
+    let mut chats = crate::model::delegated::DelegatedChats::default();
+    let mut parent = String::new();
+    let mut resolved = false;
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut asked = false;
+    while !prompt.is_finished() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "subagent permission/cancellation hung"
+        );
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                AgentEvent::Delegated { root, params } => {
+                    chats.apply(&root, &params);
+                }
+                AgentEvent::ApprovalRequest { .. } => {
+                    asked = true;
+                    assert!(
+                        manager
+                            .cancel_child(key.clone(), "wrong-root".into(), "worker".into(), false)
+                            .await
+                            .is_err()
+                    );
+                    manager
+                        .cancel_child(key.clone(), "root".into(), "worker".into(), false)
+                        .await
+                        .unwrap();
+                }
+                AgentEvent::ApprovalResolved => resolved = true,
+                AgentEvent::TextDelta(s) => parent.push_str(&s),
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    prompt.await.unwrap().unwrap();
+    for event in drain(&rx) {
+        match event {
+            AgentEvent::Delegated { root, params } => {
+                chats.apply(&root, &params);
+            }
+            AgentEvent::TextDelta(s) => parent.push_str(&s),
+            AgentEvent::ApprovalResolved => resolved = true,
+            _ => {}
+        }
+    }
+    assert!(asked && resolved);
+    assert_eq!(parent, "parent-only output");
+    assert!(
+        !cancel.load(Ordering::SeqCst),
+        "stopping a child must not cancel its parent"
+    );
+    assert_eq!(
+        chats
+            .chats
+            .iter()
+            .find(|c| c.id == "worker")
+            .unwrap()
+            .messages[0]
+            .text,
+        "Review the patch"
+    );
+    let mut late = false;
+    while !late && std::time::Instant::now() < deadline {
+        for (source, root, params) in take_delegated() {
+            if source == key {
+                late |= params["update"]["content"]["text"] == "late child output";
+                chats.apply(&root, &params);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        late,
+        "background child updates must arrive without starting a parent turn"
+    );
+    assert!(!pending_autonomous().contains(&key));
+    manager.close(&key);
+    let _ = std::fs::remove_dir_all(dir);
 }

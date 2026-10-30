@@ -258,6 +258,7 @@ pub async fn run_anthropic_loop(
     let env = ctx.env;
     let tx = ctx.tx;
     let cancel = ctx.cancel;
+    let steer = ctx.steer;
     let max_rounds = ctx.max_rounds;
     let effort_override = ctx.effort_override;
     let mut context_char_budget = ctx.context_char_budget;
@@ -273,6 +274,10 @@ pub async fn run_anthropic_loop(
     loop {
         if cancel.load(Ordering::SeqCst) {
             break;
+        }
+        // Messages the user sent into this turn join it before the next request.
+        if round > 0 {
+            super::steer::deliver(steer, openai_messages, tx);
         }
         round += 1;
         if max_rounds != 0 && round > max_rounds {
@@ -615,6 +620,10 @@ pub async fn run_anthropic_loop(
                 &mut evidence_followups,
             )
         {
+            continue;
+        }
+        // The model answered, but the user wrote to it meanwhile: go on in the same turn.
+        if (max_rounds == 0 || round < max_rounds) && super::steer::waiting(steer) {
             continue;
         }
         break;

@@ -245,6 +245,7 @@ async fn run_case(
             plan_mode: plan,
             evidence_mode: false.into(),
             undo_journal: Arc::new(std::sync::Mutex::new(Default::default())),
+            steer: Default::default(),
         },
         tx,
     );

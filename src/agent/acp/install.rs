@@ -256,6 +256,45 @@ async fn update(adapter: &Adapter) -> Result<(), String> {
     touch(&adapter.root().join("checked"))
 }
 
+/// The Claude Code binary that the managed Claude adapter's agent SDK ships in its platform
+/// package, for one-shot `claude -p` helpers when no `claude` is on `PATH`.
+pub(super) fn bundled_claude_cli() -> Option<PathBuf> {
+    let adapter = ADAPTERS.iter().find(|a| a.bin == "claude-agent-acp")?;
+    let version = adapter.installed_version()?;
+    let scope = adapter
+        .root()
+        .join(version)
+        .join("node_modules")
+        .join("@anthropic-ai");
+    let suffix = platform_suffix()?;
+    let name = if cfg!(windows) {
+        "claude.exe"
+    } else {
+        "claude"
+    };
+    std::fs::read_dir(scope)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(&suffix))
+        .find_map(|entry| find_file(&entry.path(), name, 3))
+}
+
+/// A file called `name` at most `depth` folders below `dir`.
+fn find_file(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
+    let candidate = dir.join(name);
+    if candidate.is_file() {
+        return Some(candidate);
+    }
+    if depth == 0 {
+        return None;
+    }
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+        .find_map(|entry| find_file(&entry.path(), name, depth - 1))
+}
+
 /// The suffix npm platform packages carry for this machine, as in `claude-agent-sdk-darwin-arm64`.
 fn platform_suffix() -> Option<String> {
     let os = match std::env::consts::OS {

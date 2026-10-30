@@ -437,6 +437,8 @@ impl OxiApp {
                 }
                 let count = value["count"].as_u64().unwrap_or(0) as usize;
                 let session = self.session_mut_by_key(key);
+                session.delegated =
+                    serde_json::from_value(value["delegated"].clone()).unwrap_or_default();
                 if let Some(title) = value["title"].as_str().filter(|t| !t.is_empty()) {
                     session.title = title.to_string();
                 }
@@ -703,6 +705,8 @@ impl OxiApp {
         });
         let (wi, si) = (key.workspace_idx, key.session_idx);
         let session = self.session_mut_by_key(key);
+        session.delegated =
+            serde_json::from_value(snapshot["delegated"].clone()).unwrap_or_default();
         session.messages = messages;
         session.messages_loaded = true;
         if let Some(title) = snapshot["title"].as_str().filter(|t| !t.is_empty()) {
@@ -790,7 +794,13 @@ impl OxiApp {
             .as_deref()
             .map(|f| crate::remote::path_of(f).to_string());
         let history_json = protocol::messages_to_json(history);
+        let request = match self.run_state(key).and_then(|r| r.remote_request.clone()) {
+            Some((text, id)) if text == user.text => id,
+            _ => format!("{:016x}", rand::random::<u64>()),
+        };
+        let user_text = user.text.clone();
         let mut params = json!({
+            "requestId": request,
             "root": root_path,
             "chat": chat,
             "text": user.text,
@@ -812,6 +822,7 @@ impl OxiApp {
         let (pending, rx) = client.start_turn(params, history_json);
         let cancel = Arc::new(AtomicBool::new(false));
         let run = self.run_state_mut(key);
+        run.remote_request = Some((user_text, request));
         run.agent_rx = Some(rx);
         run.approval_tx = None;
         run.pending_approval = None;
@@ -829,6 +840,27 @@ impl OxiApp {
         let (host, chat) = crate::remote::split(file)?;
         let root = crate::remote::path_of(&self.conv.workspaces[key.workspace_idx].root_path);
         Some((host.to_string(), chat.to_string(), root.to_string()))
+    }
+
+    pub(super) fn remote_stop_subagent(
+        &mut self,
+        key: SessionKey,
+        root: String,
+        child: String,
+        task: bool,
+    ) {
+        let Some((host, chat, path)) = self.remote_chat(key) else {
+            return;
+        };
+        if let Some(client) = self.remote.connected(&host) {
+            let pending = client.request(
+                "subagent.cancel",
+                json!({"root":path,"chat":chat,"sessionId":root,"child":child,"task":task}),
+            );
+            self.remote
+                .asked
+                .push((Asked::Action("Could not stop the subagent"), pending));
+        }
     }
 
     /// Pass an approval decision for a remote chat's tool call to its server.

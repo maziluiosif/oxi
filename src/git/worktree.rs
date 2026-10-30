@@ -211,8 +211,146 @@ fn commit_all(repo: &Repository, message: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Delete the work tree at `path` (its folder and git's record of it) and its branch.
-pub fn remove(path: &Path) -> Result<(), String> {
+/// What removing a work tree would lose, so the user can see it before confirming.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemovalRisk {
+    /// The work tree's branch (`HEAD` when it is detached).
+    pub branch: String,
+    /// Tracked files with uncommitted changes, staged or not.
+    pub modified: Vec<String>,
+    /// Untracked files (folders as one entry); ignored files are not counted.
+    pub untracked: Vec<String>,
+    /// Commits on the branch that no other branch, remote branch or tag contains, newest first,
+    /// as "<short id> <summary>". At most [`MAX_UNMERGED_LISTED`].
+    pub unmerged: Vec<String>,
+    /// More unmerged commits than are listed.
+    pub more_unmerged: bool,
+    /// `HEAD` is detached: its commits have no branch to keep them.
+    pub detached: bool,
+}
+
+/// Unmerged commits listed by [`removal_risk`]; more are only flagged.
+pub const MAX_UNMERGED_LISTED: usize = 20;
+
+impl RemovalRisk {
+    /// Deleting the folder loses uncommitted or untracked files.
+    pub fn loses_files(&self) -> bool {
+        !self.modified.is_empty() || !self.untracked.is_empty()
+    }
+
+    /// Deleting the branch (or a detached `HEAD`) loses commits.
+    pub fn loses_commits(&self) -> bool {
+        !self.unmerged.is_empty()
+    }
+
+    /// Whether removing with `opts` (without `force`) would lose anything.
+    pub fn blocks(&self, opts: RemoveOptions) -> bool {
+        self.loses_files() || (self.loses_commits() && (!opts.keep_branch || self.detached))
+    }
+}
+
+/// How [`remove`] treats a work tree with work that would be lost.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RemoveOptions {
+    /// Keep the branch (only the folder and git's record of it go), so its commits stay.
+    pub keep_branch: bool,
+    /// Remove even when uncommitted files or unmerged commits would be lost.
+    pub force: bool,
+}
+
+/// What removing the work tree at `path` would lose (see [`RemovalRisk`]).
+pub fn removal_risk(path: &Path) -> Result<RemovalRisk, String> {
+    let wt = open_repo(&path.to_string_lossy())?;
+    if !wt.is_worktree() {
+        return Err("Not a work tree".into());
+    }
+    let mut risk = RemovalRisk {
+        branch: current_branch(&wt),
+        detached: wt.head_detached().unwrap_or(false),
+        ..Default::default()
+    };
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(false)
+        .include_ignored(false)
+        .exclude_submodules(true);
+    for entry in wt.statuses(Some(&mut opts)).map_err(err)?.iter() {
+        let Ok(file) = entry.path().map(str::to_owned) else {
+            continue;
+        };
+        let status = entry.status();
+        if status == git2::Status::WT_NEW {
+            risk.untracked.push(file);
+        } else if !status.is_ignored() && status != git2::Status::CURRENT {
+            risk.modified.push(file);
+        }
+    }
+    let Ok(head) = wt.head().and_then(|h| h.peel_to_commit()) else {
+        return Ok(risk);
+    };
+    // Commits only this branch keeps: everything reachable from no other ref.
+    let mut walk = wt.revwalk().map_err(err)?;
+    walk.push(head.id()).map_err(err)?;
+    let own_ref = wt
+        .head()
+        .ok()
+        .and_then(|h| h.name().ok().map(str::to_owned));
+    for reference in wt.references().map_err(err)?.flatten() {
+        let Ok(name) = reference.name() else {
+            continue;
+        };
+        let other_branch = name.starts_with("refs/heads/") && Some(name) != own_ref.as_deref();
+        let keeps =
+            other_branch || name.starts_with("refs/remotes/") || name.starts_with("refs/tags/");
+        if keeps && let Ok(commit) = reference.peel_to_commit() {
+            walk.hide(commit.id()).map_err(err)?;
+        }
+    }
+    // The main checkout's HEAD may be detached on a commit no branch names.
+    if let Some(main_root) = wt.commondir().parent()
+        && let Ok(main) = Repository::open(main_root)
+        && let Ok(main_head) = main.head().and_then(|h| h.peel_to_commit())
+    {
+        walk.hide(main_head.id()).map_err(err)?;
+    }
+    for (i, oid) in walk.enumerate() {
+        if i == MAX_UNMERGED_LISTED {
+            risk.more_unmerged = true;
+            break;
+        }
+        let oid = oid.map_err(err)?;
+        let commit = wt.find_commit(oid).map_err(err)?;
+        let id = oid.to_string();
+        risk.unmerged.push(format!(
+            "{} {}",
+            &id[..7.min(id.len())],
+            commit.summary().ok().flatten().unwrap_or("").trim()
+        ));
+    }
+    Ok(risk)
+}
+
+/// Delete the work tree at `path` (its folder and git's record of it) and, unless
+/// `opts.keep_branch`, its branch. Without `opts.force` it refuses, checking again at this
+/// moment, when that would lose uncommitted files or commits no other branch contains.
+pub fn remove(path: &Path, opts: RemoveOptions) -> Result<(), String> {
+    if !opts.force {
+        let risk = removal_risk(path)?;
+        if risk.blocks(opts) {
+            return Err(if risk.loses_files() {
+                format!(
+                    "{} has uncommitted or untracked files ({}); the work tree was kept",
+                    path.display(),
+                    risk.modified.len() + risk.untracked.len()
+                )
+            } else {
+                format!(
+                    "{} has commits that are on no other branch; the work tree was kept",
+                    risk.branch
+                )
+            });
+        }
+    }
     let wt = open_repo(&path.to_string_lossy())?;
     if !wt.is_worktree() {
         return Err("Not a work tree".into());
@@ -248,7 +386,9 @@ pub fn remove(path: &Path) -> Result<(), String> {
             break;
         }
     }
-    if let Ok(mut b) = main.find_branch(&branch, BranchType::Local) {
+    if !opts.keep_branch
+        && let Ok(mut b) = main.find_branch(&branch, BranchType::Local)
+    {
         let _ = b.delete();
     }
     Ok(())
@@ -320,10 +460,94 @@ mod tests {
             "new\n"
         );
 
-        remove(&folder).unwrap();
+        assert_eq!(
+            removal_risk(&folder).unwrap().unmerged,
+            Vec::<String>::new()
+        );
+        remove(&folder, RemoveOptions::default()).unwrap();
         assert!(!folder.exists());
         let main = Repository::open(&root).unwrap();
         assert!(main.find_branch(&info.branch, BranchType::Local).is_err());
+    }
+
+    #[test]
+    fn removal_lists_what_would_be_lost_and_refuses_without_force() {
+        let (_guard, root) = init();
+        let folder = create(&root).unwrap();
+        let _cleanup = TempRepo(folder.clone());
+        let branch = info(&folder).unwrap().branch;
+        assert_eq!(
+            removal_risk(&folder).unwrap(),
+            RemovalRisk {
+                branch: branch.clone(),
+                ..Default::default()
+            },
+            "a fresh work tree loses nothing"
+        );
+
+        std::fs::write(folder.join("a.txt"), "edited\n").unwrap();
+        std::fs::write(folder.join("new.txt"), "new\n").unwrap();
+        std::fs::write(folder.join(".gitignore"), "build/\n").unwrap();
+        std::fs::create_dir_all(folder.join("build")).unwrap();
+        std::fs::write(folder.join("build/out"), "x").unwrap();
+        let risk = removal_risk(&folder).unwrap();
+        assert_eq!(risk.modified, ["a.txt"]);
+        let mut untracked = risk.untracked.clone();
+        untracked.sort();
+        assert_eq!(
+            untracked,
+            [".gitignore", "new.txt"],
+            "ignored files are not listed"
+        );
+        let error = remove(&folder, RemoveOptions::default()).unwrap_err();
+        assert!(error.contains("uncommitted"), "{error}");
+        assert!(folder.join("new.txt").exists(), "nothing was deleted");
+
+        // Committed on the branch only: deleting the branch would lose it.
+        let wt = Repository::open(&folder).unwrap();
+        commit_all(&wt, "agent work").unwrap();
+        let risk = removal_risk(&folder).unwrap();
+        assert!(!risk.loses_files());
+        assert_eq!(risk.unmerged.len(), 1);
+        assert!(
+            risk.unmerged[0].ends_with(" agent work"),
+            "{:?}",
+            risk.unmerged
+        );
+        assert!(remove(&folder, RemoveOptions::default()).is_err());
+
+        // Keeping the branch keeps the commit, so nothing is lost.
+        remove(
+            &folder,
+            RemoveOptions {
+                keep_branch: true,
+                force: false,
+            },
+        )
+        .unwrap();
+        assert!(!folder.exists());
+        let main = Repository::open(&root).unwrap();
+        assert!(main.find_branch(&branch, BranchType::Local).is_ok());
+    }
+
+    #[test]
+    fn forced_removal_deletes_a_dirty_work_tree_and_its_branch() {
+        let (_guard, root) = init();
+        let folder = create(&root).unwrap();
+        let _cleanup = TempRepo(folder.clone());
+        let branch = info(&folder).unwrap().branch;
+        std::fs::write(folder.join("scratch.txt"), "unsaved\n").unwrap();
+        remove(
+            &folder,
+            RemoveOptions {
+                keep_branch: false,
+                force: true,
+            },
+        )
+        .unwrap();
+        assert!(!folder.exists());
+        let main = Repository::open(&root).unwrap();
+        assert!(main.find_branch(&branch, BranchType::Local).is_err());
     }
 
     #[test]

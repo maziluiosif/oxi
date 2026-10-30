@@ -43,6 +43,7 @@ pub(super) fn is_plan_file_edit(tool: &Value) -> bool {
 pub(super) struct PermReq {
     pub(super) id: Value,
     pub(super) params: Value,
+    pub(super) child_cancel: Option<Arc<AtomicBool>>,
 }
 
 /// Resolve one forwarded `session/request_permission` request: ask the UI (unless approval is
@@ -64,11 +65,12 @@ pub(super) async fn handle_permission(
     let options = pr.params["options"].as_array().cloned().unwrap_or_default();
     let kind = pr.params["toolCall"]["kind"].as_str().unwrap_or("");
 
-    // oxi's own checklist tool only updates the UI; reading the scratchpad changes nothing;
+    // oxi's own checklist tool only updates the UI; reading the scratchpad or the chat changes
+    // nothing;
     // evidence tools that run no command only capture and record.
     let decision = if matches!(
         super::oxi_mcp::oxi_tool(&pr.params["toolCall"]),
-        Some("todo_write" | super::oxi_mcp::SCRATCHPAD_READ)
+        Some("todo_write" | super::oxi_mcp::SCRATCHPAD_READ | super::chat_archive::TOOL)
     ) || crate::evidence::tools::NAMES.contains(&name.as_str())
         || plan_mode && is_plan_file_edit(&pr.params["toolCall"])
     {
@@ -90,7 +92,7 @@ pub(super) async fn handle_permission(
         Some(ApprovalDecision::Approve)
     } else {
         let _ = event_tx.send(AgentEvent::ApprovalRequest { name, args });
-        wait_decision(approval_rx, cancel).await
+        wait_decision(approval_rx, cancel, pr.child_cancel.as_deref()).await
     };
 
     let outcome = match decision {
@@ -117,6 +119,7 @@ pub(super) async fn handle_permission(
             }
         }
     };
+    let _ = event_tx.send(AgentEvent::ApprovalResolved);
     let _ = write_line(
         stdin,
         &json!({"jsonrpc":"2.0","id": pr.id, "result": { "outcome": outcome }}),
@@ -128,9 +131,10 @@ pub(super) async fn handle_permission(
 async fn wait_decision(
     rx: &mut StdReceiver<ApprovalDecision>,
     cancel: &Arc<AtomicBool>,
+    child_cancel: Option<&AtomicBool>,
 ) -> Option<ApprovalDecision> {
     loop {
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.load(Ordering::SeqCst) || child_cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
             return None;
         }
         match rx.try_recv() {

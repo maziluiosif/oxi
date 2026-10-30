@@ -201,6 +201,25 @@ impl OxiApp {
                         self.start_worktree_chat(wi);
                         ui.close();
                     }
+                    let has_setup = self
+                        .conv
+                        .settings
+                        .worktree_setup_scripts
+                        .contains_key(&self.conv.workspaces[wi].root_path);
+                    if ui
+                        .button(if has_setup {
+                            "Edit work tree setup…"
+                        } else {
+                            "Set up new work trees…"
+                        })
+                        .on_hover_text(
+                            "A script run in each new work tree before its agent starts, e.g. installing dependencies",
+                        )
+                        .clicked()
+                    {
+                        self.edit_worktree_setup(wi);
+                        ui.close();
+                    }
                     if wi == self.conv.active_workspace
                         && ui
                             .button("New work tree chat side by side")
@@ -463,6 +482,7 @@ impl OxiApp {
                             }
                         } else {
                             if response.clicked() {
+                                self.close_subagent(ui.ctx());
                                 if split_partner == Some(self.session_key(wi, si)) {
                                     self.focus_split_partner();
                                 } else {
@@ -589,6 +609,7 @@ impl OxiApp {
                 });
             });
             row_advance.get_or_insert(ui.cursor().min.y - row_top);
+            self.render_sidebar_subagents(ui, self.session_key(wi, si));
             if sidebar_changed {
                 return true;
             }

@@ -86,6 +86,12 @@ impl OxiApp {
         self.conv.settings_page.provider_tab = provider;
     }
 
+    /// The parent's approval prompt under an open sub-chat transcript: a subagent's requests
+    /// use the parent's approval channel.
+    pub(super) fn render_subagent_approval(&mut self, ui: &mut Ui, pa: PendingApproval) {
+        self.render_approval_card(ui, pa);
+    }
+
     /// Approve/deny prompt for a shell or built-in filesystem mutation tool.
     /// Rendered at the bottom of the transcript (above the floating composer) so it stays in
     /// view while the run is paused — `stick_to_bottom` keeps the tail visible during a run.
@@ -330,7 +336,12 @@ impl OxiApp {
         scroll_budget: f32,
         bottom_overlay_h: f32,
     ) {
-        let transcript_h = scroll_budget.max(40.0);
+        // The secondary split column renders a conversation directly, without the composer.
+        if self.render_subagent_chat(ui, scroll_budget) {
+            return;
+        }
+        self.render_subagent_roster(ui);
+        let transcript_h = scroll_budget.min(ui.available_height()).max(40.0);
         let copy_selection = self.hold_selection_for_message_menu(ui.ctx());
         let wi = self.conv.active_workspace;
         let si = self.conv.workspaces[wi].active;
@@ -685,15 +696,8 @@ impl OxiApp {
                                 self.render_stall_notice(ui, quiet);
                             }
                             let rollback_available = self
-                                .run_state(self.active_session_key())
-                                .and_then(|run| run.undo_journal.as_ref())
-                                .is_some_and(|journal| {
-                                    journal
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner())
-                                        .unavailable_reason()
-                                        .is_none()
-                                });
+                                .last_turn_rollback(self.active_session_key())
+                                .is_ok();
                             let can_edit = !self.active_waiting_response()
                                 && !self.compaction_active_for(self.active_session_key())
                                 && self.conv.workspaces[wi].sessions[si]

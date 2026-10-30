@@ -91,16 +91,19 @@ pub fn modal_backdrop(ctx: &egui::Context, id: &str) -> bool {
     clicked
 }
 
-/// Shared confirmation modal for destructive actions. `option` adds a checkbox (label, value)
-/// above the buttons.
+/// Shared confirmation modal for destructive actions. `extra` adds content (a checkbox, details)
+/// between the text and the buttons. While `confirm_enabled` is false the confirm button is
+/// disabled and Enter does nothing.
+#[allow(clippy::too_many_arguments)]
 pub fn confirm_modal(
     ctx: &egui::Context,
     id: &str,
     title: &str,
     body: &str,
     note: Option<&str>,
-    option: Option<(&str, &mut bool)>,
+    extra: impl FnOnce(&mut Ui),
     confirm_label: &str,
+    confirm_enabled: bool,
 ) -> ModalOutcome {
     let mut outcome = ModalOutcome::Open;
     if modal_backdrop(ctx, &format!("{id}_backdrop")) {
@@ -129,13 +132,19 @@ pub fn confirm_modal(
                                 .color(crate::theme::c_error_fg()),
                         );
                     }
-                    if let Some((label, value)) = option {
-                        ui.add_space(10.0);
-                        ui.checkbox(value, RichText::new(label).size(FS_SMALL).color(c_text()));
-                    }
+                    extra(ui);
                     ui.add_space(14.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ghost_button(ui, confirm_label, true)
+                    // A fixed-height row: a right-to-left layout would otherwise take the height
+                    // the area had last frame, and a shorter dialog after a taller one (the
+                    // same area) would keep a gap above its buttons.
+                    let row = egui::vec2(ui.available_width(), 28.0);
+                    ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                confirm_enabled,
+                                super::ghost_button_widget(confirm_label, true),
+                            )
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .on_hover_text("Enter")
                             .clicked()
                         {
@@ -152,7 +161,7 @@ pub fn confirm_modal(
         });
 
     if outcome == ModalOutcome::Open {
-        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+        if confirm_enabled && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
             outcome = ModalOutcome::Confirmed;
         } else if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             outcome = ModalOutcome::Cancelled;

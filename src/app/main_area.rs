@@ -153,6 +153,9 @@ impl OxiApp {
 
     /// The active chat's transcript with the composer floating over its bottom edge.
     pub(super) fn render_chat_column(&mut self, ui: &mut Ui) {
+        if self.render_subagent_chat(ui, ui.available_height()) {
+            return;
+        }
         let style = (*ui.style()).clone();
         let column_center_w = crate::theme::chat_column_center_width(ui.available_width(), &style);
 

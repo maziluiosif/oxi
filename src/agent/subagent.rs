@@ -62,7 +62,7 @@ impl SubagentRunner {
             .zip(&parent.enabled)
             .map(|(name, on)| {
                 *on && tool_side_effect(name) == ToolSideEffect::ReadOnly
-                    && !matches!(*name, "task" | "todo_write")
+                    && !matches!(*name, "task" | "todo_write" | "task_status" | "task_cancel")
             })
             .collect();
         let env = ToolEnv {
@@ -71,6 +71,7 @@ impl SubagentRunner {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
             ..parent.clone()
         };
         Self {
@@ -147,6 +148,7 @@ impl SubagentRunner {
                 effort_override: (!effort.is_empty()).then_some(effort),
                 context_char_budget: self.context_char_budget,
                 tools_chars,
+                steer: None,
             },
             &mut messages,
             &tools,
@@ -333,6 +335,7 @@ mod tests {
                 execution: Default::default(),
                 policy: None,
             }),
+            delegation: Some(PathBuf::from("unused-parent-mailbox")),
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let runner = SubagentRunner::new(
@@ -450,6 +453,7 @@ mod tests {
             undo_journal: None,
             subagent: None,
             evidence: None,
+            delegation: None,
         };
         let (usage_tx, usage_rx) = mpsc::channel();
         let runner = SubagentRunner::new(

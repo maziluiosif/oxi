@@ -18,7 +18,7 @@ impl Terminals {
     }
 
     pub(super) fn create(&self, params: &Value, ctx: &PromptCtx) -> Result<Value, String> {
-        if params["sessionId"].as_str() != Some(&ctx.session_id) {
+        if !ctx.accepts_session(params) {
             return Err("Terminal session is not the active prompt".into());
         }
         if ctx.plan_mode {
@@ -117,6 +117,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             plan_mode: true,
             updates: super::super::UpdateState::default(),
+            children: Default::default(),
             event_tx: tx,
             perm_tx,
             cycle_end: None,

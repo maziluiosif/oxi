@@ -79,7 +79,16 @@ pub enum AgentOutcome {
 
 #[derive(Debug)]
 pub enum AgentEvent {
+    /// An ACP child-session or background workflow notification. Kept separate from the
+    /// parent's answer, tools and usage (tool ids are only unique within a session).
+    Delegated {
+        root: String,
+        params: Value,
+    },
     AgentStart,
+    /// A message the user sent into the running turn reached the agent (see
+    /// [`crate::agent::steer`]); the rest of the turn answers it.
+    Steered(String),
     /// A command PTY to attach to this workspace's terminal panel.
     AcpTerminal(crate::terminal::PendingTerminal),
     TextStart,
@@ -93,6 +102,8 @@ pub enum AgentEvent {
         tool_call_id: String,
         args: Option<Value>,
     },
+    /// The approval prompt was answered, or withdrawn (the subagent asking was stopped).
+    ApprovalResolved,
     /// A shell or built-in filesystem mutation tool is waiting for approval.
     ApprovalRequest {
         name: String,

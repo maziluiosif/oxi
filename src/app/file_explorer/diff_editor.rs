@@ -28,7 +28,7 @@ use crate::theme::*;
 use crate::ui::diff_view::{segment, toolbar_icon};
 
 use super::super::OxiApp;
-pub(crate) use decor::{DiffDecor, PaneRows, Side, Underlay, ZoneText, apply_gaps, ruler};
+pub(crate) use decor::{Change, DiffDecor, PaneRows, Side, Underlay, ZoneText, apply_gaps, ruler};
 pub(crate) use pane::PaneCache;
 
 const TOOLBAR_H: f32 = 32.0;
@@ -67,6 +67,16 @@ impl DiffSource {
         }
     }
 
+    /// What the diff compares with, for review comments: "the index", "agent turn", a branch.
+    pub(crate) fn comparison_label(&self) -> String {
+        match self {
+            Self::WorkTree => "the index".to_owned(),
+            Self::Staged => "HEAD (staged changes)".to_owned(),
+            Self::Compare { base, .. } => crate::git::checkpoint::base_label(base).to_owned(),
+            Self::Unsaved => "the saved file".to_owned(),
+        }
+    }
+
     /// Where the left side comes from, for the toolbar.
     fn base_label(&self) -> String {
         match self {
@@ -97,9 +107,13 @@ impl DiffSource {
 
     fn actions(&self) -> &'static [BlockAction] {
         match self {
-            Self::WorkTree => &[BlockAction::Stage, BlockAction::Discard],
-            Self::Staged => &[BlockAction::Unstage],
-            Self::Compare { .. } | Self::Unsaved => &[BlockAction::Discard],
+            Self::WorkTree => &[
+                BlockAction::Comment,
+                BlockAction::Stage,
+                BlockAction::Discard,
+            ],
+            Self::Staged => &[BlockAction::Comment, BlockAction::Unstage],
+            Self::Compare { .. } | Self::Unsaved => &[BlockAction::Comment, BlockAction::Discard],
         }
     }
 }
@@ -113,6 +127,8 @@ pub(crate) enum BlockAction {
     Unstage,
     /// Put the base's lines back in the buffer (one undoable edit).
     Discard,
+    /// Write a note on the change for the agent (see `app::review_comments`).
+    Comment,
 }
 
 impl BlockAction {
@@ -124,6 +140,11 @@ impl BlockAction {
                 ICON_UNDO,
                 "Discard",
                 "Discard this change (undo with Cmd/Ctrl+Z)",
+            ),
+            Self::Comment => (
+                ICON_PROMPTS,
+                "Comment",
+                "Comment on this change for the agent; comments go out with your next message",
             ),
         }
     }
@@ -618,6 +639,9 @@ impl OxiApp {
                 return;
             }
             Some(ToolbarAction::Jump(forward)) => self.jump_to_change(index, forward),
+            Some(ToolbarAction::CommentSelection((start, end), changes)) => {
+                self.comment_on_selection(&ctx, index, start, end, &changes);
+            }
             None => {}
         }
         if let Some(forward) = ui.input_mut(super::editor_body::take_modification_key) {
@@ -883,6 +907,7 @@ impl OxiApp {
         let diff = self.conv.editor.documents[index].diff.as_ref()?;
         let path = diff.relative.clone();
         let base_label = diff.source.base_label();
+        let editable = diff.source.editable();
         ui.spacing_mut().item_spacing.x = 6.0;
         let (dir, name) = path.rsplit_once('/').unwrap_or(("", path.as_str()));
         ui.label(
@@ -900,6 +925,26 @@ impl OxiApp {
             ui.spacing_mut().item_spacing.x = 2.0;
             if toolbar_icon(ui, ICON_CLOSE, "Close diff, keep editing the file", true).clicked() {
                 action = Some(ToolbarAction::Close);
+            }
+            ui.add_space(6.0);
+            let selection = self
+                .conv
+                .editor
+                .editor_selection_chars
+                .filter(|(start, end)| start < end);
+            if let Some(decor) = decor
+                && let Some(selection) = selection
+                && editable
+                && ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("Comment on selection").size(FS_TINY),
+                    ))
+                    .on_hover_text(
+                        "Comment on the selected lines for the agent; comments go out with your next message",
+                    )
+                    .clicked()
+            {
+                action = Some(ToolbarAction::CommentSelection(selection, decor.changes.clone()));
             }
             ui.add_space(6.0);
             let inline = self.conv.editor.diff_inline || !split_possible;
@@ -947,6 +992,48 @@ impl OxiApp {
             );
         });
         action
+    }
+
+    /// Open a comment on the lines of document `index` that chars `start..end` cover.
+    fn comment_on_selection(
+        &mut self,
+        ctx: &egui::Context,
+        index: usize,
+        start: usize,
+        end: usize,
+        changes: &[Change],
+    ) {
+        let document = &self.conv.editor.documents[index];
+        let Some(diff) = document.diff.as_ref() else {
+            return;
+        };
+        let content = &document.content;
+        let byte = |chars: usize| {
+            content
+                .char_indices()
+                .nth(chars)
+                .map_or(content.len(), |(i, _)| i)
+        };
+        let (from, to) = (byte(start), byte(end));
+        let first = content[..from].matches('\n').count();
+        let last = first
+            + content[from..to]
+                .trim_end_matches('\n')
+                .matches('\n')
+                .count();
+        let root = self.active_workspace().root_path.clone();
+        let target = crate::app::review_comments::lines_target(
+            &root,
+            &diff.relative,
+            &diff.source.comparison_label(),
+            content,
+            (first, last),
+            changes,
+        );
+        let anchor = ctx
+            .pointer_latest_pos()
+            .unwrap_or_else(|| ctx.content_rect().center());
+        self.open_comment_draft(target, anchor);
     }
 
     /// The hovered change's actions, over the top right of its new side.
@@ -1053,6 +1140,19 @@ impl OxiApp {
         let relative = diff.relative.clone();
         let source = diff.source.clone();
         match action {
+            BlockAction::Comment => {
+                let root = self.active_workspace().root_path.clone();
+                let target = crate::app::review_comments::change_target(
+                    &root,
+                    &relative,
+                    &source.comparison_label(),
+                    change,
+                );
+                let anchor = ctx
+                    .pointer_latest_pos()
+                    .unwrap_or_else(|| ctx.content_rect().center());
+                self.open_comment_draft(target, anchor);
+            }
             BlockAction::Stage => {
                 self.request(crate::git::GitOp::ApplyBlock(crate::git::BlockEdit {
                     path: relative,
@@ -1140,6 +1240,8 @@ impl OxiApp {
 enum ToolbarAction {
     Close,
     Jump(bool),
+    /// Comment on the selected chars `(start, end)`, with the changes at that moment.
+    CommentSelection((usize, usize), Vec<Change>),
 }
 
 /// Byte offset where 0-based `line` starts (end of text past the last line).

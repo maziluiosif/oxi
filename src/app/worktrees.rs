@@ -9,6 +9,39 @@ use eframe::egui;
 use super::OxiApp;
 use super::state::Workspace;
 
+/// The check behind a confirmation that would delete a work tree: what would be lost
+/// (see [`crate::git::worktree::removal_risk`]) and how the user chose to handle it.
+pub(crate) struct WorktreeRiskCheck {
+    /// Root of the work tree workspace being checked.
+    pub root: String,
+    /// `None` while the check runs.
+    pub result: Option<Result<crate::git::worktree::RemovalRisk, String>>,
+    rx: Option<Receiver<Result<crate::git::worktree::RemovalRisk, String>>>,
+    /// Keep the branch, and so its commits; the default when it has commits no other branch has.
+    pub keep_branch: bool,
+    /// Remove even though the listed work is lost. Only ever set by the user.
+    pub force: bool,
+}
+
+impl WorktreeRiskCheck {
+    pub(crate) fn options(&self) -> crate::git::worktree::RemoveOptions {
+        crate::git::worktree::RemoveOptions {
+            keep_branch: self.keep_branch,
+            force: self.force,
+        }
+    }
+
+    /// Whether removing now is allowed: the check found nothing that would be lost with these
+    /// options, or the user chose to delete it anyway.
+    pub(crate) fn allows_removal(&self) -> bool {
+        match &self.result {
+            None => false,
+            Some(Ok(risk)) => self.force || !risk.blocks(self.options()),
+            Some(Err(_)) => self.force,
+        }
+    }
+}
+
 /// Result of a background work tree operation, applied on the UI thread.
 pub(crate) enum WorktreeResult {
     Created(Result<PathBuf, String>),
@@ -53,8 +86,57 @@ impl OxiApp {
         });
     }
 
-    /// Delete work tree workspace `wi` (folder and branch) and drop it from the sidebar.
-    pub(crate) fn remove_worktree(&mut self, wi: usize) {
+    /// Find out, in the background, what removing work tree workspace `wi` would lose.
+    pub(crate) fn start_worktree_risk_check(&mut self, wi: usize) {
+        let Some(workspace) = self.conv.workspaces.get(wi) else {
+            return;
+        };
+        if workspace.worktree.is_none() {
+            self.conv.worktree_risk = None;
+            return;
+        }
+        let root = workspace.root_path.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = self.conv.git_ctx.clone();
+        let path = PathBuf::from(&root);
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::git::worktree::removal_risk(&path));
+            ctx.request_repaint();
+        });
+        self.conv.worktree_risk = Some(WorktreeRiskCheck {
+            root,
+            result: None,
+            rx: Some(rx),
+            keep_branch: false,
+            force: false,
+        });
+    }
+
+    /// Pick up a finished removal check.
+    pub(crate) fn poll_worktree_risk(&mut self) {
+        let Some(check) = self.conv.worktree_risk.as_mut() else {
+            return;
+        };
+        let Some(rx) = check.rx.as_ref() else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("The check stopped unexpectedly".to_string())
+            }
+        };
+        if let Ok(risk) = &result {
+            check.keep_branch = risk.loses_commits() && !risk.detached;
+        }
+        check.result = Some(result);
+        check.rx = None;
+    }
+
+    /// Delete work tree workspace `wi` (folder and, unless `opts.keep_branch`, its branch) and
+    /// drop it from the sidebar. The removal itself checks again for work that would be lost.
+    pub(crate) fn remove_worktree(&mut self, wi: usize, opts: crate::git::worktree::RemoveOptions) {
         let Some(workspace) = self.conv.workspaces.get(wi) else {
             return;
         };
@@ -74,7 +156,7 @@ impl OxiApp {
         self.delete_workspace(wi);
         // Deleting the folder can take seconds (build output, node_modules).
         self.spawn_chore("Could not remove the work tree", move || {
-            crate::git::worktree::remove(&root)
+            crate::git::worktree::remove(&root, opts)
         });
     }
 
@@ -145,6 +227,8 @@ impl OxiApp {
         });
         self.select_workspace(self.conv.workspaces.len() - 1);
         self.sync_workspaces_to_settings();
+        let root = self.active_workspace().root_path.clone();
+        self.start_worktree_setup(&root);
         self.new_chat();
         self.finish_pending_split();
     }

@@ -10,6 +10,15 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
 
+/// Subagent and workflow notifications that arrived with no turn in flight, as
+/// `(session key, root session id, params)`, for the UI to apply to the parent chat.
+static DELEGATED: Mutex<Vec<(String, String, Value)>> = Mutex::new(Vec::new());
+
+/// Take the subagent notifications received between turns, oldest first.
+pub fn take_delegated() -> Vec<(String, String, Value)> {
+    std::mem::take(&mut *DELEGATED.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
 /// Keys of the sessions holding updates that no turn has shown yet.
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -60,6 +69,12 @@ pub(super) fn wake() {
 /// Updates one connection received with no turn in flight, oldest first.
 pub(super) struct Held {
     session_key: String,
+    root: Mutex<String>,
+    pub(super) children: std::sync::Arc<Mutex<std::collections::HashSet<String>>>,
+    replay: AtomicBool,
+    parents: Mutex<std::collections::HashMap<String, String>>,
+    controls: Mutex<std::collections::HashMap<String, bool>>,
+    cancelled_children: Mutex<std::collections::HashMap<String, std::sync::Arc<AtomicBool>>>,
     /// Off while the session is set up: `session/load` replays the whole history as updates.
     armed: AtomicBool,
     updates: Mutex<VecDeque<Value>>,
@@ -72,6 +87,12 @@ impl Held {
     pub(super) fn new(session_key: &str) -> Self {
         Self {
             session_key: session_key.to_owned(),
+            root: Default::default(),
+            children: Default::default(),
+            replay: AtomicBool::new(false),
+            parents: Default::default(),
+            controls: Default::default(),
+            cancelled_children: Default::default(),
             armed: AtomicBool::new(false),
             updates: Mutex::new(VecDeque::new()),
             permissions: Mutex::new(Vec::new()),
@@ -82,6 +103,133 @@ impl Held {
         &self.session_key
     }
 
+    /// Track the provider's announcements, including those received during session/load.
+    pub(super) fn note_child(&self, params: &Value) -> bool {
+        let u = &params["update"];
+        let kind = u["sessionUpdate"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches('_');
+        if matches!(kind, "subagent_update" | "subagent_spawned") {
+            if let Some(id) = u["sessionId"]
+                .as_str()
+                .or_else(|| u["subagentSessionId"].as_str())
+            {
+                if let Some(parent) = params["sessionId"].as_str() {
+                    self.parents
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(id.into(), parent.into());
+                }
+                self.children
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(id.into());
+                if u["state"]["state"] == "running" {
+                    self.cancelled_children
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(id);
+                }
+                if let Some(cancel) = u["capabilities"].get("cancel") {
+                    self.controls
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(id.into(), cancel.is_object());
+                }
+            }
+            return true;
+        }
+        if kind == "async_task_spawned"
+            && let Some(id) = u["asyncTaskId"].as_str()
+        {
+            self.controls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.into(), u["canStop"].as_bool() == Some(true));
+        }
+        kind.starts_with("async_task_")
+            || kind == "subagent_state_update"
+            || params["sessionId"].as_str().is_some_and(|id| {
+                self.children
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(id)
+            })
+    }
+    pub(super) fn disconnected(&self) {
+        let root = self.root.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if root.is_empty() {
+            return;
+        }
+        DELEGATED.lock().unwrap_or_else(|e| e.into_inner()).push((
+            self.session_key.clone(),
+            root,
+            serde_json::json!({"update":{"sessionUpdate":"delegation_disconnected"}}),
+        ));
+        wake();
+    }
+    pub(super) fn set_root(&self, root: &str) {
+        *self.root.lock().unwrap_or_else(|e| e.into_inner()) = root.into();
+    }
+    pub(super) fn permission_cancel(&self, params: &Value) -> Option<std::sync::Arc<AtomicBool>> {
+        let id = params["sessionId"].as_str()?;
+        if !self
+            .children
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(id)
+        {
+            return None;
+        }
+        Some(
+            self.cancelled_children
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(id.into())
+                .or_default()
+                .clone(),
+        )
+    }
+    pub(super) fn cancel_permissions(&self, id: &str) {
+        // Stopping a provider-owned child also stops its descendants. Their outstanding
+        // permission requests must not leave the parent's approval loop blocked.
+        let parents = self.parents.lock().unwrap_or_else(|e| e.into_inner());
+        let mut targets = std::collections::HashSet::from([id]);
+        loop {
+            let before = targets.len();
+            for (child, parent) in parents.iter() {
+                if targets.contains(parent.as_str()) {
+                    targets.insert(child.as_str());
+                }
+            }
+            if targets.len() == before {
+                break;
+            }
+        }
+        let mut cancelled = self
+            .cancelled_children
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for target in targets {
+            cancelled
+                .entry(target.into())
+                .or_default()
+                .store(true, Ordering::SeqCst);
+        }
+    }
+    pub(super) fn can_cancel(&self, id: &str) -> bool {
+        self.controls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .copied()
+            .unwrap_or(false)
+    }
+    pub(super) fn take_replay(&self) -> bool {
+        self.replay.swap(false, Ordering::SeqCst)
+    }
+
     /// Start holding updates; the session is set up.
     pub(super) fn arm(&self) {
         self.armed.store(true, Ordering::SeqCst);
@@ -90,9 +238,31 @@ impl Held {
     /// Keep the `session/update` params that arrived between turns. Only what the agent says or
     /// does starts a held cycle; anything else (usage, a late status) is kept only behind it.
     pub(super) fn hold(&self, params: &Value) {
+        let delegated = self.note_child(params);
         if !self.armed.load(Ordering::SeqCst) {
+            if delegated {
+                self.replay.store(true, Ordering::SeqCst);
+                self.updates
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push_back(params.clone());
+            }
             return;
         }
+        if delegated {
+            let mut pending = DELEGATED.lock().unwrap_or_else(|e| e.into_inner());
+            if pending.len() < MAX_HELD {
+                pending.push((
+                    self.session_key.clone(),
+                    self.root.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+                    params.clone(),
+                ));
+            }
+            drop(pending);
+            wake();
+            return;
+        }
+        // A subagent reporting back (`session_message`) wakes the parent too.
         let starts_cycle = matches!(
             params["update"]["sessionUpdate"].as_str(),
             Some(
@@ -101,6 +271,7 @@ impl Held {
                     | "tool_call"
                     | "tool_call_update"
                     | "plan"
+                    | "session_message"
             )
         );
         {
@@ -177,6 +348,20 @@ pub(super) fn ends_cycle(update: &Value) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn child_cancellation_clears_descendant_permissions_only() {
+        let held = Held::new("nested-cancel-test");
+        for (parent, child) in [("root", "a"), ("a", "b"), ("root", "c")] {
+            held.note_child(&json!({"sessionId":parent,"update":{"sessionUpdate":"subagent_update","sessionId":child}}));
+        }
+        let a = held.permission_cancel(&json!({"sessionId":"a"})).unwrap();
+        let b = held.permission_cancel(&json!({"sessionId":"b"})).unwrap();
+        let c = held.permission_cancel(&json!({"sessionId":"c"})).unwrap();
+        held.cancel_permissions("a");
+        assert!(a.load(Ordering::SeqCst) && b.load(Ordering::SeqCst));
+        assert!(!c.load(Ordering::SeqCst));
+    }
 
     fn update(kind: &str) -> Value {
         json!({ "sessionId": "s", "update": { "sessionUpdate": kind } })

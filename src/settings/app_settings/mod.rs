@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use super::provider::{LlmProviderKind, ProviderConfig, ToolDetail, UiDensity, WebSearchBackend};
 
-pub const ALL_TOOL_NAMES: [&str; 19] = [
+pub const ALL_TOOL_NAMES: [&str; 22] = [
     "read",
     "write",
     "edit",
@@ -27,6 +27,9 @@ pub const ALL_TOOL_NAMES: [&str; 19] = [
     "diagnostics",
     "task",
     "scratchpad",
+    "delegate_task",
+    "task_status",
+    "task_cancel",
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,6 +88,10 @@ pub struct AppSettings {
     /// approval prompt, by workspace root path.
     #[serde(default)]
     pub workspace_tool_allowlist: BTreeMap<String, Vec<String>>,
+    /// Shell script run in each new work tree of a repository before its agent starts, by the
+    /// main checkout's root path.
+    #[serde(default)]
+    pub worktree_setup_scripts: BTreeMap<String, String>,
     /// Minutes an ACP agent may sit idle before its subprocess is stopped; `0` never stops it.
     /// The next prompt relaunches it and resumes the agent's session.
     #[serde(default = "default_acp_idle_minutes")]
@@ -339,6 +346,7 @@ impl Default for AppSettings {
             require_bash_approval: default_require_approval(),
             bash_allowlist: Vec::new(),
             workspace_tool_allowlist: BTreeMap::new(),
+            worktree_setup_scripts: BTreeMap::new(),
             acp_idle_minutes: default_acp_idle_minutes(),
             acp_max_live_agents: default_acp_max_live_agents(),
             notify_in_background: true,

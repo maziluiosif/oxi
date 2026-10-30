@@ -19,6 +19,7 @@ pub fn load_session_messages(session_file: &str) -> Option<Vec<ChatMessage>> {
 
 /// Authoritative session data loaded from disk, plus an optional derived provider wire cache.
 pub struct LoadedSessionMessages {
+    pub delegated: crate::model::delegated::DelegatedChats,
     pub messages: Vec<ChatMessage>,
     pub config: Option<SessionConfig>,
 }
@@ -29,6 +30,7 @@ type SessionMessagesWithWire = (LoadedSessionMessages, Option<WireCache>);
 pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMessagesWithWire> {
     let file = File::open(session_file).ok()?;
     let reader = BufReader::new(file);
+    let mut delegated = Default::default();
     let mut saw_header = false;
     let mut messages = Vec::new();
     let mut config: Option<SessionConfig> = None;
@@ -70,6 +72,9 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
             continue;
         }
         match value.get("type").and_then(Value::as_str) {
+            Some("delegated_chats") => {
+                delegated = serde_json::from_value(value["data"].clone()).unwrap_or_default();
+            }
             Some("message") => {
                 if let Some(message) = value.get("message") {
                     messages.push(message.clone());
@@ -107,6 +112,7 @@ pub fn load_session_messages_with_wire(session_file: &str) -> Option<SessionMess
     }));
     Some((
         LoadedSessionMessages {
+            delegated,
             messages: chat,
             config,
         },
@@ -194,6 +200,14 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         kind: &'static str,
     }
 
+    if !session.delegated.chats.is_empty() {
+        serde_json::to_writer(
+            &mut file,
+            &json!({"type": "delegated_chats", "data": session.delegated}),
+        )
+        .map_err(|e| e.to_string())?;
+        file.write_all(b"\n").map_err(|e| e.to_string())?;
+    }
     for message in &session.messages {
         for message_json in chat_message_to_json_entries(message) {
             let line = MessageLine {
@@ -228,6 +242,7 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
     session.disk_mtime = fs::metadata(&session_path).and_then(|m| m.modified()).ok();
     session.session_file = Some(session_path.to_string_lossy().to_string());
     session.messages_loaded = true;
+    session.delegated.unsaved_since = None;
     Ok(())
 }
 

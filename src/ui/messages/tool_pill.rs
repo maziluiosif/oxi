@@ -445,6 +445,50 @@ pub(super) fn render_single_tool_block(
     }
 
     render_tool_pill(ui, msg_idx, bi, block, streaming, streaming, is_newest_tool);
+    if let AssistantBlock::Tool {
+        tool_call_id,
+        args_summary,
+        ..
+    } = block
+    {
+        let args = args_summary
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+        // A tool links only to the child it launched. Generic Agent/Workflow calls must not
+        // repeat a menu containing every child in the conversation.
+        let links = ui
+            .ctx()
+            .data(|d| {
+                d.get_temp::<Vec<(String, String, String, Option<String>)>>(egui::Id::new(
+                    "subagent_links",
+                ))
+            })
+            .unwrap_or_default();
+        let linked = links.iter().find(|(root, id, _, tool)| {
+            tool.as_deref() == Some(tool_call_id.as_str())
+                || args.as_ref().is_some_and(|a| {
+                    a["session_id"].as_str() == Some(id.as_str())
+                        && a["root_session_id"].as_str() == Some(root.as_str())
+                })
+        });
+        if let Some((root, id, label, _)) = linked
+            && ui
+                .add(
+                    egui::Button::new(
+                        RichText::new("View agent →")
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    )
+                    .frame(false),
+                )
+                .on_hover_text(label)
+                .clicked()
+        {
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(egui::Id::new("open_subagent"), (root.clone(), id.clone()))
+            });
+        }
+    }
     // Same gap as between pills of an explore cluster, so a run of tools does not shift when the
     // third explore call regroups the earlier ones into a cluster.
     ui.add_space(TOOL_PILL_GAP);

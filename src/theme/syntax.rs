@@ -157,6 +157,90 @@ pub fn highlight_code_async(
     None
 }
 
+/// The newest cached highlight of the same language, font and palette, recolored onto
+/// `content` by keeping the colors of the unchanged prefix and suffix; the edited middle takes
+/// the color just before it. While [`highlight_code_async`] works on a keystroke, this keeps
+/// the editor from flashing plain text.
+pub fn stale_highlight(
+    content: &str,
+    language: &str,
+    font_id: &FontId,
+) -> Option<egui::text::LayoutJob> {
+    let language = normalized_language(language);
+    let palette = active_palette().syntax;
+    let cache = HIGHLIGHT_CACHE.get()?;
+    let entries = cache.lock().ok()?;
+    let (_, old) = entries.iter().rev().find(|(key, _)| {
+        key.language == language && key.font_id == *font_id && key.palette == palette
+    })?;
+    if old.sections.is_empty() {
+        return None;
+    }
+    Some(remap_job(old, content))
+}
+
+fn remap_job(old: &egui::text::LayoutJob, text: &str) -> egui::text::LayoutJob {
+    use egui::text::ByteIndex;
+    let before = old.text.as_bytes();
+    let after = text.as_bytes();
+    let mut prefix = before.iter().zip(after).take_while(|(a, b)| a == b).count();
+    while !text.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let max_suffix = before.len().min(after.len()) - prefix;
+    let mut suffix = before
+        .iter()
+        .rev()
+        .zip(after.iter().rev())
+        .take(max_suffix)
+        .take_while(|(a, b)| a == b)
+        .count();
+    while !text.is_char_boundary(after.len() - suffix) {
+        suffix -= 1;
+    }
+    let old_tail = before.len() - suffix;
+    let new_tail = after.len() - suffix;
+
+    let mut job = egui::text::LayoutJob {
+        text: text.to_owned(),
+        sections: Vec::with_capacity(old.sections.len() + 1),
+        wrap: old.wrap.clone(),
+        ..Default::default()
+    };
+    let mut push = |range: std::ops::Range<usize>, format: &egui::text::TextFormat| {
+        if !range.is_empty() {
+            job.sections.push(egui::text::LayoutSection {
+                leading_space: 0.0,
+                byte_range: ByteIndex(range.start)..ByteIndex(range.end),
+                format: format.clone(),
+            });
+        }
+    };
+    let mut middle_format = None;
+    for section in &old.sections {
+        let (start, end) = (section.byte_range.start.0, section.byte_range.end.0);
+        if start < prefix {
+            push(start..end.min(prefix), &section.format);
+            middle_format = Some(&section.format);
+        }
+    }
+    let middle_format = middle_format.or_else(|| old.sections.first().map(|s| &s.format));
+    if let Some(format) = middle_format {
+        push(prefix..new_tail, format);
+    }
+    for section in &old.sections {
+        let (start, end) = (section.byte_range.start.0, section.byte_range.end.0);
+        if end > old_tail {
+            let start = start.max(old_tail);
+            push(
+                start - old_tail + new_tail..end - old_tail + new_tail,
+                &section.format,
+            );
+        }
+    }
+    job
+}
+
 fn cached_highlight(key: &HighlightKey) -> Option<egui::text::LayoutJob> {
     let cache = HIGHLIGHT_CACHE.get_or_init(|| Mutex::new(Vec::new()));
     let mut entries = cache.lock().ok()?;
@@ -265,6 +349,36 @@ mod tests {
         colors.sort_by_key(|c| c.to_array());
         colors.dedup();
         assert!(colors.len() >= 3);
+    }
+
+    #[test]
+    fn remapped_job_keeps_colors_around_an_edit() {
+        let old = highlight_code(
+            "# Title\n\nsome *text* here\n",
+            "md",
+            FontId::monospace(12.0),
+        );
+        for text in [
+            "# Title\n\nsome *text* hereș\n",
+            "# Title\n\nsome *tex here\n",
+            "x# Title\n\nsome *text* here\n",
+            "",
+            "# Title\n\nsome *text* here\n\nmore",
+        ] {
+            let job = remap_job(&old, text);
+            assert_eq!(job.text, text);
+            let mut at = 0;
+            for section in &job.sections {
+                assert_eq!(section.byte_range.start.0, at);
+                at = section.byte_range.end.0;
+                assert!(text.is_char_boundary(at));
+            }
+            assert_eq!(at, text.len());
+        }
+        let job = remap_job(&old, "# Title!\n\nsome *text* here\n");
+        assert_eq!(job.sections[0].format.color, old.sections[0].format.color);
+        let last = |job: &egui::text::LayoutJob| job.sections.last().unwrap().format.color;
+        assert_eq!(last(&job), last(&old));
     }
 
     #[test]

@@ -1,8 +1,10 @@
-//! One-shot LLM text completion (no tools) used for the "generate commit message" button.
+//! One-shot LLM text completion (no tools) used for the "generate commit message" button and
+//! chat titles.
 //!
 //! Reuses the provider dispatch of normal agent runs, but with no tool definitions and a single
 //! round, so the model just returns plain text. Deltas are
-//! streamed back over the channel, followed by a terminal [`CompleteEvent::Done`].
+//! streamed back over the channel, followed by a terminal [`CompleteEvent::Done`]. The Claude
+//! and Codex agents answer through their own CLI instead (see [`super::cli_complete`]).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,15 +103,28 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
         undo_journal: None,
         subagent: None,
         evidence: None,
+        delegation: None,
     };
 
-    let r = if cfg.is_acp() {
-        // ACP drives a full interactive agent session; it has no cheap one-shot
-        // text-completion path for helpers like commit-message generation.
-        Err("ACP agents do not support one-shot completion. \
-             Pick another provider for commit-message generation."
-            .to_string())
-    } else {
+    if cfg.is_acp() {
+        drop(agent_tx);
+        let _ = collector.await;
+        // An ACP session is a full interactive agent. Claude Code and Codex have a one-shot
+        // CLI on the same login; the other agents have no cheap path for helpers.
+        if !crate::agent::cli_complete::supports(cfg.provider) {
+            return Err(format!(
+                "{} cannot draft text on its own. Pick another provider for commit messages \
+                 and chat titles in Settings.",
+                cfg.provider.label()
+            ));
+        }
+        let text =
+            crate::agent::cli_complete::complete(&cfg, &system_prompt, &user_prompt, max_chars)
+                .await?;
+        let _ = tx.send(CompleteEvent::Delta(text.clone()));
+        return Ok(text);
+    }
+    let r = {
         crate::agent::dispatch::run_provider_loop(
             crate::agent::dispatch::DispatchParams {
                 cfg: &cfg,
@@ -124,6 +139,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 effort_override: effort_override.as_deref(),
                 context_char_budget: usize::MAX,
                 tools_chars: 0,
+                steer: None,
             },
             &mut messages,
             &tools,

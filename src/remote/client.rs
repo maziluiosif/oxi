@@ -451,14 +451,25 @@ impl Shared {
                 history,
             } => match result {
                 Ok(value) => {
+                    // A retransmitted prompt the server had already run: nothing more comes
+                    // for it, so end the turn here (the app then reads the chat's copy).
+                    let finished_before = value["duplicate"] == true && value["running"] != true;
                     if let Some(chat) = value["chat"].as_str() {
                         if let Some(root) = params["root"].as_str() {
                             self.remember_root(chat, root);
                         }
-                        self.routes
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .insert(chat.to_string(), Route::Live(tx));
+                        if !finished_before {
+                            self.routes
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(chat.to_string(), Route::Live(tx.clone()));
+                        }
+                    }
+                    if finished_before {
+                        let _ = tx.send(AgentEvent::Finished(AgentOutcome::Success {
+                            wire_cache: None,
+                        }));
+                        self.wake();
                     }
                     let _ = reply.send(Ok(value));
                 }

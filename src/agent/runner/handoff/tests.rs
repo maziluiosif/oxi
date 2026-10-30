@@ -55,19 +55,46 @@ fn keeps_turns_and_skips_thinking() {
         ),
     ];
     let t = acp_history_transcript(&chat);
-    assert_eq!(t, "User: fix the bug\n\nAssistant: Done.");
+    assert_eq!(t, "[#1] User: fix the bug\n\n[#2] Assistant: Done.");
 }
 
 #[test]
-fn drops_oldest_turns_over_budget() {
-    let big = "x".repeat(ACP_HISTORY_MAX_CHARS - 10);
+fn keeps_the_first_turn_and_names_the_turns_left_out() {
+    let big = "x".repeat(ACP_HISTORY_MAX_CHARS * 3 / 5);
     let chat = vec![
-        chat_msg(MsgRole::User, "old", vec![]),
+        chat_msg(MsgRole::User, "the task", vec![]),
         chat_msg(MsgRole::User, &big, vec![]),
+        chat_msg(MsgRole::User, &big, vec![]),
+        chat_msg(MsgRole::User, &big, vec![]),
+        chat_msg(MsgRole::User, "latest", vec![]),
     ];
     let t = acp_history_transcript(&chat);
-    assert!(!t.contains("old"));
-    assert!(t.starts_with("User: xxx"));
+    assert!(t.starts_with("[#1] User: the task\n\n[2 turn(s), #2–#3, left out for length."));
+    assert!(t.contains("chat_read") && t.ends_with("[#5] User: latest"));
+    assert!(t.len() <= ACP_HISTORY_MAX_CHARS);
+}
+
+#[test]
+fn archive_keeps_every_turn_with_more_tool_output() {
+    let long = format!("{}END", "y".repeat(5_000));
+    let mut chat = vec![chat_msg(
+        MsgRole::Assistant,
+        "",
+        vec![tool("read", "a", &long, false)],
+    )];
+    for _ in 0..RECENT_ASSISTANT_TURNS {
+        chat.push(chat_msg(
+            MsgRole::Assistant,
+            "",
+            vec![AssistantBlock::Answer("ok".into())],
+        ));
+    }
+    let archive = acp_chat_archive(&chat);
+    assert_eq!(archive.len(), 4);
+    assert_eq!(archive[0].0, 1);
+    assert!(archive[0].1.starts_with("[#1] Assistant: [tool read: a]\n"));
+    assert!(archive[0].1.len() > 5_000);
+    assert!(!acp_history_transcript(&chat).contains(&long));
 }
 
 #[test]
@@ -147,7 +174,7 @@ fn missed_turns_start_after_the_agents_own_last_answer() {
     let t = acp_missed_transcript(&chat, LlmProviderKind::ClaudeCodeAcp);
     assert_eq!(
         t,
-        "User: review it\n\nAssistant (Codex (ACP) · m): found a bug"
+        "[#3] User: review it\n\n[#4] Assistant (Codex (ACP) · m): found a bug"
     );
     assert!(acp_missed_transcript(&chat, LlmProviderKind::CodexAcp).is_empty());
     assert!(acp_missed_transcript(&chat, LlmProviderKind::CursorAcp).is_empty());
@@ -247,4 +274,41 @@ fn multi_agent_chain_survives_reload_and_recaps_each_interrupted_agent() {
         );
     }
     assert!(acp_missed_transcript(&chat, LlmProviderKind::CursorAcp).is_empty());
+}
+
+#[test]
+fn recaps_skip_guardian_reviews_and_chat_read_output() {
+    let mut review = tool("tool", r#"{"action":{}}"#, "Status: In progress", false);
+    if let AssistantBlock::Tool { tool_call_id, .. } = &mut review {
+        *tool_call_id = "guardian_assessment:1".into();
+    }
+    let mut reply = answer_by(LlmProviderKind::CodexAcp, "Works.");
+    reply.blocks.insert(0, review);
+    reply.blocks.insert(
+        1,
+        tool(
+            "chat_read",
+            r#"{"from":2}"#,
+            "[#2] earlier turn text",
+            false,
+        ),
+    );
+    let chat = vec![
+        answer_by(LlmProviderKind::ClaudeCodeAcp, "implemented"),
+        chat_msg(MsgRole::User, "does it work?", vec![]),
+        reply,
+    ];
+    let recap = acp_missed_transcript(&chat, LlmProviderKind::ClaudeCodeAcp);
+    assert!(
+        !recap.contains("guardian") && !recap.contains("Status:"),
+        "{recap}"
+    );
+    assert!(recap.contains("[tool chat_read: {\"from\":2}]"));
+    assert!(!recap.contains("earlier turn text"));
+    let archive = acp_chat_archive(&chat);
+    assert!(
+        archive
+            .iter()
+            .all(|(_, t)| !t.contains("earlier turn text"))
+    );
 }

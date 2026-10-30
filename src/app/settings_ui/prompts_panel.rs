@@ -65,7 +65,7 @@ impl OxiApp {
                     &mut self.conv.settings.auto_title_chats,
                     "Name new chats with this model",
                     Some(
-                        "After the first reply, a short summary replaces the title. Not for ACP agents; renamed chats are kept.",
+                        "After the first reply, a short summary replaces the title. Claude Code and Codex use their own CLI login (claude -p, codex exec); other ACP agents can't. Renamed chats are kept.",
                     ),
                 );
 

@@ -26,6 +26,10 @@ const TOOL_GROUPS: &[(&str, &[&str])] = &[
     ),
     ("Run commands", &["bash", "diagnostics"]),
     ("Plan & delegate", &["todo_write", "task"]),
+    (
+        "Other agents",
+        &["delegate_task", "task_status", "task_cancel"],
+    ),
     ("Notes", &["scratchpad"]),
     ("Git", &["git_status", "git_diff"]),
     ("Web", &["web_search", "web_fetch"]),

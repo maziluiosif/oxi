@@ -27,4 +27,6 @@ pub struct LoopCtx<'a> {
     /// Size (chars) of the tool definitions sent every round, counted as fixed overhead when
     /// measuring history against [`Self::context_char_budget`].
     pub tools_chars: usize,
+    /// Messages the user sends into this turn; `None` where nobody can (helpers, sub-agents).
+    pub steer: Option<&'a super::steer::SteerInbox>,
 }

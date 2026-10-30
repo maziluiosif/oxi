@@ -3,6 +3,7 @@ mod format;
 pub(crate) use format::chat_message_to_json_entries;
 mod io;
 mod paths;
+pub mod run_journal;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -121,6 +122,7 @@ pub fn load_session_summary(path: &str) -> Option<Session> {
 
 fn unloaded_session(session: LoadedSession) -> Session {
     Session {
+        delegated: Default::default(),
         title: session.title,
         messages: Vec::new(),
         config: session.config,
@@ -142,6 +144,7 @@ pub fn load_session(path: &str) -> Option<Session> {
     let summary = parse_session_file(Path::new(path))?;
     let (loaded, wire_cache) = load_session_messages_with_wire(path)?;
     Some(Session {
+        delegated: loaded.delegated,
         title: summary.title,
         messages: loaded.messages,
         config: loaded.config.or(summary.config),
@@ -387,6 +390,7 @@ mod tests {
     fn save_and_reload_preserves_wire_cache() {
         let root = temp_root("wire-cache-roundtrip");
         let mut session = Session {
+            delegated: Default::default(),
             title: "Chat".into(),
             messages: vec![],
             config: None,
@@ -426,6 +430,7 @@ mod tests {
             context_window: Some(200_000),
         };
         let mut session = Session {
+            delegated: Default::default(),
             title: "Chat".into(),
             messages: vec![],
             config: Some(config.clone()),
@@ -452,6 +457,7 @@ mod tests {
     fn save_session_messages_dedupes_duplicate_full_history_before_writing() {
         let root = temp_root("save-dedupe");
         let mut session = Session {
+            delegated: Default::default(),
             title: "Chat".into(),
             config: None,
             messages: hydrate::messages_from_get_messages(&json!({
@@ -487,6 +493,7 @@ mod tests {
     fn save_and_reload_preserves_assistant_block_formatting() {
         let root = temp_root("formatting-roundtrip");
         let mut session = Session {
+            delegated: Default::default(),
             title: "Chat".into(),
             config: None,
             messages: vec![
@@ -560,6 +567,7 @@ mod tests {
         // a save/reload round-trip (the live `started_at` Instant cannot be persisted).
         let root = temp_root("worked-duration-roundtrip");
         let mut session = Session {
+            delegated: Default::default(),
             title: "Chat".into(),
             config: None,
             messages: vec![

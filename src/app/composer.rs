@@ -19,10 +19,7 @@ use eframe::egui::{
 
 use crate::theme::*;
 
-use super::composer_helpers::{
-    context_indicator_color, estimate_message_chars, format_context_tokens, format_tokens_per_sec,
-    paint_arc,
-};
+use super::composer_helpers::estimate_message_chars;
 use super::{OxiApp, SessionKey};
 
 /// Diameter of the round send button.
@@ -374,6 +371,10 @@ impl OxiApp {
                         // === Agent checklist and plan hand-off ===
                         self.render_task_panel(ui);
                         self.render_plan_ready_bar(ui);
+                        self.render_interrupted_notice(ui);
+                        self.render_delegations(ui);
+                        self.render_worktree_setup(ui);
+                        self.render_review_comments(ui);
                         self.render_queue_panel(ui);
                         // === Transient notice (blocked send, rejected attachment, …) ===
                         self.render_composer_notice(ui);
@@ -627,13 +628,9 @@ impl OxiApp {
         composer_focused: bool,
         width: f32,
     ) {
+        // Context, usage limits and output speed live in the status bar. Selectors can shed
+        // secondary options and truncate the provider in the rest.
         let mut budget = width - SEND_DIAM - 6.0;
-        // Context usage is persistent status, so reserve it before optional controls.
-        // Selectors can shed secondary options and truncate the provider in the rest.
-        let show_context = budget >= 48.0 + 32.0;
-        if show_context {
-            budget -= 32.0;
-        }
         let show_mic = self.conv.settings.dictation.enabled && budget >= 48.0 + MIC_DIAM + 6.0;
         if show_mic {
             budget -= MIC_DIAM + 6.0;
@@ -648,24 +645,6 @@ impl OxiApp {
         }
         let show_plan =
             self.plan_mode_on() && !self.agent_shows_plan_mode() && budget >= 48.0 + 40.0;
-        if show_plan {
-            budget -= 40.0;
-        }
-        // Output speed is status, kept beside the context ring, but it is the first thing to go:
-        // the selectors keep enough room for provider, model and effort.
-        const SELECTORS_ROOM: f32 = 340.0;
-        let tokens_per_sec = self.tokens_per_sec_text().filter(|text| {
-            let w = ui
-                .painter()
-                .layout_no_wrap(
-                    text.clone(),
-                    egui::FontId::proportional(FS_TINY),
-                    c_text_faint(),
-                )
-                .size()
-                .x;
-            budget - w - 6.0 >= SELECTORS_ROOM
-        });
         // ── Right: round send / stop button ────────────────────────────────
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let active_session_streaming = self.active_waiting_response();
@@ -747,12 +726,6 @@ impl OxiApp {
                 self.render_mic_button(ui);
             }
 
-            if show_context {
-                self.render_context_indicator(ui);
-            }
-            if let Some(text) = tokens_per_sec {
-                self.render_tokens_per_sec(ui, text);
-            }
             if show_plan {
                 self.render_plan_toggle(ui, true);
             }

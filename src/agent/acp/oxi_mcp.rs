@@ -2,7 +2,8 @@
 //! Agents do not reliably bring a checklist tool (Claude Code turns its todo tools off for some
 //! models), so every session gets `todo_write`, whose calls drive oxi's native checklist. The
 //! global scratchpad comes along (`scratchpad_read`, `scratchpad`) unless the user turned the
-//! scratchpad tool off in Settings > Agent.
+//! scratchpad tool off in Settings > Agent. `chat_read` hands back earlier turns of the chat that
+//! a handoff transcript trimmed (see [`super::chat_archive`]).
 
 use std::io::{BufRead as _, Write as _};
 
@@ -20,7 +21,11 @@ const TOOL_NAMES: [&str; 3] = [TOOL_NAME, SCRATCHPAD_READ, SCRATCHPAD];
 
 /// The ACP `McpServer` entry that launches this server from the running oxi binary.
 /// `evidence_dir`: the connection's evidence folder, which turns on the evidence tools.
-pub(super) fn acp_entry(evidence_dir: Option<&std::path::Path>) -> Option<Value> {
+/// `delegation_dir`: the chat's delegation mailbox, which turns on the delegation tools.
+pub(super) fn acp_entry(
+    evidence_dir: Option<&std::path::Path>,
+    delegation_dir: Option<&std::path::Path>,
+) -> Option<Value> {
     let exe = std::env::current_exe().ok()?;
     // Test binaries live in `target/<profile>/deps/`; the app binary sits one level up.
     #[cfg(test)]
@@ -28,6 +33,9 @@ pub(super) fn acp_entry(evidence_dir: Option<&std::path::Path>) -> Option<Value>
     let env: Vec<Value> = evidence_dir
         .map(|dir| json!({ "name": crate::evidence::DIR_ENV, "value": dir.to_string_lossy() }))
         .into_iter()
+        .chain(delegation_dir.map(
+            |dir| json!({ "name": crate::delegation::DIR_ENV, "value": dir.to_string_lossy() }),
+        ))
         .collect();
     Some(json!({
         "name": SERVER_NAME,
@@ -59,6 +67,7 @@ pub(super) fn oxi_tool_name(s: &str) -> Option<&'static str> {
     // Claude: `mcp__oxi__todo_write`; Codex and others: `oxi.todo_write`, `oxi/todo_write`, ...
     TOOL_NAMES
         .into_iter()
+        .chain([super::chat_archive::TOOL])
         .chain(crate::evidence::tools::NAMES)
         .find(|tool| {
             s.strip_suffix(tool)
@@ -132,6 +141,11 @@ fn call_scratchpad(name: &str, args: &Value) -> Result<String, String> {
     ))
 }
 
+/// The chat's delegation mailbox, when oxi handed this server one.
+fn delegation_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os(crate::delegation::DIR_ENV).map(std::path::PathBuf::from)
+}
+
 fn instructions() -> String {
     let mut text = String::from(
         "oxi shows the todo_write checklist live above the user's composer. \
@@ -141,8 +155,17 @@ fn instructions() -> String {
         text.push_str(" scratchpad_read and scratchpad reach the user's global notes in oxi.");
     }
     if crate::evidence::tools::conn_dir().is_some() {
+        text.push_str(
+            " chat_read returns earlier turns of this conversation in full when a transcript oxi sent you left them out.",
+        );
         text.push(' ');
         text.push_str(crate::evidence::tools::INSTRUCTIONS);
+    }
+    if delegation_dir().is_some() {
+        text.push_str(
+            " delegate_task hands a task to another agent (another provider or model) through \
+             oxi; its report comes back to this chat.",
+        );
     }
     text
 }
@@ -187,13 +210,44 @@ fn handle(msg: &Value) -> Option<Value> {
                 tools.extend(scratchpad_tools());
             }
             if crate::evidence::tools::conn_dir().is_some() {
+                tools.push(super::chat_archive::definition());
                 tools.extend(crate::evidence::tools::definitions());
             }
+            if delegation_dir().is_some() {
+                tools.extend(crate::delegation::tool_definitions().iter().map(|def| {
+                    json!({
+                        "name": def["function"]["name"],
+                        "description": def["function"]["description"],
+                        "inputSchema": def["function"]["parameters"],
+                    })
+                }));
+            }
             json!({ "tools": tools })
+        }
+        "tools/call"
+            if msg["params"]["name"]
+                .as_str()
+                .is_some_and(|name| crate::delegation::NAMES.contains(&name)) =>
+        {
+            let name = msg["params"]["name"].as_str().unwrap_or_default();
+            let dir = delegation_dir();
+            let (text, is_error) =
+                match crate::delegation::call(dir.as_deref(), name, &msg["params"]["arguments"]) {
+                    Ok(text) => (text, false),
+                    Err(e) => (e, true),
+                };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
         }
         "tools/call" if msg["params"]["name"] == TOOL_NAME => {
             let args = &msg["params"]["arguments"];
             let (text, is_error) = match crate::agent::tools::tool_todo_write(args) {
+                Ok(text) => (text, false),
+                Err(e) => (e, true),
+            };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+        }
+        "tools/call" if msg["params"]["name"] == super::chat_archive::TOOL => {
+            let (text, is_error) = match super::chat_archive::call(&msg["params"]["arguments"]) {
                 Ok(text) => (text, false),
                 Err(e) => (e, true),
             };
@@ -261,6 +315,7 @@ mod tests {
         assert_eq!(oxi_tool_name("mcp__oxi__scratchpad"), Some(SCRATCHPAD));
         assert_eq!(oxi_tool_name("oxi.scratchpad_read"), Some(SCRATCHPAD_READ));
         assert_eq!(oxi_tool_name("scratchpad"), None);
+        assert_eq!(oxi_tool_name("mcp__oxi__chat_read"), Some("chat_read"));
         assert_eq!(
             oxi_tool(
                 &json!({"title": "Scratchpad", "_meta": {"claudeCode": {"toolName": "mcp__oxi__scratchpad"}}})

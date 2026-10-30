@@ -44,6 +44,8 @@ pub(crate) struct DispatchParams<'a> {
     pub effort_override: Option<&'a str>,
     pub context_char_budget: usize,
     pub tools_chars: usize,
+    /// Messages the user sends into the running turn (see [`super::steer`]).
+    pub steer: Option<&'a super::steer::SteerInbox>,
 }
 
 /// HTTP client tuned for streaming: bound connect time and idle time between chunks rather than
@@ -143,6 +145,7 @@ pub(crate) async fn run_provider_loop(
         effort_override,
         context_char_budget,
         tools_chars,
+        steer,
     } = p;
     let model = cfg.model_id.clone();
     let local_base = async || match tunnels {
@@ -164,6 +167,7 @@ pub(crate) async fn run_provider_loop(
                 effort_override,
                 context_char_budget,
                 tools_chars,
+                steer,
             }
         };
     }

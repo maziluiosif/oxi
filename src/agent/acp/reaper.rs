@@ -165,6 +165,14 @@ pub(super) fn mark_live(key: &str, alive: Arc<AtomicBool>) {
         .insert(key.to_owned(), alive);
 }
 
+pub(super) fn is_current(key: &str, alive: &Arc<AtomicBool>) -> bool {
+    LIVE.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(key))
+        .is_none_or(|current| Arc::ptr_eq(current, alive))
+}
+
 pub(super) fn mark_stopped(key: &str) {
     if let Some(map) = LIVE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         map.remove(key);

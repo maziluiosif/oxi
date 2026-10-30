@@ -35,9 +35,10 @@ pub enum ToolSideEffect {
 pub fn tool_side_effect(name: &str) -> ToolSideEffect {
     match name {
         "read" | "grep" | "find" | "ls" | "codebase_search" | "git_status" | "git_diff"
-        | "web_search" | "web_fetch" | "todo_write" | "task" | "scratchpad_read" => {
-            ToolSideEffect::ReadOnly
-        }
+        | "web_search" | "web_fetch" | "todo_write" | "task" | "scratchpad_read" | "chat_read"
+        | "task_status" | "task_cancel" => ToolSideEffect::ReadOnly,
+        // Starts another agent, which works on its own: always asked, never in plan mode.
+        "delegate_task" => ToolSideEffect::UnknownExternal,
         "write" | "edit" | "delete" | "move" | "mkdir" | "scratchpad" => {
             ToolSideEffect::WorkspaceMutation
         }
@@ -103,6 +104,9 @@ pub struct ToolEnv {
     /// non-reversible because their side effects cannot be observed reliably. Bash is restricted
     /// by the system prompt to non-mutating verification commands.
     pub undo_journal: Option<Arc<Mutex<TurnUndoJournal>>>,
+    /// The chat's delegation mailbox (see [`crate::delegation`]); `None` where delegating is
+    /// not possible (helpers, sub-agents, a headless server).
+    pub delegation: Option<std::path::PathBuf>,
 }
 
 pub fn run_tool(cwd: &Path, name: &str, args: &Value, env: &ToolEnv) -> ToolResult {
@@ -265,6 +269,9 @@ fn run_tool_inner(
                     Some(runner) => runner.run(args, on_output),
                     None => Err("Sub-agents are not available in this context.".to_string()),
                 },
+                "delegate_task" | "task_status" | "task_cancel" => {
+                    crate::delegation::call(env.delegation.as_deref(), name, args)
+                }
                 _ => Err(paths::err("unknown tool")),
             };
             match result {
