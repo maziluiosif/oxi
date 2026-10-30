@@ -183,6 +183,9 @@ impl OxiApp {
             }
             return;
         }
+        if q.is_empty() && self.render_sidebar_running(ui) {
+            return;
+        }
         let order = sidebar_workspace_order(&self.conv.workspaces);
         for &(wi, parent) in &order {
             if sidebar_changed {
@@ -199,6 +202,90 @@ impl OxiApp {
                 .collect();
             sidebar_changed = self.render_sidebar_workspace(ui, wi, None, false, &q, &children);
         }
+    }
+
+    /// Chats working (or waiting for approval) in any workspace, above the workspaces, so work
+    /// running elsewhere stays one click away. Shown when it adds something: two or more of
+    /// them, or one outside the open workspace. Returns whether the selection changed.
+    fn render_sidebar_running(&mut self, ui: &mut Ui) -> bool {
+        let mut chats = Vec::new();
+        for (wi, workspace) in self.conv.workspaces.iter().enumerate() {
+            for si in 0..workspace.sessions.len() {
+                let approval = self
+                    .run_state(self.session_key(wi, si))
+                    .is_some_and(|run| run.pending_approval.is_some());
+                if approval || self.session_row_is_running(wi, si) {
+                    chats.push((wi, si, approval));
+                }
+            }
+        }
+        let active = self.conv.active_workspace;
+        if chats.len() < 2 && chats.iter().all(|&(wi, ..)| wi == active) {
+            return false;
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!("Running · {}", chats.len()))
+                .size(FS_TINY)
+                .color(c_text_muted()),
+        );
+        let mut open = None;
+        for &(wi, si, approval) in &chats {
+            let title = sidebar_session_title_display(&self.conv.workspaces[wi].sessions[si].title);
+            let place = std::path::Path::new(&self.conv.workspaces[wi].root_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let selected = wi == active && si == self.conv.workspaces[wi].active;
+            let response = ui
+                .horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.add_space(4.0);
+                    if approval {
+                        ui.label(
+                            RichText::new(ICON_WARNING)
+                                .font(FontId::new(FS_TINY, icon_font()))
+                                .color(c_accent()),
+                        )
+                        .on_hover_text("Waiting for your approval");
+                    } else {
+                        small_spinner(ui);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(&place).size(FS_TINY).color(c_text_faint()));
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&title).size(FS_SMALL).color(if selected {
+                                        c_text_strong()
+                                    } else {
+                                        c_text()
+                                    }),
+                                )
+                                .truncate()
+                                .sense(Sense::click()),
+                            )
+                        })
+                        .inner
+                    })
+                    .inner
+                })
+                .inner
+                .on_hover_text(format!("{title} — {place}"));
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if response.clicked() {
+                open = Some((wi, si));
+            }
+        }
+        ui.add_space(6.0);
+        if let Some((wi, si)) = open {
+            self.close_subagent(ui.ctx());
+            self.select_session_in_workspace(wi, si);
+            return true;
+        }
+        false
     }
 
     /// Linked checkout `wi` of workspace `parent`, indented under it with a tree guide.
@@ -272,6 +359,10 @@ impl OxiApp {
                         .sum::<usize>()
             }),
         );
+        // Found in its file by the background search (chats not loaded yet included).
+        if self.content_search_hit(wi, si, query).is_some() {
+            return true;
+        }
         if let Some(cached) = self.conv.sidebar.search_cache.get(&(wi, si))
             && cached.query == query
             && cached.title == session.title
@@ -314,6 +405,8 @@ enum SidebarGroup {
     Week,
     Month,
     Older,
+    /// Archived chats, last and folded until opened.
+    Archived,
 }
 
 impl SidebarGroup {
@@ -326,6 +419,8 @@ impl SidebarGroup {
             Self::Week => "week",
             Self::Month => "month",
             Self::Older => "older",
+            // Stored when the group is open: it starts folded.
+            Self::Archived => "archived",
         }
     }
 
@@ -337,6 +432,7 @@ impl SidebarGroup {
             Self::Week => "Previous 7 days",
             Self::Month => "Previous 30 days",
             Self::Older => "Older",
+            Self::Archived => "Archived",
         }
     }
 
@@ -396,7 +492,13 @@ fn sidebar_session_order(ws: &super::state::Workspace) -> Vec<(usize, SidebarGro
                 .session_file
                 .as_ref()
                 .is_some_and(|f| ws.pinned.contains(f));
-            let group = if pinned {
+            let archived = session
+                .session_file
+                .as_ref()
+                .is_some_and(|f| ws.archived.contains(f));
+            let group = if archived {
+                SidebarGroup::Archived
+            } else if pinned {
                 SidebarGroup::Pinned
             } else {
                 SidebarGroup::for_time(session.modified, today)
@@ -465,6 +567,7 @@ mod worktree_sidebar_tests {
             active: 0,
             sidebar_folded: false,
             pinned: Vec::new(),
+            archived: Vec::new(),
             folded_groups: Vec::new(),
             worktree: main_root.map(|main| WorktreeInfo {
                 branch: "oxi/task".into(),

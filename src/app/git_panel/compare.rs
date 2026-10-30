@@ -196,6 +196,17 @@ impl OxiApp {
         }
 
         self.render_compare_header(ui, loading);
+        if let Some((base, ahead)) = self
+            .conv
+            .git_ui
+            .compare
+            .data
+            .as_ref()
+            .map(|data| (data.base.clone(), data.commits.len()))
+        {
+            ui.add_space(4.0);
+            self.render_compare_pr_row(ui, &base, ahead);
+        }
         ui.add_space(6.0);
         crate::ui::chrome::hairline(ui);
         ui.add_space(4.0);

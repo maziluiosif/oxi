@@ -372,6 +372,9 @@ impl OxiApp {
             return;
         }
         task.status.state = if crate::model::reply_failed(reply) {
+            if task.status.error.is_none() {
+                task.status.error = Some("Its response failed; open its chat for details.".into());
+            }
             TaskState::Failed
         } else {
             TaskState::Completed
@@ -450,6 +453,7 @@ impl OxiApp {
             active: 0,
             sidebar_folded: false,
             pinned: Vec::new(),
+            archived: Vec::new(),
             folded_groups: Vec::new(),
             worktree: crate::git::worktree::info(path),
         });
@@ -463,7 +467,9 @@ impl OxiApp {
     pub(super) fn render_delegations(&mut self, ui: &mut Ui) {
         let key = self.active_session_key();
         let parent = self.acp_session_key(key);
-        let rows: Vec<(usize, String, TaskState, Option<String>)> = self
+        // (index, "Provider · title", state, chat file, error)
+        type Row = (usize, String, TaskState, Option<String>, Option<String>);
+        let rows: Vec<Row> = self
             .conv
             .delegations
             .iter()
@@ -478,6 +484,7 @@ impl OxiApp {
                     format!("{who} · {}", t.status.title),
                     t.status.state,
                     t.status.chat.clone(),
+                    t.status.error.clone(),
                 )
             })
             .collect();
@@ -486,7 +493,8 @@ impl OxiApp {
         }
         let mut open = None;
         let mut stop = None;
-        for (index, label, state, chat) in &rows {
+        let mut dismiss = None;
+        for (index, label, state, chat, error) in &rows {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let (text, color) = match state {
@@ -500,8 +508,14 @@ impl OxiApp {
                 if matches!(state, TaskState::Starting | TaskState::Running) {
                     crate::theme::small_spinner(ui);
                 }
-                ui.label(RichText::new(text).size(FS_SMALL).color(color));
+                let state_label = ui.label(RichText::new(text).size(FS_SMALL).color(color));
+                if let Some(error) = error {
+                    state_label.on_hover_text(error);
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if state.ended() && ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                        dismiss = Some(*index);
+                    }
                     if !state.ended()
                         && ui
                             .small_button("Stop")
@@ -518,18 +532,29 @@ impl OxiApp {
                     {
                         open = Some(chat.clone());
                     }
-                    ui.add(
-                        egui::Label::new(RichText::new(label).size(FS_SMALL))
-                            .truncate()
-                            .selectable(false),
-                    )
-                    .on_hover_text(label);
+                    // Why it failed, after its title: the report only reaches the parent agent.
+                    let text = match error {
+                        Some(error) => format!("{label} — {}", one_line(error)),
+                        None => label.clone(),
+                    };
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new(&text).size(FS_SMALL))
+                                .truncate()
+                                .selectable(false),
+                        )
+                        .on_hover_text(error.as_deref().unwrap_or(label));
+                    });
                 });
             });
         }
         ui.add_space(4.0);
         if let Some(index) = stop {
             self.cancel_delegation(index);
+        } else if let Some(index) = dismiss
+            && self.conv.delegations[index].delivered
+        {
+            self.conv.delegations.remove(index);
         }
         if let Some(file) = open
             && let Some(key) = self.chat_by_file(&file)
@@ -537,6 +562,14 @@ impl OxiApp {
             self.select_session_in_workspace(key.workspace_idx, key.session_idx);
         }
     }
+}
+
+/// First non-blank line of `text`.
+fn one_line(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
 }
 
 #[cfg(test)]

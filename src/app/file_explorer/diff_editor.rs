@@ -1070,20 +1070,36 @@ impl OxiApp {
         let mut right = clip.right() - 8.0;
         let mut clicked = None;
         let painter = ui.painter().with_clip_rect(clip.intersect(ui.clip_rect()));
-        for &block_action in actions.iter().rev() {
-            let (icon, label, hover) = block_action.label();
-            let mut job = LayoutJob::default();
-            job.append(
-                icon,
-                0.0,
-                TextFormat::simple(FontId::new(FS_TINY, icon_font()), c_text()),
-            );
-            job.append(
-                label,
-                4.0,
-                TextFormat::simple(FontId::proportional(FS_TINY), c_text()),
-            );
-            let galley = painter.layout_job(job);
+        let galleys: Vec<_> = actions
+            .iter()
+            .rev()
+            .map(|&block_action| {
+                let (icon, label, hover) = block_action.label();
+                let mut job = LayoutJob::default();
+                job.append(
+                    icon,
+                    0.0,
+                    TextFormat::simple(FontId::new(FS_TINY, icon_font()), c_text()),
+                );
+                job.append(
+                    label,
+                    4.0,
+                    TextFormat::simple(FontId::proportional(FS_TINY), c_text()),
+                );
+                (block_action, label, hover, painter.layout_job(job))
+            })
+            .collect();
+        // An opaque strip under the buttons, so the code of that line doesn't run through them.
+        let width: f32 = galleys.iter().map(|g| g.3.size().x + 16.0).sum();
+        painter.rect_filled(
+            Rect::from_min_max(
+                pos2(right - width - 8.0, top),
+                pos2(clip.right(), top + line_h),
+            ),
+            egui::CornerRadius::same(4),
+            c_bg_main(),
+        );
+        for (block_action, label, hover, galley) in galleys {
             let rect = Rect::from_min_size(
                 pos2(right - galley.size().x - 12.0, top + 1.0),
                 vec2(galley.size().x + 12.0, line_h - 2.0),

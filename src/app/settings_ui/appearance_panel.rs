@@ -198,6 +198,16 @@ impl OxiApp {
                 "Keep the computer awake while an agent works",
                 Some("Holds off idle sleep until the turn ends. Closing the lid still sleeps."),
             );
+            setting_switch(
+                ui,
+                &mut self.conv.settings.steer_follow_ups,
+                "Send follow-ups into the running response",
+                Some(
+                    "A message you send while the agent answers reaches it at its next step, \
+                     without stopping it (agents that support it). Off: it waits for the response \
+                     to finish. Cmd/Ctrl+Enter does the other.",
+                ),
+            );
         });
     }
 }

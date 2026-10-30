@@ -19,6 +19,83 @@ pub(super) fn run(rec: &mut Recorder<'_>) {
     diff_comments(rec);
     interrupted_turn(rec);
     delegation(rec);
+    stash_search_archive(rec);
+    pull_request(rec);
+}
+
+/// A stashed draft, an archived chat and a search that matched inside chats.
+fn stash_search_archive(rec: &mut Recorder<'_>) {
+    rec.app().select_workspace(0);
+    rec.app().new_chat();
+    rec.app().conv.composer.stash.push(QueuedSend {
+        text: "Try the streaming CSV writer instead".into(),
+        images: Vec::new(),
+        texts: Vec::new(),
+    });
+    rec.harness.run_steps(4);
+    rec.still("stash");
+    rec.app().conv.composer.stash.clear();
+    // Archive the oldest saved chat of the workspace and open the Archived group.
+    let file = rec.app().conv.workspaces[0]
+        .sessions
+        .iter()
+        .rev()
+        .find_map(|s| s.session_file.clone());
+    if let Some(file) = file {
+        let ws = &mut rec.app().conv.workspaces[0];
+        ws.archived.push(file);
+        ws.folded_groups.push("archived".into());
+    }
+    rec.harness.run_steps(4);
+    rec.still("sidebar-archived");
+    rec.app().conv.sidebar.search = "batched".into();
+    wait_until(rec, |app| {
+        app.content_search
+            .hits
+            .values()
+            .any(|h| h.contains("batched"))
+    });
+    rec.still("sidebar-search");
+    rec.app().conv.sidebar.search.clear();
+    rec.harness.run_steps(3);
+}
+
+/// The branch's pull request in the status bar and the Compare tab.
+fn pull_request(rec: &mut Recorder<'_>) {
+    use crate::git::pull_request::{Checks, PrState, PullRequest};
+    rec.app().select_workspace(0);
+    rec.app().new_chat();
+    rec.harness.run_steps(10);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    rec.harness.run_steps(10);
+    let branch = rec.app().conv.git.branch.clone();
+    let pr = PullRequest {
+        number: 42,
+        title: "Add a CSV export for the weekly report".into(),
+        url: "https://github.com/example/stats-kit/pull/42".into(),
+        state: PrState::Open,
+        base: "main".into(),
+        head: branch,
+        checks: Checks {
+            passed: 4,
+            failed: 1,
+            pending: 0,
+            failing: vec!["lint".into()],
+        },
+    };
+    rec.app().demo_pull_request(pr.clone());
+    rec.harness.run_steps(4);
+    rec.still("pr-pill");
+    rec.app().conv.git_ui.open = true;
+    rec.app().conv.git_ui.tab = crate::app::git_panel::GitTab::Compare;
+    rec.harness.run_steps(10);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    rec.harness.run_steps(10);
+    rec.app().demo_pull_request(pr);
+    rec.harness.run_steps(4);
+    rec.still("pr-compare");
+    rec.app().conv.git_ui.open = false;
+    rec.harness.run_steps(3);
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -46,6 +123,7 @@ fn add_worktree(rec: &mut Recorder<'_>) -> (usize, std::path::PathBuf) {
         active: 0,
         sidebar_folded: false,
         pinned: Vec::new(),
+        archived: Vec::new(),
         folded_groups: Vec::new(),
         worktree: crate::git::worktree::info(&folder),
     });
@@ -409,6 +487,8 @@ fn diff_comments(rec: &mut Recorder<'_>) {
             note: "Guard against an empty list here.".into(),
             ..comment
         });
+    rec.harness.run_steps(4);
+    rec.still("diff-comment-markers");
     rec.app().reveal_chat_view();
     rec.harness.run_steps(4);
     rec.still("diff-comments-composer");

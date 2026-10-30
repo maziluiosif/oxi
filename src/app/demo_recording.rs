@@ -3174,6 +3174,7 @@ fn review_acp_ui(rec: &mut Recorder<'_>) {
             active: 0,
             sidebar_folded: false,
             pinned: vec![],
+            archived: Vec::new(),
             folded_groups: vec![],
             worktree: None,
         });
@@ -3333,6 +3334,7 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
             active: 0,
             sidebar_folded: false,
             pinned: Vec::new(),
+            archived: Vec::new(),
             folded_groups: Vec::new(),
             worktree: Some(crate::git::worktree::WorktreeInfo {
                 branch: branch.into(),

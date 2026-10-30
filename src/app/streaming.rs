@@ -284,11 +284,20 @@ impl OxiApp {
     /// Send the composer contents into `key`'s chat. While that chat is still answering, the
     /// message is queued instead and goes out when the response finishes.
     pub(super) fn send_message_for(&mut self, key: SessionKey, skip_autocompact: bool) {
+        let alternate = std::mem::take(&mut self.conv.composer.alternate_send);
         let text = self.conv.composer.input.trim().to_string();
         let has_attachments = !self.conv.composer.pending_images.is_empty()
             || !self.conv.composer.pending_texts.is_empty();
         if text.is_empty() && !has_attachments {
             return;
+        }
+        // Writing in an archived chat brings it back to the list.
+        if let Some(file) = self.session_by_key(key).session_file.clone() {
+            let ws = &mut self.conv.workspaces[key.workspace_idx];
+            if ws.archived.contains(&file) {
+                ws.archived.retain(|f| f != &file);
+                self.sync_workspaces_to_settings();
+            }
         }
         // A turn run from an editor (the headless daemon) a moment ago must not be overwritten.
         self.reload_session_if_changed(key);
@@ -312,7 +321,16 @@ impl OxiApp {
             self.conv.composer.history_index = None;
             self.conv.composer.history_draft.clear();
             let queued = self.take_composer_payload();
-            self.run_state_mut(key).queued.push_back(queued);
+            let run = self.run_state_mut(key);
+            run.queued.push_back(queued);
+            let last = run.queued.len() - 1;
+            // Into the running turn (or the opposite, with Cmd/Ctrl+Enter) when it takes it.
+            if !setup_holds
+                && self.conv.settings.steer_follow_ups != alternate
+                && self.can_steer(key, last)
+            {
+                self.steer_into_turn(key, last);
+            }
             self.persist_queue(key);
             return;
         }
@@ -680,12 +698,14 @@ impl OxiApp {
             run.interrupted = None;
         }
         self.persist_queue(key);
-        // ACP agents run their own loop: there is nothing to hand a message to mid-turn.
+        // ACP agents run their own loop: their turn takes messages only once the agent said it
+        // supports `_session/steering`.
         let steer = crate::agent::steer::SteerInbox::default();
-        let steerable = !session_config.provider.is_acp();
+        let acp = session_config.provider.is_acp();
         {
             let run = self.run_state_mut(key);
-            run.steer = steerable.then(|| steer.clone());
+            run.steer = (!acp).then(|| steer.clone());
+            run.steer_offered = acp.then(|| steer.clone());
             run.steered = false;
         }
         let request = AgentRunRequest {

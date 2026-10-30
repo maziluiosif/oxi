@@ -339,6 +339,7 @@ mod tests {
             active: 0,
             sidebar_folded: false,
             pinned: vec![],
+            archived: Vec::new(),
             folded_groups: vec![],
             worktree: None,
         }];

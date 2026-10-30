@@ -243,6 +243,9 @@ pub struct AcpPrompt {
     pub cancel: Arc<AtomicBool>,
     /// Plan mode: ask for a plan and refuse every permission request that could change things.
     pub plan_mode: bool,
+    /// Messages the user sends into the running turn, delivered through the `_session/steering`
+    /// extension when the agent advertises it (`initialize` `_meta.steering.supported`).
+    pub steer: Option<crate::agent::steer::SteerInbox>,
     /// Evidence mode: ask the agent to prove the change (see [`crate::evidence`]) and follow up
     /// when the proof is incomplete.
     pub evidence_policy: crate::evidence::Policy,
@@ -610,6 +613,8 @@ struct ConnHandles {
     images: bool,
     /// What the agent advertised in `initialize`.
     caps: Arc<Value>,
+    /// The agent takes messages into a running turn (`_session/steering`).
+    steering: bool,
     /// Held for a whole prompt turn. A prompt sent right after Stop waits here until the
     /// cancelled turn has wound down, instead of having its context cleared by it.
     turn_lock: Arc<AsyncMutex<()>>,
@@ -1064,6 +1069,7 @@ async fn spawn_conn(
         embedded_context: caps["promptCapabilities"]["embeddedContext"].as_bool() == Some(true),
         images: caps["promptCapabilities"]["image"].as_bool() == Some(true),
         caps: Arc::new(caps.clone()),
+        steering: init["_meta"]["steering"]["supported"].as_bool() == Some(true),
         turn_lock: Arc::new(AsyncMutex::new(())),
         held,
         alive: alive.clone(),
@@ -1372,8 +1378,10 @@ async fn run_prompt(
         plan_mode,
         evidence_policy,
         evidence_base,
+        steer,
         ..
     } = req;
+    let steer = steer.filter(|_| handles.steering);
 
     let _turn = handles.turn_lock.clone().lock_owned().await;
     handles.activity.touch();
@@ -1431,6 +1439,9 @@ async fn run_prompt(
             replay: None,
         });
         let _ = event_tx.send(AgentEvent::AgentStart);
+        if steer.is_some() {
+            let _ = event_tx.send(AgentEvent::SteerAvailable);
+        }
         let held_updates = handles.held.drain();
         if handles.held.take_replay() {
             let sessions: std::collections::HashSet<&str> = held_updates
@@ -1551,6 +1562,10 @@ async fn run_prompt(
                             &handles.stdin,
                             &json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId": handles.session_id}}),
                         ).await;
+                    } else if !cancel_sent && let Some(inbox) = steer.as_ref() {
+                        for text in inbox.take() {
+                            steer_turn(&handles, &text, &event_tx).await;
+                        }
                     }
                 }
             }
@@ -1615,6 +1630,37 @@ async fn run_prompt(
         }
     }
     let _ = reply.send(result.map(|_| ()));
+}
+
+/// Hand `text` to the running turn through `_session/steering`. A message the turn did not take
+/// (it had just ended, or the agent refused it) goes back to the chat's queue.
+async fn steer_turn(handles: &ConnHandles, text: &str, event_tx: &StdSender<AgentEvent>) {
+    let params = json!({
+        "sessionId": handles.session_id,
+        "prompt": [{"type": "text", "text": text}],
+        "_meta": {"steering": {"idleBehavior": "promptRequired"}},
+    });
+    let sent = tokio::time::timeout(
+        Duration::from_secs(20),
+        request(
+            &handles.stdin,
+            &handles.next_id,
+            &handles.pending,
+            "_session/steering",
+            params,
+        ),
+    )
+    .await;
+    let event = match sent {
+        Ok(Ok(res)) if res["outcome"].as_str() == Some("injected") => {
+            AgentEvent::Steered(text.to_string())
+        }
+        other => {
+            log::info!("steering not taken: {other:?}");
+            AgentEvent::SteerReturned
+        }
+    };
+    let _ = event_tx.send(event);
 }
 
 /// Shown at the end of the reply when the agent stopped for a reason other than finishing

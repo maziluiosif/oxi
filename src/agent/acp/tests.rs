@@ -241,6 +241,7 @@ fn acp_end_to_end_applies_model() {
         plan_mode: false,
         evidence_policy: Default::default(),
         evidence_base: None,
+        steer: None,
     };
     let rt = tokio::runtime::Runtime::new().unwrap();
     let r = rt.block_on(mgr.prompt(req));
@@ -913,6 +914,7 @@ fn acp_live_features() {
         plan_mode,
         evidence_policy: Default::default(),
         evidence_base: None,
+        steer: None,
     };
     let rt = tokio::runtime::Runtime::new().unwrap();
     let r = rt.block_on(mgr.prompt(req));
@@ -1033,6 +1035,7 @@ fn a_turn_the_agent_starts_itself_is_held_until_attached() {
         plan_mode: false,
         evidence_policy: Default::default(),
         evidence_base: None,
+        steer: None,
     };
     rt.block_on(mgr.prompt(prompt)).unwrap();
     assert_eq!(texts(&ev_rx), "Building in the background.");
@@ -1274,6 +1277,7 @@ for line in sys.stdin:
                 ..Default::default()
             },
             evidence_base: None,
+            steer: None,
         };
         let handle = tokio::spawn(async move { worker.prompt(req).await });
         let mut events = vec![];
@@ -1389,6 +1393,7 @@ async fn sessions_run_outside_oxi_are_listed_imported_and_forked() {
         plan_mode: false,
         evidence_policy: Default::default(),
         evidence_base: None,
+        steer: None,
     };
     tokio::time::timeout(
         Duration::from_secs(5),
@@ -1490,6 +1495,7 @@ for line in sys.stdin:
         plan_mode: false,
         evidence_policy: Default::default(),
         evidence_base: None,
+        steer: None,
     };
     let worker = manager.clone();
     let prompt = tokio::spawn(async move { worker.prompt(req).await });

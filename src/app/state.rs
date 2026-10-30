@@ -371,6 +371,8 @@ pub struct Workspace {
     pub sidebar_folded: bool,
     /// Session files pinned to the top of the sidebar list (persisted in settings).
     pub pinned: Vec<String>,
+    /// Session files archived (see `WorkspaceEntry::archived`).
+    pub archived: Vec<String>,
     /// Keys of the sidebar date groups folded in this workspace (persisted in settings).
     pub folded_groups: Vec<String>,
     /// Set when the folder is a linked git work tree (see `worktrees.rs`).
@@ -423,10 +425,13 @@ pub struct SessionRunState {
     pub usage_target: Option<(crate::settings::LlmProviderKind, String)>,
     /// Messages written while this chat was answering, sent one per finished response.
     pub queued: std::collections::VecDeque<super::compaction::QueuedSend>,
-    /// Messages handed to the running turn of oxi's own agent, read at its next step (see
-    /// [`crate::agent::steer`]). `None` when the turn can't take any (an ACP agent, a remote
-    /// chat, no turn).
+    /// Messages handed to the running turn, read at its next step (see
+    /// [`crate::agent::steer`]). `None` when the turn can't take any (an ACP agent without
+    /// `_session/steering`, a remote chat, no turn).
     pub steer: Option<crate::agent::steer::SteerInbox>,
+    /// An ACP turn's inbox until its agent says it takes messages mid-turn
+    /// ([`crate::agent::AgentEvent::SteerAvailable`]).
+    pub steer_offered: Option<crate::agent::steer::SteerInbox>,
     /// What the user wrote for each message waiting in [`Self::steer`] (before @mentions were
     /// expanded), in the same order: shown above the composer, and queued again if the turn
     /// ends without reading them.
@@ -652,6 +657,11 @@ pub struct TranscriptUnitHeight {
 #[derive(Default)]
 pub struct ComposerState {
     pub input: String,
+    /// Drafts put aside with Cmd/Ctrl+Shift+S (see `app::stash`), oldest first.
+    pub stash: Vec<super::compaction::QueuedSend>,
+    /// The next send was made with Cmd/Ctrl+Enter: while the chat answers, it does the opposite
+    /// of the "Send follow-ups into the running response" setting.
+    pub alternate_send: bool,
     pub pending_images: Vec<(String, Vec<u8>)>,
     pub pending_texts: Vec<crate::model::UserAttachment>,
     pub history: Vec<String>,

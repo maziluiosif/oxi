@@ -188,7 +188,7 @@ fn recover_interrupted(chat: &mut Chat, id: &str) {
         && let Some(reply) = messages.last_mut()
     {
         reply.append_answer(&format!(
-            "[Interrupted] Not sent: {}\n",
+            "*Interrupted: not sent: {}*\n",
             recovery.queued.join(" · ")
         ));
     }
@@ -1250,7 +1250,10 @@ impl Server {
                 chat.session.delegated.apply(&root, &params);
                 chat.dirty = true;
             }
-            AgentEvent::AgentStart | AgentEvent::AssistantMessageDone => {}
+            AgentEvent::AgentStart
+            | AgentEvent::AssistantMessageDone
+            | AgentEvent::SteerAvailable
+            | AgentEvent::SteerReturned => {}
             AgentEvent::Steered(text) => {
                 // The rest of the turn answers the message sent into it.
                 let route = chat.last_assistant_mut().and_then(|m| {
@@ -2245,7 +2248,7 @@ mod tests {
         let reloaded = second.load_chat(&root, &chat).unwrap();
 
         let note = crate::model::last_answer(&reloaded.session.messages).unwrap_or_default();
-        assert!(note.contains("[Interrupted]"), "{note}");
+        assert!(note.contains("*Interrupted:"), "{note}");
         let _ = std::fs::remove_file(&chat);
         let _ = std::fs::remove_file(session_store::run_journal::path_for(&chat));
     }
