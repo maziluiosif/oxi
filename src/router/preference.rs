@@ -80,6 +80,7 @@ pub fn parse(text: &str) -> Option<Preference> {
                 ("gpt codex", LlmProviderKind::GptCodex),
                 ("openrouter", LlmProviderKind::OpenRouter),
                 ("opencode go", LlmProviderKind::OpenCodeGo),
+                ("opencode", LlmProviderKind::OpenCodeAcp),
                 ("meta muse", LlmProviderKind::MetaMuse),
                 ("azure openai", LlmProviderKind::AzureOpenAi),
                 ("lm studio", LlmProviderKind::LmStudio),

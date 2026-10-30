@@ -151,6 +151,7 @@ impl AppSettings {
             | LlmProviderKind::MuseCodeAcp
             | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp
+            | LlmProviderKind::OpenCodeAcp
             | LlmProviderKind::Router => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;

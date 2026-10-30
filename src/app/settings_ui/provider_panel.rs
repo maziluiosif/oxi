@@ -159,6 +159,9 @@ impl OxiApp {
                     "Optional ANTHROPIC_API_KEY (else Claude Code's own login is used)"
                 }
                 LlmProviderKind::CursorAcp => "Cursor CLI uses its own login",
+                LlmProviderKind::OpenCodeAcp => {
+                    "OpenCode uses its own login (`opencode auth login`)"
+                }
                 LlmProviderKind::CodexAcp => {
                     "Optional OPENAI_API_KEY / CODEX_API_KEY (else Codex login is used)"
                 }

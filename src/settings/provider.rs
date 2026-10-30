@@ -48,6 +48,9 @@ pub enum LlmProviderKind {
     MuseCodeAcp,
     /// GitHub Copilot CLI's built-in ACP server (`copilot --acp`), on the user's Copilot plan.
     CopilotAcp,
+    /// OpenCode's built-in ACP server (`opencode acp`), on whatever providers OpenCode is logged
+    /// into.
+    OpenCodeAcp,
     /// Google Antigravity through its official native ACP server.
     AntigravityAcp,
     /// Not a backend: picks one of the other configured providers (and a model + effort) per
@@ -59,7 +62,7 @@ impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 19] = [
+    pub const ALL: [LlmProviderKind; 20] = [
         LlmProviderKind::Router,
         LlmProviderKind::LocalHf,
         LlmProviderKind::RemoteHf,
@@ -71,6 +74,7 @@ impl LlmProviderKind {
         LlmProviderKind::CodexAcp,
         LlmProviderKind::MuseCodeAcp,
         LlmProviderKind::CopilotAcp,
+        LlmProviderKind::OpenCodeAcp,
         LlmProviderKind::AntigravityAcp,
         LlmProviderKind::AzureOpenAi,
         LlmProviderKind::CustomAnthropic,
@@ -103,6 +107,7 @@ impl LlmProviderKind {
             LlmProviderKind::CodexAcp => "codexacp",
             LlmProviderKind::MuseCodeAcp => "musecodeacp",
             LlmProviderKind::CopilotAcp => "copilotacp",
+            LlmProviderKind::OpenCodeAcp => "opencodeacp",
             LlmProviderKind::AntigravityAcp => "antigravityacp",
             LlmProviderKind::Router => "router",
         }
@@ -117,6 +122,7 @@ impl LlmProviderKind {
                 | LlmProviderKind::MuseCodeAcp
                 | LlmProviderKind::AntigravityAcp
                 | LlmProviderKind::CopilotAcp
+                | LlmProviderKind::OpenCodeAcp
         )
     }
 
@@ -150,6 +156,7 @@ impl LlmProviderKind {
             | LlmProviderKind::MuseCodeAcp
             | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp
+            | LlmProviderKind::OpenCodeAcp
             | LlmProviderKind::Router => "",
         }
     }
@@ -173,6 +180,7 @@ impl LlmProviderKind {
             LlmProviderKind::CodexAcp => "Codex (ACP)",
             LlmProviderKind::MuseCodeAcp => "Muse Code (ACP)",
             LlmProviderKind::CopilotAcp => "GitHub Copilot (ACP)",
+            LlmProviderKind::OpenCodeAcp => "OpenCode (ACP)",
             LlmProviderKind::AntigravityAcp => "Antigravity (ACP)",
             LlmProviderKind::Router => "Router (auto)",
         }
@@ -199,7 +207,8 @@ impl LlmProviderKind {
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
             | LlmProviderKind::AntigravityAcp
-            | LlmProviderKind::CopilotAcp => "default",
+            | LlmProviderKind::CopilotAcp
+            | LlmProviderKind::OpenCodeAcp => "default",
             LlmProviderKind::Router => "balanced",
         }
     }
@@ -441,6 +450,8 @@ impl ProviderConfig {
     pub const DEFAULT_MUSE_ACP_COMMAND: &'static str = "npx -y @brokkai/muse-acp";
     /// The Copilot CLI is its own ACP server; `--acp` serves it over stdio.
     pub const DEFAULT_COPILOT_ACP_COMMAND: &'static str = "npx -y @github/copilot --acp";
+    /// The OpenCode CLI is its own ACP server too; `acp` serves it over stdio.
+    pub const DEFAULT_OPENCODE_ACP_COMMAND: &'static str = "npx -y opencode-ai acp";
 
     /// Native server from the official ACP registry. Linux requires an empty uid argument.
     pub const DEFAULT_ANTIGRAVITY_ACP_COMMAND: &'static str = if cfg!(windows) {
@@ -464,6 +475,7 @@ impl ProviderConfig {
             LlmProviderKind::CodexAcp => Self::DEFAULT_CODEX_ACP_COMMAND,
             LlmProviderKind::MuseCodeAcp => Self::DEFAULT_MUSE_ACP_COMMAND,
             LlmProviderKind::CopilotAcp => Self::DEFAULT_COPILOT_ACP_COMMAND,
+            LlmProviderKind::OpenCodeAcp => Self::DEFAULT_OPENCODE_ACP_COMMAND,
             LlmProviderKind::AntigravityAcp => Self::DEFAULT_ANTIGRAVITY_ACP_COMMAND,
             _ => Self::DEFAULT_ACP_COMMAND,
         }

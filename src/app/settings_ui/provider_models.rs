@@ -353,6 +353,7 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         | LlmProviderKind::MuseCodeAcp
         | LlmProviderKind::AntigravityAcp
         | LlmProviderKind::CopilotAcp
+        | LlmProviderKind::OpenCodeAcp
         | LlmProviderKind::Router => Ok(String::new()),
     }
 }

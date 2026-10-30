@@ -71,7 +71,7 @@ pub(crate) fn composer_provider_label(kind: crate::settings::LlmProviderKind) ->
         AzureOpenAi => "Azure",
         CustomAnthropic => "Anthropic",
         GptCodex => "GPT Codex",
-        OpenCodeGo => "OpenCode",
+        OpenCodeGo => "OpenCode Go",
         MetaMuse => "Muse",
         LmStudio => "LM Studio",
         LlamaCpp => "llama.cpp",
@@ -83,6 +83,7 @@ pub(crate) fn composer_provider_label(kind: crate::settings::LlmProviderKind) ->
         CodexAcp => "Codex",
         MuseCodeAcp => "Muse Code",
         CopilotAcp => "Copilot",
+        OpenCodeAcp => "OpenCode",
         AntigravityAcp => "Antigravity",
         Router => "Router",
     }

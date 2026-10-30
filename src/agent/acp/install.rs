@@ -35,7 +35,7 @@ pub(super) struct Adapter {
     args: &'static [&'static str],
 }
 
-const ADAPTERS: [Adapter; 4] = [
+const ADAPTERS: [Adapter; 5] = [
     Adapter {
         package: "@agentclientprotocol/claude-agent-acp",
         bin: "claude-agent-acp",
@@ -55,6 +55,11 @@ const ADAPTERS: [Adapter; 4] = [
         package: "@github/copilot",
         bin: "copilot",
         args: &["--acp"],
+    },
+    Adapter {
+        package: "opencode-ai",
+        bin: "opencode",
+        args: &["acp"],
     },
 ];
 
@@ -169,6 +174,13 @@ pub(super) async fn resolve_command(command_line: &str) -> Result<String, String
     })
 }
 
+/// The launch line of the current managed install `command_line` refers to, without installing
+/// anything; `None` for other commands or when nothing is installed yet.
+pub(super) fn installed_launch(command_line: &str) -> Option<String> {
+    let adapter = adapter_for(command_line.trim())?;
+    Some(adapter.launch_line(shell_quote(&adapter.installed_bin()?)))
+}
+
 /// Whether `command_line` starts without installing anything first: a managed adapter that is
 /// already installed (it was used before), or another command whose program exists.
 pub(super) async fn is_ready(command_line: &str) -> bool {
@@ -209,23 +221,27 @@ fn first_word(command_line: &str) -> Option<String> {
     (!word.is_empty()).then(|| word.to_string())
 }
 
-/// Update every adapter that has a managed install and hasn't been checked recently, then prune
-/// superseded versions. Silent: failures only reach stderr.
-pub(super) async fn update_installed() {
+/// Update every adapter that has a managed install and hasn't been checked recently (or every one,
+/// when `force`), then prune superseded versions. Silent: failures only reach stderr. Whether a
+/// new version was installed.
+pub(super) async fn update_installed(force: bool) -> bool {
+    let mut installed = false;
     for adapter in &ADAPTERS {
-        if adapter.installed_bin().is_none() || !check_due(adapter) {
+        if adapter.installed_bin().is_none() || !(force || check_due(adapter)) {
             continue;
         }
         let lock = adapter.lock();
         let _guard = lock.lock().await;
-        if let Err(e) = update(adapter).await {
-            log::warn!(
+        match update(adapter).await {
+            Ok(new) => installed |= new,
+            Err(e) => log::warn!(
                 "background update of ACP adapter {} failed: {e}",
                 adapter.package
-            );
+            ),
         }
         prune(adapter);
     }
+    installed
 }
 
 fn check_due(adapter: &Adapter) -> bool {
@@ -236,7 +252,8 @@ fn check_due(adapter: &Adapter) -> bool {
         .is_none_or(|age| age >= CHECK_INTERVAL)
 }
 
-async fn update(adapter: &Adapter) -> Result<(), String> {
+/// Whether a new version was installed.
+async fn update(adapter: &Adapter) -> Result<bool, String> {
     let latest = npm_output(
         &["view", adapter.package, "version"],
         &base_dir(),
@@ -247,13 +264,15 @@ async fn update(adapter: &Adapter) -> Result<(), String> {
     if latest.is_empty() {
         return Err("npm view returned no version".into());
     }
-    if adapter.installed_version().as_deref() != Some(latest) {
+    let new = adapter.installed_version().as_deref() != Some(latest);
+    if new {
         install_latest(adapter).await?;
     } else if let Some(version) = adapter.installed_version() {
         // An install npm left without its native binary fails at every launch; repair it.
         add_platform_packages(&adapter.root().join(version)).await?;
     }
-    touch(&adapter.root().join("checked"))
+    touch(&adapter.root().join("checked"))?;
+    Ok(new)
 }
 
 /// The Claude Code binary that the managed Claude adapter's agent SDK ships in its platform
@@ -582,6 +601,20 @@ mod tests {
         ] {
             assert_eq!(adapter_for(cmd).map(|a| a.bin), Some("copilot"), "{cmd}");
         }
+        assert_eq!(
+            adapter_for(crate::settings::ProviderConfig::DEFAULT_OPENCODE_ACP_COMMAND)
+                .map(|a| a.bin),
+            Some("opencode")
+        );
+    }
+
+    #[test]
+    fn installed_launch_only_covers_managed_adapters() {
+        assert_eq!(installed_launch("agent acp"), None);
+        assert_eq!(
+            installed_launch("npx -y @agentclientprotocol/claude-agent-acp@0.20.0"),
+            None
+        );
     }
 
     #[test]
