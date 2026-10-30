@@ -354,9 +354,12 @@ pub async fn refresh(settings: &AppSettings, force: bool) {
     };
     let claude = async {
         if has(LlmProviderKind::ClaudeCodeAcp) && settings.router.read_claude_code_usage {
-            let r = match claude_code_token().await {
-                Ok(token) => probe_claude(&client, &token).await,
-                Err(e) => Err(e),
+            let r = match probe_claude_cli().await {
+                Ok(snap) => Ok(snap),
+                Err(cli_err) => match claude_code_token().await {
+                    Ok(token) => probe_claude(&client, &token).await,
+                    Err(_) => Err(cli_err),
+                },
             };
             store(LlmProviderKind::ClaudeCodeAcp, r);
         }
@@ -465,6 +468,82 @@ async fn probe_claude(client: &reqwest::Client, token: &str) -> Result<QuotaSnap
     let v = get_json(req).await?;
     let mut snap = parse_claude_usage(&v);
     snap.source = "Claude usage (Claude Code login)".into();
+    Ok(snap)
+}
+
+/// Ask the `claude` CLI for its `/usage` data (the `get_usage` control request). Claude Code
+/// reads its own login, so oxi never touches Claude Code's keychain item (and its macOS
+/// password prompt). No prompt is sent, so it costs no tokens; hooks, MCP servers and session
+/// files are skipped.
+async fn probe_claude_cli() -> Result<QuotaSnapshot, String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut cmd = tokio::process::Command::new("claude");
+    crate::shell_env::apply_async(&mut cmd).await;
+    cmd.args([
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--setting-sources",
+        "",
+    ])
+    .current_dir(std::env::temp_dir())
+    .stdin(std::process::Stdio::piped())
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null())
+    .kill_on_drop(true);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("could not start the claude CLI: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("claude CLI: no stdin")?;
+    let stdout = child.stdout.take().ok_or("claude CLI: no stdout")?;
+    stdin
+        .write_all(
+            concat!(
+                r#"{"type":"control_request","request_id":"oxi-init","request":{"subtype":"initialize"}}"#,
+                "\n",
+                r#"{"type":"control_request","request_id":"oxi-usage","request":{"subtype":"get_usage"}}"#,
+                "\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    let read = async {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let r = &v["response"];
+            if v["type"] != "control_response" || r["request_id"] != "oxi-usage" {
+                continue;
+            }
+            if r["subtype"] != "success" {
+                return Err(r["error"]
+                    .as_str()
+                    .unwrap_or("claude CLI: usage request failed")
+                    .to_string());
+            }
+            let usage = &r["response"];
+            if usage["rate_limits_available"] != true || usage["rate_limits"].is_null() {
+                return Err("Claude Code is not signed in with a Claude subscription".into());
+            }
+            return Ok(parse_claude_usage(&usage["rate_limits"]));
+        }
+        Err("claude CLI exited without usage data".to_string())
+    };
+    let result = tokio::time::timeout(Duration::from_secs(20), read)
+        .await
+        .unwrap_or_else(|_| Err("claude CLI: usage request timed out".into()));
+    drop(stdin);
+    let _ = child.kill().await;
+    let mut snap = result?;
+    snap.source = "Claude usage (Claude Code CLI)".into();
     Ok(snap)
 }
 
@@ -600,7 +679,8 @@ async fn claude_code_credentials_json() -> Result<String, String> {
         .map(std::path::PathBuf::from)
         .or_else(|| dirs::home_dir().map(|h| h.join(".claude")))
         .map(|d| d.join(".credentials.json"));
-    #[cfg(target_os = "macos")]
+    // Disabled: reading Claude Code's keychain item showed a macOS password prompt.
+    #[cfg(any())]
     {
         // Claude Code keeps its login in the login keychain on macOS. The first read shows
         // the system's "allow access" prompt, which is why this is opt-in.
@@ -653,6 +733,15 @@ mod tests {
         assert_eq!(s.windows[1].label, "7d");
         assert_eq!(s.credits_left, Some(4.2));
         assert_eq!(s.used_pct_for("gpt-5"), Some(61.5));
+    }
+
+    /// Runs the real `claude` CLI (needs a Claude subscription login), so it's ignored by
+    /// default: `cargo test -- --ignored claude_cli_reports_usage`.
+    #[tokio::test]
+    #[ignore]
+    async fn claude_cli_reports_usage() {
+        let snap = probe_claude_cli().await.unwrap();
+        assert!(snap.windows.iter().any(|w| w.label == "5h"), "{snap:?}");
     }
 
     #[test]

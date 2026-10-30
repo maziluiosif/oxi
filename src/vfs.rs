@@ -159,7 +159,7 @@ pub fn read_to_string(path: &Path) -> io::Result<String> {
 
 pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let Some((host, remote_path)) = remote(path) else {
-        return std::fs::write(path, bytes);
+        return crate::fsutil::save(path, bytes);
     };
     let data = base64::engine::general_purpose::STANDARD.encode(bytes);
     let v = call(

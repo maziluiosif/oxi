@@ -149,59 +149,54 @@ impl OxiApp {
             }
             return;
         }
-        let metadata = match crate::vfs::metadata(&safe_path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                self.conv.editor.error = Some(format!("Could not inspect file: {error}"));
-                return;
-            }
-        };
-        // Media and oversized/binary files open as a read-only preview tab.
-        let media = MediaKind::from_path(&safe_path)
-            .or((metadata.len > MAX_TEXT_FILE_BYTES).then_some(MediaKind::Binary));
-        let content = match media {
-            Some(_) => Ok(String::new()),
-            None => crate::vfs::read_to_string(&safe_path),
-        };
-        let (content, media) = match content {
-            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
-                (Ok(String::new()), Some(MediaKind::Binary))
-            }
-            other => (other, media),
-        };
-        match content {
-            Ok(content) => {
-                self.conv.editor.documents.push(EditorDocument {
-                    markdown_preview_open: false,
-                    path: safe_path.clone(),
-                    is_scratchpad: false,
-                    saved_content: content.clone(),
-                    content,
-                    disk_modified: metadata.modified,
-                    externally_modified: false,
-                    syntax_state: None,
-                    content_revision: 0,
-                    dirty: false,
-                    layout_cache: EditorLayoutCache::default(),
-                    minimap_cache: None,
-                    view: Default::default(),
-                    viewport_width_bits: None,
-                    viewport_anchor_line: 0,
-                    media,
-                    diff: None,
-                });
-                self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
-                self.conv.editor.error = None;
-                // An open git diff stays reachable as an editor tab; just show the file.
-                self.conv.editor.diff_tab_active = false;
-                self.conv.editor.markdown_preview_active = false;
-                if reveal_in_explorer {
-                    self.reveal_editor_file_in_explorer(&safe_path);
-                }
-            }
-            Err(error) => {
-                self.conv.editor.error = Some(format!("Could not open text file: {error}"))
-            }
+        if crate::vfs::is_remote(&safe_path) {
+            // Two round trips to the host: wait for them off the UI thread.
+            self.conv
+                .editor
+                .remote_io
+                .open(safe_path, reveal_in_explorer);
+            self.conv.editor.error = None;
+            return;
+        }
+        match load_document(&safe_path) {
+            Ok(loaded) => self.push_loaded_document(safe_path, loaded, reveal_in_explorer),
+            Err(error) => self.conv.editor.error = Some(error),
+        }
+    }
+
+    /// Show a file read by [`load_document`] in a new tab and select it.
+    pub(super) fn push_loaded_document(
+        &mut self,
+        safe_path: PathBuf,
+        (content, media, modified): LoadedDocument,
+        reveal_in_explorer: bool,
+    ) {
+        self.conv.editor.documents.push(EditorDocument {
+            markdown_preview_open: false,
+            path: safe_path.clone(),
+            is_scratchpad: false,
+            saved_content: content.clone(),
+            content,
+            disk_modified: modified,
+            externally_modified: false,
+            syntax_state: None,
+            content_revision: 0,
+            dirty: false,
+            layout_cache: EditorLayoutCache::default(),
+            minimap_cache: None,
+            view: Default::default(),
+            viewport_width_bits: None,
+            viewport_anchor_line: 0,
+            media,
+            diff: None,
+        });
+        self.conv.editor.active = Some(self.conv.editor.documents.len() - 1);
+        self.conv.editor.error = None;
+        // An open git diff stays reachable as an editor tab; just show the file.
+        self.conv.editor.diff_tab_active = false;
+        self.conv.editor.markdown_preview_active = false;
+        if reveal_in_explorer {
+            self.reveal_editor_file_in_explorer(&safe_path);
         }
     }
 
@@ -211,6 +206,7 @@ impl OxiApp {
         };
         if self.conv.editor.documents[index].is_scratchpad {
             self.autosave_scratchpad(index);
+            self.save_scratchpad_as(index);
             return;
         }
         if self.conv.editor.documents[index].media.is_some() {
@@ -218,6 +214,15 @@ impl OxiApp {
         }
         self.tidy_before_save(Some(ctx), index);
         let path = self.conv.editor.documents[index].path.clone();
+        if crate::vfs::is_remote(&path) {
+            let document = &self.conv.editor.documents[index];
+            self.conv.editor.remote_io.save(
+                path,
+                Some(document.saved_content.clone()),
+                document.content.clone(),
+            );
+            return;
+        }
         if let Err(error) = self.save_editor_document(index, false) {
             if self.conv.editor.documents[index].externally_modified {
                 self.conv.editor.prompt = Some(super::super::state::EditorPrompt::Overwrite {
@@ -226,6 +231,37 @@ impl OxiApp {
                 });
             }
             self.conv.editor.error = Some(error);
+        }
+    }
+
+    /// The scratchpad autosaves, so Save writes a copy instead: a save dialog that starts in
+    /// the workspace root, then the new file opens in a tab next to the scratchpad.
+    fn save_scratchpad_as(&mut self, index: usize) {
+        let content = self.conv.editor.documents[index].content.clone();
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Save Scratchpad As")
+            .set_file_name(scratchpad_file_name(&content));
+        // The native dialog can't browse an SSH host; it falls back to its last folder.
+        if !crate::vfs::is_remote(&root) && root.is_dir() {
+            dialog = dialog.set_directory(&root);
+        }
+        let Some(path) = dialog.save_file() else {
+            return;
+        };
+        if let Err(error) = crate::fsutil::save(&path, content.as_bytes()) {
+            self.conv.editor.error = Some(format!("Could not save {}: {error}", path.display()));
+            return;
+        }
+        if let Some(tx) = &self.conv.git_ui.tx {
+            let _ = tx.send(crate::git::GitOp::Refresh);
+        }
+        let safe_root = crate::vfs::canonicalize(&root).unwrap_or(root);
+        // A tab already showing that file picks the new text up via the external-change check.
+        if std::fs::canonicalize(&path).is_ok_and(|p| p.starts_with(&safe_root)) {
+            self.open_editor_file_only(path);
+        } else {
+            self.conv.editor.error = None;
         }
     }
 
@@ -255,6 +291,7 @@ impl OxiApp {
     pub(crate) fn check_external_file_changes(&mut self, ctx: &egui::Context) {
         let waker = ctx.clone();
         crate::open_buffers::set_waker(move || waker.request_repaint());
+        self.poll_remote_io(ctx);
         self.apply_agent_writes(ctx);
         self.publish_open_buffers();
         if self
@@ -280,6 +317,10 @@ impl OxiApp {
             let document = &mut self.conv.editor.documents[index];
             // Its new text arrives through `apply_agent_writes`, as an undoable edit.
             if crate::open_buffers::has_agent_write(&document.path) {
+                continue;
+            }
+            // The save in flight changes the disk under it; its result updates the tab.
+            if self.conv.editor.remote_io.is_saving(&document.path) {
                 continue;
             }
             // A tab without unsaved changes follows the disk; the old text stays one undo away,
@@ -532,37 +573,104 @@ impl EditorDocument {
         if !overwrite && !self.is_scratchpad {
             match crate::vfs::read(&self.path) {
                 Ok(bytes) if bytes == self.saved_content.as_bytes() => {}
-                Ok(bytes) => {
-                    // Changed since the last check: merge it in now, as a sync would have.
-                    let merged = String::from_utf8(bytes).ok().and_then(|disk| {
-                        let merged =
-                            crate::merge3::merge(&self.saved_content, &self.content, &disk, false)?;
-                        Some((disk, merged))
-                    });
-                    let Some((disk, merged)) = merged else {
-                        self.externally_modified = true;
-                        return Err(
-                            "The file changed on disk where you also edited it. Review it before overwriting.".into(),
-                        );
-                    };
-                    self.saved_content = disk;
-                    self.replace_content(merged);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    self.externally_modified = true;
-                    return Err(
-                        "The file was removed from disk. Overwrite will recreate it.".into(),
-                    );
-                }
-                Err(error) => return Err(format!("Could not check file before saving: {error}")),
+                disk => self.take_in_disk_before_save(disk)?,
             }
         }
         crate::vfs::write(&self.path, self.content.as_bytes())
             .map_err(|e| format!("Could not save file: {e}"))?;
-        self.saved_content.clone_from(&self.content);
-        self.dirty = false;
-        self.disk_modified = crate::vfs::modified(&self.path);
-        self.externally_modified = false;
+        let written = self.content.clone();
+        self.mark_saved(written, crate::vfs::modified(&self.path));
         Ok(())
     }
+
+    /// The disk no longer holds what the tab last saved: merge it in, as a sync would have,
+    /// so the save writes both. Fails, flagging the tab, when the edits collide or the file
+    /// is gone.
+    pub(super) fn take_in_disk_before_save(
+        &mut self,
+        disk: std::io::Result<Vec<u8>>,
+    ) -> Result<(), String> {
+        match disk {
+            Ok(bytes) => {
+                let merged = String::from_utf8(bytes).ok().and_then(|disk| {
+                    let merged =
+                        crate::merge3::merge(&self.saved_content, &self.content, &disk, false)?;
+                    Some((disk, merged))
+                });
+                let Some((disk, merged)) = merged else {
+                    self.externally_modified = true;
+                    return Err(
+                        "The file changed on disk where you also edited it. Review it before overwriting.".into(),
+                    );
+                };
+                self.saved_content = disk;
+                self.replace_content(merged);
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.externally_modified = true;
+                Err("The file was removed from disk. Overwrite will recreate it.".into())
+            }
+            Err(error) => Err(format!("Could not check file before saving: {error}")),
+        }
+    }
+
+    /// `written` is on disk now. The tab may have been edited since it was sent off.
+    pub(super) fn mark_saved(&mut self, written: String, modified: Option<std::time::SystemTime>) {
+        self.saved_content = written;
+        self.dirty = self.content != self.saved_content;
+        self.disk_modified = modified;
+        self.externally_modified = false;
+    }
+}
+
+/// A file's text (empty for a preview tab), its preview kind, and its modification time.
+pub(super) type LoadedDocument = (String, Option<MediaKind>, Option<std::time::SystemTime>);
+
+/// Read a file for a new tab. Media and oversized/binary files open as a read-only preview.
+/// Suggested name for a scratchpad copy: its first line as a slug, else `scratchpad.md`.
+pub(super) fn scratchpad_file_name(content: &str) -> String {
+    let first = content
+        .lines()
+        .map(|line| line.trim().trim_start_matches('#').trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let mut slug = String::new();
+    for c in first.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+        if slug.chars().count() >= 48 {
+            break;
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() {
+        "scratchpad.md".into()
+    } else {
+        format!("{slug}.md")
+    }
+}
+
+pub(super) fn load_document(path: &Path) -> Result<LoadedDocument, String> {
+    let metadata =
+        crate::vfs::metadata(path).map_err(|error| format!("Could not inspect file: {error}"))?;
+    let media = MediaKind::from_path(path)
+        .or((metadata.len > MAX_TEXT_FILE_BYTES).then_some(MediaKind::Binary));
+    let content = match media {
+        Some(_) => Ok(String::new()),
+        None => crate::vfs::read_to_string(path),
+    };
+    let (content, media) = match content {
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+            (Ok(String::new()), Some(MediaKind::Binary))
+        }
+        other => (other, media),
+    };
+    let content = content.map_err(|error| format!("Could not open text file: {error}"))?;
+    // Reading a remote file refreshes its metadata too.
+    let modified = crate::vfs::modified(path).or(metadata.modified);
+    Ok((content, media, modified))
 }

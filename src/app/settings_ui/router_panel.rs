@@ -143,7 +143,7 @@ impl OxiApp {
                     .color(c_text()),
             )
             .on_hover_text(
-                "Reads Claude Code's login (macOS keychain or ~/.claude/.credentials.json) only to query the usage windows. The token is never refreshed or used for requests. macOS asks for permission the first time.",
+                "Asks the claude CLI for its /usage data (no prompt is sent, so it costs nothing). oxi never reads Claude Code's login itself, so macOS asks for no password.",
             );
             crate::ui::chrome::toggle(ui,
                 &mut router.read_codex_cli_usage,
