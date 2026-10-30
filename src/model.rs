@@ -597,7 +597,13 @@ pub fn concat_thinking_blocks(blocks: &[AssistantBlock], indices: &[usize]) -> S
     let mut s = String::new();
     for &i in indices {
         if let AssistantBlock::Thinking(t) = &blocks[i] {
-            if !s.is_empty() && !t.is_empty() {
+            // Agents often open a reasoning chunk with blank lines (Codex summaries start
+            // "\n\n**Title**"); untrimmed they render as empty rows at the top of the body.
+            let t = t.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if !s.is_empty() {
                 s.push_str("\n\n");
             }
             s.push_str(t);
@@ -870,6 +876,17 @@ mod tests {
         ];
         let result = concat_thinking_blocks(&blocks, &[0, 2]);
         assert_eq!(result, "first\n\nsecond");
+    }
+
+    #[test]
+    fn concat_thinking_blocks_trims_blank_lines() {
+        let blocks = vec![
+            AssistantBlock::Thinking("\n\n**Polling test run**\n".into()),
+            AssistantBlock::Thinking("\n \n".into()),
+            AssistantBlock::Thinking("next".into()),
+        ];
+        let result = concat_thinking_blocks(&blocks, &[0, 1, 2]);
+        assert_eq!(result, "**Polling test run**\n\nnext");
     }
 
     #[test]
