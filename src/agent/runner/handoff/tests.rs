@@ -75,6 +75,21 @@ fn keeps_the_first_turn_and_names_the_turns_left_out() {
 }
 
 #[test]
+fn an_oversized_newest_turn_is_cut_not_dropped() {
+    let huge = format!("start of paste {}", "y".repeat(ACP_HISTORY_MAX_CHARS * 2));
+    let chat = vec![
+        chat_msg(MsgRole::User, "the task", vec![]),
+        answer_by(LlmProviderKind::OpenAi, "done"),
+        chat_msg(MsgRole::User, &huge, vec![]),
+    ];
+    let t = acp_history_transcript(&chat);
+    assert!(t.starts_with("[#1] User: the task\n\n[1 turn(s), #2–#2, left out for length."));
+    assert!(t.contains("[#3] User: start of paste yyy"));
+    assert!(t.ends_with("[Turn #3 cut for length. Read it in full with oxi's chat_read tool.]"));
+    assert!(t.len() <= ACP_HISTORY_MAX_CHARS);
+}
+
+#[test]
 fn archive_keeps_every_turn_with_more_tool_output() {
     let long = format!("{}END", "y".repeat(5_000));
     let mut chat = vec![chat_msg(

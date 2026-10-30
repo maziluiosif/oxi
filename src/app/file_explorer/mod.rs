@@ -28,6 +28,7 @@ mod minimap;
 mod multi_cursor;
 mod navigation_diff;
 mod project_search;
+mod remote_io;
 mod safety;
 mod status_info;
 mod support;
@@ -45,6 +46,7 @@ pub(crate) use multi_cursor::DocumentView;
 #[cfg(test)]
 pub(crate) use multi_cursor::text_point;
 pub(crate) use project_search::{FIND_REFERENCES_REQUEST, ProjectSearchState, search_json};
+pub(crate) use remote_io::RemoteIo;
 pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
 
 pub(crate) use diff_editor::{Change as DiffChange, DiffSource, DocumentDiff};

@@ -133,6 +133,8 @@ pub struct EditorState {
     pub prompt: Option<EditorPrompt>,
     pub allow_exit: bool,
     pub last_external_check: Option<Instant>,
+    /// Remote workspace files being opened or saved off the UI thread.
+    pub remote_io: super::file_explorer::RemoteIo,
     pub documents: Vec<EditorDocument>,
     pub active: Option<usize>,
     /// Active tab remembered while the chat/agent view is shown.

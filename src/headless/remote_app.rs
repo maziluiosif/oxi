@@ -296,7 +296,7 @@ pub(super) fn fs_write(params: &Value) -> Result<Value, String> {
     let data = base64::engine::general_purpose::STANDARD
         .decode(params["data"].as_str().unwrap_or_default())
         .map_err(|e| format!("bad data: {e}"))?;
-    std::fs::write(&path, data).map_err(|e| io_error(&path, &e))?;
+    crate::fsutil::save(Path::new(&path), &data).map_err(|e| io_error(&path, &e))?;
     let meta = std::fs::metadata(&path).map_err(|e| io_error(&path, &e))?;
     Ok(meta_json(&meta))
 }
