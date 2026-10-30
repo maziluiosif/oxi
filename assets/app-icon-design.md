@@ -3,12 +3,17 @@
 The app icon uses linked code brackets in copper orange on a graphite tile,
 matching the application's warm accent. The exterior is transparent.
 
-- `app-icon.png`: 1024 × 1024 source, used by `scripts/bundle-macos.sh` to build
-  the macOS icon.
-- `windows/app-icon-256.png`: 256 × 256 PNG, embedded by the native app as its
-  window icon (a 1024 px window icon costs 32 MB of memory on macOS).
-- `windows/app-icon.ico`: PNG frames at 16, 24, 32, 48, 64, 128 and 256 pixels,
-  embedded by `build.rs` on Windows.
+- `app-icon.png`: 1024 × 1024 source, with Apple's grid margin around the tile.
+- `macos/app-icon-fullbleed.png`: the tile scaled to fill 1024 × 1024, used by
+  `scripts/bundle-macos.sh` for `oxi.icns`. macOS 26 applies its own squircle mask
+  to full-bleed artwork; icons with a transparent margin are shrunk into a grey
+  tile instead.
+- `macos/app-icon-256.png`: 256 × 256 with the grid margin, set by the running app
+  as its Dock icon (AppKit draws it unmasked; a 1024 px image costs 32 MB).
+- `windows/app-icon-256.png`: 256 × 256 with the tile filling the canvas, the
+  window icon on Windows and Linux and the Linux menu entry icon.
+- `windows/app-icon.ico`: PNG frames at 16, 24, 32, 48, 64, 128 and 256 pixels of
+  the same tight crop, embedded by `build.rs` on Windows.
 
 Generated with the built-in ImageGen tool; platform sizes were exported with
 macOS `sips`. The ICO container preserves the PNG frames and their alpha.

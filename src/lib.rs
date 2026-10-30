@@ -50,8 +50,14 @@ use eframe::egui::IconData;
 
 /// The window icon. 256 px is the largest size taskbars use; on macOS eframe hands it to the Dock
 /// as an `NSImage`, which AppKit backs at Retina scale, so the 1024 px source pinned 32 MB.
+/// The Dock draws that image as is, so the macOS copy keeps Apple's grid margin; Windows and Linux
+/// taskbars expect the tile to fill the canvas.
 pub(crate) fn app_icon() -> IconData {
-    let image = image::load_from_memory(include_bytes!("../assets/windows/app-icon-256.png"))
+    #[cfg(target_os = "macos")]
+    const PNG: &[u8] = include_bytes!("../assets/macos/app-icon-256.png");
+    #[cfg(not(target_os = "macos"))]
+    const PNG: &[u8] = include_bytes!("../assets/windows/app-icon-256.png");
+    let image = image::load_from_memory(PNG)
         .expect("embedded app icon should be a valid PNG")
         .into_rgba8();
     let (width, height) = image.dimensions();

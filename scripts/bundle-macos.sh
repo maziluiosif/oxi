@@ -18,7 +18,7 @@ BIN="${1:?usage: bundle-macos.sh <oxi-binary> <output-dir>}"
 OUT_DIR="${2:?usage: bundle-macos.sh <oxi-binary> <output-dir>}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ICON_PNG="$REPO_ROOT/assets/app-icon.png"
+ICON_PNG="$REPO_ROOT/assets/macos/app-icon-fullbleed.png"
 APP="$OUT_DIR/oxi.app"
 
 if [[ ! -f "$BIN" ]]; then
@@ -38,7 +38,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/oxi"
 chmod +x "$APP/Contents/MacOS/oxi"
 
-# Build oxi.icns from the 1024x1024 PNG. iconutil only accepts the canonical
+# Build oxi.icns from the 1024x1024 full-bleed PNG. macOS 26 masks full-bleed artwork to its own
+# squircle; an icon with a transparent margin is shrunk into a grey tile instead, so the Dock
+# showed a smaller icon until the app started and set its own. iconutil only accepts the canonical
 # iconset names below, so generate exactly those sizes.
 ICONSET="$(mktemp -d)/oxi.iconset"
 mkdir -p "$ICONSET"
