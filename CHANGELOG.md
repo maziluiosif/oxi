@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.31.0] - 2026-10-30
+
+### Added
+- **Delegation:** Agents can hand tasks to other providers through delegate_task, task_status and task_cancel tools; delegated tasks run in their own chat with optional new work trees and setup scripts.
+- **Recovery:** Chat turns are journaled to disk; if the app crashes, interrupted turns show which tool calls are safe to repeat and which may have changed files, with options to continue or dismiss.
+- **Diff comments:** Comment on any diff line in the editor; comments attach to your next message so the agent addresses them all at once.
+- **Work tree setup:** Repositories can define a setup script that runs in new work trees before the agent starts, with progress shown above the composer.
+- **Steering:** While oxi's own agent is responding, queued messages now offer Steer to hand them to the running turn, which answers them in the same response.
+- **Checkpoints:** Turn snapshots are kept with git refs; you can rewind to any message and optionally restore the files it changed from saved snapshots.
+- **Work tree removal:** Removing a work tree now shows what would be lost (uncommitted changes, untracked files, unique commits) before deleting.
+- **Status bar:** Context usage, subscription windows and token speed moved from the composer to the status bar with reset times and costs on hover.
+- **Chat history tool:** ACP agents can now read the full chat history with the new chat_read tool, with numbered turns for better handoffs.
+- **Helper CLIs:** Commit message and chat title drafts now work with Claude Code and Codex CLIs as helper models.
+
+### Changed
+- **Performance:** Delegation mailboxes are read only when requests arrive, and CLI helper lookups no longer block the runtime.
+- **Performance:** File change lists are computed off the UI thread when snapshots are taken, not during rendering.
+- **Performance:** Subagent transcript saves are debounced to once per two seconds instead of on every update.
+- **UI:** Syntax highlighting is reused while Markdown rehighlights, eliminating flashes of plain text.
+- **Subagents:** Only live, recently heard-from children keep the chat's spinner and keep-awake; waiting or disconnected ones do not.
+
+### Fixed
+- **Recovery:** Turn journals now close properly however a turn ends (stopped by user, agent crash, etc.), so the next turn runs with a journal and restarts report the correct state.
+- **Helpers:** Claude Code and Codex CLI early exits (broken pipe) are now handled correctly instead of treated as errors.
+
+
 ## [1.30.0] - 2026-10-29
 
 ### Added
@@ -1261,7 +1287,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.30.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.31.0...HEAD
+[1.31.0]: https://github.com/maziluiosif/oxi/compare/v1.30.0...v1.31.0
 [1.30.0]: https://github.com/maziluiosif/oxi/compare/v1.29.0...v1.30.0
 [1.29.0]: https://github.com/maziluiosif/oxi/compare/v1.28.0...v1.29.0
 [1.28.0]: https://github.com/maziluiosif/oxi/compare/v1.27.0...v1.28.0
