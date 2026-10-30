@@ -600,7 +600,8 @@ async fn claude_code_credentials_json() -> Result<String, String> {
         .map(std::path::PathBuf::from)
         .or_else(|| dirs::home_dir().map(|h| h.join(".claude")))
         .map(|d| d.join(".credentials.json"));
-    #[cfg(target_os = "macos")]
+    // Disabled: reading Claude Code's keychain item showed a macOS password prompt.
+    #[cfg(any())]
     {
         // Claude Code keeps its login in the login keychain on macOS. The first read shows
         // the system's "allow access" prompt, which is why this is opt-in.

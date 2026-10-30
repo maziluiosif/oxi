@@ -245,7 +245,13 @@ pub const SERVER_FILE_ENV: &str = "OXI_SECRETS_FILE";
 /// The keychain asks again for every new oxi build (oxi is ad-hoc signed), and a server
 /// waiting on that prompt serves nobody until someone walks to its screen. So a server copies
 /// the secrets out of the keychain once and then uses the file.
+///
+/// On macOS the desktop app uses the file too: the keychain prompt came back after every
+/// update (twice per launch), which was more in the way than it helped.
 fn server_file() -> Option<std::path::PathBuf> {
+    if cfg!(all(target_os = "macos", not(test))) {
+        return Some(server_file_path());
+    }
     std::env::var_os(SERVER_FILE_ENV)
         .filter(|v| !v.is_empty())
         .map(|_| server_file_path())
