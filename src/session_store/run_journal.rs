@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 const MAX_RECEIPTS: usize = 32;
 /// Longest tool argument summary kept.
 const MAX_ARGS: usize = 300;
+/// Tries at locking a journal no turn of this process holds, 10 ms apart.
+const LOCK_TRIES: u32 = 20;
 
 /// What a tool call may do, as far as a restart is concerned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +156,34 @@ fn open(path: &Path) -> std::io::Result<File> {
         options.mode(0o600);
     }
     options.open(path)
+}
+
+/// Journals held by turns of this process.
+fn held() -> std::sync::MutexGuard<'static, std::collections::HashSet<PathBuf>> {
+    static HELD: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    HELD.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Lock the journal at `path`, open as `file`. One held by a turn of this process is refused at
+/// once; otherwise it is tried a few times: a child process being spawned shares every open
+/// file of its parent, and with them their locks, until it execs.
+fn lock(file: &File, path: &Path) -> bool {
+    if held().contains(path) {
+        return false;
+    }
+    for attempt in 0..LOCK_TRIES {
+        match file.try_lock() {
+            Ok(()) => return true,
+            Err(std::fs::TryLockError::WouldBlock) if attempt + 1 < LOCK_TRIES => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(_) => return false,
+        }
+    }
+    false
 }
 
 fn read_records(file: &mut File) -> Vec<Record> {
@@ -295,7 +325,10 @@ impl TurnJournal {
         let mut file = open(&path)
             .map_err(|e| log::warn!("run journal {}: {e}", path.display()))
             .ok()?;
-        file.try_lock().ok()?;
+        if !lock(&file, &path) {
+            return None;
+        }
+        held().insert(path.clone());
         // What an earlier turn left (receipts, queue) is carried; an unended turn here was
         // already reported when the chat was loaded.
         let earlier = summarize(read_records(&mut file));
@@ -374,8 +407,20 @@ impl TurnJournal {
     }
 
     /// The turn ended; keep only what outlives it.
-    pub fn end(self, queued: &[String]) {
-        compact_and_close(self.file, &self.path, &self.receipts, queued);
+    pub fn end(mut self, queued: &[String]) {
+        let empty = compact(&mut self.file, &self.path, &self.receipts, queued);
+        let path = self.path.clone();
+        // Closed (and so unlocked) first: Windows does not delete a file that is still open.
+        drop(self);
+        if empty {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+impl Drop for TurnJournal {
+    fn drop(&mut self) {
+        held().remove(&self.path);
     }
 }
 
@@ -389,7 +434,9 @@ pub fn recover(session_file: &str) -> Option<Recovery> {
     }
     let mut file = open(&path).ok()?;
     // Held: a turn of a live process (this one or another oxi) is running.
-    file.try_lock().ok()?;
+    if !lock(&file, &path) {
+        return None;
+    }
     let recovery = summarize(read_records(&mut file));
     compact_and_close(file, &path, &recovery.receipts, &recovery.queued);
     Some(recovery)
@@ -405,7 +452,7 @@ pub fn save_queue(session_file: &str, queued: &[String]) {
     let Ok(mut file) = open(&path) else {
         return;
     };
-    if file.try_lock().is_err() {
+    if !lock(&file, &path) {
         return;
     }
     let receipts = summarize(read_records(&mut file)).receipts;
