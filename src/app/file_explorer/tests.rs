@@ -415,3 +415,12 @@ fn close_all_tabs_closes_clean_tabs_and_asks_before_dropping_edits() {
         Some(super::super::state::EditorPrompt::CloseAll)
     ));
 }
+
+#[test]
+fn scratchpad_copy_is_named_after_its_first_line() {
+    use super::documents::scratchpad_file_name;
+    assert_eq!(scratchpad_file_name("\n\n# Plan: ACP v2!\nbody"), "plan-acp-v2.md");
+    assert_eq!(scratchpad_file_name("Ședință joi"), "ședință-joi.md");
+    assert_eq!(scratchpad_file_name("  \n --- \n"), "scratchpad.md");
+    assert_eq!(scratchpad_file_name(""), "scratchpad.md");
+}

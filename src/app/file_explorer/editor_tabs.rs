@@ -140,7 +140,12 @@ impl OxiApp {
                                         })
                                     };
                                     response.context_menu(|ui| {
-                                        if ui.button("Save").clicked() {
+                                        let save_label = if document.is_scratchpad {
+                                            "Save As…"
+                                        } else {
+                                            "Save"
+                                        };
+                                        if ui.button(save_label).clicked() {
                                             select = Some(index);
                                             save = true;
                                             ui.close();

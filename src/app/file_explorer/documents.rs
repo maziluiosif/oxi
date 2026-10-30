@@ -206,6 +206,7 @@ impl OxiApp {
         };
         if self.conv.editor.documents[index].is_scratchpad {
             self.autosave_scratchpad(index);
+            self.save_scratchpad_as(index);
             return;
         }
         if self.conv.editor.documents[index].media.is_some() {
@@ -230,6 +231,37 @@ impl OxiApp {
                 });
             }
             self.conv.editor.error = Some(error);
+        }
+    }
+
+    /// The scratchpad autosaves, so Save writes a copy instead: a save dialog that starts in
+    /// the workspace root, then the new file opens in a tab next to the scratchpad.
+    fn save_scratchpad_as(&mut self, index: usize) {
+        let content = self.conv.editor.documents[index].content.clone();
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Save Scratchpad As")
+            .set_file_name(scratchpad_file_name(&content));
+        // The native dialog can't browse an SSH host; it falls back to its last folder.
+        if !crate::vfs::is_remote(&root) && root.is_dir() {
+            dialog = dialog.set_directory(&root);
+        }
+        let Some(path) = dialog.save_file() else {
+            return;
+        };
+        if let Err(error) = crate::fsutil::save(&path, content.as_bytes()) {
+            self.conv.editor.error = Some(format!("Could not save {}: {error}", path.display()));
+            return;
+        }
+        if let Some(tx) = &self.conv.git_ui.tx {
+            let _ = tx.send(crate::git::GitOp::Refresh);
+        }
+        let safe_root = crate::vfs::canonicalize(&root).unwrap_or(root);
+        // A tab already showing that file picks the new text up via the external-change check.
+        if std::fs::canonicalize(&path).is_ok_and(|p| p.starts_with(&safe_root)) {
+            self.open_editor_file_only(path);
+        } else {
+            self.conv.editor.error = None;
         }
     }
 
@@ -596,6 +628,32 @@ impl EditorDocument {
 pub(super) type LoadedDocument = (String, Option<MediaKind>, Option<std::time::SystemTime>);
 
 /// Read a file for a new tab. Media and oversized/binary files open as a read-only preview.
+/// Suggested name for a scratchpad copy: its first line as a slug, else `scratchpad.md`.
+pub(super) fn scratchpad_file_name(content: &str) -> String {
+    let first = content
+        .lines()
+        .map(|line| line.trim().trim_start_matches('#').trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let mut slug = String::new();
+    for c in first.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+        if slug.chars().count() >= 48 {
+            break;
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() {
+        "scratchpad.md".into()
+    } else {
+        format!("{slug}.md")
+    }
+}
+
 pub(super) fn load_document(path: &Path) -> Result<LoadedDocument, String> {
     let metadata =
         crate::vfs::metadata(path).map_err(|error| format!("Could not inspect file: {error}"))?;
