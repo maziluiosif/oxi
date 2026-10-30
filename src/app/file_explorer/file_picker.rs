@@ -215,6 +215,19 @@ impl OxiApp {
         }
 
         let safe_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if crate::vfs::is_remote(path)
+            && !self
+                .conv
+                .editor
+                .documents
+                .iter()
+                .any(|document| document.path == safe_path)
+        {
+            // Reading it takes a round trip to the host per highlighted row; it opens on Enter.
+            self.conv.editor.file_picker_preview = None;
+            self.conv.editor.file_picker_preview_created = false;
+            return;
+        }
         let was_open = self
             .conv
             .editor

@@ -3,8 +3,9 @@
 //!
 //! Every write goes to a synced temporary file next to the destination, which is then renamed
 //! over it: a crash, a full disk or a killed process leaves either the old content or the new
-//! one, never a truncated mix. Files the user saves from the editor are still written in place,
-//! like other editors do, so their extended attributes, hard links and bind mounts survive.
+//! one, never a truncated mix. Files the user saves from the editor go through [`save`], which
+//! does the same but follows symlinks and keeps what a rename would lose, falling back to an
+//! in-place write where it cannot (hard links, files owned by someone else, bind mounts).
 
 use std::fs;
 use std::io::Write;
@@ -94,6 +95,130 @@ fn write_atomic_with(path: &Path, content: &[u8], private: bool) -> Result<(), S
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+/// Save a user's file the way an editor should: the new bytes go to a synced temporary file
+/// that is renamed over the old one, so a full disk or a crash mid-save leaves the old content
+/// intact. A symlink is followed and stays a link; the target keeps its permissions, group and
+/// (macOS) extended attributes and ACL. Where a rename would break the file instead (a hard
+/// link, someone else's file, a folder we may not create files in, a bind mount, a file with
+/// Linux extended attributes, anything but a regular file) it is written in place.
+pub fn save(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let target = match fs::canonicalize(path) {
+        Ok(target) => target,
+        // A dangling symlink: let the plain write create whatever it points at.
+        Err(_) if fs::symlink_metadata(path).is_ok() => return fs::write(path, content),
+        Err(_) => path.to_path_buf(),
+    };
+    let existing = fs::metadata(&target).ok();
+    if existing
+        .as_ref()
+        .is_some_and(|meta| !replaceable(&target, meta))
+    {
+        return fs::write(&target, content);
+    }
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let tmp = unique_temp_path(parent, ".oxi-save", "tmp");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Private until the original's permissions are copied over, so a key or a .env is
+        // never readable mid-save. A new file gets the usual 0666 & !umask.
+        options.mode(if existing.is_some() { 0o600 } else { 0o666 });
+    }
+    let mut file = match options.open(&tmp) {
+        Ok(file) => file,
+        // A folder we can write files in but not create files in, or a missing one: the
+        // plain write either works or reports the real problem.
+        Err(_) => return fs::write(&target, content),
+    };
+    let written = (|| -> std::io::Result<()> {
+        file.write_all(content)?;
+        file.flush()?;
+        sync(&file)?;
+        if let Some(meta) = &existing {
+            // The group first: changing it can clear a setgid bit the permissions restore.
+            keep_attributes(&target, &file, meta);
+            fs::set_permissions(&tmp, meta.permissions())?;
+        }
+        Ok(())
+    })();
+    drop(file);
+    if let Err(error) = written {
+        // Out of space or a failing drive: the original is untouched, which is the point.
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    if install(&tmp, &target).is_err() {
+        // A bind mount or a file another program holds open on Windows: the rename cannot
+        // replace it, but the content fits, so write it in place.
+        let _ = fs::remove_file(&tmp);
+        return fs::write(&target, content);
+    }
+    Ok(())
+}
+
+/// Whether replacing `path` with a renamed copy keeps it the same file to everyone else.
+fn replaceable(path: &Path, meta: &fs::Metadata) -> bool {
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid has no preconditions.
+        if meta.nlink() > 1 || meta.uid() != unsafe { libc::geteuid() } {
+            return false;
+        }
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        // Linux has no call that copies them all; keep them by writing in place.
+        let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: a NUL-terminated path and a zero-sized query.
+        if unsafe { libc::llistxattr(c_path.as_ptr(), std::ptr::null_mut(), 0) } != 0 {
+            return false;
+        }
+    }
+    let _ = path;
+    true
+}
+
+/// Best effort: what the rename would otherwise reset to the defaults for a new file.
+#[allow(unused_variables)]
+fn keep_attributes(original: &Path, replacement: &fs::File, meta: &fs::Metadata) {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: the descriptor is owned by `replacement`; -1 keeps the owner as it is.
+        unsafe {
+            libc::fchown(replacement.as_raw_fd(), u32::MAX, meta.gid());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        if let Ok(source) = fs::File::open(original) {
+            // SAFETY: both descriptors stay open for the call; no state object is used.
+            unsafe {
+                libc::fcopyfile(
+                    source.as_raw_fd(),
+                    replacement.as_raw_fd(),
+                    std::ptr::null_mut(),
+                    libc::COPYFILE_XATTR | libc::COPYFILE_ACL,
+                );
+            }
+        }
+    }
 }
 
 /// Move a fully written and synced temporary file over `destination`, then sync the directory
@@ -261,6 +386,69 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(fs::read(&link).unwrap(), b"new");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_creates_and_replaces_without_leftovers() {
+        let dir = temp_dir("save");
+        let path = dir.join("a.txt");
+        save(&path, b"one").unwrap();
+        save(&path, b"two").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"two");
+        assert!(leftovers(&dir).is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_follows_a_symlink_and_keeps_the_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("save-link");
+        let target = dir.join("real.sh");
+        fs::write(&target, "old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o750)).unwrap();
+        let link = dir.join("link.sh");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        save(&link, b"new").unwrap();
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert!(leftovers(&dir).is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_writes_a_hard_link_in_place() {
+        let dir = temp_dir("save-hardlink");
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        fs::write(&a, "old").unwrap();
+        fs::hard_link(&a, &b).unwrap();
+        save(&a, b"new").unwrap();
+        assert_eq!(fs::read(&b).unwrap(), b"new");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_the_inode_so_a_failed_write_cannot_truncate() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = temp_dir("save-inode");
+        let path = dir.join("a.txt");
+        fs::write(&path, "old").unwrap();
+        let before = fs::metadata(&path).unwrap().ino();
+        save(&path, b"new").unwrap();
+        assert_ne!(fs::metadata(&path).unwrap().ino(), before);
         let _ = fs::remove_dir_all(dir);
     }
 }

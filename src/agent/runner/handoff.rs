@@ -253,6 +253,25 @@ fn transcript(chat: &[ChatMessage], offset: usize, detail: Detail) -> String {
         start -= 1;
         total += turns[start].text.len() + 2;
     }
+    // The newest turn alone is over the budget (a huge paste): send its start rather than
+    // no recent turn at all. Room is kept for the
+    // note about the turns left out before it.
+    const LEFT_OUT_NOTE_CHARS: usize = 200;
+    let mut newest = None;
+    if start == turns.len() && start > floor {
+        start -= 1;
+        let t = &turns[start];
+        let note = format!(
+            "\n[Turn #{} cut for length. Read it in full with oxi's chat_read tool.]",
+            t.n
+        );
+        newest = Some(
+            head(
+                &t.text,
+                budget.saturating_sub(note.len() + LEFT_OUT_NOTE_CHARS),
+            ) + &note,
+        );
+    }
     let mut parts: Vec<String> = Vec::new();
     if !header.is_empty() && !turns.is_empty() {
         parts.push(header);
@@ -265,7 +284,10 @@ fn transcript(chat: &[ChatMessage], offset: usize, detail: Detail) -> String {
             "[{count} turn(s), #{from}–#{to}, left out for length. Read them with oxi's chat_read tool if you need them.]"
         ));
     }
-    parts.extend(turns[start..].iter().map(|t| t.text.clone()));
+    match newest {
+        Some(text) => parts.push(text),
+        None => parts.extend(turns[start..].iter().map(|t| t.text.clone())),
+    }
     parts.join("\n\n")
 }
 
