@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.32.0] - 2026-10-30
+
+### Added
+- **Agent providers:** OpenCode CLI is now available as a managed ACP provider with automatic installation and updates.
+- **Agent management:** Idle agents automatically relaunch when their underlying tools are updated in the background, ensuring prompts use the latest version.
+
+### Changed
+- **App icon:** Updated application icon across platforms.
+
+
 ## [1.31.2] - 2026-10-30
 
 ### Fixed
@@ -1300,7 +1310,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.31.2...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.32.0...HEAD
+[1.32.0]: https://github.com/maziluiosif/oxi/compare/v1.31.2...v1.32.0
 [1.31.2]: https://github.com/maziluiosif/oxi/compare/v1.31.1...v1.31.2
 [1.31.1]: https://github.com/maziluiosif/oxi/compare/v1.31.0...v1.31.1
 [1.31.0]: https://github.com/maziluiosif/oxi/compare/v1.30.0...v1.31.0
