@@ -584,6 +584,24 @@ pub fn describe(interrupted: &Interrupted) -> String {
     )
 }
 
+/// One line for the chat's notice (the transcript has the details): how many started actions
+/// may have changed things.
+pub fn summary(interrupted: &Interrupted) -> String {
+    let risky = interrupted
+        .unfinished
+        .iter()
+        .filter(|t| t.effect.may_have_changed_things())
+        .count();
+    match risky {
+        0 => "The last response was cut off when oxi closed.".into(),
+        1 => "The last response was cut off when oxi closed; 1 action may have changed things."
+            .into(),
+        n => format!(
+            "The last response was cut off when oxi closed; {n} actions may have changed things."
+        ),
+    }
+}
+
 /// The message "Continue" sends: carry on, after checking what the interrupted calls did.
 pub fn continue_prompt(interrupted: &Interrupted) -> String {
     let lines = unfinished_lines(interrupted);
@@ -666,7 +684,7 @@ pub fn mark_interrupted(
             }),
         }
     }
-    reply.append_answer(&format!("\n[Interrupted] {}\n", describe(interrupted)));
+    reply.append_answer(&format!("\n\n*Interrupted: {}*\n", describe(interrupted)));
     reply.finish_streaming();
     true
 }

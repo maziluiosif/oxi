@@ -175,6 +175,7 @@ fn spawn_agent_attempt(
                 plan_mode,
                 evidence_mode,
                 evidence_base,
+                steer.clone(),
             )
             .await;
             if let AgentOutcome::Failed { error } = &outcome
@@ -508,6 +509,7 @@ async fn run_acp_turn(
     plan_mode: bool,
     evidence_mode: crate::evidence::Mode,
     evidence_base: Option<(PathBuf, String)>,
+    steer: crate::agent::steer::SteerInbox,
 ) -> AgentOutcome {
     let last_user_idx = chat_for_history
         .iter()
@@ -571,6 +573,7 @@ async fn run_acp_turn(
         plan_mode,
         evidence_policy,
         evidence_base,
+        steer: Some(steer),
     };
 
     match acp.prompt(req).await {

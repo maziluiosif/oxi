@@ -18,7 +18,7 @@ pub(crate) const ATTACHMENT: &str = "Review comments";
 const DEFAULT_PROMPT: &str = "Please address my review comments on the diff.";
 
 /// One note on a range of diff lines.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ReviewComment {
     /// Workspace the file belongs to.
     pub root: String,
@@ -181,7 +181,43 @@ pub(crate) fn format_comments(comments: &[ReviewComment]) -> String {
     out
 }
 
+/// Where the comments not sent yet are kept between runs.
+fn comments_path() -> std::path::PathBuf {
+    crate::app_dirs::data_dir().join("review_comments.json")
+}
+
+/// The comments a previous run left unsent.
+pub(crate) fn load_comments() -> Vec<ReviewComment> {
+    std::fs::read(comments_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
 impl OxiApp {
+    /// Keep the unsent comments on disk (off the UI thread; they change a few times a minute
+    /// at most).
+    fn save_comments(&self) {
+        let content = serde_json::to_vec_pretty(&self.conv.review_comments).unwrap_or_default();
+        let _ = std::thread::Builder::new()
+            .name("oxi-review-comments".into())
+            .spawn(move || {
+                if let Err(e) = crate::fsutil::write_atomic_private(&comments_path(), &content) {
+                    log::warn!("review comments: could not save: {e}");
+                }
+            });
+    }
+
+    /// Comments on `path` (relative to the active workspace), for the diff's markers.
+    pub(crate) fn comments_on(&self, path: &str) -> Vec<&ReviewComment> {
+        let root = &self.active_workspace().root_path;
+        self.conv
+            .review_comments
+            .iter()
+            .filter(|c| &c.root == root && c.path == path)
+            .collect()
+    }
+
     /// Comments waiting to go out with the active workspace's next message.
     fn workspace_comments(&self) -> Vec<(usize, &ReviewComment)> {
         let root = &self.active_workspace().root_path;
@@ -191,6 +227,12 @@ impl OxiApp {
             .enumerate()
             .filter(|(_, c)| &c.root == root)
             .collect()
+    }
+
+    /// Whether comments wait for the active workspace's next message (they can be sent alone,
+    /// with the default prompt).
+    pub(crate) fn has_review_comments(&self) -> bool {
+        !self.workspace_comments().is_empty()
     }
 
     /// Move the active workspace's comments into the composer's attachments, before sending.
@@ -203,6 +245,7 @@ impl OxiApp {
         if comments.is_empty() {
             return;
         }
+        self.save_comments();
         self.conv.composer.pending_texts.push(UserAttachment::Text {
             name: format!("{ATTACHMENT} ({})", comments.len()),
             text: format_comments(&comments),
@@ -296,6 +339,7 @@ impl OxiApp {
             let mut comment = draft.target;
             comment.note = draft.text.trim().to_string();
             self.conv.review_comments.push(comment);
+            self.save_comments();
             self.notify_composer("Comment added; it goes out with your next message.");
         } else if !cancel {
             self.conv.comment_draft = Some(draft);
@@ -360,8 +404,10 @@ impl OxiApp {
         if clear {
             let root = self.active_workspace().root_path.clone();
             self.conv.review_comments.retain(|c| c.root != root);
+            self.save_comments();
         } else if let Some(index) = remove {
             self.conv.review_comments.remove(index);
+            self.save_comments();
         }
     }
 }

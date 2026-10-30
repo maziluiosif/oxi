@@ -1,11 +1,12 @@
-//! Messages queued while a chat is answering: shown above the composer, sent one per finished
-//! response, or sent right away by interrupting the current one ("Send now").
+//! Messages written while a chat is answering: steered into the running turn (when its agent
+//! takes messages mid-turn and the setting asks for it), or queued above the composer and sent
+//! one per finished response, or sent right away by stopping the current one ("Stop & send").
 
 use eframe::egui::{self, RichText, Ui};
 
 use super::compaction::QueuedSend;
 use super::{OxiApp, SessionKey};
-use crate::theme::{FS_SMALL, FS_TINY, ICON_SEND, c_text_muted, icon_font};
+use crate::theme::{FS_SMALL, FS_TINY, ICON_SEND, c_accent, c_text, c_text_muted, icon_font};
 
 impl OxiApp {
     /// Move the composer's text and attachments out, leaving it empty.
@@ -137,6 +138,70 @@ impl OxiApp {
         }
     }
 
+    /// The oldest message sent into the running turn did not reach it: back to the queue front.
+    pub(crate) fn return_steered_message(&mut self, key: SessionKey) {
+        let run = self.run_state_mut(key);
+        if run.steer_pending.is_empty() {
+            return;
+        }
+        let text = run.steer_pending.remove(0);
+        run.queued.push_front(QueuedSend {
+            text,
+            images: Vec::new(),
+            texts: Vec::new(),
+        });
+        self.persist_queue(key);
+        self.notify_composer("The agent did not take the message mid-response; it is queued.");
+    }
+
+    /// Composer shortcuts for the queue, taken before the text field sees the keys:
+    /// Cmd/Ctrl+Shift+Enter steers the first queued message into the running turn,
+    /// Alt+Up moves the last queued message back into the composer for editing.
+    pub(super) fn handle_queue_keys(&mut self, ui: &mut Ui) {
+        let key = self.active_session_key();
+        let Some(run) = self.run_state(key) else {
+            return;
+        };
+        let count = run.queued.len();
+        if count == 0 {
+            return;
+        }
+        let steer = ui.input_mut(|i| {
+            i.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::Enter,
+            )
+        });
+        if steer {
+            if self.can_steer(key, 0) {
+                self.steer_into_turn(key, 0);
+                self.persist_queue(key);
+            } else {
+                self.notify_composer("This response can't take messages; it stays queued.");
+            }
+            return;
+        }
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp)) {
+            self.edit_queued(key, count - 1);
+            self.persist_queue(key);
+        }
+    }
+
+    /// Move queued message `index` back into the composer, ahead of the current draft.
+    fn edit_queued(&mut self, key: SessionKey, index: usize) {
+        if let Some(item) = self.run_state_mut(key).queued.remove(index) {
+            let draft = std::mem::take(&mut self.conv.composer.input);
+            self.conv.composer.input = if draft.trim().is_empty() {
+                item.text
+            } else {
+                format!("{}\n\n{}", item.text, draft.trim())
+            };
+            self.conv.composer.pending_images.extend(item.images);
+            self.conv.composer.pending_texts.extend(item.texts);
+            self.conv.composer.focus_next_frame = true;
+        }
+    }
+
     /// Send queued message `index` now, stopping the response in progress if there is one.
     pub(crate) fn steer_queued(&mut self, key: SessionKey, index: usize) {
         if self.setup_holding_agent(key.workspace_idx).is_some() {
@@ -157,9 +222,9 @@ impl OxiApp {
         self.send_queued(key, item, false);
     }
 
-    /// Messages handed to the running turn, then the queued ones: each queued message can go
-    /// into the response in progress (Steer, where the agent allows it), replace it (Stop &
-    /// send), or wait for it to finish (the default).
+    /// Messages handed to the running turn, then the queued ones. Each row reads left to right:
+    /// its state, its text, then its main action (Steer while the turn takes messages, Send when
+    /// the chat is idle); the rest (Stop & send, Edit, Remove) sits in its "…" menu.
     pub(super) fn render_queue_panel(&mut self, ui: &mut Ui) {
         let key = self.active_session_key();
         let Some(run) = self.run_state(key) else {
@@ -174,26 +239,13 @@ impl OxiApp {
             .map(|i| (run.queued[i].preview(), self.can_steer(key, i)))
             .collect();
         let mut action = None;
-        let icon = |ui: &mut Ui| {
-            ui.label(
-                RichText::new(ICON_SEND)
-                    .font(egui::FontId::new(FS_TINY, icon_font()))
-                    .color(c_text_muted()),
-            );
-        };
         for (i, preview) in steering.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
-                icon(ui);
-                ui.label(
-                    RichText::new("Steering")
-                        .size(FS_SMALL)
-                        .color(crate::theme::c_accent()),
-                )
-                .on_hover_text(
-                    "Sent into the response in progress; the agent reads it at its next step",
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            queue_row(
+                ui,
+                ("Steering", c_accent()),
+                "Sent into the response in progress; the agent reads it at its next step",
+                preview,
+                |ui| {
                     if ui
                         .small_button("Undo")
                         .on_hover_text("Take it back to the queue (until the agent reads it)")
@@ -201,70 +253,65 @@ impl OxiApp {
                     {
                         action = Some(QueueAction::Unsteer(i));
                     }
-                    ui.add(
-                        egui::Label::new(RichText::new(preview).size(FS_SMALL))
-                            .truncate()
-                            .selectable(false),
-                    )
-                    .on_hover_text(preview);
-                });
-            });
+                },
+            );
         }
+        let last = rows.len().saturating_sub(1);
         for (i, (preview, steerable)) in rows.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
-                icon(ui);
-                ui.label(RichText::new("Queued").size(FS_SMALL).color(c_text_muted()))
-                    .on_hover_text(if running {
-                        "Sent when the response finishes"
-                    } else {
-                        "Waiting to be sent"
-                    });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("×")
-                        .on_hover_text("Remove from queue")
-                        .clicked()
+            let hover = if running {
+                "Sent when the response finishes"
+            } else {
+                "Waiting to be sent"
+            };
+            queue_row(ui, ("Queued", c_text_muted()), hover, preview, |ui| {
+                ui.menu_button(RichText::new("…").size(FS_SMALL), |ui| {
+                    if running
+                        && ui
+                            .button("Stop & send")
+                            .on_hover_text("Stop the current response and send this instead")
+                            .clicked()
                     {
-                        action = Some(QueueAction::Remove(i));
+                        action = Some(QueueAction::Send(i));
                     }
+                    let edit = if i == last { "Edit  (Alt+↑)" } else { "Edit" };
                     if ui
-                        .small_button("Edit")
+                        .button(edit)
                         .on_hover_text("Move back into the composer")
                         .clicked()
                     {
                         action = Some(QueueAction::Edit(i));
                     }
-                    let (label, hover) = if running {
-                        (
-                            "Stop & send",
-                            "Stop the current response and send this instead",
-                        )
-                    } else {
-                        ("Send", "Send this message")
-                    };
-                    if ui.small_button(label).on_hover_text(hover).clicked() {
+                    if ui.button("Remove").clicked() {
+                        action = Some(QueueAction::Remove(i));
+                    }
+                })
+                .response
+                .on_hover_text("More");
+                if !running {
+                    if ui
+                        .small_button("Send")
+                        .on_hover_text("Send this message")
+                        .clicked()
+                    {
                         action = Some(QueueAction::Send(i));
                     }
-                    if running
-                        && *steerable
-                        && ui
-                            .small_button("Steer")
-                            .on_hover_text(
-                                "Add this to the response in progress: the agent reads it at its \
-                                 next step, without stopping",
-                            )
-                            .clicked()
+                } else if *steerable {
+                    let hint = if i == 0 {
+                        "  (Cmd/Ctrl+Shift+Enter)"
+                    } else {
+                        ""
+                    };
+                    if ui
+                        .small_button(RichText::new("Steer").color(c_accent()))
+                        .on_hover_text(format!(
+                            "Add this to the response in progress: the agent reads it at its \
+                                 next step, without stopping{hint}"
+                        ))
+                        .clicked()
                     {
                         action = Some(QueueAction::Steer(i));
                     }
-                    ui.add(
-                        egui::Label::new(RichText::new(preview).size(FS_SMALL))
-                            .truncate()
-                            .selectable(false),
-                    )
-                    .on_hover_text(preview);
-                });
+                }
             });
         }
         ui.add_space(4.0);
@@ -276,19 +323,7 @@ impl OxiApp {
             Some(QueueAction::Remove(i)) => {
                 self.run_state_mut(key).queued.remove(i);
             }
-            Some(QueueAction::Edit(i)) => {
-                if let Some(item) = self.run_state_mut(key).queued.remove(i) {
-                    let draft = std::mem::take(&mut self.conv.composer.input);
-                    self.conv.composer.input = if draft.trim().is_empty() {
-                        item.text
-                    } else {
-                        format!("{}\n\n{}", item.text, draft.trim())
-                    };
-                    self.conv.composer.pending_images.extend(item.images);
-                    self.conv.composer.pending_texts.extend(item.texts);
-                    self.conv.composer.focus_next_frame = true;
-                }
-            }
+            Some(QueueAction::Edit(i)) => self.edit_queued(key, i),
             None => {}
         }
         if changed {
@@ -302,6 +337,7 @@ impl OxiApp {
         let Some(run) = self.flow.sessions.get_mut(&key) else {
             return;
         };
+        run.steer_offered = None;
         if let Some(inbox) = run.steer.take() {
             inbox.take();
         }
@@ -389,26 +425,23 @@ impl OxiApp {
             return;
         };
         let mut action = None;
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.label(
-                RichText::new(crate::session_store::run_journal::describe(&interrupted))
-                    .size(FS_SMALL)
+                RichText::new(crate::theme::ICON_WARNING)
+                    .font(egui::FontId::new(FS_TINY, icon_font()))
                     .color(crate::theme::c_warning_fg()),
             );
-        });
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Nothing was resent.")
-                    .size(FS_TINY)
-                    .color(c_text_muted()),
-            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Dismiss").clicked() {
+                if ui
+                    .small_button("Dismiss")
+                    .on_hover_text("Nothing is resent")
+                    .clicked()
+                {
                     action = Some(false);
                 }
                 if ui
-                    .small_button("Continue")
+                    .small_button(RichText::new("Continue").color(c_accent()))
                     .on_hover_text(
                         "Ask the agent to check what the interrupted actions did, then carry on",
                     )
@@ -416,6 +449,18 @@ impl OxiApp {
                 {
                     action = Some(true);
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(crate::session_store::run_journal::summary(&interrupted))
+                                .size(FS_SMALL)
+                                .color(crate::theme::c_warning_fg()),
+                        )
+                        .truncate()
+                        .selectable(false),
+                    )
+                    .on_hover_text(crate::session_store::run_journal::describe(&interrupted));
+                });
             });
         });
         ui.add_space(4.0);
@@ -460,7 +505,7 @@ impl QueuedSend {
     }
 
     /// One-line label for the queue row.
-    fn preview(&self) -> String {
+    pub(crate) fn preview(&self) -> String {
         let line = self
             .text
             .lines()
@@ -473,6 +518,38 @@ impl QueuedSend {
             (l, n) => format!("{l} (+{n} attachment(s))"),
         }
     }
+}
+
+/// One row of the queue panel: its state, its text (left-aligned, cut to fit) and its actions
+/// on the right, added right to left by `actions`.
+fn queue_row(
+    ui: &mut Ui,
+    (state, color): (&str, egui::Color32),
+    state_hover: &str,
+    preview: &str,
+    actions: impl FnOnce(&mut Ui),
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(
+            RichText::new(ICON_SEND)
+                .font(egui::FontId::new(FS_TINY, icon_font()))
+                .color(color),
+        );
+        ui.label(RichText::new(state).size(FS_SMALL).color(color))
+            .on_hover_text(state_hover);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            actions(ui);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(preview).size(FS_SMALL).color(c_text()))
+                        .truncate()
+                        .selectable(false),
+                )
+                .on_hover_text(preview);
+            });
+        });
+    });
 }
 
 #[cfg(test)]

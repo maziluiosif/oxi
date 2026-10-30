@@ -206,6 +206,13 @@ impl OxiApp {
             }
             AgentEvent::AgentStart => {}
             AgentEvent::Steered(text) => self.show_steered_message(key, &text),
+            AgentEvent::SteerAvailable => {
+                let run = self.run_state_mut(key);
+                if run.waiting_response {
+                    run.steer = run.steer_offered.take();
+                }
+            }
+            AgentEvent::SteerReturned => self.return_steered_message(key),
             AgentEvent::AcpTerminal(pending) => {
                 if let Some(terminal) = pending.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     if key.workspace_idx == self.conv.active_workspace {

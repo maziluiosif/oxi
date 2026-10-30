@@ -154,6 +154,7 @@ impl OxiApp {
                         self.render_update_status(ui);
 
                         if self.conv.git.repo {
+                            self.render_pr_pill(ui);
                             let branches_on =
                                 self.conv.git_ui.open && self.conv.git_ui.tab == GitTab::Branches;
                             let mut label = self.conv.git.branch.clone();
