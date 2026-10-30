@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.31.2] - 2026-10-30
+
+### Fixed
+- Chat titles now display correctly in the agent panel
+- Empty line formatting issues resolved
+
+
 ## [1.31.1] - 2026-10-30
 
 ### Fixed
@@ -1293,7 +1300,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.31.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.31.2...HEAD
+[1.31.2]: https://github.com/maziluiosif/oxi/compare/v1.31.1...v1.31.2
 [1.31.1]: https://github.com/maziluiosif/oxi/compare/v1.31.0...v1.31.1
 [1.31.0]: https://github.com/maziluiosif/oxi/compare/v1.30.0...v1.31.0
 [1.30.0]: https://github.com/maziluiosif/oxi/compare/v1.29.0...v1.30.0
