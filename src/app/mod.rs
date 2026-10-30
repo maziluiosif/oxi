@@ -285,6 +285,7 @@ impl OxiApp {
                 rewind_check: None,
                 rewind_jobs: Vec::new(),
                 title_gen: Vec::new(),
+                helper_titles: Default::default(),
                 git_ctx: eframe::egui::Context::default(),
                 fetched_models: std::collections::HashMap::new(),
                 acp_prewarmed_at: std::collections::HashMap::new(),

@@ -53,6 +53,10 @@ impl OxiApp {
         if auto_title.split_whitespace().count() <= 5 && auto_title.chars().count() <= 40 {
             return;
         }
+        // The chat's agent titled it already (Claude Code and Codex do, mid-turn): use that.
+        if crate::agent::acp::has_agent_title(&self.acp_session_key(key)) {
+            return;
+        }
         if self
             .conv
             .title_gen
@@ -96,15 +100,18 @@ impl OxiApp {
         }
         for (index, result) in finished.into_iter().rev() {
             let (root, file, auto_title, _) = self.conv.title_gen.remove(index);
-            if let Some(title) = result.as_deref().and_then(clean_title) {
-                self.apply_generated_title(&root, &file, &auto_title, title);
+            if let Some(title) = result.as_deref().and_then(clean_title)
+                && self.apply_generated_title(&root, &file, &auto_title, title.clone())
+            {
+                self.conv.helper_titles.insert(file, title);
                 ctx.request_repaint();
             }
         }
     }
 
     /// Name chats with the titles their ACP agents generated, while a chat still carries the
-    /// automatic first-prompt title. A chat that is answering gets it once the turn is saved.
+    /// automatic first-prompt title or the helper model's. A chat that is answering gets it once
+    /// the turn is saved.
     pub(crate) fn apply_agent_titles(&mut self, ctx: &egui::Context) {
         for (acp_key, title) in crate::agent::acp::take_agent_titles() {
             let Some(key) = self.session_key_for_acp(&acp_key) else {
@@ -129,47 +136,62 @@ impl OxiApp {
             let Some(title) = clean_title(&title) else {
                 continue;
             };
-            if session.title != auto_title || session.title == title {
-                continue;
-            }
             let (Some(file), root) = (
                 session.session_file.clone(),
                 self.conv.workspaces[key.workspace_idx].root_path.clone(),
             ) else {
                 continue;
             };
-            self.apply_generated_title(&root, &file, &auto_title, title);
+            // A helper title lost the race to the agent's own one: the agent's wins.
+            let current = match self.conv.helper_titles.get(&file) {
+                Some(helper) if *helper == session.title => helper.clone(),
+                _ => auto_title,
+            };
+            if session.title != current || session.title == title {
+                continue;
+            }
+            if self.apply_generated_title(&root, &file, &current, title) {
+                self.conv.helper_titles.remove(&file);
+            }
             ctx.request_repaint();
         }
     }
 
-    fn apply_generated_title(&mut self, root: &str, file: &str, auto_title: &str, title: String) {
+    /// Replace the chat's title `expected` with `title`; false when it changed meanwhile.
+    fn apply_generated_title(
+        &mut self,
+        root: &str,
+        file: &str,
+        expected: &str,
+        title: String,
+    ) -> bool {
         let Some(wi) = self
             .conv
             .workspaces
             .iter()
             .position(|w| w.root_path == root)
         else {
-            return;
+            return false;
         };
         let Some(si) = self.conv.workspaces[wi]
             .sessions
             .iter()
             .position(|s| s.session_file.as_deref() == Some(file))
         else {
-            return;
+            return false;
         };
         let key = self.session_key(wi, si);
         // Renamed by the user meanwhile, or mid-run (a save would race the streaming writer).
-        if self.session_by_key(key).title != auto_title
+        if self.session_by_key(key).title != expected
             || self.run_state(key).is_some_and(|r| r.waiting_response)
         {
-            return;
+            return false;
         }
         self.session_mut_by_key(key).title = title;
         if let Err(e) = session_store::save_session_messages(root, self.session_mut_by_key(key)) {
             self.run_state_mut(key).stream_error = Some(format!("Save chat title: {e}"));
         }
+        true
     }
 }
 

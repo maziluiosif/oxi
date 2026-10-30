@@ -938,6 +938,9 @@ pub struct ConversationState {
         String,
         std::sync::mpsc::Receiver<crate::agent::CompleteEvent>,
     )>,
+    /// Titles the helper model gave chats, by session file: an agent's own title still replaces
+    /// them, unlike a rename.
+    pub helper_titles: std::collections::HashMap<String, String>,
     /// egui context used for the git worker so it can request repaints.
     pub git_ctx: eframe::egui::Context,
     /// Background model-list fetch results keyed by provider kind.
