@@ -28,6 +28,12 @@ pub fn kind_of(path: &Path) -> Option<ItemKind> {
 }
 
 fn quiet(command: &mut Command) -> &mut Command {
+    // No console window for the browser/ffmpeg capture helpers on a Windows GUI process.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())

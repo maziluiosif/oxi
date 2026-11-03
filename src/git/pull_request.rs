@@ -173,6 +173,11 @@ pub fn create(dir: &Path, new: &NewPullRequest) -> Result<PullRequest, String> {
         .args(["push", "--set-upstream", "origin", "HEAD"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        push.creation_flags(0x0800_0000);
+    }
     run(push, "git push").map_err(|e| format!("Could not push the branch: {e}"))?;
     let mut cmd = gh(dir);
     cmd.args(["pr", "create", "--title", &new.title, "--body", &new.body]);
