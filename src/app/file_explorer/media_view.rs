@@ -467,6 +467,12 @@ fn poster_for(
 }
 
 fn quiet(command: &mut std::process::Command) -> bool {
+    // No console window for ffmpeg on a Windows GUI process.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
