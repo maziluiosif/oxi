@@ -70,6 +70,15 @@ If a phone can't use Tailscale, `oxi server phone --lan` (or **Also allow phones
 my local network**) accepts private LAN addresses too. That traffic is not
 encrypted, so only use it on a network you trust.
 
+### Attachments
+
+The **+** in the composer attaches photos and files. Photos go to the model as images
+(scaled down to 2048 px). Other files are saved on the server in the workspace, under
+`.oxi/attachments/` (kept out of Git by its own `.gitignore`), and the agent is told
+where. For PDF, Word, Excel, PowerPoint and OpenDocument files the server also puts
+their text in the prompt, up to 100,000 characters, so models without file tools can
+read them. Scanned PDFs have no text to extract. Files can be up to 30 MB.
+
 ## Commands
 
 ```text

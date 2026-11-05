@@ -1,5 +1,8 @@
 package dev.oxi.android.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -35,6 +38,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -44,6 +51,8 @@ import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +65,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,7 +77,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -81,6 +93,7 @@ import dev.oxi.android.Block
 import dev.oxi.android.Message
 import dev.oxi.android.OpenChat
 import dev.oxi.android.OxiViewModel
+import dev.oxi.android.PendingAttachment
 import dev.oxi.android.UiState
 
 @Composable
@@ -89,6 +102,10 @@ fun ChatScreen(vm: OxiViewModel, state: UiState) {
     var draft by rememberSaveable(chat.id) { mutableStateOf("") }
     var picker by remember { mutableStateOf(false) }
     var rename by remember { mutableStateOf(false) }
+    var zoom by remember { mutableStateOf<ImageBitmap?>(null) }
+    val images by vm.images.collectAsState()
+    val pickPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICK)) { vm.attach(it) }
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.attach(it) }
     val list = rememberLazyListState()
     // Jump to the end once the transcript has loaded, then follow only from the bottom.
     var opened by remember(chat.id) { mutableStateOf(false) }
@@ -135,8 +152,8 @@ fun ChatScreen(vm: OxiViewModel, state: UiState) {
             ) {
                 itemsIndexed(chat.messages) { index, message ->
                     when (message) {
-                        is Message.User -> UserBubble(message)
-                        is Message.Assistant -> AssistantMessage(message, live = chat.running && index == chat.messages.lastIndex)
+                        is Message.User -> UserBubble(message, index, chat.id, vm, images) { zoom = it }
+                        is Message.Assistant -> AssistantMessage(message, live = chat.running && index == chat.messages.lastIndex, vm, images) { zoom = it }
                     }
                 }
                 if (chat.status != null || chat.error != null) {
@@ -158,8 +175,13 @@ fun ChatScreen(vm: OxiViewModel, state: UiState) {
             onSend = { vm.send(draft); draft = "" },
             onStop = { vm.cancel() },
             onPicker = { picker = true },
+            onPhotos = { pickPhotos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onFiles = { pickFiles.launch(arrayOf("*/*")) },
+            onRemove = { vm.removeAttachment(it) },
+            onEvidence = { vm.setEvidence(!chat.evidence) },
         )
     }
+    zoom?.let { ImageZoom(it) { zoom = null } }
     if (picker) ProviderSheet(vm, state, chat) { picker = false }
     if (rename) {
         var title by remember { mutableStateOf(chat.title) }
@@ -198,8 +220,18 @@ private fun EmptyChat(chat: OpenChat, modifier: Modifier) {
     }
 }
 
+/** Photos that can be picked at once. */
+private const val MAX_PICK = 8
+
 @Composable
-private fun UserBubble(m: Message.User) {
+private fun UserBubble(
+    m: Message.User,
+    index: Int,
+    chatId: String?,
+    vm: OxiViewModel,
+    images: Map<String, ImageBitmap?>,
+    onZoom: (ImageBitmap) -> Unit,
+) {
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Column(
             Modifier
@@ -208,16 +240,36 @@ private fun UserBubble(m: Message.User) {
                 .background(Oxi.raised)
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
-            SelectionContainer { Text(m.text, style = MaterialTheme.typography.bodyLarge) }
-            if (m.attachments.isNotEmpty()) {
-                Text(m.attachments.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = Oxi.muted, modifier = Modifier.padding(top = 4.dp))
+            if (chatId != null && m.images.isNotEmpty()) {
+                Row(
+                    Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(bottom = if (m.text.isBlank()) 0.dp else 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    m.images.forEach { i ->
+                        val key = vm.chatImageKey(chatId, index, i)
+                        LaunchedEffect(key) { vm.loadChatImage(index, i) }
+                        ImageThumb(images[key], loaded = key in images, size = 120, onZoom = onZoom)
+                    }
+                }
+            }
+            if (m.text.isNotBlank()) SelectionContainer { Text(m.text, style = MaterialTheme.typography.bodyLarge) }
+            // Images show above; list the rest (text files, or images not saved yet).
+            val others = m.attachments.filterIndexed { i, _ -> chatId == null || i !in m.images }
+            if (others.isNotEmpty()) {
+                Text(others.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = Oxi.muted, modifier = Modifier.padding(top = 4.dp))
             }
         }
     }
 }
 
 @Composable
-private fun AssistantMessage(m: Message.Assistant, live: Boolean) {
+private fun AssistantMessage(
+    m: Message.Assistant,
+    live: Boolean,
+    vm: OxiViewModel,
+    images: Map<String, ImageBitmap?>,
+    onZoom: (ImageBitmap) -> Unit,
+) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Consecutive tool calls read as one group.
         var i = 0
@@ -235,6 +287,7 @@ private fun AssistantMessage(m: Message.Assistant, live: Boolean) {
             }
             i++
         }
+        m.evidence?.takeIf { it.worthShowing && !m.streaming }?.let { EvidenceCard(it, vm, images, onZoom) }
         if (live && m.streaming) {
             WorkingDots()
         } else if (!m.streaming && (m.routeLabel != null || m.workedSecs != null)) {
@@ -456,7 +509,12 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPicker: () -> Unit,
+    onPhotos: () -> Unit,
+    onFiles: () -> Unit,
+    onRemove: (PendingAttachment) -> Unit,
+    onEvidence: () -> Unit,
 ) {
+    var attachMenu by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -467,6 +525,16 @@ private fun Composer(
             .border(1.dp, Oxi.line, RoundedCornerShape(22.dp))
             .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 8.dp)
     ) {
+        if (chat.attachments.isNotEmpty() || chat.attaching > 0) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(end = 8.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                chat.attachments.forEach { AttachmentChip(it) { onRemove(it) } }
+                if (chat.attaching > 0) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Oxi.copper)
+            }
+        }
         BasicTextField(
             value = draft,
             onValueChange = onDraft,
@@ -485,6 +553,30 @@ private fun Composer(
             },
         )
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+            Box {
+                IconButton(onClick = { attachMenu = true }, modifier = Modifier.size(34.dp)) {
+                    Icon(Icons.Rounded.Add, "Attach", tint = Oxi.muted)
+                }
+                DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }, containerColor = Oxi.raised) {
+                    DropdownMenuItem(
+                        text = { Text("Photos") },
+                        leadingIcon = { Icon(Icons.Rounded.Image, null, tint = Oxi.muted) },
+                        onClick = { attachMenu = false; onPhotos() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Files") },
+                        leadingIcon = { Icon(Icons.Rounded.AttachFile, null, tint = Oxi.muted) },
+                        onClick = { attachMenu = false; onFiles() },
+                    )
+                }
+            }
+            IconButton(onClick = onEvidence, modifier = Modifier.size(34.dp)) {
+                Icon(
+                    Icons.Rounded.Shield,
+                    if (chat.evidence) "Evidence mode on" else "Evidence mode off",
+                    tint = if (chat.evidence) Oxi.green else Oxi.faint,
+                )
+            }
             Row(
                 Modifier
                     .clip(RoundedCornerShape(50))
@@ -506,10 +598,10 @@ private fun Composer(
                 Text("${chat.queued} queued", style = MaterialTheme.typography.labelSmall, color = Oxi.faint, modifier = Modifier.padding(start = 4.dp))
             }
             Spacer(Modifier.weight(1f))
-            if (chat.running && draft.isBlank()) {
+            if (chat.running && draft.isBlank() && chat.attachments.isEmpty()) {
                 RoundButton(Icons.Rounded.Stop, "Stop", Oxi.raised, Oxi.text, onStop)
             } else {
-                val enabled = draft.isNotBlank() && !chat.sending
+                val enabled = (draft.isNotBlank() || chat.attachments.isNotEmpty()) && !chat.sending && chat.attaching == 0
                 RoundButton(
                     if (chat.running) Icons.AutoMirrored.Rounded.ArrowForward else Icons.Rounded.ArrowUpward,
                     "Send",
@@ -518,6 +610,37 @@ private fun Composer(
                     onClick = { if (enabled) onSend() },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentChip(a: PendingAttachment, onRemove: () -> Unit) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Oxi.raised)
+            .padding(start = if (a is PendingAttachment.Image) 4.dp else 10.dp, end = 2.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (a is PendingAttachment.Image) {
+            val thumb = remember(a) { a.thumb.asImageBitmap() }
+            androidx.compose.foundation.Image(
+                thumb, a.name,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(7.dp)),
+            )
+        } else {
+            Icon(Icons.Rounded.AttachFile, null, tint = Oxi.muted, modifier = Modifier.size(16.dp))
+            Column(Modifier.widthIn(max = 160.dp).padding(start = 4.dp)) {
+                Text(a.name, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (a is PendingAttachment.File) {
+                    Text(dev.oxi.android.Attachments.sizeLabel(a.bytes.size), style = MaterialTheme.typography.labelSmall, color = Oxi.faint)
+                }
+            }
+        }
+        IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+            Icon(Icons.Rounded.Close, "Remove", tint = Oxi.muted, modifier = Modifier.size(16.dp))
         }
     }
 }

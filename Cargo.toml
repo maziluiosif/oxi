@@ -69,6 +69,8 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
 cpal = "0.18"
+pdf-extract = "0.12.1"
+roxmltree = "0.20"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

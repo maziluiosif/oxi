@@ -5,12 +5,16 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -28,6 +32,11 @@ data class OpenChat(
     val error: String? = null,
     val loading: Boolean = false,
     val sending: Boolean = false,
+    /** Picked in the composer for the next prompt, and how many are still being read. */
+    val attachments: List<PendingAttachment> = emptyList(),
+    val attaching: Int = 0,
+    /** Evidence mode for the next prompt. */
+    val evidence: Boolean = false,
 )
 
 /** A paired machine running `oxi server`. */
@@ -70,6 +79,8 @@ data class UiState(
     val chat: OpenChat? = null,
     val models: Map<String, List<String>> = emptyMap(),
     val quota: Map<String, List<QuotaWindow>> = emptyMap(),
+    /** What the server supports beyond the basics (`initialize`'s `features`). */
+    val features: Set<String> = emptySet(),
     val toast: String? = null,
 ) {
     val active: Server? get() = servers.firstOrNull { it.id == activeId }
@@ -81,6 +92,10 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
     private val client = OxiClient(viewModelScope)
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui
+
+    /** Images shown in chats, by [chatImageKey] or [fileImageKey]; null when it can't be shown. */
+    private val _images = MutableStateFlow<Map<String, ImageBitmap?>>(emptyMap())
+    val images: StateFlow<Map<String, ImageBitmap?>> = _images
 
     init {
         viewModelScope.launch { client.state.collect { s -> _ui.update { it.copy(conn = s) } } }
@@ -266,6 +281,7 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
             _ui.update {
                 it.copy(
                     providers = parseProviders(init),
+                    features = parseFeatures(init),
                     host = info?.optString("host").orEmpty(),
                     home = info?.optString("home"),
                 )
@@ -348,6 +364,7 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
                             running = obj.optBoolean("running"),
                             queued = obj.optInt("queued"),
                             approval = parseApproval(obj.optJSONObject("approval")),
+                            evidence = obj.optBoolean("evidence"),
                             status = obj.optString("status").takeIf { !obj.isNull("status") && it.isNotEmpty() },
                             loading = false,
                         )
@@ -380,8 +397,10 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
     fun send(text: String) {
         val chat = _ui.value.chat ?: return
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
-        val params = JSONObject().put("root", chat.root).put("text", trimmed)
+        val attachments = chat.attachments
+        if ((trimmed.isEmpty() && attachments.isEmpty()) || chat.attaching > 0) return
+        val params = JSONObject().put("root", chat.root).put("text", trimmed).put("evidence", chat.evidence)
+        if (attachments.isNotEmpty()) params.put("attachments", JSONArray(attachments.map { it.toJson() }))
         if (chat.id != null) params.put("chat", chat.id)
         else chat.config?.let { params.put("provider", it.provider).put("model", it.model).put("effort", it.effort) }
         _ui.update { s -> s.copy(chat = s.chat?.copy(sending = true, error = null)) }
@@ -390,10 +409,15 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { r ->
                     val id = r.optString("chat")
                     val queued = r.optInt("queued")
+                    val userIndex = if (r.isNull("user_index")) -1 else r.optInt("user_index", -1)
                     _ui.update { s ->
                         val c = s.chat ?: return@update s
                         if (c.id != null && c.id != id) return@update s
-                        val messages = if (queued == 0) c.messages + Message.User(trimmed, emptyList()) else c.messages
+                        // The server announces the prompt (a `message` note) before it answers, so
+                        // it is usually here already; add it only when it isn't.
+                        val messages = if (queued == 0 && userIndex !in c.messages.indices) {
+                            c.messages + Message.User(trimmed, attachments.map { it.label })
+                        } else c.messages
                         s.copy(
                             chat = c.copy(
                                 id = id,
@@ -402,12 +426,76 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
                                 running = true,
                                 queued = queued,
                                 sending = false,
+                                attachments = c.attachments - attachments.toSet(),
                             )
                         )
                     }
                     if (chat.id == null) reopen(chat.root, id)
                 }
                 .onFailure { e -> _ui.update { s -> s.copy(chat = s.chat?.copy(sending = false, error = e.message)) } }
+        }
+    }
+
+    fun setEvidence(on: Boolean) = _ui.update { s -> s.copy(chat = s.chat?.copy(evidence = on)) }
+
+    // ---- attachments -----------------------------------------------------------------------
+
+    fun attach(uris: List<Uri>) {
+        val target = _ui.value.chat ?: return
+        if (uris.isEmpty()) return
+        val context = getApplication<Application>()
+        _ui.update { s -> s.copy(chat = s.chat?.let { it.copy(attaching = it.attaching + uris.size) }) }
+        uris.forEach { uri ->
+            viewModelScope.launch {
+                val files = "file_attachments" in _ui.value.features
+                val result = runCatching { Attachments.load(context, uri, files) }
+                _ui.update { s ->
+                    val c = s.chat ?: return@update s
+                    // Another chat was opened meanwhile.
+                    if (c.root != target.root || c.id != target.id) return@update s
+                    val added = result.getOrNull()
+                    s.copy(chat = c.copy(attaching = (c.attaching - 1).coerceAtLeast(0), attachments = c.attachments + listOfNotNull(added)))
+                }
+                result.exceptionOrNull()?.let { toast(it.message ?: "Can't attach that") }
+            }
+        }
+    }
+
+    fun removeAttachment(attachment: PendingAttachment) =
+        _ui.update { s -> s.copy(chat = s.chat?.let { it.copy(attachments = it.attachments - attachment) }) }
+
+    // ---- images in chats -------------------------------------------------------------------
+
+    private val imageLoads = mutableSetOf<String>()
+
+    fun chatImageKey(chat: String, message: Int, index: Int) = "chat:$chat:$message:$index"
+    fun fileImageKey(path: String) = "file:$path"
+
+    /** An image attached to user message [message] of the open chat. */
+    fun loadChatImage(message: Int, index: Int) {
+        val chat = _ui.value.chat ?: return
+        val id = chat.id ?: return
+        val params = JSONObject().put("root", chat.root).put("chat", id).put("message", message).put("index", index)
+        loadImage(chatImageKey(id, message, index)) { client.request("chat.image", params) as JSONObject }
+    }
+
+    /** An evidence capture: a file on the server. */
+    fun loadFileImage(path: String) {
+        val params = JSONObject().put("path", path).put("max", 20_000_000)
+        loadImage(fileImageKey(path)) { client.request("fs.read", params) as JSONObject }
+    }
+
+    private fun loadImage(key: String, fetch: suspend () -> JSONObject) {
+        if (key in _images.value || !imageLoads.add(key)) return
+        viewModelScope.launch {
+            val result = runCatching { fetch() }
+            imageLoads.remove(key)
+            // Not connected: try again when the image is next on screen.
+            if (result.exceptionOrNull()?.message.let { it == "Not connected" || it == "Disconnected" }) return@launch
+            val bitmap = result.getOrNull()?.optString("data")?.takeIf { it.isNotEmpty() }?.let { data ->
+                withContext(Dispatchers.Default) { Attachments.bitmapFromBase64(data)?.asImageBitmap() }
+            }
+            _images.update { it + (key to bitmap) }
         }
     }
 
@@ -479,6 +567,9 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         }
         "turn" -> c.copy(
             running = p.optBoolean("running"),
+            // A turn starting reports the mode it runs in; later notes would undo a choice made
+            // on the phone meanwhile for the next prompt.
+            evidence = if (p.has("evidence") && p.optBoolean("running") && !p.has("outcome")) p.optBoolean("evidence") else c.evidence,
             queued = p.optInt("queued"),
             error = p.optString("error").takeIf { !p.isNull("error") && it.isNotEmpty() } ?: c.error.takeIf { p.optBoolean("running") },
         )
