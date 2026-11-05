@@ -625,6 +625,8 @@ impl Server {
             "protocol": PROTOCOL_VERSION,
             "version": env!("CARGO_PKG_VERSION"),
             "providers": providers,
+            // `prompt.send` takes `{"name", "file"}` attachments (any file, as base64).
+            "features": ["file_attachments"],
         })
     }
 
@@ -885,16 +887,21 @@ impl Server {
     fn send_prompt(&mut self, params: &Value) -> Result<Value, String> {
         self.refresh_settings();
         let root = root_param(params)?;
+        let mut attachments = Vec::new();
+        for item in params["attachments"].as_array().into_iter().flatten() {
+            if item.get("file").is_some() {
+                attachments.push(file_attachment(&root, item)?);
+            } else if let Some(attachment) = attachment_param(item) {
+                attachments.push(attachment);
+            }
+        }
         let prompt = Prompt {
             text: params["text"]
                 .as_str()
                 .unwrap_or_default()
                 .trim()
                 .to_string(),
-            attachments: params["attachments"]
-                .as_array()
-                .map(|items| items.iter().filter_map(attachment_param).collect())
-                .unwrap_or_default(),
+            attachments,
             plan: params["plan"].as_bool(),
             evidence: params["evidence"].as_bool(),
             request: params["requestId"]
@@ -1923,6 +1930,126 @@ fn attachment_param(value: &Value) -> Option<UserAttachment> {
     })
 }
 
+/// Largest file a prompt may carry.
+const MAX_FILE_ATTACHMENT: usize = 30 * 1024 * 1024;
+/// Text of an attached document that goes into the prompt; the agent reads the rest from the file.
+const MAX_DOCUMENT_TEXT: usize = 100_000;
+/// Where attached files are kept, under the workspace root, so the agent's tools reach them.
+const ATTACHMENTS_DIR: &str = ".oxi/attachments";
+
+/// A file sent with a prompt (`{"name", "file": base64}`, from a phone): saved in the
+/// workspace, and passed to the agent as a note with its path and, for documents oxi can
+/// read (PDF, Office, OpenDocument, plain text), their text.
+fn file_attachment(root: &str, value: &Value) -> Result<UserAttachment, String> {
+    use base64::Engine as _;
+    let name = attachment_file_name(value["name"].as_str().unwrap_or_default());
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(value["file"].as_str().unwrap_or_default().trim())
+        .map_err(|e| format!("{name}: bad data: {e}"))?;
+    if data.len() > MAX_FILE_ATTACHMENT {
+        return Err(format!(
+            "{name} is larger than {} MB",
+            MAX_FILE_ATTACHMENT / (1024 * 1024)
+        ));
+    }
+    let dir = Path::new(root).join(ATTACHMENTS_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        // Attachments are the user's files, not the project's: keep them out of commits.
+        let _ = std::fs::write(&ignore, "*\n");
+    }
+    let path = unique_file(&dir, &name);
+    crate::fsutil::save(&path, &data).map_err(|e| format!("{}: {e}", path.display()))?;
+    let shown = path
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.display().to_string());
+    let mut text = format!(
+        "The user attached {name} ({}). It is saved in the workspace at `{shown}`.",
+        human_size(data.len())
+    );
+    let content = crate::documents::extract_text(&name, &data).or_else(|| {
+        // Text files (code, CSV, Markdown...) need no extracting.
+        (!data.contains(&0))
+            .then(|| String::from_utf8(data).ok())
+            .flatten()
+            .filter(|t| !t.trim().is_empty())
+    });
+    match content {
+        Some(content) => {
+            let cut = content.len() > MAX_DOCUMENT_TEXT;
+            let mut end = MAX_DOCUMENT_TEXT.min(content.len());
+            while !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.push_str(" Its text:\n\n");
+            text.push_str(&content[..end]);
+            if cut {
+                text.push_str("\n\n[The text is cut off here; read the file for the rest.]");
+            }
+        }
+        None => text.push_str(
+            " oxi could not read its text; open the file with your tools if you need its content.",
+        ),
+    }
+    Ok(UserAttachment::Text { name, text })
+}
+
+/// A file name safe on every OS, from what a client sent.
+fn attachment_file_name(raw: &str) -> String {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or_default();
+    let clean: String = base
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '|' | '?' | '*' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let clean = clean.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    let clean: String = if clean.chars().count() > 120 {
+        // Keep the extension: it says what the file is.
+        let ext = clean
+            .rsplit_once('.')
+            .map(|(_, e)| e)
+            .filter(|e| e.len() <= 10);
+        let stem: String = clean.chars().take(100).collect();
+        ext.map_or(stem.clone(), |e| format!("{stem}.{e}"))
+    } else {
+        clean.to_string()
+    };
+    if clean.is_empty() {
+        "attachment".into()
+    } else {
+        clean
+    }
+}
+
+/// `dir/name`, or `dir/stem-2.ext` and so on when that is taken.
+fn unique_file(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    if !path.exists() {
+        return path;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
+        _ => (name, String::new()),
+    };
+    (2..)
+        .map(|n| dir.join(format!("{stem}-{n}{ext}")))
+        .find(|p| !p.exists())
+        .expect("a free name")
+}
+
+fn human_size(bytes: usize) -> String {
+    match bytes {
+        b if b < 1024 => format!("{b} B"),
+        b if b < 1024 * 1024 => format!("{:.0} KB", b as f64 / 1024.0),
+        b => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+    }
+}
+
 fn paths_param(params: &Value) -> Result<Vec<String>, String> {
     let paths: Vec<String> = params["paths"]
         .as_array()
@@ -2317,6 +2444,55 @@ mod tests {
         let value = message_json(&ChatMessage::user(&expanded, &[]));
         assert_eq!(value["text"], "look at @a.txt");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_are_saved_in_the_workspace_with_their_text() {
+        use base64::Engine as _;
+        let root = std::env::temp_dir().join(format!("oxi-attach-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root_str = root.to_string_lossy().to_string();
+        let send = |name: &str, bytes: &[u8]| {
+            let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+            match file_attachment(&root_str, &json!({"name": name, "file": data})).unwrap() {
+                UserAttachment::Text { name, text } => (name, text),
+                UserAttachment::Image { .. } => panic!("a file is not an image"),
+            }
+        };
+        let (name, text) = send("../notes.csv", b"a,b\n1,2\n");
+        assert_eq!(name, "notes.csv");
+        assert!(text.contains("`.oxi/attachments/notes.csv`"), "{text}");
+        assert!(text.ends_with("Its text:\n\na,b\n1,2\n"), "{text}");
+        assert_eq!(
+            std::fs::read(root.join(".oxi/attachments/notes.csv")).unwrap(),
+            b"a,b\n1,2\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".oxi/attachments/.gitignore")).unwrap(),
+            "*\n"
+        );
+        // Same name again: a new file next to it, not over it.
+        let (_, text) = send("notes.csv", b"other");
+        assert!(text.contains("`.oxi/attachments/notes-2.csv`"), "{text}");
+        let (_, text) = send("scan.bin", &[0, 1, 2]);
+        assert!(text.contains("could not read its text"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attachment_names_are_safe() {
+        assert_eq!(
+            attachment_file_name("C:\\Users\\a\\Q3 report.pdf"),
+            "Q3 report.pdf"
+        );
+        assert_eq!(attachment_file_name("what?.docx"), "what_.docx");
+        assert_eq!(attachment_file_name(".."), "attachment");
+        assert_eq!(attachment_file_name(""), "attachment");
+        let long = format!("{}.xlsx", "x".repeat(300));
+        assert_eq!(
+            attachment_file_name(&long),
+            format!("{}.xlsx", "x".repeat(100))
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ mod code_nav;
 mod compute;
 mod delegation;
 mod desktop_entry;
+mod documents;
 mod evidence;
 pub mod fsutil;
 mod git;
