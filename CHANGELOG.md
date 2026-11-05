@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.34.0] - 2026-11-05
+
+### Added
+- **Android:** Attach photos and files to messages with a composer menu.
+- **Android:** Evidence mode to create per-reply reports with claims, checks, and captured screenshots.
+- **Server:** Accept file attachments and automatically extract text from PDFs, Word, Excel, PowerPoint, and OpenDocument files.
+- Sent images now appear in your message for reference.
+
+### Fixed
+- **Android:** Sent messages no longer appear twice in the chat.
+
+
 ## [1.33.1] - 2026-11-03
 
 ### Fixed
@@ -1333,7 +1345,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.33.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.34.0...HEAD
+[1.34.0]: https://github.com/maziluiosif/oxi/compare/v1.33.1...v1.34.0
 [1.33.1]: https://github.com/maziluiosif/oxi/compare/v1.33.0...v1.33.1
 [1.33.0]: https://github.com/maziluiosif/oxi/compare/v1.32.0...v1.33.0
 [1.32.0]: https://github.com/maziluiosif/oxi/compare/v1.31.2...v1.32.0
