@@ -201,6 +201,16 @@ pub(super) async fn dispatch(
         if let Some(id) = id {
             let params = v.get("params").cloned().unwrap_or(Value::Null);
             handle_agent_request(method, id, params, stdin, prompt_ctx, held).await;
+        } else if method == "elicitation/complete" || method == "$/cancel_request" {
+            // The login finished in the browser, or the agent stopped waiting: drop the card.
+            let params = &v["params"];
+            let key = params["elicitationId"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| params.get("requestId").map(Value::to_string));
+            if let Some(key) = key {
+                held.withdraw_elicitation(&key);
+            }
         } else if method == "session/update" {
             let update = &v["params"]["update"];
             let session_id = v["params"]["sessionId"].as_str().unwrap_or_default();
@@ -281,7 +291,9 @@ pub(super) async fn handle_agent_request(
                 Err(e) => reply_err(stdin, id, -32000, &e).await,
             }
         }
-        "session/request_permission" => {
+        "session/request_permission" | "elicitation/create" => {
+            let elicitation = method == "elicitation/create";
+            let withdrawn = held.elicitation_flag(&id, &params);
             let forwarded = {
                 let mut ctx = prompt_ctx.lock().await;
                 match ctx.as_mut() {
@@ -291,6 +303,7 @@ pub(super) async fn handle_agent_request(
                             c.emit_permission_tool(&params);
                             c.perm_tx.send(PermReq {
                                 child_cancel: held.permission_cancel(&params),
+                                withdrawn,
                                 id: id.clone(),
                                 params,
                             })
@@ -304,7 +317,12 @@ pub(super) async fn handle_agent_request(
             // The prompt task is gone, or the session is still being set up: cancel the request
             // so the agent doesn't block forever.
             if !forwarded {
-                reply_ok(stdin, id, json!({ "outcome": { "outcome": "cancelled" } })).await;
+                let cancelled = if elicitation {
+                    crate::agent::elicitation::response(None)
+                } else {
+                    json!({ "outcome": { "outcome": "cancelled" } })
+                };
+                reply_ok(stdin, id, cancelled).await;
             }
         }
         _ => {

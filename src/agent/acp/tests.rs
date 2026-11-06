@@ -1579,3 +1579,119 @@ for line in sys.stdin:
     manager.close(&key);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Asks a question, then offers a login that finishes without the client answering it, then
+/// reports what came back. The capabilities oxi offered are reported too.
+const ASKING_AGENT: &str = r#"
+import json, sys
+def send(v):
+    print(json.dumps(dict(jsonrpc='2.0', **v)), flush=True)
+def say(text):
+    send(dict(method='session/update', params=dict(sessionId='fake-session', update=dict(
+        sessionUpdate='agent_message_chunk', content=dict(type='text', text=text)))))
+caps = {}
+prompt_id = None
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    if method is None:
+        if m['id'] == 900:
+            say('answer=%s;' % json.dumps(m['result'], sort_keys=True))
+            send(dict(id=901, method='elicitation/create', params=dict(mode='url', sessionId='fake-session',
+                message='Authenticate', url='https://example.com/login', elicitationId='login-1')))
+            send(dict(method='elicitation/complete', params=dict(elicitationId='login-1')))
+        elif m['id'] == 901:
+            say('login=%s;' % json.dumps(m['result']))
+            send(dict(id=prompt_id, result=dict(stopReason='end_turn')))
+    elif method == 'initialize':
+        caps = m['params']['clientCapabilities']
+        send(dict(id=m['id'], result=dict(protocolVersion=1, agentCapabilities={})))
+    elif method == 'session/new':
+        send(dict(id=m['id'], result=dict(sessionId='fake-session')))
+    elif method == 'session/prompt':
+        prompt_id = m['id']
+        say('caps=%s;' % json.dumps(caps['elicitation'], sort_keys=True))
+        schema = dict(type='object', properties=dict(pick=dict(type='string', enum=['a', 'b'])))
+        send(dict(id=900, method='elicitation/create', params=dict(mode='form', sessionId='fake-session',
+            message='Which one?', requestedSchema=schema)))
+    elif 'id' in m:
+        send(dict(id=m['id'], result={}))
+"#;
+
+#[test]
+fn questions_reach_the_user_whatever_the_approval_settings_and_logins_can_be_withdrawn() {
+    let dir = std::env::temp_dir().join(format!("oxi-acp-elicit-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("agent.py");
+    std::fs::write(&script, ASKING_AGENT).unwrap();
+    let session_key = format!("elicit-{}", rand::random::<u64>());
+    let mgr = AcpManager::spawn();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (ev_tx, ev_rx) = channel::<AgentEvent>();
+    let (appr_tx, appr_rx) = channel::<ApprovalDecision>();
+    let prompt = AcpPrompt {
+        session_key: session_key.clone(),
+        cwd: dir.clone(),
+        command_line: format!(
+            "{} {}",
+            crate::agent::test_python_executable().display(),
+            script.display()
+        ),
+        env: Vec::new(),
+        model: String::new(),
+        effort: String::new(),
+        mcp_servers: Vec::new(),
+        text: "go".into(),
+        history: String::new(),
+        missed: String::new(),
+        archive: Vec::new(),
+        images: Vec::new(),
+        resources: Vec::new(),
+        event_tx: ev_tx,
+        approval_rx: appr_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+        evidence_policy: Default::default(),
+        evidence_base: None,
+        steer: None,
+    };
+    let answering = std::thread::spawn(move || {
+        let mut text = String::new();
+        let mut asked = Vec::new();
+        for event in ev_rx {
+            match event {
+                AgentEvent::ElicitationRequest { params } => {
+                    if params["mode"] == "form" {
+                        let _ =
+                            appr_tx.send(crate::agent::elicitation::accepted(json!({"pick": "b"})));
+                    }
+                    asked.push(params["message"].as_str().unwrap_or_default().to_owned());
+                }
+                AgentEvent::TextDelta(delta) => text.push_str(&delta),
+                _ => {}
+            }
+        }
+        (text, asked)
+    });
+    rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(20), mgr.prompt(prompt))
+            .await
+            .expect("the turn did not end")
+    })
+    .unwrap();
+    mgr.close(&session_key);
+    drop(mgr);
+    let (text, asked) = answering.join().unwrap();
+    // The login may be withdrawn before it is shown; either way the agent is answered below.
+    assert_eq!(asked[0], "Which one?");
+    assert!(text.contains(r#"caps={"form": {}, "url": {}};"#), "{text}");
+    assert!(
+        text.contains(r#"answer={"action": "accept", "content": {"pick": "b"}};"#),
+        "{text}"
+    );
+    assert!(text.contains(r#"login={"action": "cancel"};"#), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

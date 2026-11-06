@@ -27,6 +27,8 @@ pub enum ApprovalDecision {
     ApproveRest,
     /// Refuse this tool call; the model is told the user denied it.
     Deny,
+    /// The `elicitation/create` response to a question the agent asked.
+    Elicitation(serde_json::Value),
 }
 
 /// Build a short human-readable summary of a pending tool call for the approval prompt.
@@ -232,7 +234,7 @@ impl ApprovalGate {
                     self.auto_approve = true;
                     return Ok(());
                 }
-                Ok(ApprovalDecision::Deny) => {
+                Ok(ApprovalDecision::Deny | ApprovalDecision::Elicitation(_)) => {
                     return Err(format!("User denied running the `{name}` tool."));
                 }
                 Err(RecvTimeoutError::Timeout) => continue,

@@ -44,6 +44,8 @@ pub(super) struct PermReq {
     pub(super) id: Value,
     pub(super) params: Value,
     pub(super) child_cancel: Option<Arc<AtomicBool>>,
+    /// Set when the agent stops waiting for this elicitation.
+    pub(super) withdrawn: Option<Arc<AtomicBool>>,
 }
 
 /// Resolve one forwarded `session/request_permission` request: ask the UI (unless approval is
@@ -61,6 +63,9 @@ pub(super) async fn handle_permission(
     auto_approve: &mut bool,
     pr: PermReq,
 ) {
+    if crate::agent::elicitation::is_request(&pr.params) {
+        return handle_elicitation(stdin, event_tx, approval_rx, cancel, pr).await;
+    }
     let (name, args) = permission_name_args(&pr.params["toolCall"]);
     let options = pr.params["options"].as_array().cloned().unwrap_or_default();
     let kind = pr.params["toolCall"]["kind"].as_str().unwrap_or("");
@@ -92,7 +97,7 @@ pub(super) async fn handle_permission(
         Some(ApprovalDecision::Approve)
     } else {
         let _ = event_tx.send(AgentEvent::ApprovalRequest { name, args });
-        wait_decision(approval_rx, cancel, pr.child_cancel.as_deref()).await
+        wait_decision(approval_rx, cancel, pr.child_cancel.as_deref(), None).await
     };
 
     let outcome = match decision {
@@ -103,7 +108,9 @@ pub(super) async fn handle_permission(
                 | ApprovalDecision::AllowPrefix(_)
                 | ApprovalDecision::AllowTool(_) => &["allow_once", "allow"],
                 ApprovalDecision::ApproveRest => &["allow_always", "allow_once", "allow"],
-                ApprovalDecision::Deny => &["reject_once", "reject"],
+                ApprovalDecision::Deny | ApprovalDecision::Elicitation(_) => {
+                    &["reject_once", "reject"]
+                }
             };
             match pick_option(&options, wanted) {
                 Some(option_id) => {
@@ -111,7 +118,9 @@ pub(super) async fn handle_permission(
                         ApprovalDecision::ApproveRest => *auto_approve = true,
                         ApprovalDecision::AllowPrefix(prefix) => bash_allowlist.push(prefix),
                         ApprovalDecision::AllowTool(tool) => allowed_tools.push(tool),
-                        ApprovalDecision::Approve | ApprovalDecision::Deny => {}
+                        ApprovalDecision::Approve
+                        | ApprovalDecision::Deny
+                        | ApprovalDecision::Elicitation(_) => {}
                     }
                     json!({ "outcome": "selected", "optionId": option_id })
                 }
@@ -127,14 +136,45 @@ pub(super) async fn handle_permission(
     .await;
 }
 
-/// Poll the approval back-channel until a decision arrives or the turn is cancelled.
+/// Ask the user what the agent wants to know. Questions always reach the user: approval settings
+/// and "allow the rest of this turn" are about running tools, not about answering for them.
+async fn handle_elicitation(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    event_tx: StdSender<AgentEvent>,
+    approval_rx: &mut StdReceiver<ApprovalDecision>,
+    cancel: &Arc<AtomicBool>,
+    pr: PermReq,
+) {
+    let withdrawn = pr.withdrawn.as_deref();
+    let decision = if withdrawn.is_some_and(|w| w.load(Ordering::SeqCst)) {
+        None
+    } else {
+        let _ = event_tx.send(AgentEvent::ElicitationRequest {
+            params: pr.params.clone(),
+        });
+        wait_decision(approval_rx, cancel, pr.child_cancel.as_deref(), withdrawn).await
+    };
+    let _ = event_tx.send(AgentEvent::ApprovalResolved);
+    let response = crate::agent::elicitation::response(decision);
+    let _ = write_line(
+        stdin,
+        &json!({"jsonrpc":"2.0","id": pr.id, "result": response}),
+    )
+    .await;
+}
+
+/// Poll the approval back-channel until a decision arrives or the wait is called off.
 async fn wait_decision(
     rx: &mut StdReceiver<ApprovalDecision>,
     cancel: &Arc<AtomicBool>,
     child_cancel: Option<&AtomicBool>,
+    withdrawn: Option<&AtomicBool>,
 ) -> Option<ApprovalDecision> {
     loop {
-        if cancel.load(Ordering::SeqCst) || child_cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+        if cancel.load(Ordering::SeqCst)
+            || child_cancel.is_some_and(|c| c.load(Ordering::SeqCst))
+            || withdrawn.is_some_and(|w| w.load(Ordering::SeqCst))
+        {
             return None;
         }
         match rx.try_recv() {

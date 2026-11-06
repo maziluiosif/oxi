@@ -755,6 +755,10 @@ impl PromptCtx {
         })
     }
     fn emit_permission_tool(&mut self, params: &Value) {
+        // An elicitation is no tool call of its own.
+        if params["toolCall"].is_null() {
+            return;
+        }
         if params["sessionId"].as_str() == Some(&self.session_id) {
             self.updates.emit_tool(&params["toolCall"], &self.event_tx);
         } else {
@@ -784,8 +788,9 @@ impl PromptCtx {
         for (id, params) in requests {
             self.emit_permission_tool(&params);
             let _ = self.perm_tx.send(PermReq {
-                id,
                 child_cancel: held.permission_cancel(&params),
+                withdrawn: held.elicitation_flag(&id, &params),
+                id,
                 params,
             });
         }
@@ -1032,6 +1037,8 @@ async fn spawn_conn(
             "fs": { "readTextFile": true, "writeTextFile": true },
             "terminal": true,
             "subagents": {},
+            // Questions, MCP forms and logins, and the retry offered after a refusal.
+            "elicitation": { "form": {}, "url": {} },
             // Fast mode and similar switches arrive as `type: "boolean"` options.
             "session": { "configOptions": { "boolean": {} } },
             // Command output as appended chunks on the tool call (Claude Code and Codex). Codex

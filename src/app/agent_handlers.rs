@@ -298,7 +298,13 @@ impl OxiApp {
                     name,
                     summary,
                     allow_prefix,
+                    elicitation: None,
                 });
+                self.notify_attention(ctx, key, super::notify::Attention::Approval);
+            }
+            AgentEvent::ElicitationRequest { params } => {
+                self.run_state_mut(key).pending_approval =
+                    Some(PendingApproval::for_elicitation(&params));
                 self.notify_attention(ctx, key, super::notify::Attention::Approval);
             }
             AgentEvent::ToolOutput {

@@ -917,6 +917,7 @@ mod keep_awake_tests {
             name: "bash".into(),
             summary: "cargo test".into(),
             allow_prefix: None,
+            elicitation: None,
         });
         assert!(
             !app.agent_is_working(),
@@ -954,6 +955,7 @@ mod keep_awake_tests {
             name: "bash".into(),
             summary: "cargo test".into(),
             allow_prefix: None,
+            elicitation: None,
         });
         assert!(!app.agent_is_working(), "waiting on the user may sleep");
         app.run_state_mut(key).pending_approval = None;

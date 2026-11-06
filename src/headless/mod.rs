@@ -23,6 +23,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Value, json};
 
+use crate::agent::acp::config_options::{self, AcpConfigOption};
 use crate::agent::runner::{AgentExecutor, AgentRunRequest};
 use crate::agent::{AgentEvent, AgentOutcome, ApprovalDecision};
 use crate::model::{
@@ -80,6 +81,11 @@ enum Input {
     },
     /// An ACP agent started a turn on its own.
     Autonomous,
+    /// An agent's options changed; clients show them in their composer.
+    AgentOptions {
+        chat: String,
+        options: Vec<AcpConfigOption>,
+    },
 }
 
 /// Who a reply goes to: the editor that asked, and its request id.
@@ -102,6 +108,8 @@ struct Prompt {
     evidence: Option<bool>,
     /// The client's id for this request, so a retransmission is recognized.
     request: Option<String>,
+    /// Agent options picked in the client before this chat's agent was known to it.
+    agent_options: Vec<(String, Value)>,
 }
 
 struct Chat {
@@ -296,6 +304,15 @@ fn serve(as_daemon: bool) -> i32 {
         let tx = tx.clone();
         crate::agent::acp::set_autonomous_waker(move || {
             let _ = tx.send(Input::Autonomous);
+        });
+    }
+    {
+        let tx = tx.clone();
+        config_options::set_listener(move |chat, options| {
+            let _ = tx.send(Input::AgentOptions {
+                chat: chat.to_owned(),
+                options: options.to_vec(),
+            });
         });
     }
     if as_daemon {
@@ -496,6 +513,9 @@ impl Server {
             Input::AgentGone { chat, run } => self.agent_gone(&chat, run),
             Input::Reply { to, result } => self.reply(to, result),
             Input::Autonomous => self.attach_autonomous_turns(),
+            Input::AgentOptions { chat, options } => {
+                self.notify("agent_options", json!({"chat": chat, "options": options}));
+            }
         }
         true
     }
@@ -531,6 +551,11 @@ impl Server {
             "ping" => Ok(Value::Null),
             "chat.open" => self.open_chat(&params),
             "chat.set_config" => self.set_config(&params),
+            "chat.set_option" => match self.set_agent_option(&params, to) {
+                // Answered from a worker thread once the agent took it.
+                Ok(()) => return true,
+                Err(e) => Err(e),
+            },
             "chat.rename" => self.rename_chat(&params),
             "chat.delete" => self.delete_chat(&params),
             "prompt.send" => self.send_prompt(&params),
@@ -852,6 +877,61 @@ impl Server {
         Ok(config_json(&config))
     }
 
+    /// Set one of the agent's options (permission mode, fast mode…) as the composer does for a
+    /// local chat: on the running agent, else kept for its launch.
+    fn set_agent_option(&mut self, params: &Value, to: ReplyTo) -> Result<(), String> {
+        let root = root_param(params)?;
+        let id = str_param(params, "chat")?;
+        let config_id = str_param(params, "configId")?;
+        self.load_chat(&root, &id)?;
+        let command_line = self.agent_command(&id);
+        let tx = self.tx.clone();
+        self.apply_agent_option(
+            &id,
+            &command_line,
+            config_id,
+            params["value"].clone(),
+            move |result| {
+                let _ = tx.send(Input::Reply {
+                    to,
+                    result: result.map(|()| Value::Null),
+                });
+            },
+        );
+        Ok(())
+    }
+
+    /// The command the chat's agent runs under, which keys its options.
+    fn agent_command(&mut self, id: &str) -> String {
+        let config = self.ensure_config(id);
+        let mut settings = self.settings.clone();
+        config.apply_to_settings(&mut settings);
+        settings.active_config().effective_acp_command()
+    }
+
+    fn apply_agent_option(
+        &self,
+        id: &str,
+        command_line: &str,
+        config_id: String,
+        value: Value,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
+        config_options::set_local(id, command_line, &config_id, &value);
+        let request = crate::agent::acp::AcpSetOption {
+            session_key: id.to_owned(),
+            command_line: command_line.to_owned(),
+            config_id,
+            value,
+            model: None,
+            effort: None,
+        };
+        let acp = self.acp.clone();
+        std::thread::spawn(move || {
+            done(crate::runtime::runtime().and_then(|rt| rt.block_on(acp.set_option(request))));
+        });
+    }
+
     fn rename_chat(&mut self, params: &Value) -> Result<Value, String> {
         let root = root_param(params)?;
         let id = str_param(params, "chat")?;
@@ -908,6 +988,15 @@ impl Server {
                 .as_str()
                 .filter(|r| !r.is_empty())
                 .map(str::to_owned),
+            agent_options: params["agent_options"]
+                .as_array()
+                .map(|picks| {
+                    picks
+                        .iter()
+                        .filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["value"].clone())))
+                        .collect()
+                })
+                .unwrap_or_default(),
         };
         if prompt.text.is_empty() && prompt.attachments.is_empty() {
             return Err("Nothing to send".into());
@@ -1079,6 +1168,14 @@ impl Server {
 
         let mut settings = self.settings.clone();
         config.apply_to_settings(&mut settings);
+        let command_line = settings.active_config().effective_acp_command();
+        for (config_id, value) in prompt.agent_options {
+            self.apply_agent_option(&id, &command_line, config_id, value, |result| {
+                if let Err(e) = result {
+                    log::warn!("headless: could not set an agent option: {e}");
+                }
+            });
+        }
         let run_id = self.next_run;
         self.next_run += 1;
         let (approval_tx, approval_rx) = mpsc::channel();
@@ -1388,6 +1485,18 @@ impl Server {
                 self.notify("approval", json!({"chat": id, "approval": approval}));
                 return;
             }
+            AgentEvent::ElicitationRequest { params } => {
+                // Clients that don't know elicitations show the question as an approval.
+                let approval = json!({
+                    "tool": "question",
+                    "summary": params["message"],
+                    "elicitation": params,
+                });
+                chat.pending_approval = Some(approval.clone());
+                self.flush_chat(id);
+                self.notify("approval", json!({"chat": id, "approval": approval}));
+                return;
+            }
             AgentEvent::StreamRetry { attempt, reason } => {
                 log::info!("headless: stream retry (attempt {attempt}): {reason}");
                 if let Some(m) = chat.last_assistant_mut() {
@@ -1534,6 +1643,7 @@ impl Server {
             "approve" => ApprovalDecision::Approve,
             "approve_rest" => ApprovalDecision::ApproveRest,
             "deny" => ApprovalDecision::Deny,
+            "elicitation" => ApprovalDecision::Elicitation(params["response"].clone()),
             "allow_prefix" => {
                 let prefix = str_param(params, "prefix")?;
                 self.update_settings(|settings| {
@@ -2378,6 +2488,127 @@ mod tests {
         assert!(note.contains("*Interrupted:"), "{note}");
         let _ = std::fs::remove_file(&chat);
         let _ = std::fs::remove_file(session_store::run_journal::path_for(&chat));
+    }
+
+    /// A remote client's picks reach the agent on the server, the bug being a composer showing
+    /// "Bypass permissions" over an agent that stayed in its default mode and kept asking.
+    #[test]
+    fn agent_options_picked_in_a_client_reach_the_agent_on_the_server() {
+        const AGENT: &str = r#"
+import json, sys
+mode = 'default'
+def send(v):
+    print(json.dumps(dict(jsonrpc='2.0', **v)), flush=True)
+def options():
+    return [dict(id='mode', name='Mode', category='mode', type='select', currentValue=mode,
+        options=[dict(value='default', name='Manual'), dict(value='bypassPermissions', name='Bypass')])]
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    if method == 'initialize':
+        send(dict(id=m['id'], result=dict(protocolVersion=1, agentCapabilities={})))
+    elif method == 'session/new':
+        send(dict(id=m['id'], result=dict(sessionId='fake', configOptions=options())))
+    elif method == 'session/set_config_option':
+        mode = m['params']['value']
+        send(dict(id=m['id'], result=dict(configOptions=options())))
+    elif method == 'session/prompt':
+        send(dict(method='session/update', params=dict(sessionId='fake', update=dict(
+            sessionUpdate='agent_message_chunk', content=dict(type='text', text='mode=' + mode)))))
+        send(dict(id=m['id'], result=dict(stopReason='end_turn')))
+    elif 'id' in m:
+        send(dict(id=m['id'], result={}))
+"#;
+        crate::secrets::use_mock_store();
+        let root = crate::app_dirs::test_root().join("headless-agent-options");
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("agent.py");
+        std::fs::write(&script, AGENT).unwrap();
+        let root = root.canonicalize().unwrap().to_string_lossy().to_string();
+
+        let (tx, rx) = mpsc::channel();
+        let mut server = Server::new(tx.clone(), AgentExecutor::new().unwrap(), false);
+        let kind = LlmProviderKind::ClaudeCodeAcp;
+        server.settings.active_provider = kind;
+        server.settings.provider_mut(kind).acp_command = format!(
+            "{} {}",
+            crate::agent::test_python_executable().display(),
+            script.display()
+        );
+        config_options::set_listener(move |chat, options| {
+            let _ = tx.send(Input::AgentOptions {
+                chat: chat.to_owned(),
+                options: options.to_vec(),
+            });
+        });
+        // Serves the server until the chat's turn is over; returns the option lists published.
+        fn finish_turn(
+            server: &mut Server,
+            rx: &mpsc::Receiver<Input>,
+            chat: &str,
+        ) -> Vec<Vec<AcpConfigOption>> {
+            let mut published = Vec::new();
+            while server.chats[chat].run.is_some() {
+                match rx
+                    .recv_timeout(Duration::from_secs(20))
+                    .expect("agent hung")
+                {
+                    Input::AgentOptions { chat: of, options } if of == chat => {
+                        published.push(options)
+                    }
+                    input => {
+                        server.handle(input);
+                    }
+                }
+            }
+            published
+        }
+        let reply = |server: &Server, chat: &str| {
+            let last = server.chats[chat].session.messages.last().unwrap();
+            message_json(last).to_string()
+        };
+
+        // Picked before the chat existed: arrives with its first prompt.
+        let sent = server
+            .send_prompt(&json!({
+                "root": root, "text": "one",
+                "agent_options": [{"id": "mode", "value": "bypassPermissions"}],
+            }))
+            .unwrap();
+        let chat = sent["chat"].as_str().unwrap().to_string();
+        let published = finish_turn(&mut server, &rx, &chat);
+        let text = reply(&server, &chat);
+        assert!(text.contains("mode=bypassPermissions"), "{text}");
+        let last = published
+            .last()
+            .expect("the agent's options were published");
+        assert!(matches!(
+            &last[0].kind,
+            config_options::AcpConfigKind::Select { current, .. } if current == "bypassPermissions"
+        ));
+
+        // Picked while the agent runs: set on it, not only shown.
+        let (done_tx, done_rx) = mpsc::channel();
+        let command = server.agent_command(&chat);
+        server.apply_agent_option(&chat, &command, "mode".into(), json!("default"), move |r| {
+            let _ = done_tx.send(r);
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(20))
+            .unwrap()
+            .unwrap();
+        server
+            .send_prompt(&json!({"root": root, "chat": chat, "text": "two"}))
+            .unwrap();
+        finish_turn(&mut server, &rx, &chat);
+        let text = reply(&server, &chat);
+        assert!(text.contains("mode=default"), "{text}");
+
+        let snapshot = server
+            .get_chat(&json!({"root": root, "chat": chat}))
+            .unwrap();
+        assert_eq!(snapshot["agent_options"][0]["id"], "mode");
+        server.acp.close(&chat);
     }
 
     #[test]

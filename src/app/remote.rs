@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use super::{OxiApp, PendingApproval, SessionKey};
 use crate::agent::AgentEvent;
+use crate::agent::acp::config_options::AcpConfigKind;
 use crate::model::{MsgRole, Session, UserAttachment};
 use crate::remote::client::{Client, ConnState, Note, Pending};
 use crate::remote::protocol;
@@ -313,6 +314,7 @@ impl OxiApp {
                     self.remote_list_chats(wi);
                 }
             }
+            "agent_options" => self.show_remote_agent_options(&file, &params["options"]),
             "title" => {
                 if let Some(key) = self.key_for_file(&file)
                     && let Some(title) = params["title"].as_str()
@@ -697,6 +699,9 @@ impl OxiApp {
         }
         let config: Option<crate::model::SessionConfig> =
             serde_json::from_value(snapshot["config"].clone()).ok();
+        if let Some(file) = self.session_by_key(key).session_file.clone() {
+            self.show_remote_agent_options(&file, &snapshot["agent_options"]);
+        }
         let context = snapshot["context"].as_object().map(|c| {
             (
                 c["used"].as_u64().unwrap_or(0),
@@ -735,21 +740,27 @@ impl OxiApp {
 
     /// Show a turn the server runs for `key` (started elsewhere) as if it ran here.
     fn follow_remote_turn(&mut self, key: SessionKey, snapshot: &Value, rx: Receiver<AgentEvent>) {
-        let approval = snapshot["approval"].as_object().map(|a| PendingApproval {
-            name: a
-                .get("tool")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            summary: a
-                .get("summary")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            allow_prefix: a
-                .get("allow_prefix")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+        let approval = snapshot["approval"].as_object().map(|a| {
+            if let Some(params) = a.get("elicitation").filter(|p| !p.is_null()) {
+                return PendingApproval::for_elicitation(params);
+            }
+            PendingApproval {
+                name: a
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                summary: a
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                allow_prefix: a
+                    .get("allow_prefix")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                elicitation: None,
+            }
         });
         let run = self.run_state_mut(key);
         run.begin_waiting_response();
@@ -778,6 +789,7 @@ impl OxiApp {
             ));
         }
         let config = self.ensure_session_config(key);
+        let agent_options = self.remote_option_picks(key);
         let (plan, evidence) = self
             .run_state(key)
             .map(|r| (r.plan_mode, r.evidence_mode.enabled()))
@@ -810,6 +822,7 @@ impl OxiApp {
             "config": config,
             "title": session.title,
             "history_hash": protocol::messages_hash(history),
+            "agent_options": agent_options,
         });
         if chat.is_none() {
             params.as_object_mut().expect("object").remove("chat");
@@ -861,6 +874,71 @@ impl OxiApp {
                 .asked
                 .push((Asked::Action("Could not stop the subagent"), pending));
         }
+    }
+
+    /// The command `key`'s agent options are kept under here. Only a label on this side: the
+    /// agent itself runs what the server has configured.
+    fn agent_options_command(&mut self, key: Option<SessionKey>) -> Option<String> {
+        let key = key.unwrap_or_else(|| self.active_session_key());
+        let provider = self.ensure_session_config(key).provider;
+        let config = self.conv.settings.provider(provider);
+        config.is_acp().then(|| config.effective_acp_command())
+    }
+
+    /// Show the options a server's agent offers now in the composer of the chat in `file`.
+    fn show_remote_agent_options(&mut self, file: &str, options: &Value) {
+        let Ok(options) = serde_json::from_value(options.clone()) else {
+            return;
+        };
+        // A chat's first agent can report before the client knows the chat: that one is active.
+        let key = self.key_for_file(file);
+        if let Some(command_line) = self.agent_options_command(key) {
+            crate::agent::acp::config_options::show(file, &command_line, options);
+        }
+    }
+
+    /// What was picked for `key`'s agent that its server has not been told yet: a new chat has
+    /// no id to send them under, and a chat may hold picks from before the server took them.
+    fn remote_option_picks(&mut self, key: SessionKey) -> Vec<Value> {
+        let session_key = self.acp_session_key(key);
+        let Some(command_line) = self.agent_options_command(Some(key)) else {
+            return Vec::new();
+        };
+        crate::agent::acp::config_options::picked_before_launch(&session_key, &command_line)
+            .iter()
+            .filter(|o| !o.is_model() && !o.is_thought_level())
+            .map(|o| {
+                let value = match &o.kind {
+                    AcpConfigKind::Select { current, .. } => json!(current),
+                    AcpConfigKind::Boolean(on) => json!(on),
+                };
+                json!({"id": o.id, "value": value})
+            })
+            .collect()
+    }
+
+    /// Set one of the agent's options on the server running it. A chat the server doesn't know
+    /// yet keeps the pick for its first prompt.
+    pub(crate) fn remote_set_agent_option(
+        &mut self,
+        key: SessionKey,
+        config_id: &str,
+        value: &Value,
+    ) {
+        let Some((host, chat, root)) = self.remote_chat(key) else {
+            return;
+        };
+        let Some(client) = self.remote.connected(&host) else {
+            return;
+        };
+        let pending = client.request(
+            "chat.set_option",
+            json!({"root": root, "chat": chat, "configId": config_id, "value": value}),
+        );
+        self.remote.asked.push((
+            Asked::Action("Could not change the agent's option"),
+            pending,
+        ));
     }
 
     /// Pass an approval decision for a remote chat's tool call to its server.

@@ -55,7 +55,9 @@ impl Progress {
                 let remaining = HANDOFF_BYTES.saturating_sub(self.text.len());
                 self.text.push_str(&bounded(text, remaining));
             }
-            AgentEvent::ApprovalRequest { .. } => self.approval_pending = true,
+            AgentEvent::ApprovalRequest { .. } | AgentEvent::ElicitationRequest { .. } => {
+                self.approval_pending = true
+            }
             AgentEvent::ToolStart {
                 name,
                 tool_call_id,
