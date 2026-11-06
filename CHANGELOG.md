@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.35.0] - 2026-11-06
+
+### Added
+- **Agent:** Declare elicitation capability so Claude can ask questions during autonomous turns and handle MCP forms without auto-declining them.
+- **Remote:** Agent option changes now sync to the server, so the agent mode matches what you see in the picker on SSH workspaces.
+
+### Fixed
+- **Remote:** Tool approval requests no longer keep appearing after changing agent options on SSH workspaces.
+
+
 ## [1.34.0] - 2026-11-05
 
 ### Added
@@ -1345,7 +1355,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.34.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.35.0...HEAD
+[1.35.0]: https://github.com/maziluiosif/oxi/compare/v1.34.0...v1.35.0
 [1.34.0]: https://github.com/maziluiosif/oxi/compare/v1.33.1...v1.34.0
 [1.33.1]: https://github.com/maziluiosif/oxi/compare/v1.33.0...v1.33.1
 [1.33.0]: https://github.com/maziluiosif/oxi/compare/v1.32.0...v1.33.0
