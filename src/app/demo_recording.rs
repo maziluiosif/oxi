@@ -480,10 +480,31 @@ fn run_gallery(rec: &mut Recorder<'_>) {
                 name: "bash".into(),
                 summary: "rm -rf build/ && python3 -m unittest -q".into(),
                 allow_prefix: None,
+                elicitation: None,
             });
         }
         rec.harness.run_steps(3);
         rec.still("chat-approval");
+        {
+            let app = rec.app();
+            let key = app.active_session_key();
+            let request = serde_json::json!({
+                "mode": "form",
+                "message": "Which storage should the stats cache use?",
+                "requestedSchema": {"type": "object", "properties": {
+                    "question_0": {"type": "string", "title": "Storage", "oneOf": [
+                        {"const": "SQLite", "title": "SQLite", "description": "One file, queryable"},
+                        {"const": "JSON", "title": "JSON", "description": "Simple, readable by hand"},
+                    ]},
+                    "question_0_custom": {"type": "string", "title": "Other",
+                        "description": "Type your own answer, or add a note (optional)."},
+                }},
+            });
+            app.run_state_mut(key).pending_approval =
+                Some(super::state::PendingApproval::for_elicitation(&request));
+        }
+        rec.harness.run_steps(3);
+        rec.still("chat-question");
         // A small window: every row has to wrap or truncate instead of overflowing.
         rec.harness.set_size(egui::vec2(760.0, 560.0));
         rec.harness.run_steps(4);

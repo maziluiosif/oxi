@@ -38,6 +38,9 @@ pub fn event_to_json(event: &AgentEvent) -> Option<Value> {
         AgentEvent::ApprovalRequest { name, args } => {
             json!({"type": "approval_request", "name": name, "args": args})
         }
+        AgentEvent::ElicitationRequest { params } => {
+            json!({"type": "elicitation_request", "params": params})
+        }
         AgentEvent::ToolOutput {
             tool_call_id,
             text,
@@ -114,6 +117,9 @@ pub fn event_from_json(v: &Value) -> Option<AgentEvent> {
         "approval_request" => AgentEvent::ApprovalRequest {
             name: s(v, "name"),
             args: args(v),
+        },
+        "elicitation_request" => AgentEvent::ElicitationRequest {
+            params: v["params"].clone(),
         },
         "tool_output" => AgentEvent::ToolOutput {
             tool_call_id: s(v, "id"),
@@ -196,6 +202,9 @@ pub fn decision_to_json(decision: &ApprovalDecision) -> Value {
             json!({"decision": "allow_prefix", "prefix": prefix})
         }
         ApprovalDecision::AllowTool(_) => json!({"decision": "allow_tool"}),
+        ApprovalDecision::Elicitation(response) => {
+            json!({"decision": "elicitation", "response": response})
+        }
     }
 }
 

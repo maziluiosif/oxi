@@ -115,6 +115,11 @@ pub enum AgentEvent {
         name: String,
         args: Option<Value>,
     },
+    /// The agent asks the user something: the params of its `elicitation/create`, read by
+    /// [`crate::agent::elicitation::parse`]. Answered and resolved like an approval.
+    ElicitationRequest {
+        params: Value,
+    },
     ToolOutput {
         tool_call_id: String,
         text: String,

@@ -517,6 +517,13 @@ impl OxiApp {
         let session_key = self.acp_session_key(key);
         let command_line = self.conv.settings.active_config().effective_acp_command();
         config_options::set_local(&session_key, &command_line, &option.id, &value);
+        if self.is_remote_key(key) {
+            // The agent runs on the server. The model and effort travel with each prompt.
+            if model.is_none() && effort.is_none() {
+                self.remote_set_agent_option(key, &option.id, &value);
+            }
+            return;
+        }
         let req = crate::agent::acp::AcpSetOption {
             session_key,
             command_line,

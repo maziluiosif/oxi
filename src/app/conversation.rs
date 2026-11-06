@@ -24,6 +24,9 @@ const TRANSCRIPT_RESIZE_SETTLE: f64 = 0.25;
 mod transcript_model;
 use transcript_model::{transcript_unit_fingerprint, transcript_units};
 
+#[path = "conversation/elicitation.rs"]
+mod elicitation;
+
 #[path = "conversation/stall.rs"]
 mod stall;
 
@@ -96,6 +99,9 @@ impl OxiApp {
     /// Rendered at the bottom of the transcript (above the floating composer) so it stays in
     /// view while the run is paused — `stick_to_bottom` keeps the tail visible during a run.
     fn render_approval_card(&mut self, ui: &mut Ui, pa: PendingApproval) {
+        if pa.elicitation.is_some() {
+            return self.render_elicitation_card(ui, pa);
+        }
         Frame::new()
             .fill(crate::theme::c_info_bg())
             .stroke(Stroke::new(1.0, c_accent()))

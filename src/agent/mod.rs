@@ -8,6 +8,7 @@ pub mod cli_complete;
 mod codex_responses;
 pub mod complete;
 mod dispatch;
+pub mod elicitation;
 pub mod events;
 mod history;
 mod loop_ctx;

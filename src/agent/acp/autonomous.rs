@@ -77,6 +77,8 @@ pub(super) struct Held {
     cancelled_children: Mutex<std::collections::HashMap<String, std::sync::Arc<AtomicBool>>>,
     /// Off while the session is set up: `session/load` replays the whole history as updates.
     armed: AtomicBool,
+    /// Elicitations still waiting for an answer, by JSON-RPC id and `elicitationId`.
+    elicitations: Mutex<std::collections::HashMap<String, std::sync::Weak<AtomicBool>>>,
     updates: Mutex<VecDeque<Value>>,
     /// `session/request_permission` requests (id, params) of such a turn, unanswered until a
     /// turn shows them: the agent waits on them.
@@ -94,6 +96,7 @@ impl Held {
             controls: Default::default(),
             cancelled_children: Default::default(),
             armed: AtomicBool::new(false),
+            elicitations: Mutex::default(),
             updates: Mutex::new(VecDeque::new()),
             permissions: Mutex::new(Vec::new()),
         }
@@ -289,10 +292,40 @@ impl Held {
         }
     }
 
+    /// The flag that drops an elicitation the agent no longer waits for; `None` for a permission
+    /// request. Stored under both ids it can be withdrawn by.
+    pub(super) fn elicitation_flag(
+        &self,
+        id: &Value,
+        params: &Value,
+    ) -> Option<std::sync::Arc<AtomicBool>> {
+        use crate::agent::elicitation;
+        if !elicitation::is_request(params) {
+            return None;
+        }
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let mut flags = self.elicitations.lock().unwrap_or_else(|e| e.into_inner());
+        flags.retain(|_, flag| flag.strong_count() > 0);
+        flags.insert(id.to_string(), std::sync::Arc::downgrade(&flag));
+        if let Some(key) = elicitation::id_of(params) {
+            flags.insert(key.to_owned(), std::sync::Arc::downgrade(&flag));
+        }
+        Some(flag)
+    }
+
+    pub(super) fn withdraw_elicitation(&self, key: &str) {
+        let flags = self.elicitations.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(flag) = flags.get(key).and_then(std::sync::Weak::upgrade) {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+
     /// Keep a permission request that arrived between turns for the turn that shows them.
     /// Returns false (the caller declines it) while the session is still being set up.
+    /// Elicitations are kept even then: an MCP login starts while the agent launches, and the
+    /// first turn is about to show it.
     pub(super) fn hold_permission(&self, id: Value, params: Value) -> bool {
-        if !self.armed.load(Ordering::SeqCst) {
+        if !self.armed.load(Ordering::SeqCst) && !crate::agent::elicitation::is_request(&params) {
             return false;
         }
         self.permissions

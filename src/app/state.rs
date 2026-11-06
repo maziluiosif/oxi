@@ -23,6 +23,21 @@ pub struct PendingApproval {
     pub summary: String,
     /// For a simple `bash` command, the prefix "Always allow" would add to the allowlist.
     pub allow_prefix: Option<String>,
+    /// The agent asks something instead of wanting to run a tool; holds the answers so far.
+    pub elicitation: Option<crate::agent::elicitation::Elicitation>,
+}
+
+impl PendingApproval {
+    /// An `elicitation/create` request waits on the user exactly like an approval does.
+    pub fn for_elicitation(params: &serde_json::Value) -> Self {
+        let elicitation = crate::agent::elicitation::parse(params);
+        Self {
+            name: "question".to_string(),
+            summary: elicitation.message.clone(),
+            allow_prefix: None,
+            elicitation: Some(elicitation),
+        }
+    }
 }
 
 /// Active section in the settings window (sidebar).
