@@ -85,7 +85,7 @@ impl OxiApp {
         };
         let env = cfg.acp_env();
         let command_line = cfg.effective_acp_command();
-        let mcp_servers = self.conv.settings.mcp_servers.clone();
+        let mcp_servers = self.conv.settings.effective_mcp_servers();
         let acp = self.acp.clone();
 
         let (tx, rx) = std::sync::mpsc::channel::<ModelFetchMsg>();
@@ -169,7 +169,7 @@ impl OxiApp {
             env: cfg.acp_env(),
             model: cfg.model_id.clone(),
             effort: cfg.effort.clone(),
-            mcp_servers: settings.mcp_servers.clone(),
+            mcp_servers: settings.effective_mcp_servers(),
         };
         let acp = self.acp.clone();
         let ctx = ctx.clone();

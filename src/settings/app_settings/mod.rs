@@ -220,6 +220,10 @@ pub struct AppSettings {
     /// MCP servers to spawn (stdio). Tools appear as `mcp_<server>_<tool>`.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Give agents desktop control through agent-desktop, without asking (see
+    /// `crate::computer_use`). The app sends this to the SSH servers it connects to.
+    #[serde(default)]
+    pub computer_use: bool,
     /// Record raw provider/agent traffic for the Activity window (see
     /// `crate::agent::activity_log`). Off by default; the log itself is never written to disk.
     #[serde(default)]
@@ -389,6 +393,7 @@ impl Default for AppSettings {
             git_use_system_cli: false,
             git_executable: String::new(),
             mcp_servers: Vec::new(),
+            computer_use: false,
             activity_log_enabled: false,
             auto_update: true,
             router: super::router::RouterSettings::default(),

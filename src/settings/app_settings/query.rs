@@ -4,6 +4,17 @@ use super::super::provider::{LlmProviderKind, ProviderConfig, WebSearchBackend};
 use super::*;
 
 impl AppSettings {
+    /// The MCP servers agents get: the user's, plus agent-desktop when computer use is on. A
+    /// server the user set up under that name wins.
+    pub fn effective_mcp_servers(&self) -> Vec<super::McpServerConfig> {
+        let mut servers = self.mcp_servers.clone();
+        let name = crate::computer_use::SERVER_NAME;
+        if self.computer_use && !servers.iter().any(|s| s.name.trim() == name) {
+            servers.extend(crate::computer_use::server_config());
+        }
+        servers
+    }
+
     /// Config for the given provider kind. Infallible: `AppSettings::normalize` runs on
     /// every load and guarantees an entry per kind.
     pub fn provider(&self, kind: LlmProviderKind) -> &ProviderConfig {

@@ -136,6 +136,12 @@ const ENTRIES: &[Entry] = &[
     ),
     (
         SettingsTab::Agent,
+        "Computer use",
+        "Let agents use the desktop",
+        "agent-desktop accessibility automation screen click apps",
+    ),
+    (
+        SettingsTab::Agent,
         "Web search",
         "Web search backend",
         "searxng duckduckgo internet",

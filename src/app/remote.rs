@@ -8,7 +8,7 @@
 //! the app only sends its changes (a rename, a rewound transcript) and its history with a prompt
 //! when the server's differs.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -45,6 +45,10 @@ enum Asked {
         from: usize,
     },
     Browse,
+    /// What the server reports about computer use on its machine.
+    ComputerUse {
+        host: String,
+    },
     /// Shown as a sidebar notice when it fails.
     Action(&'static str),
 }
@@ -65,7 +69,12 @@ pub(crate) struct RemoteState {
     /// Hosts connected at least once: connecting again is a reconnect.
     was_connected: HashSet<String>,
     pub(crate) dialog: Option<ConnectDialog>,
+    /// Computer use on each machine, by host; [`LOCAL_MACHINE`] is this one.
+    pub(crate) computer_use: Arc<Mutex<BTreeMap<String, Result<Value, String>>>>,
 }
+
+/// [`RemoteState::computer_use`] key of the machine running the app.
+pub(crate) const LOCAL_MACHINE: &str = "";
 
 impl Default for RemoteState {
     fn default() -> Self {
@@ -82,6 +91,7 @@ impl Default for RemoteState {
             relist: HashSet::new(),
             was_connected: HashSet::new(),
             dialog: None,
+            computer_use: Arc::default(),
         }
     }
 }
@@ -271,6 +281,9 @@ impl OxiApp {
                 ConnState::Connecting => {}
             }
         }
+        if state == ConnState::Connected {
+            self.sync_computer_use(host, false);
+        }
         if state != ConnState::Connected {
             return;
         }
@@ -357,6 +370,13 @@ impl OxiApp {
 
     fn on_remote_answer(&mut self, asked: Asked, result: Result<Value, String>) {
         match asked {
+            Asked::ComputerUse { host } => {
+                self.remote
+                    .computer_use
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(host, result);
+            }
             Asked::List { root } => {
                 self.remote.listing.remove(&root);
                 match result {
@@ -939,6 +959,56 @@ impl OxiApp {
             Asked::Action("Could not change the agent's option"),
             pending,
         ));
+    }
+
+    /// Hosts with a live connection, sorted.
+    pub(crate) fn connected_hosts(&self) -> Vec<String> {
+        let mut hosts: Vec<String> = self
+            .remote
+            .clients
+            .keys()
+            .filter(|host| self.remote.connected(host).is_some())
+            .cloned()
+            .collect();
+        hosts.sort();
+        hosts
+    }
+
+    /// Bring computer use on `host` in line with the switch and get its state; `guide` opens the
+    /// Accessibility grant on that machine's desktop.
+    pub(crate) fn sync_computer_use(&mut self, host: &str, guide: bool) {
+        let enabled = self.conv.settings.computer_use;
+        let state = self.remote.computer_use.clone();
+        let mark_checking = |host: &str| {
+            state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(host.to_string(), Ok(json!({"checking": true})));
+        };
+        if host == LOCAL_MACHINE {
+            mark_checking(host);
+            let ctx = self.remote.ctx.clone();
+            std::thread::spawn(move || {
+                let result = crate::computer_use::refresh(enabled, guide);
+                state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(LOCAL_MACHINE.to_string(), result);
+                if let Some(ctx) = ctx.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    ctx.request_repaint();
+                }
+            });
+        } else if let Some(client) = self.remote.connected(host) {
+            let pending = client.request(
+                "computer_use.sync",
+                json!({"enabled": enabled, "guide": guide}),
+            );
+            mark_checking(host);
+            let asked = Asked::ComputerUse {
+                host: host.to_string(),
+            };
+            self.remote.asked.push((asked, pending));
+        }
     }
 
     /// Pass an approval decision for a remote chat's tool call to its server.
