@@ -165,11 +165,19 @@ impl OxiApp {
 
     /// Put back the settings as they were when the page opened (or last saved).
     fn discard_settings_changes(&mut self, ctx: &egui::Context) {
+        let computer_use = self.conv.settings.computer_use;
         if let Some(original) = self.conv.settings_page.original.clone() {
             self.conv.settings = original;
         }
         self.conv.settings_page.save_error = None;
         self.reapply_appearance(ctx);
+        // The switch took effect on connected servers as soon as it was flipped.
+        if self.conv.settings.computer_use != computer_use {
+            self.sync_computer_use(crate::app::remote::LOCAL_MACHINE, false);
+            for host in self.connected_hosts() {
+                self.sync_computer_use(&host, false);
+            }
+        }
     }
 
     fn save_settings_and_continue(&mut self, action: SettingsExitAction) {

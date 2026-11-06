@@ -556,6 +556,11 @@ impl Server {
                 Ok(()) => return true,
                 Err(e) => Err(e),
             },
+            "computer_use.sync" => match self.computer_use_sync(&params, to) {
+                // Answered from a worker thread: it may download.
+                Ok(()) => return true,
+                Err(e) => Err(e),
+            },
             "chat.rename" => self.rename_chat(&params),
             "chat.delete" => self.delete_chat(&params),
             "prompt.send" => self.send_prompt(&params),
@@ -1703,7 +1708,7 @@ impl Server {
             env: cfg.acp_env(),
             model: cfg.model_id.clone(),
             effort: cfg.effort.clone(),
-            mcp_servers: self.settings.mcp_servers.clone(),
+            mcp_servers: self.settings.effective_mcp_servers(),
         };
         let acp = self.acp.clone();
         let tx = self.tx.clone();

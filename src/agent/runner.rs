@@ -159,7 +159,7 @@ fn spawn_agent_attempt(
                 .checkpoint_base();
             let outcome = run_acp_turn(
                 &cfg,
-                settings.mcp_servers.clone(),
+                settings.effective_mcp_servers(),
                 &acp,
                 acp_session_key,
                 cwd.clone(),
@@ -233,7 +233,7 @@ fn spawn_agent_attempt(
         // Blocking (process spawns, HTTP handshakes), so keep it off the async workers.
         {
             let mcp = mcp.clone();
-            let servers = settings.mcp_servers.clone();
+            let servers = settings.effective_mcp_servers();
             let _ = tokio::task::spawn_blocking(move || mcp.sync_servers(&servers)).await;
         }
         // MCP tools have unknown side effects, so plan mode leaves them out.

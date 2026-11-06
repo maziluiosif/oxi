@@ -83,6 +83,7 @@ pub(super) async fn handle_permission(
     } else if plan_mode && !acp_kind_is_read_only(kind) {
         Some(ApprovalDecision::Deny)
     } else if *auto_approve
+        || crate::computer_use::is_acp_tool(&pr.params["toolCall"])
         || !approval_policy.requires_approval(&name)
         || crate::agent::approval::tool_allowed(&name, allowed_tools)
         || (name == "bash"

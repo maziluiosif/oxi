@@ -11,6 +11,7 @@ mod app;
 mod app_dirs;
 mod code_nav;
 mod compute;
+mod computer_use;
 mod delegation;
 mod desktop_entry;
 mod documents;
@@ -78,6 +79,7 @@ pub fn run() -> eframe::Result<()> {
         Some(agent::acp::oxi_mcp::SUBCOMMAND) => {
             std::process::exit(agent::acp::oxi_mcp::run_stdio())
         }
+        Some(computer_use::SUBCOMMAND) => std::process::exit(computer_use::run_mcp()),
         Some(headless::SUBCOMMAND) => std::process::exit(headless::run()),
         Some(remote::service::SUBCOMMAND) => std::process::exit(remote::service::run()),
         _ => {}
