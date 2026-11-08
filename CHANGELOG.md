@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.37.0] - 2026-11-08
+
+### Added
+- **Chat:** Search across all saved chats in your workspace with the new chat_search tool.
+- **Agent:** Use `/learn [focus]` to turn chat corrections into numbered candidate rules, then save picked ones as project rules that apply to all future chats.
+- **Chat:** Open any saved chat by ID with the chat_read tool.
+
+
 ## [1.36.0] - 2026-11-06
 
 ### Added
@@ -1365,7 +1373,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.36.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.37.0...HEAD
+[1.37.0]: https://github.com/maziluiosif/oxi/compare/v1.36.0...v1.37.0
 [1.36.0]: https://github.com/maziluiosif/oxi/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/maziluiosif/oxi/compare/v1.34.0...v1.35.0
 [1.34.0]: https://github.com/maziluiosif/oxi/compare/v1.33.1...v1.34.0
