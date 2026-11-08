@@ -216,10 +216,17 @@ mod tests {
             .unwrap();
         repo.worktree("wt", &dir.join("wt"), None).unwrap();
 
-        let expected = main.join(".oxi/rules/learned.md");
-        assert_eq!(rules_path(&main), expected);
-        assert_eq!(rules_path(&main.join("src")), expected);
-        assert_eq!(rules_path(&dir.join("wt")), expected);
+        // git2 spells Windows paths with forward slashes, so compare the folders as the OS sees them.
+        std::fs::create_dir_all(main.join(RULES_DIR)).unwrap();
+        let resolved = |cwd: &Path| {
+            let path = rules_path(cwd);
+            assert_eq!(path.file_name().unwrap(), RULES_FILE);
+            std::fs::canonicalize(path.parent().unwrap()).unwrap()
+        };
+        let expected = std::fs::canonicalize(main.join(RULES_DIR)).unwrap();
+        assert_eq!(resolved(&main), expected);
+        assert_eq!(resolved(&main.join("src")), expected);
+        assert_eq!(resolved(&dir.join("wt")), expected);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
