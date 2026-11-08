@@ -389,6 +389,13 @@ impl OxiApp {
                     }
                 }
             }
+            // The agent's connection turns it into the real prompt; the chat keeps `/learn`.
+            Some(super::compaction::SlashCommand::Learn) => {
+                if !self.ensure_session_config(key).provider.is_acp() {
+                    self.notify_composer("/learn needs an ACP agent, like Claude Code or Codex.");
+                    return;
+                }
+            }
             Some(cmd)
                 if !has_attachments
                     && (cmd == super::compaction::SlashCommand::New

@@ -10,7 +10,7 @@ use crate::settings::AppSettings;
 
 mod activity_window;
 mod agent_handlers;
-mod chat_search;
+pub(crate) mod chat_search;
 mod chat_status;
 mod chat_sync;
 mod chores;

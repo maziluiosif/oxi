@@ -36,10 +36,10 @@ pub fn tool_side_effect(name: &str) -> ToolSideEffect {
     match name {
         "read" | "grep" | "find" | "ls" | "codebase_search" | "git_status" | "git_diff"
         | "web_search" | "web_fetch" | "todo_write" | "task" | "scratchpad_read" | "chat_read"
-        | "task_status" | "task_cancel" => ToolSideEffect::ReadOnly,
+        | "chat_search" | "task_status" | "task_cancel" => ToolSideEffect::ReadOnly,
         // Starts another agent, which works on its own: always asked, never in plan mode.
         "delegate_task" => ToolSideEffect::UnknownExternal,
-        "write" | "edit" | "delete" | "move" | "mkdir" | "scratchpad" => {
+        "write" | "edit" | "delete" | "move" | "mkdir" | "scratchpad" | "learn_rules" => {
             ToolSideEffect::WorkspaceMutation
         }
         // Type-checkers run project build scripts (build.rs, npx), so treat them like bash.

@@ -3,7 +3,9 @@
 //! models), so every session gets `todo_write`, whose calls drive oxi's native checklist. The
 //! global scratchpad comes along (`scratchpad_read`, `scratchpad`) unless the user turned the
 //! scratchpad tool off in Settings > Agent. `chat_read` hands back earlier turns of the chat that
-//! a handoff transcript trimmed (see [`super::chat_archive`]).
+//! a handoff transcript trimmed (see [`super::chat_archive`]), and `chat_search` finds things in the
+//! user's other chats (see [`super::chat_history`]). `learn_rules` saves what `/learn` found (see
+//! [`super::learned_rules`]).
 
 use std::io::{BufRead as _, Write as _};
 
@@ -67,7 +69,11 @@ pub(super) fn oxi_tool_name(s: &str) -> Option<&'static str> {
     // Claude: `mcp__oxi__todo_write`; Codex and others: `oxi.todo_write`, `oxi/todo_write`, ...
     TOOL_NAMES
         .into_iter()
-        .chain([super::chat_archive::TOOL])
+        .chain([
+            super::chat_archive::TOOL,
+            super::chat_history::TOOL,
+            super::learned_rules::TOOL,
+        ])
         .chain(crate::evidence::tools::NAMES)
         .find(|tool| {
             s.strip_suffix(tool)
@@ -156,7 +162,8 @@ fn instructions() -> String {
     }
     if crate::evidence::tools::conn_dir().is_some() {
         text.push_str(
-            " chat_read returns earlier turns of this conversation in full when a transcript oxi sent you left them out.",
+            " chat_read returns earlier turns of this conversation in full when a transcript oxi sent you left them out. \
+             chat_search finds past work in the user's other oxi chats: use it when the user refers to earlier work or a decision you have no record of.",
         );
         text.push(' ');
         text.push_str(crate::evidence::tools::INSTRUCTIONS);
@@ -211,6 +218,8 @@ fn handle(msg: &Value) -> Option<Value> {
             }
             if crate::evidence::tools::conn_dir().is_some() {
                 tools.push(super::chat_archive::definition());
+                tools.push(super::chat_history::definition());
+                tools.push(super::learned_rules::definition());
                 tools.extend(crate::evidence::tools::definitions());
             }
             if delegation_dir().is_some() {
@@ -248,6 +257,20 @@ fn handle(msg: &Value) -> Option<Value> {
         }
         "tools/call" if msg["params"]["name"] == super::chat_archive::TOOL => {
             let (text, is_error) = match super::chat_archive::call(&msg["params"]["arguments"]) {
+                Ok(text) => (text, false),
+                Err(e) => (e, true),
+            };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+        }
+        "tools/call" if msg["params"]["name"] == super::learned_rules::TOOL => {
+            let (text, is_error) = match super::learned_rules::call(&msg["params"]["arguments"]) {
+                Ok(text) => (text, false),
+                Err(e) => (e, true),
+            };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+        }
+        "tools/call" if msg["params"]["name"] == super::chat_history::TOOL => {
+            let (text, is_error) = match super::chat_history::call(&msg["params"]["arguments"]) {
                 Ok(text) => (text, false),
                 Err(e) => (e, true),
             };
@@ -316,6 +339,8 @@ mod tests {
         assert_eq!(oxi_tool_name("oxi.scratchpad_read"), Some(SCRATCHPAD_READ));
         assert_eq!(oxi_tool_name("scratchpad"), None);
         assert_eq!(oxi_tool_name("mcp__oxi__chat_read"), Some("chat_read"));
+        assert_eq!(oxi_tool_name("oxi.chat_search"), Some("chat_search"));
+        assert_eq!(oxi_tool_name("mcp__oxi__learn_rules"), Some("learn_rules"));
         assert_eq!(
             oxi_tool(
                 &json!({"title": "Scratchpad", "_meta": {"claudeCode": {"toolName": "mcp__oxi__scratchpad"}}})

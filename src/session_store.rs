@@ -46,6 +46,37 @@ pub fn list_session_files(dir: &Path) -> Option<Vec<(String, SystemTime)>> {
     Some(files)
 }
 
+/// Every chat file in the default session store, plus those in `extra` (a workspace with its own
+/// session folder), with their mtimes.
+pub fn all_session_files(extra: Option<&Path>) -> Vec<(String, SystemTime)> {
+    let store = agent_dir().join("sessions");
+    let dirs = fs::read_dir(&store)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok);
+    let mut dirs: Vec<PathBuf> = dirs.map(|dir| dir.path()).collect();
+    dirs.extend(
+        extra
+            .filter(|dir| !dir.starts_with(&store))
+            .map(Path::to_path_buf),
+    );
+    dirs.iter()
+        .filter_map(|dir| list_session_files(dir))
+        .flatten()
+        .collect()
+}
+
+/// The workspace folder a chat file belongs to, for showing: its header's `cwd`, else the folder
+/// its session folder's name was made from, else that name.
+pub fn session_file_workspace(file: &str) -> String {
+    let file = Path::new(file);
+    let name = || Some(file.parent()?.file_name()?.to_string_lossy().to_string());
+    header_cwd(file)
+        .or_else(|| folder_from_session_dir_name(&name()?, Path::new("/")))
+        .or_else(name)
+        .unwrap_or_default()
+}
+
 /// Folders that have chats in the default session store, newest chat first, with that
 /// chat's mtime and the number of chats. The folder is the `cwd` in the newest file's header
 /// when it has one, else the existing folder the session folder's name was made from.

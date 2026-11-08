@@ -52,6 +52,8 @@ pub(crate) enum SlashCommand {
     Plan(Option<String>),
     /// `/evidence` toggles evidence mode; `/evidence <task>` turns it on and sends the task.
     Evidence(Option<String>),
+    /// `/learn` and `/learn <focus>`: sent to the agent, which expands them (needs ACP).
+    Learn,
 }
 
 /// Recognize an exact, argument-free `/new` or `/compact`, or `/plan` with an optional task.
@@ -64,6 +66,12 @@ pub(crate) fn parse_slash_command(text: &str) -> Option<SlashCommand> {
         "/plan" => return Some(SlashCommand::Plan(None)),
         "/evidence" => return Some(SlashCommand::Evidence(None)),
         _ => {}
+    }
+    if text
+        .strip_prefix("/learn")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        return Some(SlashCommand::Learn);
     }
     if let Some(task) = text.strip_prefix("/evidence") {
         return task
@@ -354,6 +362,12 @@ mod tests {
             Some(SlashCommand::Plan(Some("add a cache\nfor sessions".into())))
         );
         assert_eq!(parse_slash_command("/planner"), None);
+        assert_eq!(parse_slash_command("/learn"), Some(SlashCommand::Learn));
+        assert_eq!(
+            parse_slash_command("/learn naming"),
+            Some(SlashCommand::Learn)
+        );
+        assert_eq!(parse_slash_command("/learned"), None);
         assert_eq!(
             parse_slash_command("/evidence"),
             Some(SlashCommand::Evidence(None))
