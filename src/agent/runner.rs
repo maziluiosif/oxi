@@ -116,7 +116,8 @@ impl AgentExecutor {
 mod evidence;
 mod handoff;
 mod routing;
-use handoff::{acp_chat_archive, acp_history_transcript, acp_missed_transcript, with_agent_notes};
+pub(crate) use handoff::acp_chat_archive;
+use handoff::{acp_history_transcript, acp_missed_transcript, with_agent_notes};
 pub use routing::spawn_agent_run;
 
 fn spawn_agent_attempt(
