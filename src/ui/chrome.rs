@@ -148,6 +148,7 @@ pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usiz
             ui.add(
                 TextEdit::multiline(text)
                     .frame(egui::Frame::NONE)
+                    .font(FontId::proportional(FS_SMALL))
                     .desired_width(f32::INFINITY)
                     .desired_rows(rows)
                     .hint_text(hint),
@@ -1313,6 +1314,40 @@ pub fn mini_button_icon_enabled(ui: &mut Ui, icon: &str, label: &str, enabled: b
         c_accent(),
         enabled,
     )
+}
+
+/// Text-only [`mini_button_icon_enabled`]: the small inline action next to a status line
+/// ("Restore", "Run again", "Clear"). Use it instead of `ui.small_button`, whose default egui
+/// frame matches nothing else in the app.
+pub fn mini_button(ui: &mut Ui, label: &str) -> Response {
+    mini_button_icon_enabled(ui, "", label, true)
+}
+
+/// [`mini_button`] with an accent label, for the one action in a row the user most likely wants.
+pub fn mini_button_accent(ui: &mut Ui, label: &str) -> Response {
+    icon_text_button_core(
+        ui,
+        "",
+        label,
+        FS_TINY,
+        egui::vec2(0.0, 24.0),
+        &IconButtonLook {
+            fill: c_bg_elevated(),
+            hover_fill: c_row_hover(),
+            stroke: c_border_subtle(),
+            hover_stroke: c_border(),
+            rounding: CornerRadius::same(RADIUS_BUTTON),
+            glyph: c_accent(),
+        },
+        c_accent(),
+        c_accent(),
+        true,
+    )
+}
+
+/// The small "×" that dismisses an inline notice or row.
+pub fn dismiss_button(ui: &mut Ui) -> Response {
+    icon_button_plain(ui, ICON_CLOSE, 20.0, false)
 }
 
 /// Frameless icon + label button (transparent at rest, `c_row_hover` fill + accent icon on

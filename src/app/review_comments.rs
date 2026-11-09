@@ -317,14 +317,21 @@ impl OxiApp {
                                 |ui| {
                                     let ready = !draft.text.trim().is_empty();
                                     if ui
-                                        .add_enabled(ready, egui::Button::new("Add comment"))
+                                        .add_enabled(
+                                            ready,
+                                            crate::ui::chrome::primary_button_widget("Add comment"),
+                                        )
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                                         .on_hover_text("Cmd/Ctrl+Enter")
                                         .clicked()
                                         || (submit && ready)
                                     {
                                         add = true;
                                     }
-                                    if ui.button("Cancel").on_hover_text("Esc").clicked() {
+                                    if crate::ui::chrome::ghost_button(ui, "Cancel", false)
+                                        .on_hover_text("Esc")
+                                        .clicked()
+                                    {
                                         cancel = true;
                                     }
                                 },
@@ -372,7 +379,7 @@ impl OxiApp {
                 .color(c_text_muted()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                clear = ui.small_button("Clear").clicked();
+                clear = crate::ui::chrome::mini_button(ui, "Clear").clicked();
             });
         });
         for (index, location, note) in &comments {
@@ -384,8 +391,7 @@ impl OxiApp {
                         .color(c_accent()),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("×")
+                    if crate::ui::chrome::dismiss_button(ui)
                         .on_hover_text("Remove this comment")
                         .clicked()
                     {

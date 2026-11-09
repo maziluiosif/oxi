@@ -362,7 +362,7 @@ fn media_card(ui: &mut Ui, path: &Path, kind: MediaKind, modified: Option<std::t
                     }
                     Some(PosterState::Pending) => {
                         ui.add_space(60.0);
-                        ui.spinner();
+                        crate::theme::spinner(ui, 18.0, crate::theme::c_text_muted());
                         ui.add_space(60.0);
                     }
                     _ => {

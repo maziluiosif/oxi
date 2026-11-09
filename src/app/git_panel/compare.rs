@@ -259,31 +259,29 @@ impl OxiApp {
                     .strong(),
             );
             let refresh_w = 22.0 + ui.spacing().item_spacing.x;
-            egui::ComboBox::from_id_salt("git_compare_base")
-                .selected_text(
-                    RichText::new(if shown_base.is_empty() {
-                        "…"
-                    } else {
-                        &shown_base
-                    })
-                    .size(FS_SMALL)
-                    .monospace(),
-                )
-                .width((ui.available_width() - refresh_w).max(80.0))
-                .height(320.0)
-                .show_ui(ui, |ui| {
-                    for base in &bases {
-                        if ui
-                            .selectable_label(
+            // The same dropdown as the composer and Settings (searchable, which helps in a
+            // repository with many branches).
+            let shown = if shown_base.is_empty() {
+                "…"
+            } else {
+                &shown_base
+            };
+            if let Some(i) = crate::ui::select_menu::SelectMenu::new("git_compare_base", shown)
+                .framed((ui.available_width() - refresh_w).max(80.0))
+                .show(ui, || {
+                    bases
+                        .iter()
+                        .map(|base| {
+                            crate::ui::select_menu::SelectOption::new(
+                                base.clone(),
                                 *base == shown_base,
-                                RichText::new(base).size(FS_SMALL).monospace(),
                             )
-                            .clicked()
-                        {
-                            picked = Some(base.clone());
-                        }
-                    }
-                });
+                        })
+                        .collect()
+                })
+            {
+                picked = bases.get(i).cloned();
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if loading {
                     crate::theme::spinner(ui, 12.0, c_text_muted());

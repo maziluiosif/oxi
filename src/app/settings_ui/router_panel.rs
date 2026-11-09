@@ -127,7 +127,7 @@ impl OxiApp {
                 crate::ui::chrome::settings_reveal_flash(ui, "Usage & quota", title.rect, flash);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if quota::is_refreshing() {
-                        ui.spinner();
+                        crate::theme::small_spinner(ui);
                     } else if ghost_button_icon(ui, ICON_REFRESH, "Refresh", false).clicked() {
                         self.spawn_quota_refresh(ui.ctx(), true);
                     }
@@ -190,7 +190,7 @@ impl OxiApp {
                             .color(c_warning_fg()),
                         )
                         .on_hover_text("Skipped after a rate-limit or quota error");
-                        if ui.small_button("Clear").clicked() {
+                        if crate::ui::chrome::mini_button(ui, "Clear").clicked() {
                             quota::clear_cooldown(kind);
                         }
                     }

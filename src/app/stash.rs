@@ -118,11 +118,13 @@ impl OxiApp {
                 )
                 .on_hover_text("Put aside with Cmd/Ctrl+Shift+S");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("×").on_hover_text("Discard").clicked() {
+                    if crate::ui::chrome::dismiss_button(ui)
+                        .on_hover_text("Discard")
+                        .clicked()
+                    {
                         remove = Some(i);
                     }
-                    if ui
-                        .small_button("Restore")
+                    if crate::ui::chrome::mini_button(ui, "Restore")
                         .on_hover_text("Back into the composer")
                         .clicked()
                     {

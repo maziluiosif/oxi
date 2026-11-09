@@ -941,10 +941,7 @@ impl OxiApp {
             if let Some(decor) = decor
                 && let Some(selection) = selection
                 && editable
-                && ui
-                    .add(egui::Button::new(
-                        egui::RichText::new("Comment on selection").size(FS_TINY),
-                    ))
+                && crate::ui::chrome::mini_button(ui, "Comment on selection")
                     .on_hover_text(
                         "Comment on the selected lines for the agent; comments go out with your next message",
                     )

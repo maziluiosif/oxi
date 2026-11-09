@@ -87,15 +87,17 @@ pub fn show(ctx: &egui::Context, scope: Id, pending: &mut Vec<UserAttachment>) {
         .default_height(420.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                save = ui
-                    .button(if preview.draft_scope.is_some() {
+                save = crate::ui::chrome::primary_button(
+                    ui,
+                    if preview.draft_scope.is_some() {
                         "Save changes"
                     } else {
                         "Add edited copy"
-                    })
-                    .clicked();
-                cancel = ui.button("Cancel").clicked();
-                if ui.button("Copy full text").clicked() {
+                    },
+                )
+                .clicked();
+                cancel = crate::ui::chrome::ghost_button(ui, "Cancel", false).clicked();
+                if crate::ui::chrome::ghost_button(ui, "Copy full text", false).clicked() {
                     ctx.copy_text(preview.text.clone());
                 }
             });

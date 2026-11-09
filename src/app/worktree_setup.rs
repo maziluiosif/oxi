@@ -386,29 +386,33 @@ impl OxiApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     match setup.state {
                         SetupState::Running => {
-                            if ui.small_button("Cancel").clicked() {
+                            if crate::ui::chrome::mini_button(ui, "Cancel").clicked() {
                                 action = Some(SetupAction::Cancel);
                             }
                         }
                         SetupState::Succeeded => {
-                            if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                            if crate::ui::chrome::dismiss_button(ui)
+                                .on_hover_text("Dismiss")
+                                .clicked()
+                            {
                                 action = Some(SetupAction::Dismiss);
                             }
                         }
                         _ => {
                             if setup.skipped {
-                                if ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                                if crate::ui::chrome::dismiss_button(ui)
+                                    .on_hover_text("Dismiss")
+                                    .clicked()
+                                {
                                     action = Some(SetupAction::Dismiss);
                                 }
-                            } else if ui
-                                .small_button("Continue without it")
+                            } else if crate::ui::chrome::mini_button(ui, "Continue without it")
                                 .on_hover_text("Start the agent in this work tree as it is")
                                 .clicked()
                             {
                                 action = Some(SetupAction::Skip);
                             }
-                            if ui
-                                .small_button("Run again")
+                            if crate::ui::chrome::mini_button(ui, "Run again")
                                 .on_hover_text("Run the setup script again in this work tree")
                                 .clicked()
                             {
@@ -421,7 +425,7 @@ impl OxiApp {
                     } else {
                         "Output"
                     };
-                    if ui.small_button(label).clicked() {
+                    if crate::ui::chrome::mini_button(ui, label).clicked() {
                         action = Some(SetupAction::ToggleOutput);
                     }
                 });
