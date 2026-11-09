@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.38.0] - 2026-11-09
+
+### Added
+- **Editor:** View Git and current versions of images side by side or with a swipe divider in image tabs.
+- **UI:** Modal dialogs for pull requests, import sessions, and remote operations.
+- **UI:** Dialog review gallery for testing dialogs and inline components.
+
+### Changed
+- **UI:** Replaced small buttons across panels with consistent mini_button and dismiss_button components.
+- **Markdown:** Tables now fit within available width and balance column sizes based on content.
+- **Editor:** Active tab automatically scrolls into view when selected.
+- **UI:** Improved spacing and alignment in file picker, activity log toolbar, and suggestion cards.
+- **UI:** Clearer error messages for stream failures.
+
+
 ## [1.37.0] - 2026-11-08
 
 ### Added
@@ -1373,7 +1388,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.37.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.38.0...HEAD
+[1.38.0]: https://github.com/maziluiosif/oxi/compare/v1.37.0...v1.38.0
 [1.37.0]: https://github.com/maziluiosif/oxi/compare/v1.36.0...v1.37.0
 [1.36.0]: https://github.com/maziluiosif/oxi/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/maziluiosif/oxi/compare/v1.34.0...v1.35.0
