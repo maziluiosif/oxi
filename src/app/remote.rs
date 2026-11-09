@@ -1258,10 +1258,11 @@ impl OxiApp {
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let field = ui.add(
-                                egui::TextEdit::singleline(&mut dialog.host)
-                                    .hint_text("SSH host, e.g. my-server or user@host")
-                                    .desired_width(330.0),
+                            let field = crate::ui::chrome::settings_text_field_width(
+                                ui,
+                                &mut dialog.host,
+                                "SSH host, e.g. my-server or user@host",
+                                330.0,
                             );
                             if dialog.focus_host {
                                 field.request_focus();
@@ -1284,8 +1285,7 @@ impl OxiApp {
                                         .color(c_text_faint()),
                                 );
                                 for host in dialog.suggestions.clone() {
-                                    if ui
-                                        .small_button(egui::RichText::new(&host).size(FS_TINY))
+                                    if crate::ui::chrome::mini_button(ui, &host)
                                         .clicked()
                                     {
                                         dialog.host = host;
@@ -1299,12 +1299,13 @@ impl OxiApp {
                             match state {
                                 Some(ConnState::Connected) => {
                                     ui.horizontal(|ui| {
-                                        if ui
-                                            .add_enabled(
-                                                dialog.parent.is_some(),
-                                                egui::Button::new(".."),
-                                            )
-                                            .on_hover_text("Parent folder")
+                                        if crate::ui::chrome::mini_button_icon_enabled(
+                                            ui,
+                                            "",
+                                            "..",
+                                            dialog.parent.is_some(),
+                                        )
+                                        .on_hover_text("Parent folder")
                                             .clicked()
                                         {
                                             browse = dialog.parent.clone();
@@ -1327,15 +1328,23 @@ impl OxiApp {
                                                 .auto_shrink([false, false])
                                                 .show(ui, |ui| {
                                                     if dialog.browsing && dialog.entries.is_empty() {
-                                                        ui.label("Loading…");
+                                                        ui.label(
+                                                            egui::RichText::new("Loading…")
+                                                                .size(FS_SMALL)
+                                                                .color(c_text_muted()),
+                                                        );
                                                     }
                                                     for (name, dir) in &dialog.entries {
                                                         if !dir {
                                                             continue;
                                                         }
-                                                        let row = ui.selectable_label(
-                                                            false,
-                                                            format!("{name}/"),
+                                                        let row = crate::ui::chrome::flat_button_icon(
+                                                            ui,
+                                                            ICON_FOLDER,
+                                                            name,
+                                                            FS_SMALL,
+                                                            egui::vec2(ui.available_width(), 24.0),
+                                                            c_text(),
                                                         );
                                                         if row.double_clicked() || row.clicked() {
                                                             let base = dialog.path.trim_end_matches('/');

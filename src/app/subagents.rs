@@ -368,7 +368,7 @@ impl OxiApp {
         {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(c_error_fg(), error);
-                if ui.small_button("Dismiss").clicked() {
+                if crate::ui::chrome::mini_button(ui, "Dismiss").clicked() {
                     ui.ctx()
                         .data_mut(|d| d.remove::<String>(egui::Id::new("subagent_control_error")));
                 }

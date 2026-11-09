@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use eframe::egui::{self, RichText, TextEdit, Ui};
+use eframe::egui::{self, RichText, Ui};
 
 use crate::theme::{FS_TINY, c_text_muted};
 
@@ -31,10 +31,10 @@ impl OxiApp {
         };
         ui.label(RichText::new(label).size(FS_TINY).color(c_text_muted()));
         if !destructive {
-            let response = ui.add(
-                TextEdit::singleline(&mut self.conv.editor.file_operation_name)
-                    .id_salt("workspace_file_operation_name")
-                    .desired_width(f32::INFINITY),
+            let response = crate::ui::chrome::settings_text_field(
+                ui,
+                &mut self.conv.editor.file_operation_name,
+                "",
             );
             if std::mem::take(&mut self.conv.editor.focus_file_operation_next_frame) {
                 response.request_focus();
@@ -46,13 +46,15 @@ impl OxiApp {
             }
         }
         ui.horizontal(|ui| {
-            if ui
-                .button(if destructive { "Delete" } else { "Apply" })
-                .clicked()
-            {
+            let apply = if destructive {
+                crate::ui::chrome::ghost_button(ui, "Delete", true)
+            } else {
+                crate::ui::chrome::primary_button(ui, "Apply")
+            };
+            if apply.clicked() {
                 self.apply_file_operation(operation.clone());
             }
-            if ui.button("Cancel").clicked() {
+            if crate::ui::chrome::ghost_button(ui, "Cancel", false).clicked() {
                 self.conv.editor.file_operation = None;
             }
         });

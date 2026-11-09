@@ -883,8 +883,7 @@ impl OxiApp {
                     .color(c_text()),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .small_button(RichText::new("Text search").size(FS_TINY))
+                if crate::ui::chrome::mini_button(ui, "Text search")
                     .on_hover_text("Back to Find in Files")
                     .clicked()
                 {

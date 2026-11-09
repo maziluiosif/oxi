@@ -136,6 +136,7 @@ impl OxiApp {
     pub(crate) fn open_file_picker_with(&mut self, query: &str) {
         self.open_file_picker();
         self.conv.editor.file_picker_query = query.to_owned();
+        self.conv.editor.file_picker_caret_to_end = true;
     }
 
     /// Goto Symbol in Project: the picker lists every function/type in the workspace.
@@ -187,6 +188,7 @@ impl OxiApp {
             (document.path.clone(), caret)
         });
         self.conv.editor.file_picker_return_focus = None;
+        self.conv.editor.file_picker_caret_to_end = true;
         self.conv.editor.file_picker_open = true;
     }
 
@@ -850,7 +852,7 @@ impl OxiApp {
             style.spacing.item_spacing.y,
         );
         let row_height = interact_h.max(text_h + 2.0 * pad_y) + gap_y;
-        let query_height = interact_h.max(text_h + 8.0);
+        let query_height = interact_h.max(text_h + 10.0);
         // Whatever the list still overflowed by last frame (window chrome we can't predict).
         let overflow_id = egui::Id::new("workspace_file_picker_overflow");
         let overflow = ctx.data(|d| d.get_temp::<f32>(overflow_id)).unwrap_or(0.0);
@@ -890,10 +892,24 @@ impl OxiApp {
                         } else {
                             "Go to file…  (@ symbol, : line, > command, # chat)"
                         })
+                        // Room between the field's border and the caret.
+                        .margin(egui::Margin::symmetric(8, 5))
                         .desired_width(f32::INFINITY),
                 );
                 if !response.has_focus() {
                     response.request_focus();
+                }
+                if std::mem::take(&mut self.conv.editor.file_picker_caret_to_end) {
+                    // The field remembers its caret from the last time the picker was open, so a
+                    // prefilled `>` would otherwise start with the caret in front of it.
+                    let end = egui::text::CCursor::new(
+                        self.conv.editor.file_picker_query.chars().count(),
+                    );
+                    let mut state = TextEdit::load_state(ui.ctx(), response.id).unwrap_or_default();
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                    state.store(ui.ctx(), response.id);
                 }
                 ui.add_space(6.0);
                 // Fill the remaining window height even when every match fits. Otherwise the

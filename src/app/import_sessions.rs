@@ -45,6 +45,29 @@ impl OxiApp {
         self.list_importable_sessions(ctx);
     }
 
+    /// The dialog listing two sessions, for the gallery stills.
+    #[cfg(test)]
+    pub(crate) fn demo_import_dialog(&mut self) {
+        self.conv.import_sessions = Some(ImportDialog {
+            workspace_root: self.active_workspace().root_path.clone(),
+            provider: LlmProviderKind::ClaudeCodeAcp,
+            state: ImportState::Listed(vec![
+                ExternalSession {
+                    session_id: "a".into(),
+                    title: "Fix the flaky percentile test".into(),
+                    updated_at: Some(
+                        (chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339(),
+                    ),
+                },
+                ExternalSession {
+                    session_id: "b".into(),
+                    title: "Add CSV export to the weekly report".into(),
+                    updated_at: Some((chrono::Utc::now() - chrono::Duration::days(2)).to_rfc3339()),
+                },
+            ]),
+        });
+    }
+
     fn import_request(&self, dialog: &ImportDialog) -> AcpImport {
         let cfg = self.conv.settings.provider(dialog.provider);
         AcpImport {
@@ -223,81 +246,136 @@ impl OxiApp {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        egui::Window::new("Import agent session")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size(egui::vec2(520.0, 420.0))
+        // Read before the list handles the key itself, so Escape closes the agent list first
+        // and the dialog only on the next press.
+        let list_open = egui::Popup::is_any_open(ctx);
+        if crate::ui::chrome::modal_backdrop(ctx, "import_sessions_backdrop") {
+            open = false;
+        }
+        egui::Area::new(egui::Id::new("import_sessions_dialog"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Agent").size(FS_SMALL).color(c_text_muted()));
-                    ui.add_enabled_ui(!busy, |ui| {
-                        egui::ComboBox::from_id_salt("import_session_agent")
-                            .selected_text(provider.label())
-                            .show_ui(ui, |ui| {
-                                for kind in LlmProviderKind::ALL.into_iter().filter(|k| k.is_acp())
-                                {
-                                    ui.selectable_value(&mut provider, kind, kind.label());
-                                }
-                            });
-                    });
-                    ui.label(
-                        RichText::new(format!("in {workspace}"))
+                egui::Frame::new()
+                    .fill(c_bg_elevated())
+                    .stroke(egui::Stroke::new(1.0, c_border()))
+                    .corner_radius(RADIUS_CHIP)
+                    .inner_margin(egui::Margin::same(16))
+                    .show(ui, |ui| {
+                        ui.set_width(520.0_f32.min(ctx.content_rect().width() - 64.0));
+                        ui.label(
+                            RichText::new("Import agent session")
+                                .size(FS_BODY)
+                                .color(c_text())
+                                .strong(),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "Sessions an agent ran in {workspace} outside oxi. The imported \
+                                 chat continues the agent's own session."
+                            ))
                             .size(FS_SMALL)
                             .color(c_text_muted()),
-                    );
-                });
-                ui.label(
-                    RichText::new(
-                        "Sessions this agent ran in this folder outside oxi. The imported chat continues the agent's own session.",
-                    )
-                    .size(FS_SMALL)
-                    .color(c_text_faint()),
-                );
-                ui.add_space(6.0);
-                match &dialog.state {
-                    ImportState::Listing(_) => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("Asking the agent for its sessions…");
-                        });
-                    }
-                    ImportState::Importing(_) => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("Loading the session…");
-                        });
-                    }
-                    ImportState::Ready(_, _) => {
-                        ui.label("Save the open files before switching to the imported session's workspace.");
-                        finish_ready = ui.button("Finish import").clicked();
-                    }
-                    ImportState::Failed(error) => {
-                        ui.label(RichText::new(error).color(c_error_fg()));
-                        retry = ui.button("Try again").clicked();
-                    }
-                    ImportState::Listed(sessions) if sessions.is_empty() => {
-                        ui.label("No sessions to import: none were found, or oxi already has them all.");
-                    }
-                    ImportState::Listed(sessions) => {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            for session in sessions {
-                                ui.horizontal(|ui| {
-                                    if ui.button("Import").clicked() {
-                                        import = Some(session.session_id.clone());
-                                    }
-                                    ui.label(&session.title);
-                                    if let Some(when) = session.updated_at.as_deref().and_then(age) {
-                                        ui.label(
-                                            RichText::new(when).size(FS_SMALL).color(c_text_faint()),
-                                        );
-                                    }
-                                });
+                        );
+                        ui.add_space(10.0);
+                        ui.add_enabled_ui(!busy, |ui| {
+                            let agents: Vec<LlmProviderKind> = LlmProviderKind::ALL
+                                .into_iter()
+                                .filter(|k| k.is_acp())
+                                .collect();
+                            let picked = crate::ui::select_menu::SelectMenu::new(
+                                "import_session_agent",
+                                provider.label(),
+                            )
+                            .framed(220.0)
+                            .show(ui, || {
+                                agents
+                                    .iter()
+                                    .map(|kind| {
+                                        crate::ui::select_menu::SelectOption::new(
+                                            kind.label(),
+                                            *kind == provider,
+                                        )
+                                    })
+                                    .collect()
+                            });
+                            if let Some(kind) = picked.and_then(|i| agents.get(i)) {
+                                provider = *kind;
                             }
                         });
-                    }
-                }
+                        ui.add_space(8.0);
+                        let note = |ui: &mut egui::Ui, text: &str| {
+                            ui.label(RichText::new(text).size(FS_SMALL).color(c_text_muted()));
+                        };
+                        match &dialog.state {
+                            ImportState::Listing(_) => {
+                                ui.horizontal(|ui| {
+                                    small_spinner(ui);
+                                    note(ui, "Asking the agent for its sessions…");
+                                });
+                            }
+                            ImportState::Importing(_) => {
+                                ui.horizontal(|ui| {
+                                    small_spinner(ui);
+                                    note(ui, "Loading the session…");
+                                });
+                            }
+                            ImportState::Ready(_, _) => {
+                                note(
+                                    ui,
+                                    "Save the open files before switching to the imported \
+                                     session's workspace.",
+                                );
+                                ui.add_space(6.0);
+                                finish_ready =
+                                    crate::ui::chrome::primary_button(ui, "Finish import")
+                                        .clicked();
+                            }
+                            ImportState::Failed(error) => {
+                                ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
+                                ui.add_space(6.0);
+                                retry = crate::ui::chrome::ghost_button(ui, "Try again", false)
+                                    .clicked();
+                            }
+                            ImportState::Listed(sessions) if sessions.is_empty() => {
+                                note(
+                                    ui,
+                                    "No sessions to import: none were found, or oxi already has \
+                                     them all.",
+                                );
+                            }
+                            ImportState::Listed(sessions) => {
+                                egui::ScrollArea::vertical()
+                                    .max_height(320.0)
+                                    .show(ui, |ui| {
+                                        for session in sessions {
+                                            if session_row(ui, session) {
+                                                import = Some(session.session_id.clone());
+                                            }
+                                        }
+                                    });
+                            }
+                        }
+                        ui.add_space(12.0);
+                        let row = egui::vec2(ui.available_width(), 28.0);
+                        ui.allocate_ui_with_layout(
+                            row,
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if crate::ui::chrome::ghost_button(ui, "Close", false)
+                                    .on_hover_text("Esc")
+                                    .clicked()
+                                {
+                                    open = false;
+                                }
+                            },
+                        );
+                    });
             });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !list_open {
+            open = false;
+        }
         let changed_provider = provider != dialog.provider;
         dialog.provider = provider;
         if !open {
@@ -316,16 +394,33 @@ impl OxiApp {
     }
 }
 
-/// "3d ago" for an RFC 3339 time.
+/// One importable session: its title and age, with Import on the right. True when clicked.
+fn session_row(ui: &mut egui::Ui, session: &ExternalSession) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            clicked = crate::ui::chrome::mini_button(ui, "Import").clicked();
+            if let Some(when) = session.updated_at.as_deref().and_then(age) {
+                ui.label(RichText::new(when).size(FS_TINY).color(c_text_faint()));
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(&session.title).size(FS_SMALL).color(c_text()))
+                        .truncate()
+                        .selectable(false),
+                )
+                .on_hover_text(&session.title);
+            });
+        });
+    });
+    clicked
+}
+
+/// "3d" for an RFC 3339 time, like the ages in the chat sidebar.
 fn age(rfc3339: &str) -> Option<String> {
     let at = chrono::DateTime::parse_from_rfc3339(rfc3339).ok()?;
-    let secs = (chrono::Utc::now() - at.with_timezone(&chrono::Utc))
-        .num_seconds()
-        .max(0) as u64;
-    Some(format!(
-        "{} ago",
-        crate::router::decide::short_duration(secs)
-    ))
+    Some(format_relative_time(std::time::SystemTime::from(at)))
 }
 
 #[cfg(test)]

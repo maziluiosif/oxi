@@ -47,6 +47,11 @@ pub fn serve(params: &Value) -> Result<Value, String> {
             &arg::<String>(params, "relative")?,
             &arg(params, "base")?,
         )),
+        "diff_blobs" => answer(super::hunk::diff_blobs_encoded(
+            cwd,
+            &arg::<String>(params, "relative")?,
+            &arg(params, "base")?,
+        )),
         "compare" => answer(super::compare(cwd, &arg::<String>(params, "base")?)),
         "changed_files" => answer(super::checkpoint::changed_files(
             Path::new(cwd),

@@ -20,18 +20,24 @@ impl OxiApp {
         );
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut self.conv.git_ui.new_branch)
-                    .hint_text("branch name…")
-                    .desired_width(ui.available_width() - 78.0),
+            ui.spacing_mut().item_spacing.x = 6.0;
+            // The field's frame adds its own padding and border around the text.
+            let resp = crate::ui::chrome::settings_text_field_width(
+                ui,
+                &mut self.conv.git_ui.new_branch,
+                "branch name…",
+                (ui.available_width() - 96.0).max(60.0),
             );
             let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if crate::ui::chrome::primary_button(ui, "Create").clicked() || enter {
-                let name = self.conv.git_ui.new_branch.trim().to_string();
-                if !name.is_empty() {
-                    self.request(GitOp::NewBranch(name));
-                    self.conv.git_ui.new_branch.clear();
-                }
+            let name = self.conv.git_ui.new_branch.trim().to_string();
+            let create = ui
+                .add_enabled_ui(!name.is_empty(), |ui| {
+                    crate::ui::chrome::primary_button(ui, "Create")
+                })
+                .inner;
+            if (create.clicked() || enter) && !name.is_empty() {
+                self.request(GitOp::NewBranch(name));
+                self.conv.git_ui.new_branch.clear();
             }
         });
         ui.add_space(8.0);

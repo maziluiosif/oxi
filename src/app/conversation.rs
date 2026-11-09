@@ -66,7 +66,7 @@ impl OxiApp {
                 settings: error_suggests_settings(&e),
                 switch_to: idle.then(|| self.other_agent_in_chat(key)).flatten(),
             };
-            match dismissible_error(ui, "Something went wrong", &e, actions) {
+            match dismissible_error(ui, stream_error_title(&e), &e, actions) {
                 Some(ErrorAction::Dismiss) => self.run_state_mut(key).stream_error = None,
                 Some(ErrorAction::Retry) => self.retry_last_prompt(),
                 Some(ErrorAction::Continue) => {
@@ -321,8 +321,15 @@ impl OxiApp {
             for row in shown.chunks(columns) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = GAP;
+                    // Cards in a row share the tallest one's height, whatever their prompts wrap to.
+                    let card_h = row
+                        .iter()
+                        .map(|&(_, _, prompt)| suggestion_card_height(ui, card_w, prompt))
+                        .fold(0.0, f32::max);
                     for &(icon, title, prompt) in row {
-                        if suggestion_card(ui, card_w, icon, title, prompt).clicked() {
+                        if suggestion_card(ui, egui::vec2(card_w, card_h), icon, title, prompt)
+                            .clicked()
+                        {
                             self.conv.composer.input = prompt.to_string();
                             // A suggestion is a starting point, not a terminal action: put
                             // the caret in the composer so the user can tailor it.
@@ -959,6 +966,67 @@ fn error_suggests_settings(err: &str) -> bool {
     .any(|needle| e.contains(needle))
 }
 
+/// A headline that says what kind of failure this is, so the banner can be read at a glance
+/// before the provider's own wording below it. Checked in order: the first family that matches
+/// wins, and anything unrecognised keeps the neutral title.
+fn stream_error_title(err: &str) -> &'static str {
+    let e = err.to_ascii_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|needle| e.contains(needle));
+    if has(&[
+        "context length",
+        "context window",
+        "maximum context",
+        "prompt is too long",
+        "too many tokens",
+    ]) {
+        "Conversation too long for this model"
+    } else if has(&[
+        "429",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "quota",
+        "overloaded",
+        "usage limit",
+    ]) {
+        "Rate limit or quota reached"
+    } else if has(&[
+        "401",
+        "unauthorized",
+        "api key",
+        "api_key",
+        "apikey",
+        "invalid key",
+        "authentication",
+        "not signed in",
+    ]) {
+        "Sign-in or API key rejected"
+    } else if has(&["403", "forbidden", "permission denied"]) {
+        "Access denied"
+    } else if has(&[
+        "model not found",
+        "no such model",
+        "model does not exist",
+        "404",
+    ]) {
+        "Model or endpoint not found"
+    } else if has(&[
+        "connection refused",
+        "could not connect",
+        "failed to connect",
+        "error sending request",
+        "dns",
+        "timed out",
+        "timeout",
+        "connection reset",
+        "network",
+    ]) {
+        "Could not reach the provider"
+    } else {
+        "Something went wrong"
+    }
+}
+
 fn dismissible_error(
     ui: &mut Ui,
     title: &str,
@@ -1076,23 +1144,26 @@ fn dismissible_error(
     action
 }
 
-fn suggestion_card(
-    ui: &mut Ui,
-    width: f32,
-    icon: &str,
-    title: &str,
-    prompt: &str,
-) -> egui::Response {
+/// On very narrow columns the prompt can need more than two lines. The card grows with it so
+/// its text never spills into the next suggestion.
+fn suggestion_card_height(ui: &Ui, width: f32, prompt: &str) -> f32 {
     let body = ui.painter().layout(
         prompt.to_owned(),
         egui::FontId::proportional(FS_TINY),
         c_text_muted(),
         (width - 28.0).max(1.0),
     );
-    // On very narrow columns the prompt can need more than two lines. Let the card
-    // grow with it so its text never spills into the next suggestion.
-    let height = (body.size().y + FS_SMALL * 1.5 + 26.0).max(74.0);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    (body.size().y + FS_SMALL * 1.5 + 26.0).max(74.0)
+}
+
+fn suggestion_card(
+    ui: &mut Ui,
+    size: egui::Vec2,
+    icon: &str,
+    title: &str,
+    prompt: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), title)
     });

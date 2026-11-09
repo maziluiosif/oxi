@@ -2,7 +2,7 @@
 //! requests and response streams, retries/errors, tool calls, and ACP/MCP traffic. Opened from
 //! the status bar; recording is a persisted opt-in switch inside the window.
 
-use eframe::egui::{self, Align, Layout, RichText, ScrollArea, TextEdit};
+use eframe::egui::{self, Align, Layout, RichText, ScrollArea};
 
 use crate::agent::activity_log::{self, ActivityEntry, ActivityKind};
 use crate::theme::*;
@@ -113,30 +113,35 @@ impl OxiApp {
             .min_size(egui::vec2(420.0, 260.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut recording, "Record").on_hover_text(
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    crate::ui::chrome::toggle(ui, &mut recording, "Record").on_hover_text(
                         "Capture raw provider requests/responses, tool calls and ACP/MCP \
                              traffic. Credentials are redacted. Kept in memory only.",
                     );
-                    ui.add(
-                        TextEdit::singleline(&mut view.query)
-                            .hint_text("Filter…")
-                            .desired_width(180.0),
+                    crate::ui::chrome::toggle(ui, &mut view.follow, "Follow")
+                        .on_hover_text("Keep the newest entry in view");
+                    crate::ui::chrome::settings_text_field_width(
+                        ui,
+                        &mut view.query,
+                        "Filter…",
+                        180.0,
                     );
-                    ui.checkbox(&mut view.follow, "Follow");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Clear").clicked() {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if crate::ui::chrome::ghost_button(ui, "Clear", false).clicked() {
                             activity_log::clear();
                             view.selected = None;
                         }
-                        if ui
-                            .add_enabled(!visible.is_empty(), egui::Button::new("Copy shown"))
-                            .clicked()
-                        {
+                        let copy = ui.add_enabled_ui(!visible.is_empty(), |ui| {
+                            crate::ui::chrome::ghost_button(ui, "Copy shown", false)
+                        });
+                        if copy.inner.clicked() {
                             let all: String = visible.iter().map(|e| entry_as_text(e)).collect();
                             ui.ctx().copy_text(all);
                         }
                     });
                 });
+                ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
                     for kind in ActivityKind::ALL {
                         let shown = !view.hidden.contains(&kind);
@@ -212,7 +217,7 @@ impl OxiApp {
                                 .size(FS_SMALL),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("Copy").clicked() {
+                            if crate::ui::chrome::ghost_button(ui, "Copy", false).clicked() {
                                 ui.ctx().copy_text(entry.body.clone());
                             }
                         });

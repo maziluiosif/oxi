@@ -513,20 +513,22 @@ impl OxiApp {
                     state_label.on_hover_text(error);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if state.ended() && ui.small_button("×").on_hover_text("Dismiss").clicked() {
+                    if state.ended()
+                        && crate::ui::chrome::dismiss_button(ui)
+                            .on_hover_text("Dismiss")
+                            .clicked()
+                    {
                         dismiss = Some(*index);
                     }
                     if !state.ended()
-                        && ui
-                            .small_button("Stop")
+                        && crate::ui::chrome::mini_button(ui, "Stop")
                             .on_hover_text("Stop this delegated task")
                             .clicked()
                     {
                         stop = Some(*index);
                     }
                     if let Some(chat) = chat
-                        && ui
-                            .small_button("Open")
+                        && crate::ui::chrome::mini_button(ui, "Open")
                             .on_hover_text("Show the task's chat")
                             .clicked()
                     {

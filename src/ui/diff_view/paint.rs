@@ -1027,11 +1027,9 @@ pub(crate) fn segment(
 }
 
 pub(crate) fn toolbar_icon(ui: &mut Ui, icon: &str, hint: &str, enabled: bool) -> egui::Response {
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(icon_glyph_rich(icon, FS_SMALL, c_text_muted()))
-            .frame(false)
-            .min_size(vec2(24.0, 24.0)),
-    )
+    ui.add_enabled_ui(enabled, |ui| {
+        crate::ui::chrome::icon_button_plain(ui, icon, 24.0, false)
+    })
+    .inner
     .on_hover_text(hint)
 }

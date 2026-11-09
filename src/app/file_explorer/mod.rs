@@ -20,6 +20,7 @@ mod file_operations;
 mod file_picker;
 mod find_replace;
 mod folding;
+mod image_diff;
 mod layout_cache;
 mod line_layout;
 mod markdown_preview;
@@ -89,11 +90,15 @@ impl OxiApp {
                 } else {
                     "File changed on disk."
                 };
-                ui.label(RichText::new(note).color(c_warning_fg()));
-                if ui.button("Reload from disk").clicked() {
+                ui.label(
+                    RichText::new(note)
+                        .size(crate::theme::FS_SMALL)
+                        .color(c_warning_fg()),
+                );
+                if crate::ui::chrome::mini_button(ui, "Reload from disk").clicked() {
                     self.request_reload_editor_file();
                 }
-                if dirty && ui.button("Keep mine").clicked() {
+                if dirty && crate::ui::chrome::mini_button(ui, "Keep mine").clicked() {
                     self.conv.editor.prompt = Some(super::state::EditorPrompt::Overwrite {
                         path,
                         close_after: false,

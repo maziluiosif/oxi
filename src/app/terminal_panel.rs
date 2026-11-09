@@ -340,11 +340,10 @@ fn terminal_tab(
             } else {
                 "Close shell"
             });
-        ui.painter().text(
+        crate::ui::chrome::paint_close_mark(
+            ui.painter(),
             close_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            ICON_CLOSE,
-            FontId::new(FS_TINY - 1.0, icon_font()),
+            2.75,
             if close.hovered() {
                 c_accent()
             } else {

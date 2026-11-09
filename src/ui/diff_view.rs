@@ -25,7 +25,6 @@ use eframe::egui::{
 };
 
 use crate::theme::*;
-use crate::ui::chrome::icon_glyph_rich;
 
 use paint::{commit_height, line_job};
 pub(crate) use paint::{segment, toolbar_icon};

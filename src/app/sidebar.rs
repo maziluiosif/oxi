@@ -171,11 +171,10 @@ impl OxiApp {
                     .color(c_text_muted()),
             );
             ui.add_space(6.0);
-            if ui.button("Open folder…").clicked() {
+            if crate::ui::chrome::primary_button(ui, "Open folder…").clicked() {
                 self.open_workspace_folder();
             }
-            if ui
-                .button("Start a general chat")
+            if crate::ui::chrome::ghost_button(ui, "Start a general chat", false)
                 .on_hover_text("A chat that isn't about any project, run in ~/oxi-general")
                 .clicked()
             {
