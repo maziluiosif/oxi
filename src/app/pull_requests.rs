@@ -492,7 +492,7 @@ impl OxiApp {
                             );
                         });
                     ui.add_space(6.0);
-                    ui.checkbox(&mut dialog.new.draft, "Open as a draft");
+                    crate::ui::chrome::checkbox(ui, &mut dialog.new.draft, "Open as a draft");
                 });
                 if let Some(error) = &dialog.error {
                     ui.add_space(6.0);

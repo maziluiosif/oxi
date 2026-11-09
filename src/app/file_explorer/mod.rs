@@ -20,6 +20,7 @@ mod file_operations;
 mod file_picker;
 mod find_replace;
 mod folding;
+mod image_diff;
 mod layout_cache;
 mod line_layout;
 mod markdown_preview;

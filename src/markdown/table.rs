@@ -135,6 +135,32 @@ fn collect_cell(it: &mut ParserPeek<'_>, is_header: bool) -> TableCellData {
     cell
 }
 
+/// Share `table_w` between the columns by how much text each holds, so a column of short
+/// values does not take as much room as one of sentences. The weights are clamped: no column
+/// collapses, and one very long cell cannot starve the rest.
+fn column_widths(rows: &[Vec<TableCellData>], cols: usize, table_w: f32) -> Vec<f32> {
+    const MIN_CHARS: usize = 6;
+    const MAX_CHARS: usize = 48;
+    let weights: Vec<f32> = (0..cols)
+        .map(|col| {
+            let longest = rows
+                .iter()
+                .filter_map(|row| row.get(col))
+                .map(|cell| {
+                    let text = cell.text.lines().map(|l| l.chars().count()).max();
+                    // An image needs room whatever its alt text says.
+                    text.unwrap_or(0)
+                        .max(if cell.images.is_empty() { 0 } else { 24 })
+                })
+                .max()
+                .unwrap_or(0);
+            longest.clamp(MIN_CHARS, MAX_CHARS) as f32
+        })
+        .collect();
+    let total: f32 = weights.iter().sum();
+    weights.iter().map(|w| table_w * w / total).collect()
+}
+
 pub(super) fn render_table(
     ui: &mut eframe::egui::Ui,
     wrap_w: f32,
@@ -154,8 +180,10 @@ pub(super) fn render_table(
     const CELL_PAD_Y: f32 = 8.0;
 
     allocate_full_width_block(ui, wrap_w, |ui| {
-        let table_w = ui.available_width().max(48.0);
-        let cell_w = table_w / cols as f32;
+        // The frame's border sits outside its content: leave room for it on both sides so the
+        // table lines up with the code blocks and rules around it.
+        let table_w = (ui.available_width() - 2.0).max(48.0);
+        let widths = column_widths(&rows, cols, table_w);
 
         eframe::egui::Frame::new()
             .fill(c_md_code_block_bg())
@@ -173,7 +201,7 @@ pub(super) fn render_table(
                             let is_header = cell.map(|c| c.is_header).unwrap_or(false);
                             let text = cell.map(|c| c.text.as_str()).unwrap_or("");
                             let mut job = LayoutJob::default();
-                            set_job_wrap(&mut job, (cell_w - CELL_PAD_X * 2.0).max(24.0));
+                            set_job_wrap(&mut job, (widths[col_idx] - CELL_PAD_X * 2.0).max(24.0));
                             let fmt = if is_header {
                                 inline_text_format(SZ_BODY, 1, false, InlineDensity::Normal)
                             } else {
@@ -191,6 +219,7 @@ pub(super) fn render_table(
                         for (col_idx, (is_header, job)) in cell_jobs.into_iter().enumerate() {
                             // Reserve the background before rendering so it stays behind images/text.
                             let background = ui.painter().add(egui::Shape::Noop);
+                            let cell_w = widths[col_idx];
                             let halign = match alignments.get(col_idx) {
                                 Some(Alignment::Center) => Align::Center,
                                 Some(Alignment::Right) => Align::Max,
@@ -264,6 +293,29 @@ mod tests {
             }
         }
         Vec::new()
+    }
+
+    fn cell(text: &str) -> TableCellData {
+        TableCellData {
+            text: text.to_owned(),
+            images: Vec::new(),
+            is_header: false,
+        }
+    }
+
+    #[test]
+    fn columns_share_the_width_by_their_text() {
+        let rows = vec![
+            vec![cell("id"), cell("what it does")],
+            vec![cell("1"), cell(&"a long explanation ".repeat(20))],
+        ];
+        let widths = column_widths(&rows, 2, 540.0);
+        assert!((widths.iter().sum::<f32>() - 540.0).abs() < 0.01);
+        // 6 : 48 after clamping.
+        assert!((widths[0] - 60.0).abs() < 0.01, "{widths:?}");
+        // Similar columns stay close to an even split, and a missing cell is not a panic.
+        let even = column_widths(&[vec![cell("retries"), cell("value")], vec![]], 2, 500.0);
+        assert!(even[0] > 250.0 && even[0] < 300.0, "{even:?}");
     }
 
     #[test]

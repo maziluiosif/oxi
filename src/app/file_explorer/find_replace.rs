@@ -569,13 +569,7 @@ pub(super) fn toggle_button(
             );
         }
         ToggleLabel::Icon(icon) => {
-            painter.text(
-                center,
-                Align2::CENTER_CENTER,
-                icon,
-                FontId::new(FS_TINY, icon_font()),
-                color,
-            );
+            crate::ui::chrome::paint_icon_glyph(painter, center, icon, FS_TINY, color);
         }
         ToggleLabel::Word => {
             let text_center = center - egui::vec2(0.0, 3.0);

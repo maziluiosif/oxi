@@ -93,7 +93,7 @@ impl DiffSource {
         !matches!(self, Self::Staged)
     }
 
-    fn git_base(&self) -> Option<crate::git::DiffBase> {
+    pub(super) fn git_base(&self) -> Option<crate::git::DiffBase> {
         match self {
             Self::WorkTree => Some(crate::git::DiffBase::Index),
             Self::Staged => Some(crate::git::DiffBase::Staged),
@@ -192,6 +192,8 @@ pub(crate) struct DocumentDiff {
     pub(super) frame: DiffFrame,
     /// Bring the change at this 0-based line (or the first change) into view once loaded.
     reveal: Option<Option<usize>>,
+    /// The Git sides when the document is an image (see `image_diff`).
+    pub(super) images: super::image_diff::ImageDiffState,
 }
 
 pub(super) struct DiffFrame {
@@ -242,6 +244,7 @@ impl DocumentDiff {
             scroll_request: None,
             frame: DiffFrame::default(),
             reveal: Some(reveal),
+            images: Default::default(),
         }
     }
 
@@ -439,7 +442,10 @@ impl OxiApp {
         line: Option<usize>,
     ) -> bool {
         let path = PathBuf::from(&self.active_workspace().root_path).join(relative);
-        if !crate::vfs::is_file(&path) || super::MediaKind::from_path(&path).is_some() {
+        // Images get their own diff (old and new picture); other media has nothing to show.
+        let media = super::MediaKind::from_path(&path);
+        if !crate::vfs::is_file(&path) || media.is_some_and(|kind| kind != super::MediaKind::Image)
+        {
             return false;
         }
         let Ok(wanted) = crate::vfs::canonicalize(&path) else {
@@ -448,7 +454,7 @@ impl OxiApp {
         self.open_editor_file_only(path);
         let Some(index) = self.conv.editor.active.filter(|&index| {
             self.conv.editor.documents[index].path == wanted
-                && self.conv.editor.documents[index].media.is_none()
+                && self.conv.editor.documents[index].media == media
         }) else {
             return false;
         };

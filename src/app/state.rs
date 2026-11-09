@@ -242,6 +242,9 @@ pub struct EditorState {
     /// Keyboard focus when the picker opened (`None` until the picker captures it), given back
     /// after a palette command so its keys land where the user was.
     pub file_picker_return_focus: Option<Option<eframe::egui::Id>>,
+    /// Put the query field's caret after its text on the next frame (set when the picker
+    /// opens with a prefix such as `>`, which egui would otherwise leave the caret before).
+    pub file_picker_caret_to_end: bool,
     /// Palette commands run most recently, newest first (indices into the palette's list).
     pub palette_recent: Vec<usize>,
     /// Goto Symbol outline of the picker's document, keyed by path and content revision.

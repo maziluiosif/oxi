@@ -929,6 +929,57 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         }
         rec.app().close_editor_git_diff();
         rec.harness.run_steps(2);
+        // An image's diff: the staged picture next to the changed one, then under the divider.
+        {
+            let logo = project.join("logo.png");
+            let draw = |tint: [u8; 3], radius: f32| {
+                image::RgbaImage::from_fn(320, 200, |x, y| {
+                    let (dx, dy) = (x as f32 - 160.0, y as f32 - 100.0);
+                    if (dx * dx + dy * dy).sqrt() < radius {
+                        image::Rgba([tint[0], tint[1], tint[2], 255])
+                    } else if y > 150 {
+                        image::Rgba([40, 44, 52, 255])
+                    } else {
+                        image::Rgba([0, 0, 0, 0])
+                    }
+                })
+            };
+            let git = |args: &[&str]| {
+                let ok = std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&project)
+                    .status()
+                    .is_ok_and(|status| status.success());
+                assert!(ok, "git {args:?} failed");
+            };
+            draw([97, 175, 239], 60.0).save(&logo).unwrap();
+            git(&["add", "logo.png"]);
+            draw([229, 192, 123], 80.0).save(&logo).unwrap();
+            assert!(rec.app().open_diff_editor(
+                "logo.png",
+                crate::app::file_explorer::DiffSource::WorkTree,
+                None
+            ));
+            for _ in 0..60 {
+                rec.harness.step();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            rec.still("image-diff");
+            rec.harness
+                .ctx
+                .data_mut(|d| d.insert_temp(egui::Id::new("oxi_image_diff_swipe"), true));
+            rec.harness.run_steps(4);
+            rec.still("image-diff-swipe");
+            rec.harness
+                .ctx
+                .data_mut(|d| d.insert_temp(egui::Id::new("oxi_image_diff_swipe"), false));
+            if let Some(index) = rec.app().conv.editor.active {
+                rec.app().request_close_editor_tab(index);
+            }
+            git(&["rm", "-q", "-f", "--cached", "logo.png"]);
+            std::fs::remove_file(&logo).unwrap();
+            rec.harness.run_steps(4);
+        }
         rec.profile("editor idle", false);
         rec.profile("editor hover", true);
         // A typical source file (~2k lines): typing at the caret.
