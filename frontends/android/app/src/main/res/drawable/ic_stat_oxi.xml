@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- A ring with a dot: the "o" of oxi, as a status bar glyph. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12,3a9,9 0,1 0,0 18a9,9 0,1 0,0 -18zM12,6.2a5.8,5.8 0,1 1,0 11.6a5.8,5.8 0,1 1,0 -11.6z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,9.6a2.4,2.4 0,1 0,0 4.8a2.4,2.4 0,1 0,0 -4.8z" />
+</vector>
