@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.39.0] - 2026-11-10
+
+### Added
+- **Camera:** Take photos directly from the composer and attach them to messages.
+- **Notifications:** Get alerts when replies are ready, tools need approval, or the agent asks a question.
+- **Share:** Send text, links, photos and files into oxi from other apps.
+- **Agent questions:** View and respond to agent questions as forms instead of simple approvals.
+- **Git:** View changed files and diffs, stage, commit with optional generated messages, pull, push, and browse recent commits.
+- **Chat persistence:** Drafts and open chats survive the app being backgrounded or killed.
+- **Agent checklist:** See the agent's plan and context usage above the composer.
+- **Reply actions:** Copy and share replies, jump to the end of a conversation.
+
+
 ## [1.38.0] - 2026-11-09
 
 ### Added
@@ -1388,7 +1401,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.38.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.39.0...HEAD
+[1.39.0]: https://github.com/maziluiosif/oxi/compare/v1.38.0...v1.39.0
 [1.38.0]: https://github.com/maziluiosif/oxi/compare/v1.37.0...v1.38.0
 [1.37.0]: https://github.com/maziluiosif/oxi/compare/v1.36.0...v1.37.0
 [1.36.0]: https://github.com/maziluiosif/oxi/compare/v1.35.0...v1.36.0
