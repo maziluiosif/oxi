@@ -18,7 +18,8 @@ data class ChatSummary(
 
 data class ChatConfig(val provider: String, val label: String, val model: String, val effort: String)
 
-data class Approval(val tool: String, val summary: String, val allowPrefix: String?)
+/** [question]: the agent asks something (an ACP elicitation) instead of wanting a tool allowed. */
+data class Approval(val tool: String, val summary: String, val allowPrefix: String?, val question: Question? = null)
 
 sealed interface Block {
     data class Thinking(val text: String) : Block
@@ -134,8 +135,11 @@ fun parseConfig(obj: JSONObject?): ChatConfig? = obj?.let {
     ChatConfig(it.optString("provider"), it.optString("label"), it.optString("model"), it.optString("effort"))
 }
 
+fun parseContext(obj: JSONObject?): Pair<Long, Long>? =
+    obj?.takeIf { it.has("used") && it.optLong("size") > 0 }?.let { it.optLong("used") to it.optLong("size") }
+
 fun parseApproval(obj: JSONObject?): Approval? = obj?.let {
-    Approval(it.optString("tool"), it.optString("summary"), it.str("allow_prefix"))
+    Approval(it.optString("tool"), it.optString("summary"), it.str("allow_prefix"), it.optJSONObject("elicitation")?.let(::parseQuestion))
 }
 
 fun parseMessage(obj: JSONObject): Message {
@@ -229,3 +233,190 @@ fun parseQuota(obj: JSONObject?): List<QuotaWindow> =
             if (it.isNull("resets_in")) null else it.optLong("resets_in"),
         )
     }
+
+// ---- questions (ACP elicitations) -----------------------------------------------------------
+
+enum class FieldKind { Text, Number, Integer, Toggle, Choice, Multi }
+
+data class Option(val value: String, val label: String, val description: String)
+
+data class Field(
+    val key: String,
+    val title: String,
+    val description: String,
+    val required: Boolean,
+    val kind: FieldKind,
+    val options: List<Option> = emptyList(),
+    /** A String, a Boolean or a Set<String>, by [kind]. */
+    val default: Any? = null,
+)
+
+/** What the agent asks (`Elicitation` in src/agent/elicitation.rs): a form, or a page to visit. */
+data class Question(val message: String, val url: String?, val fields: List<Field>) {
+    fun defaults(): Map<String, Any> = fields.mapNotNull { f -> f.default?.let { f.key to it } }.toMap()
+
+    /** The `content` of an accepted form for [answers], or what is still wrong with them. */
+    fun content(answers: Map<String, Any>): Result<JSONObject> {
+        val out = JSONObject()
+        for (f in fields) {
+            val name = f.title.ifBlank { "This field" }
+            val value: Any? = when (f.kind) {
+                FieldKind.Toggle -> answers[f.key] as? Boolean ?: false
+                FieldKind.Text, FieldKind.Choice -> (answers[f.key] as? String)?.takeIf { it.isNotBlank() }
+                FieldKind.Number, FieldKind.Integer -> {
+                    val typed = (answers[f.key] as? String)?.trim().orEmpty()
+                    if (typed.isEmpty()) null else {
+                        val number = typed.toDoubleOrNull()?.takeIf { it.isFinite() }
+                            ?: return Result.failure(IllegalArgumentException("$name must be a number"))
+                        if (f.kind == FieldKind.Integer) {
+                            if (number % 1.0 != 0.0) return Result.failure(IllegalArgumentException("$name must be a whole number"))
+                            number.toLong()
+                        } else number
+                    }
+                }
+                FieldKind.Multi -> (answers[f.key] as? Set<*>)?.takeIf { it.isNotEmpty() }
+                    ?.let { picks -> JSONArray(f.options.map { it.value }.filter { it in picks }) }
+            }
+            if (value == null) {
+                if (f.required) return Result.failure(IllegalArgumentException("$name is required"))
+            } else out.put(f.key, value)
+        }
+        return Result.success(out)
+    }
+}
+
+/** Text order, with runs of digits compared as numbers: `question_2` before `question_10`. */
+fun naturalCompare(a: String, b: String): Int {
+    var i = 0
+    var j = 0
+    while (i < a.length && j < b.length) {
+        if (a[i].isDigit() && b[j].isDigit()) {
+            val si = i
+            val sj = j
+            while (i < a.length && a[i].isDigit()) i++
+            while (j < b.length && b[j].isDigit()) j++
+            val x = a.substring(si, i).trimStart('0')
+            val y = b.substring(sj, j).trimStart('0')
+            if (x.length != y.length) return x.length.compareTo(y.length)
+            val c = x.compareTo(y)
+            if (c != 0) return c
+        } else {
+            if (a[i] != b[j]) return a[i].compareTo(b[j])
+            i++
+            j++
+        }
+    }
+    return (a.length - i).compareTo(b.length - j)
+}
+
+private fun parseOptions(schema: JSONObject?): List<Option> {
+    if (schema == null) return emptyList()
+    (schema.optJSONArray("oneOf") ?: schema.optJSONArray("anyOf"))?.let { items ->
+        return items.objects().mapNotNull { item ->
+            val value = item.str("const") ?: return@mapNotNull null
+            Option(value, item.str("title") ?: value, item.optString("description"))
+        }
+    }
+    val values = schema.optJSONArray("enum") ?: return emptyList()
+    val names = schema.optJSONArray("enumNames")
+    return (0 until values.length()).mapNotNull { i ->
+        val value = values.opt(i) as? String ?: return@mapNotNull null
+        Option(value, names?.opt(i) as? String ?: value, "")
+    }
+}
+
+fun parseQuestion(params: JSONObject): Question {
+    val message = params.optString("message")
+    if (params.optString("mode") == "url") return Question(message, params.optString("url"), emptyList())
+    val schema = params.optJSONObject("requestedSchema")
+    val required = schema?.optJSONArray("required").strings().toSet()
+    val properties = schema?.optJSONObject("properties")
+    val fields = properties?.keys()?.asSequence()?.toList().orEmpty().mapNotNull { key ->
+        val s = properties?.optJSONObject(key) ?: return@mapNotNull null
+        val base = Field(key, s.optString("title"), s.optString("description"), key in required, FieldKind.Text)
+        when (s.optString("type")) {
+            "boolean" -> base.copy(kind = FieldKind.Toggle, default = s.optBoolean("default"))
+            "number", "integer" -> base.copy(
+                kind = if (s.optString("type") == "integer") FieldKind.Integer else FieldKind.Number,
+                default = s.opt("default")?.takeIf { it is Number }?.toString(),
+            )
+            "array" -> base.copy(
+                kind = FieldKind.Multi,
+                options = parseOptions(s.optJSONObject("items")),
+                default = s.optJSONArray("default").strings().toSet().takeIf { it.isNotEmpty() },
+            )
+            else -> {
+                val options = parseOptions(s)
+                val default = s.str("default")
+                if (options.isEmpty()) base.copy(default = default)
+                else base.copy(kind = FieldKind.Choice, options = options, default = default?.takeIf { d -> options.any { it.value == d } })
+            }
+        }
+    }
+    return Question(message, null, fields.sortedWith { x, y -> naturalCompare(x.key, y.key) })
+}
+
+// ---- the agent's checklist ------------------------------------------------------------------
+
+data class Todo(val text: String, val status: String)
+
+/** The items of a `todo_write` call's arguments, or null when they aren't a checklist. */
+fun parseTodos(args: String?): List<Todo>? {
+    if (args.isNullOrBlank()) return null
+    val obj = runCatching { JSONObject(args) }.getOrNull() ?: return null
+    val items = obj.optJSONArray("todos") ?: return null
+    return items.objects().mapNotNull { item ->
+        val text = item.str("content") ?: item.str("text") ?: item.str("title") ?: return@mapNotNull null
+        Todo(text, item.optString("status", "pending"))
+    }.takeIf { it.isNotEmpty() }
+}
+
+/** The checklist the agent keeps for the prompt being answered: its latest `todo_write`. */
+fun latestTodoArgs(messages: List<Message>): String? {
+    for (m in messages.asReversed()) {
+        if (m is Message.User) return null
+        val blocks = (m as Message.Assistant).blocks
+        for (b in blocks.asReversed()) {
+            if (b is Block.Tool && b.name.lowercase().replace("_", "").contains("todowrite") && b.args != null) return b.args
+        }
+    }
+    return null
+}
+
+// ---- git ------------------------------------------------------------------------------------
+
+data class GitFile(val path: String, val status: String)
+
+data class GitCommit(val hash: String, val date: String, val author: String, val message: String)
+
+data class GitDiff(val title: String, val text: String)
+
+/** `git_state_json` in src/headless/mod.rs. */
+data class GitState(
+    val repo: Boolean,
+    val branch: String,
+    val ahead: Int,
+    val behind: Int,
+    val staged: List<GitFile>,
+    val unstaged: List<GitFile>,
+    val log: List<GitCommit>,
+    val diff: GitDiff?,
+    val error: String?,
+)
+
+fun parseGit(obj: JSONObject): GitState {
+    fun files(key: String) = obj.optJSONArray(key).objects().map { GitFile(it.optString("path"), it.optString("status")) }
+    return GitState(
+        repo = obj.optBoolean("repo"),
+        branch = obj.optString("branch"),
+        ahead = obj.optInt("ahead"),
+        behind = obj.optInt("behind"),
+        staged = files("staged"),
+        unstaged = files("unstaged"),
+        log = obj.optJSONArray("log").objects().map {
+            GitCommit(it.optString("hash"), it.optString("date"), it.optString("author"), it.optString("message"))
+        },
+        diff = obj.optJSONObject("diff")?.let { GitDiff(it.optString("title"), it.optString("text")) },
+        error = obj.str("error"),
+    )
+}

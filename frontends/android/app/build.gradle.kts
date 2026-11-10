@@ -95,8 +95,12 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("androidx.core:core-ktx:1.16.0")
+    // Play services brings an old Fragment, whose activity results (camera, permissions) are broken.
+    implementation("androidx.fragment:fragment-ktx:1.8.8")
     // Google's QR scanner UI from Play services: no camera permission, nothing bundled.
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    // The real org.json: Android's is only a stub in unit tests.
+    testImplementation("org.json:json:20250517")
 }

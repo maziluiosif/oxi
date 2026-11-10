@@ -2,9 +2,9 @@ package dev.oxi.android
 
 import android.app.Application
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
 import android.net.Uri
+import androidx.core.content.FileProvider
+import androidx.lifecycle.SavedStateHandle
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
@@ -37,21 +37,33 @@ data class OpenChat(
     val attaching: Int = 0,
     /** Evidence mode for the next prompt. */
     val evidence: Boolean = false,
-)
-
-/** A paired machine running `oxi server`. */
-data class Server(val id: String, val name: String, val host: String, val port: Int, val token: String) {
-    val endpoint get() = Endpoint(host, port, token)
-
-    fun toJson(): JSONObject = JSONObject().put("id", id).put("name", name).put("host", host)
-        .put("port", port).put("token", token)
-
-    companion object {
-        fun fromJson(o: JSONObject) = Server(
-            o.optString("id"), o.optString("name"), o.optString("host"), o.optInt("port", 47811), o.optString("token"),
-        )
-    }
+    /** Plan mode for the next prompt: the agent proposes before it changes anything. */
+    val plan: Boolean = false,
+    /** Tokens of the agent's context window in use, and its size. */
+    val context: Pair<Long, Long>? = null,
+    /** Bumped when the draft was changed from outside the composer (a share, a failed send). */
+    val draftSeed: Int = 0,
+) {
+    val contextPct: Int? get() = context?.takeIf { it.second > 0 }?.let { (it.first * 100 / it.second).toInt().coerceIn(0, 100) }
 }
+
+/** Shared into oxi from another app, waiting for a chat to go to. */
+data class Share(val text: String = "", val attachments: List<PendingAttachment> = emptyList(), val loading: Int = 0) {
+    val count get() = attachments.size + loading + if (text.isNotBlank()) 1 else 0
+}
+
+/** The source control sheet of a workspace. */
+data class GitView(
+    val root: String,
+    val state: GitState? = null,
+    /** What is being done, to show while waiting. */
+    val busy: String? = null,
+    val error: String? = null,
+    /** A commit message written by the server's model, and a counter to notice a new one. */
+    val generated: String = "",
+    val generatedSeed: Int = 0,
+    val generating: Boolean = false,
+)
 
 sealed interface UpdateState {
     data object None : UpdateState
@@ -82,14 +94,18 @@ data class UiState(
     /** What the server supports beyond the basics (`initialize`'s `features`). */
     val features: Set<String> = emptySet(),
     val toast: String? = null,
+    val share: Share? = null,
+    val git: GitView? = null,
 ) {
     val active: Server? get() = servers.firstOrNull { it.id == activeId }
     val endpoint: Endpoint? get() = active?.endpoint
 }
 
-class OxiViewModel(app: Application) : AndroidViewModel(app) {
-    private val prefs = app.getSharedPreferences("oxi", Context.MODE_PRIVATE)
-    private val client = OxiClient(viewModelScope)
+class OxiViewModel(app: Application, private val saved: SavedStateHandle) : AndroidViewModel(app) {
+    private val prefs = ServerStore.prefs(app)
+    private val oxi = app as OxiApp
+    private val client = oxi.client
+    private val watch = oxi.watch
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui
 
@@ -97,39 +113,25 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
     private val _images = MutableStateFlow<Map<String, ImageBitmap?>>(emptyMap())
     val images: StateFlow<Map<String, ImageBitmap?>> = _images
 
+    /** What is typed and not sent, by server, folder and chat. Not in [ui]: it changes per key. */
+    private val drafts = HashMap<String, String>()
+
     init {
         viewModelScope.launch { client.state.collect { s -> _ui.update { it.copy(conn = s) } } }
         viewModelScope.launch { client.connected.collect { onConnected() } }
         viewModelScope.launch { client.notes.collect(::onNote) }
-        val servers = loadServers()
+        val servers = ServerStore.load(app)
         val active = prefs.getString("active", null)?.takeIf { id -> servers.any { it.id == id } } ?: servers.firstOrNull()?.id
         _ui.update { it.copy(servers = servers) }
-        active?.let { switchServer(it) }
-        watchNetwork(app)
+        loadDrafts()
+        active?.let { switchServer(it, restore = true) }
     }
 
     // ---- servers ---------------------------------------------------------------------------
 
-    private fun loadServers(): List<Server> {
-        prefs.getString("servers", null)?.let { text ->
-            val arr = runCatching { JSONArray(text) }.getOrNull() ?: return emptyList()
-            return (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.let(Server::fromJson) }
-        }
-        // The first version kept a single server.
-        val host = prefs.getString("host", null) ?: return emptyList()
-        val token = prefs.getString("token", null) ?: return emptyList()
-        val server = Server(newId(), host, host, prefs.getInt("port", 47811), token)
-        prefs.edit().remove("host").remove("token").remove("port")
-            .putString("root:${server.id}", prefs.getString("root", null)).remove("root").apply()
-        saveServers(listOf(server))
-        return listOf(server)
-    }
+    private fun saveServers(servers: List<Server>) = ServerStore.save(getApplication(), servers)
 
-    private fun saveServers(servers: List<Server>) {
-        prefs.edit().putString("servers", JSONArray(servers.map { it.toJson() }).toString()).apply()
-    }
-
-    private fun newId() = java.util.UUID.randomUUID().toString().take(8)
+    private fun newId() = ServerStore.newId()
 
     /** Add a server, or update the one at the same address, and switch to it. */
     fun addServer(endpoint: Endpoint, name: String?) {
@@ -161,21 +163,34 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
-    fun switchServer(id: String, force: Boolean = false) {
+    /** [restore]: the screen comes back (a new activity, or the process after Android killed it). */
+    fun switchServer(id: String, force: Boolean = false, restore: Boolean = false) {
         val server = _ui.value.servers.firstOrNull { it.id == id } ?: return
         if (!force && _ui.value.activeId == id) return
         prefs.edit().putString("active", id).apply()
+        val root = prefs.getString("root:$id", null)
+        // The chat that was open, e.g. when the camera app pushed oxi out of memory.
+        val chat = saved.get<String>("chat")?.takeIf { restore && root != null && saved.get<String>("chat_root") == root }
+        if (!restore) {
+            saved.remove<String>("chat")
+            if (client.current != server.endpoint) watch.reset()
+        }
         _ui.update {
             UiState(
                 update = it.update,
                 servers = it.servers,
                 activeId = id,
-                root = prefs.getString("root:$id", null),
+                root = root,
+                chat = chat?.let { c ->
+                    if (c.isEmpty()) OpenChat(root!!, null, "New chat", null) else OpenChat(root!!, c, "", null, loading = true)
+                },
                 toast = it.toast,
+                share = it.share,
             )
         }
-        client.stop()
+        // The connection belongs to the app: it may be up already, for this very server.
         client.start(server.endpoint)
+        if (client.state.value is ConnState.Connected) viewModelScope.launch { onConnected() }
     }
 
     fun renameServer(id: String, name: String) {
@@ -190,6 +205,7 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().remove("root:$id").apply()
         if (_ui.value.activeId == id) {
             client.stop()
+            watch.reset()
             _ui.update { UiState(update = it.update, servers = updated) }
             updated.firstOrNull()?.let { switchServer(it.id) } ?: prefs.edit().remove("active").apply()
         } else {
@@ -255,25 +271,6 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         if (apk.exists()) _ui.update { it.copy(update = UpdateState.Ready(u.version, apk)) }
     }
 
-    /** Reconnect as soon as the default network changes (Wi-Fi ↔ mobile data, Tailscale up). */
-    private fun watchNetwork(app: Application) {
-        val cm = app.getSystemService(ConnectivityManager::class.java) ?: return
-        var current: Network? = null
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                val previous = current
-                current = network
-                if (previous != null && previous != network) client.reconnect()
-            }
-
-            override fun onLost(network: Network) {
-                if (network == current) client.reconnect()
-            }
-        }
-        cm.registerDefaultNetworkCallback(callback)
-        addCloseable { cm.unregisterNetworkCallback(callback) }
-    }
-
     private suspend fun onConnected() {
         runCatching {
             val init = client.request("initialize") as JSONObject
@@ -293,7 +290,9 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         }.onFailure { toast(it.message) }
         refreshWorkspaces()
         _ui.value.root?.let { refreshChats(it) }
-        _ui.value.chat?.let { chat -> if (chat.id != null) reopen(chat.root, chat.id) }
+        _ui.value.chat?.let { chat ->
+            if (chat.id != null) reopen(chat.root, chat.id) else if (chat.config == null) loadDefaultConfig(chat.root)
+        }
     }
 
     // ---- workspaces and chats --------------------------------------------------------------
@@ -306,7 +305,9 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openWorkspace(path: String?) {
         _ui.value.activeId?.let { prefs.edit().putString("root:$it", path).apply() }
-        _ui.update { it.copy(root = path, chats = emptyList(), chat = null) }
+        persistDrafts()
+        _ui.update { it.copy(root = path, chats = emptyList(), chat = null, git = null) }
+        rememberChat()
         if (path != null) refreshChats(path)
     }
 
@@ -335,20 +336,50 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         val root = _ui.value.root ?: return
         val last = _ui.value.chat?.config
         _ui.update { it.copy(chat = OpenChat(root, null, "New chat", last)) }
-        // The daemon's default for a new chat in this folder.
-        viewModelScope.launch {
-            runCatching { client.request("chat.set_config", JSONObject().put("root", root)) as JSONObject }
-                .onSuccess { cfg ->
-                    _ui.update { s -> s.copy(chat = s.chat?.takeIf { it.id == null }?.copy(config = parseConfig(cfg)) ?: s.chat) }
-                }
-        }
+        rememberChat()
+        deliverShare()
+        loadDefaultConfig(root)
     }
 
     fun openChat(id: String) {
         val root = _ui.value.root ?: return
         val title = _ui.value.chats.firstOrNull { it.id == id }?.title ?: ""
         _ui.update { it.copy(chat = OpenChat(root, id, title, null, loading = true)) }
+        rememberChat()
+        watch.clear(id)
+        deliverShare()
         viewModelScope.launch { reopen(root, id) }
+    }
+
+    /** From a notification: the chat may be in another folder than the one on screen. */
+    fun openChatAt(root: String, id: String, title: String) {
+        if (root.isBlank() || _ui.value.activeId == null) return
+        if (_ui.value.chat?.id == id) return watch.clear(id)
+        persistDrafts()
+        _ui.value.activeId?.let { prefs.edit().putString("root:$it", root).apply() }
+        _ui.update { s ->
+            s.copy(root = root, chats = if (s.root == root) s.chats else emptyList(), chat = OpenChat(root, id, title, null, loading = true), git = null)
+        }
+        rememberChat()
+        watch.clear(id)
+        deliverShare()
+        refreshChats(root)
+        viewModelScope.launch { reopen(root, id) }
+    }
+
+    /** Keep the open chat (empty for a new one) across the activity being destroyed. */
+    private fun rememberChat() {
+        val chat = _ui.value.chat
+        saved["chat"] = chat?.let { it.id.orEmpty() }
+        saved["chat_root"] = chat?.root
+    }
+
+    /** The daemon's default agent and model for a new chat in [root]. */
+    private fun loadDefaultConfig(root: String) = viewModelScope.launch {
+        runCatching { client.request("chat.set_config", JSONObject().put("root", root)) as JSONObject }
+            .onSuccess { cfg ->
+                _ui.update { s -> s.copy(chat = s.chat?.takeIf { it.id == null && it.root == root }?.copy(config = parseConfig(cfg)) ?: s.chat) }
+            }
     }
 
     private suspend fun reopen(root: String, id: String) {
@@ -365,17 +396,23 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
                             queued = obj.optInt("queued"),
                             approval = parseApproval(obj.optJSONObject("approval")),
                             evidence = obj.optBoolean("evidence"),
+                            plan = obj.optBoolean("plan"),
+                            context = parseContext(obj.optJSONObject("context")),
                             status = obj.optString("status").takeIf { !obj.isNull("status") && it.isNotEmpty() },
                             loading = false,
+                            error = null,
                         )
                     )
                 }
+                if (obj.optBoolean("running")) watch.follow(root, id, obj.optString("title"), running = true)
             }
             .onFailure { e -> _ui.update { s -> s.copy(chat = s.chat?.copy(loading = false, error = e.message)) } }
     }
 
     fun closeChat() {
+        persistDrafts()
         _ui.update { it.copy(chat = null) }
+        rememberChat()
         _ui.value.root?.let { refreshChats(it) }
     }
 
@@ -399,7 +436,7 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         val trimmed = text.trim()
         val attachments = chat.attachments
         if ((trimmed.isEmpty() && attachments.isEmpty()) || chat.attaching > 0) return
-        val params = JSONObject().put("root", chat.root).put("text", trimmed).put("evidence", chat.evidence)
+        val params = JSONObject().put("root", chat.root).put("text", trimmed).put("evidence", chat.evidence).put("plan", chat.plan)
         if (attachments.isNotEmpty()) params.put("attachments", JSONArray(attachments.map { it.toJson() }))
         if (chat.id != null) params.put("chat", chat.id)
         else chat.config?.let { params.put("provider", it.provider).put("model", it.model).put("effort", it.effort) }
@@ -430,17 +467,125 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
                             )
                         )
                     }
-                    if (chat.id == null) reopen(chat.root, id)
+                    watch.follow(chat.root, id, r.optString("title").ifBlank { chat.title }, running = true)
+                    if (chat.id == null) {
+                        rememberChat()
+                        reopen(chat.root, id)
+                    }
                 }
-                .onFailure { e -> _ui.update { s -> s.copy(chat = s.chat?.copy(sending = false, error = e.message)) } }
+                .onFailure { e ->
+                    // Give the text back: nothing typed on a phone should be lost to a bad connection.
+                    val key = draftKey(chat.root, chat.id)
+                    if (drafts[key].isNullOrBlank()) drafts[key] = trimmed
+                    _ui.update { s ->
+                        val c = s.chat?.takeIf { it.root == chat.root && it.id == chat.id } ?: return@update s
+                        s.copy(chat = c.copy(sending = false, error = e.message, draftSeed = c.draftSeed + 1))
+                    }
+                }
         }
     }
 
     fun setEvidence(on: Boolean) = _ui.update { s -> s.copy(chat = s.chat?.copy(evidence = on)) }
 
+    fun setPlan(on: Boolean) = _ui.update { s -> s.copy(chat = s.chat?.copy(plan = on)) }
+
+    // ---- drafts ----------------------------------------------------------------------------
+
+    private fun draftKey(root: String, id: String?) = "${_ui.value.activeId}|$root|${id.orEmpty()}"
+
+    private fun loadDrafts() {
+        val obj = runCatching { JSONObject(prefs.getString("drafts", null) ?: return) }.getOrNull() ?: return
+        obj.keys().forEach { drafts[it] = obj.optString(it) }
+    }
+
+    fun persistDrafts() {
+        val obj = JSONObject()
+        drafts.filterValues { it.isNotBlank() }.forEach { (k, v) -> obj.put(k, v) }
+        prefs.edit().putString("drafts", obj.toString()).apply()
+    }
+
+    fun draftFor(chat: OpenChat): String = drafts[draftKey(chat.root, chat.id)].orEmpty()
+
+    fun setDraft(chat: OpenChat, text: String) {
+        val key = draftKey(chat.root, chat.id)
+        if (text.isEmpty()) drafts.remove(key) else drafts[key] = text
+    }
+
+    // ---- shared from other apps ------------------------------------------------------------
+
+    /** Text and files sent to oxi from another app: into the open chat, else the next one opened. */
+    fun share(text: String?, uris: List<Uri>) {
+        if (text.isNullOrBlank() && uris.isEmpty()) return
+        if (_ui.value.servers.isEmpty()) return toast("Connect to a computer first")
+        _ui.update { s ->
+            val old = s.share ?: Share()
+            s.copy(share = old.copy(text = listOf(old.text, text.orEmpty().trim()).filter { it.isNotBlank() }.joinToString("\n\n"), loading = old.loading + uris.size))
+        }
+        // Read them now: the permission to is only lent for as long as this screen lives.
+        val context = getApplication<Application>()
+        uris.forEach { uri ->
+            viewModelScope.launch {
+                val files = "file_attachments" in _ui.value.features || _ui.value.conn !is ConnState.Connected
+                val result = runCatching { Attachments.load(context, uri, files) }
+                val added = listOfNotNull(result.getOrNull())
+                _ui.update { s ->
+                    val share = s.share
+                    // Still waiting for a chat, or already handed to the open one.
+                    if (share != null) s.copy(share = share.copy(attachments = share.attachments + added, loading = (share.loading - 1).coerceAtLeast(0)))
+                    else s.copy(chat = s.chat?.let { it.copy(attachments = it.attachments + added, attaching = (it.attaching - 1).coerceAtLeast(0)) })
+                }
+                result.exceptionOrNull()?.let { toast(it.message ?: "Can't attach that") }
+            }
+        }
+        deliverShare()
+    }
+
+    fun cancelShare() = _ui.update { it.copy(share = null) }
+
+    private fun deliverShare() {
+        val share = _ui.value.share ?: return
+        val chat = _ui.value.chat ?: return
+        if (share.text.isNotBlank()) {
+            val key = draftKey(chat.root, chat.id)
+            drafts[key] = listOf(drafts[key].orEmpty(), share.text).filter { it.isNotBlank() }.joinToString("\n\n")
+        }
+        _ui.update { s ->
+            val c = s.chat ?: return@update s
+            val given = s.share ?: return@update s
+            s.copy(
+                share = null,
+                chat = c.copy(attachments = c.attachments + given.attachments, attaching = c.attaching + given.loading, draftSeed = c.draftSeed + 1),
+            )
+        }
+    }
+
+    // ---- camera ----------------------------------------------------------------------------
+
+    /** Where the camera app should write the next photo. */
+    fun newPhoto(): Uri {
+        val context = getApplication<Application>()
+        val dir = java.io.File(context.cacheDir, "camera").apply { mkdirs() }
+        // Photos left behind by a camera that never came back.
+        dir.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 3600_000L }?.forEach { it.delete() }
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+        val file = java.io.File(dir, "photo-$stamp.jpg")
+        saved["photo"] = file.absolutePath
+        return FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+    }
+
+    fun photoTaken(ok: Boolean) {
+        val context = getApplication<Application>()
+        val file = saved.remove<String>("photo")?.let { java.io.File(it) } ?: return
+        if (!ok || file.length() == 0L) {
+            file.delete()
+            return
+        }
+        attach(listOf(FileProvider.getUriForFile(context, "${context.packageName}.files", file))) { file.delete() }
+    }
+
     // ---- attachments -----------------------------------------------------------------------
 
-    fun attach(uris: List<Uri>) {
+    fun attach(uris: List<Uri>, done: () -> Unit = {}) {
         val target = _ui.value.chat ?: return
         if (uris.isEmpty()) return
         val context = getApplication<Application>()
@@ -449,6 +594,7 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch {
                 val files = "file_attachments" in _ui.value.features
                 val result = runCatching { Attachments.load(context, uri, files) }
+                done()
                 _ui.update { s ->
                     val c = s.chat ?: return@update s
                     // Another chat was opened meanwhile.
@@ -512,6 +658,76 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { client.request("approval.respond", params) }.onFailure { toast(it.message) }
     }
 
+    /** Answer the agent's question: [content] of the filled form, or null to decline. */
+    fun answer(content: JSONObject?) = viewModelScope.launch {
+        val id = _ui.value.chat?.id ?: return@launch
+        val response = if (content == null) JSONObject().put("action", "decline")
+        else JSONObject().put("action", "accept").put("content", content)
+        val params = JSONObject().put("chat", id).put("decision", "elicitation").put("response", response)
+        runCatching { client.request("approval.respond", params) }.onFailure { toast(it.message) }
+    }
+
+    // ---- git -------------------------------------------------------------------------------
+
+    fun openGit() {
+        val root = _ui.value.chat?.root ?: _ui.value.root ?: return
+        _ui.update { it.copy(git = GitView(root)) }
+        git("refresh", "Reading")
+    }
+
+    fun closeGit() = _ui.update { it.copy(git = null) }
+
+    fun closeDiff() = _ui.update { s -> s.copy(git = s.git?.let { g -> g.copy(state = g.state?.copy(diff = null)) }) }
+
+    /** Run a git operation on the server; every one answers with the repository's new state. */
+    fun git(op: String, label: String, params: JSONObject = JSONObject(), then: (suspend () -> Unit)? = null) {
+        val view = _ui.value.git ?: return
+        if (view.busy != null) return
+        _ui.update { s -> s.copy(git = s.git?.copy(busy = label, error = null)) }
+        viewModelScope.launch {
+            val result = runCatching { client.request("git", params.put("root", view.root).put("op", op)) as JSONObject }
+            _ui.update { s ->
+                val g = s.git?.takeIf { it.root == view.root } ?: return@update s
+                val state = result.getOrNull()?.let(::parseGit)
+                val old = g.state
+                // A diff answers with the diff alone; keep the lists already shown.
+                val merged = if (state != null && old != null && (op == "diff" || op == "show_commit")) old.copy(diff = state.diff, error = state.error) else state ?: old
+                s.copy(git = g.copy(state = merged, busy = null, error = result.exceptionOrNull()?.message ?: state?.error))
+            }
+            if (result.isSuccess && result.getOrNull()?.isNull("error") != false) then?.invoke()
+        }
+    }
+
+    private fun paths(files: List<GitFile>) = JSONObject().put("paths", JSONArray(files.map { it.path }))
+
+    fun gitStage(files: List<GitFile>) = git("stage", "Staging", paths(files))
+
+    fun gitUnstage(files: List<GitFile>) = git("unstage", "Unstaging", paths(files))
+
+    /** Commit what is staged; with nothing staged, everything that changed. */
+    fun gitCommit(message: String) {
+        val state = _ui.value.git?.state ?: return
+        val commit = { git("commit", "Committing", JSONObject().put("message", message.trim())) { toast("Committed") } }
+        if (state.staged.isEmpty() && state.unstaged.isNotEmpty()) git("stage", "Staging", paths(state.unstaged)) { commit() }
+        else commit()
+    }
+
+    fun gitWriteMessage() {
+        val view = _ui.value.git ?: return
+        if (view.generating) return
+        _ui.update { s -> s.copy(git = s.git?.copy(generating = true)) }
+        viewModelScope.launch {
+            val result = runCatching { client.request("git.commit_message", JSONObject().put("root", view.root)) as JSONObject }
+            _ui.update { s ->
+                val g = s.git ?: return@update s
+                val text = result.getOrNull()?.optString("message").orEmpty()
+                if (text.isBlank()) g.copy(generating = false).let { s.copy(git = it) }
+                else s.copy(git = g.copy(generating = false, generated = text, generatedSeed = g.generatedSeed + 1))
+            }
+            result.exceptionOrNull()?.let { toast(it.message) }
+        }
+    }
+
     fun setProvider(provider: String, model: String? = null) = viewModelScope.launch {
         val chat = _ui.value.chat ?: return@launch
         val params = JSONObject().put("root", chat.root).put("provider", provider)
@@ -566,7 +782,8 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         "turn" -> c.copy(
-            running = p.optBoolean("running"),
+            running = p.optBoolean("running").also { running -> if (running) c.id?.let { watch.follow(c.root, it, c.title, running = true) } },
+            plan = if (p.has("plan") && p.optBoolean("running") && !p.has("outcome")) p.optBoolean("plan") else c.plan,
             // A turn starting reports the mode it runs in; later notes would undo a choice made
             // on the phone meanwhile for the next prompt.
             evidence = if (p.has("evidence") && p.optBoolean("running") && !p.has("outcome")) p.optBoolean("evidence") else c.evidence,
@@ -577,6 +794,7 @@ class OxiViewModel(app: Application) : AndroidViewModel(app) {
         "status" -> c.copy(status = p.optString("text").takeIf { !p.isNull("text") && it.isNotEmpty() })
         "title" -> c.copy(title = p.optString("title"))
         "config" -> c.copy(config = parseConfig(p.optJSONObject("config")))
+        "context" -> c.copy(context = parseContext(p))
         else -> c
     }
 
