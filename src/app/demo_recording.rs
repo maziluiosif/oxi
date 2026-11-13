@@ -4573,6 +4573,12 @@ fn review_subagent_chats(rec: &mut Recorder<'_>) {
             modifiers: egui::Modifiers::NONE,
         });
         rec.harness.run_steps(3);
+        // Sidebar agents start folded under their chat.
+        if rec.harness.query_by_label("Editor review").is_none() {
+            rec.still(&format!("subagents-folded-{width}"));
+            click_label(rec, "Agents · 2");
+            rec.harness.run_steps(3);
+        }
         click_label(rec, "Editor review");
         rec.harness.run_steps(5);
         rec.still(&format!("subagents-workflow-{width}"));
