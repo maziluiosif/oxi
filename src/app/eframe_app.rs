@@ -187,6 +187,10 @@ impl eframe::App for OxiApp {
                 }
             });
 
+        if crate::ui::window_chrome::sidebar_toggle(ui, self.conv.sidebar.open) {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleSidebarVisibility);
+        }
+
         self.render_file_picker(ui.ctx());
 
         // Shared destructive-action confirmation modal, on top of everything.

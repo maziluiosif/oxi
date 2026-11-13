@@ -3473,6 +3473,8 @@ fn review_split_view(rec: &mut Recorder<'_>) {
 
 fn review_worktree_sidebar(rec: &mut Recorder) {
     use super::state::Workspace;
+    // Node click coordinates are physical pixels; interact at 1x, then review scaling below.
+    rec.harness.set_pixels_per_point(1.0);
     let root = rec.project.to_string_lossy().into_owned();
     for branch in [
         "oxi/fix-sidebar",
@@ -3493,6 +3495,32 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
             }),
         });
     }
+    rec.harness.run_steps(4);
+    rec.harness.get_by_label("New worktree").click();
+    rec.harness.run_steps(3);
+    rec.still("worktree-create-preview");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    #[cfg(target_os = "macos")]
+    {
+        rec.harness.get_by_label("Hide sidebar").click();
+        rec.harness.run_steps(3);
+        assert!(!rec.app().conv.sidebar.open);
+        rec.still("titlebar-sidebar-hidden");
+        rec.harness.get_by_label("Show sidebar").click();
+        rec.harness.run_steps(3);
+        assert!(rec.app().conv.sidebar.open);
+        // Hiding Files must preserve that view when it is shown again.
+        rec.app().conv.sidebar.mode = super::state::SidebarMode::Explorer;
+        rec.harness.run_steps(3);
+        rec.harness.get_by_label("Hide sidebar").click();
+        rec.harness.run_steps(3);
+        assert!(!rec.app().conv.sidebar.open);
+        rec.harness.get_by_label("Show sidebar").click();
+        rec.harness.run_steps(3);
+        assert!(rec.app().conv.sidebar.mode == super::state::SidebarMode::Explorer);
+        rec.app().conv.sidebar.mode = super::state::SidebarMode::Chats;
+    }
     for scale in [1.0, 1.25, 1.5] {
         rec.harness.set_pixels_per_point(scale);
         for width in [180.0, 250.0] {
@@ -3505,6 +3533,29 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
             rec.still(&format!("worktrees-folded-{width}-{scale}"));
         }
     }
+    rec.harness.set_pixels_per_point(1.0);
+    rec.app().conv.sidebar.width = 250.0;
+    let before = rec.app().conv.workspaces.len();
+    rec.harness.run_steps(3);
+    rec.harness.get_by_label("New worktree").click();
+    rec.harness.run_steps(3);
+    rec.harness
+        .get_by_label("Create worktree & open chat")
+        .click();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rec.app().conv.workspaces.len() == before && Instant::now() < deadline {
+        rec.harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(rec.app().conv.workspaces.len(), before + 1);
+    assert!(rec.app().active_workspace().worktree.is_some());
+    assert!(!rec.app().conv.workspaces[0].sidebar_folded);
+    rec.harness.run_steps(4);
+    rec.still("worktree-created");
+    // The action stays available inside the linked checkout and targets the main project.
+    rec.harness.get_by_label("New worktree").click();
+    rec.harness.run_steps(3);
+    rec.still("worktree-create-from-linked-checkout");
 }
 
 /// Keyboard chat switching: `#` in Goto Anything (Cmd+Shift+O) and Ctrl+Tab, driven with real

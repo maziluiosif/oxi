@@ -43,7 +43,7 @@ impl OxiApp {
             - if sidebar_open {
                 0.0
             } else {
-                crate::ui::window_chrome::TRAFFIC_LIGHTS_W
+                crate::ui::window_chrome::WINDOW_CONTROLS_W
             })
         .max(80.0);
 
@@ -58,7 +58,7 @@ impl OxiApp {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if !sidebar_open {
                         // The macOS traffic lights sit over the window's top-left corner.
-                        ui.add_space(crate::ui::window_chrome::TRAFFIC_LIGHTS_W);
+                        ui.add_space(crate::ui::window_chrome::WINDOW_CONTROLS_W);
                     }
                     let back = ui.add_enabled(
                         can_go_back,

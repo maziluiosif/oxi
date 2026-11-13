@@ -61,6 +61,8 @@ pub enum SettingsExitAction {
     BackToChat,
     NewChat,
     ToggleSidebar,
+    /// Hide/show the current sidebar view without switching to Chats.
+    ToggleSidebarVisibility,
     ToggleExplorer,
     /// Show the search sidebar (Cmd/Ctrl+Shift+F); `toggle` hides it when it is showing.
     ShowSearch {

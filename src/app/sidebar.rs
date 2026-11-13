@@ -69,6 +69,41 @@ impl OxiApp {
                 self.start_worktree_split();
             }
         });
+        // Keep isolation discoverable without having to recognize a branch glyph.
+        let active = self.conv.active_workspace;
+        let source = self.conv.workspaces[active]
+            .worktree
+            .as_ref()
+            .map_or(active, |info| {
+                self.conv
+                    .workspaces
+                    .iter()
+                    .position(|ws| {
+                        ws.worktree.is_none()
+                            && std::path::Path::new(&ws.root_path).starts_with(&info.main_root)
+                    })
+                    .unwrap_or(active)
+            });
+        let workspace = &self.conv.workspaces[source];
+        let can_create = workspace.worktree.is_none()
+            && !crate::app_dirs::is_general_chats_dir(&workspace.root_path)
+            && !self.is_remote_workspace(source);
+        if can_create {
+            let root = workspace.root_path.clone();
+            ui.add_enabled_ui(self.conv.worktree_ops.is_empty(), |ui| {
+                let label = if self.conv.worktree_ops.is_empty() {
+                    "New worktree"
+                } else {
+                    "Creating worktree…"
+                };
+                ui.menu_button(
+                    RichText::new(label).size(FS_SMALL).color(c_text_muted()),
+                    |ui| {
+                        self.render_worktree_creation(ui, source, &root);
+                    },
+                );
+            });
+        }
         ui.add_space(SPACE_SM);
 
         // Search row + add-workspace button.
@@ -285,6 +320,48 @@ impl OxiApp {
             return true;
         }
         false
+    }
+
+    /// Explain isolation and destination before starting a new linked checkout.
+    pub(super) fn render_worktree_creation(&mut self, ui: &mut Ui, wi: usize, root: &str) {
+        ui.set_max_width(280.0);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+        ui.label(RichText::new("New chat in an isolated worktree").strong());
+        ui.label(format!("Project: {}", workspace_sidebar_label(root)));
+        ui.add(
+            egui::Label::new(RichText::new(root).size(FS_TINY).color(c_text_muted())).truncate(),
+        )
+        .on_hover_text(root);
+        ui.separator();
+        ui.label(
+            "Starts from this checkout’s latest commit (HEAD). Uncommitted changes stay here.",
+        );
+        ui.label("Oxi creates a new branch and folder, then opens a chat under this project. Merge the work back when ready.");
+        let destination = crate::app_dirs::data_dir().join("worktrees");
+        ui.label(
+            RichText::new("New folders are stored in:")
+                .size(FS_TINY)
+                .color(c_text_muted()),
+        );
+        ui.add(
+            egui::Label::new(
+                RichText::new(destination.display().to_string())
+                    .size(FS_TINY)
+                    .color(c_text_muted()),
+            )
+            .truncate(),
+        )
+        .on_hover_text(destination.display().to_string());
+        if ui
+            .add_enabled(
+                self.conv.worktree_ops.is_empty(),
+                egui::Button::new("Create worktree & open chat"),
+            )
+            .clicked()
+        {
+            self.start_worktree_chat(wi);
+            ui.close();
+        }
     }
 
     /// Linked checkout `wi` of workspace `parent`, indented under it with a tree guide.
