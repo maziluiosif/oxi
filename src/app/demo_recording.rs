@@ -3707,7 +3707,95 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     assert!(rec.app().active_workspace().worktree.is_some());
     assert!(!rec.app().conv.workspaces[0].sidebar_folded);
     rec.harness.run_steps(4);
+    assert_eq!(
+        rec.app().active_workspace().sessions.len(),
+        1,
+        "one fresh chat per worktree"
+    );
+    assert_eq!(rec.app().active_session().title, "New chat");
+    assert!(rec.app().conv.composer.notice.is_none());
     rec.still("worktree-created");
+
+    // Right-click targets the checkout under the pointer, even with another one active.
+    let project_label = format!("Project {}", crate::theme::workspace_sidebar_label(&root));
+    rec.harness.get_by_label(&project_label).click_secondary();
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_by_label("New chat in a work tree")
+            .is_some()
+    );
+    assert!(rec.harness.query_by_label("Remove work tree…").is_none());
+    rec.still("sidebar-project-context-menu");
+    let project_chats = rec.app().conv.workspaces[0].sessions.len();
+    rec.harness.get_by_label("New chat here").click();
+    rec.harness.run_steps(3);
+    assert_eq!(rec.app().conv.active_workspace, 0);
+    assert_eq!(
+        rec.app().conv.workspaces[0].sessions.len(),
+        project_chats + 1
+    );
+    assert_eq!(rec.app().conv.workspaces[before].sessions.len(), 1);
+    let main_branch = rec.app().conv.workspaces[before]
+        .worktree
+        .as_ref()
+        .unwrap()
+        .main_branch
+        .clone();
+    let checkout_label = format!("Checkout {main_branch}");
+    rec.harness.get_by_label(&checkout_label).click_secondary();
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_by_label("New chat here").is_some());
+    assert!(rec.harness.query_by_label("Remove workspace").is_none());
+    assert!(
+        rec.harness
+            .query_by_label("New chat in a work tree")
+            .is_none()
+    );
+    rec.still("sidebar-checkout-context-menu");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    rec.app().select_workspace(before);
+    rec.harness.run_steps(3);
+    let tree_label = format!(
+        "Worktree {}",
+        rec.app()
+            .active_workspace()
+            .worktree
+            .as_ref()
+            .unwrap()
+            .branch
+    );
+    rec.harness.get_by_label(&tree_label).click_secondary();
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_by_label("Remove work tree…").is_some());
+    assert!(
+        rec.harness
+            .query_by_label("New chat in a work tree")
+            .is_none()
+    );
+    assert!(rec.harness.query_by_label("Remove workspace").is_none());
+    rec.still("sidebar-worktree-context-menu");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    rec.app().conv.workspaces[before].sessions[0].title = "Context menu target chat".into();
+    rec.harness.run_steps(3);
+    rec.harness
+        .query_all_by_label("Context menu target chat")
+        .next()
+        .unwrap()
+        .click_secondary();
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_by_label("Rename chat").is_some());
+    assert!(rec.harness.query_by_label("Remove work tree…").is_none());
+    assert!(
+        rec.harness
+            .query_by_label("Import agent session…")
+            .is_none()
+    );
+    rec.still("sidebar-chat-context-menu");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
     // Folding preserves the selected worktree while hiding inactive checkouts.
     let branch = rec
         .app()

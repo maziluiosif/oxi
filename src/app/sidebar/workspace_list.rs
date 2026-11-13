@@ -32,6 +32,13 @@ impl OxiApp {
             None if checkout_row => self.sidebar_branch_label(wi),
             None => workspace_sidebar_label(&self.conv.workspaces[wi].root_path),
         };
+        let kind = if !is_main {
+            "Worktree"
+        } else if checkout_row {
+            "Checkout"
+        } else {
+            "Project"
+        };
         let searching_all = !q.is_empty() || self.conv.sidebar.history;
         let own_folded = if checkout_row {
             self.conv.workspaces[wi]
@@ -47,11 +54,25 @@ impl OxiApp {
         const ROW_H: f32 = 26.0;
         const PLUS_W: f32 = 22.0;
         const GLYPH_W: f32 = 18.0;
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::hover());
+        let response = ui.interact(
+            rect,
+            egui::Id::new(("sidebar_workspace_row", wi, checkout_row)),
+            Sense::click(),
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                format!("{kind} {root_label}"),
+            )
+        });
         // `rect_contains_pointer` instead of `response.hovered()`: the in-place "+"
         // below steals hover from the row response, which would flicker the fill.
-        let row_hovered = ui.rect_contains_pointer(rect) || response.has_focus();
+        let row_hovered = ui.rect_contains_pointer(rect)
+            || response.has_focus()
+            || response.context_menu_opened();
         if row_hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             ui.painter()
@@ -198,8 +219,10 @@ impl OxiApp {
             if wi != self.conv.active_workspace {
                 self.select_workspace(wi);
             }
-            self.new_chat();
-            sidebar_changed = true;
+            if self.conv.active_workspace == wi {
+                self.new_chat();
+                sidebar_changed = true;
+            }
         } else if response.clicked() && !plus_hovered && !worktree_hovered {
             if remote_status.is_some() {
                 self.retry_remote(wi);
@@ -231,6 +254,14 @@ impl OxiApp {
             response
         };
         response.context_menu(|ui| {
+            sidebar_menu_heading(ui, kind, &root_label, &self.conv.workspaces[wi].root_path);
+            if ui.button("New chat here").clicked() {
+                self.select_workspace(wi);
+                if self.conv.active_workspace == wi {
+                    self.new_chat();
+                }
+                ui.close();
+            }
             match &worktree {
                 None if !can_worktree => {}
                 None => {
@@ -308,7 +339,13 @@ impl OxiApp {
                 self.open_session_import(ui.ctx(), wi);
                 ui.close();
             }
-            let resp = ui.add_enabled(!ws_running, egui::Button::new("Remove workspace"));
+            // The nested main checkout is part of the project, not a separate workspace.
+            if checkout_row {
+                return;
+            }
+            ui.separator();
+            let label = if worktree.is_some() { "Close worktree in sidebar" } else { "Remove workspace" };
+            let resp = ui.add_enabled(!ws_running, egui::Button::new(label));
             if ws_running {
                 resp.on_disabled_hover_text("A chat in this workspace is still running");
             } else if resp.clicked() {
@@ -316,6 +353,7 @@ impl OxiApp {
                     wi,
                     remove_worktree: false,
                 });
+                ui.close();
             }
         });
         ui.add_space(1.0);
@@ -448,7 +486,9 @@ impl OxiApp {
                         });
                         // Keep the row hovered while the pointer is over an
                         // overlapping action such as the hover-only trash button.
-                        let hovered = ui.rect_contains_pointer(rect) || response.has_focus();
+                        let hovered = ui.rect_contains_pointer(rect)
+                            || response.has_focus()
+                            || response.context_menu_opened();
                         if hovered {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
@@ -536,6 +576,7 @@ impl OxiApp {
                                 }
                             }
                             response.context_menu(|ui| {
+                                sidebar_menu_heading(ui, "Chat", &title, &root_label);
                                 let row_key = self.session_key(wi, si);
                                 if row_key != self.active_session_key()
                                     && ui
@@ -544,6 +585,7 @@ impl OxiApp {
                                         .clicked()
                                 {
                                     self.open_split_with(row_key);
+                                    ui.close();
                                 }
                                 if let Some(file) =
                                     self.conv.workspaces[wi].sessions[si].session_file.clone()
@@ -559,6 +601,7 @@ impl OxiApp {
                                             ws.pinned.push(file.clone());
                                         }
                                         self.sync_workspaces_to_settings();
+                                        ui.close();
                                     }
                                     let archived =
                                         self.conv.workspaces[wi].archived.contains(&file);
@@ -582,6 +625,7 @@ impl OxiApp {
                                             ws.archived.push(file);
                                         }
                                         self.sync_workspaces_to_settings();
+                                        ui.close();
                                     }
                                 }
                                 if wi == self.conv.active_workspace && !running {
@@ -589,10 +633,12 @@ impl OxiApp {
                                         self.conv.sidebar.renaming_session = Some((wi, si));
                                         self.conv.sidebar.rename_draft =
                                             self.conv.workspaces[wi].sessions[si].title.clone();
+                                        ui.close();
                                     }
                                     if ui.button("Export as Markdown…").clicked() {
                                         self.select_session_in_workspace(wi, si);
                                         self.export_active_session_markdown();
+                                        ui.close();
                                     }
                                     if ui.button("Delete chat").clicked() {
                                         self.request_confirm(
@@ -602,6 +648,7 @@ impl OxiApp {
                                                 remove_worktree: false,
                                             },
                                         );
+                                        ui.close();
                                     }
                                 }
                             });
@@ -916,6 +963,20 @@ fn session_rename_field(ui: &mut Ui, rect: egui::Rect, draft: &mut String) -> Op
     } else {
         None
     }
+}
+
+/// Keep the origin visible even when the menu covers the clicked row.
+fn sidebar_menu_heading(ui: &mut Ui, kind: &str, title: &str, detail: &str) {
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!("{kind} · {title}"))
+                .size(FS_SMALL)
+                .color(c_text_muted()),
+        )
+        .truncate(),
+    )
+    .on_hover_text(detail);
+    ui.separator();
 }
 
 #[cfg(test)]
