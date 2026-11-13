@@ -242,9 +242,7 @@ impl OxiApp {
             |ui| {
                 let statuses = self.mcp.statuses();
                 let mut remove_idx: Option<usize> = None;
-                let n = self.conv.settings.mcp_servers.len();
-                for i in 0..n {
-                    let server = &mut self.conv.settings.mcp_servers[i];
+                for (i, server) in self.conv.settings.mcp_servers.iter_mut().enumerate() {
                     let status = statuses.iter().find(|s| s.name == server.name);
                     setting_item(ui, |ui| {
                         ui.horizontal(|ui| {
