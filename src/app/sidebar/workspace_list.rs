@@ -44,9 +44,14 @@ impl OxiApp {
             ui.painter()
                 .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
         }
-        // Leading glyph: folder open/closed at rest, fold chevron on hover.
+        if !is_main && wi == self.conv.active_workspace && !row_hovered {
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_active());
+        }
+        // Leading glyph: branch for worktrees, folder for projects; chevron on hover.
         let remote = self.is_remote_workspace(wi);
-        let glyph = match (row_hovered || parent.is_some(), folded) {
+        let glyph = match (row_hovered, folded) {
+            (false, _) if !is_main => ICON_BRANCH,
             (true, true) => ICON_CHEVRON_RIGHT,
             (true, false) => ICON_ANGLE_DOWN,
             (false, _) if remote => ICON_SERVER,
@@ -112,7 +117,7 @@ impl OxiApp {
             });
         });
         crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
-        let mut worktree_clicked = false;
+
         let mut worktree_hovered = false;
         if can_worktree {
             let action_rect = egui::Rect::from_min_max(
@@ -126,7 +131,17 @@ impl OxiApp {
                     Sense::click(),
                 )
                 .on_hover_text("New worktree chat — create an isolated branch and start chatting");
-            worktree_clicked = action.clicked();
+            action.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    ui.is_enabled(),
+                    format!("New worktree for {root_label}"),
+                )
+            });
+            let root = self.conv.workspaces[wi].root_path.clone();
+            egui::Popup::menu(&action).show(|ui| {
+                self.render_worktree_creation(ui, wi, &root);
+            });
             worktree_hovered = action.hovered();
             ui.painter().text(
                 action_rect.center(),
@@ -166,10 +181,7 @@ impl OxiApp {
                 },
             );
         }
-        if worktree_clicked {
-            self.start_worktree_chat(wi);
-            sidebar_changed = true;
-        } else if plus_clicked {
+        if plus_clicked {
             if wi != self.conv.active_workspace {
                 self.select_workspace(wi);
             }
@@ -187,6 +199,15 @@ impl OxiApp {
         }
         let ws_running = (0..n_sessions).any(|si| self.session_row_is_running(wi, si));
         let worktree = self.conv.workspaces[wi].worktree.clone();
+        let response = if let Some(info) = &worktree {
+            response.on_hover_text(format!(
+                "Worktree · {}\nProject: {}\nMerge into: {}\nFolder: {}\nRight-click for merge and removal",
+                info.branch, info.main_root.display(), info.main_branch,
+                self.conv.workspaces[wi].root_path,
+            ))
+        } else {
+            response
+        };
         response.context_menu(|ui| {
             match &worktree {
                 None if !can_worktree => {}
@@ -281,6 +302,16 @@ impl OxiApp {
         }
         // Work trees sit right under their main checkout's header, above its chats: after
         // them they read as part of the last date group ("Older").
+        if !worktrees.is_empty() && (!folded || !q.is_empty()) {
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                ui.label(
+                    RichText::new(format!("Worktrees · {}", worktrees.len()))
+                        .size(FS_TINY)
+                        .color(c_text_faint()),
+                );
+            });
+        }
         for &child in worktrees {
             if self.render_sidebar_worktree_child(ui, child, wi, q) {
                 return true;

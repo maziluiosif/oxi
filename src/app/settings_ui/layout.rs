@@ -86,6 +86,10 @@ impl OxiApp {
             SettingsExitAction::BackToChat => {
                 self.focus_active_view_next_frame();
             }
+            SettingsExitAction::ToggleSidebarVisibility => {
+                self.conv.sidebar.open = !self.conv.sidebar.open;
+                self.focus_active_view_next_frame();
+            }
             SettingsExitAction::ToggleSidebar => {
                 let chats_on = self.conv.sidebar.open
                     && self.conv.sidebar.mode == crate::app::state::SidebarMode::Chats;
