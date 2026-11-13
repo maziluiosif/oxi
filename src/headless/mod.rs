@@ -2072,7 +2072,7 @@ fn file_attachment(root: &str, value: &Value) -> Result<UserAttachment, String> 
     let ignore = dir.join(".gitignore");
     if !ignore.exists() {
         // Attachments are the user's files, not the project's: keep them out of commits.
-        let _ = std::fs::write(&ignore, "*\n");
+        let _ = crate::fsutil::write_atomic(&ignore, b"*\n");
     }
     let path = unique_file(&dir, &name);
     crate::fsutil::save(&path, &data).map_err(|e| format!("{}: {e}", path.display()))?;

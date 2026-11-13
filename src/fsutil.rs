@@ -40,6 +40,31 @@ pub fn unique_temp_path(dir: &Path, prefix: &str, extension: &str) -> PathBuf {
     ))
 }
 
+/// Deletes a temporary file when dropped, unless [`RemoveOnDrop::disarm`] was called: keeps
+/// failed writes from leaving uniquely named temporary files behind.
+pub struct RemoveOnDrop<'a> {
+    path: Option<&'a Path>,
+}
+
+impl<'a> RemoveOnDrop<'a> {
+    pub fn new(path: &'a Path) -> Self {
+        Self { path: Some(path) }
+    }
+
+    /// The file was moved into place (or is otherwise wanted): keep it.
+    pub fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for RemoveOnDrop<'_> {
+    fn drop(&mut self) {
+        if let Some(path) = self.path {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 /// Replace `path` with `content` atomically. A symlink at `path` is replaced rather than
 /// followed. An existing file keeps its permissions; a new one gets the usual
 /// `0666 & !umask`.
@@ -103,6 +128,8 @@ fn write_atomic_with(path: &Path, content: &[u8], private: bool) -> Result<(), S
 /// (macOS) extended attributes and ACL. Where a rename would break the file instead (a hard
 /// link, someone else's file, a folder we may not create files in, a bind mount, a file with
 /// Linux extended attributes, anything but a regular file) it is written in place.
+// The in-place fallbacks below are the documented exceptions to the atomic rule.
+#[allow(clippy::disallowed_methods)]
 pub fn save(path: &Path, content: &[u8]) -> std::io::Result<()> {
     let target = match fs::canonicalize(path) {
         Ok(target) => target,

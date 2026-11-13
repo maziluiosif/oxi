@@ -1,0 +1,6 @@
+# A plain `std::fs::write` truncates the file first: a crash, a killed process or a full disk
+# mid-write leaves it empty or half-written. App state and user files go through `fsutil`
+# instead (temporary file + rename). Tests may use it freely (see `src/lib.rs`).
+disallowed-methods = [
+    { path = "std::fs::write", reason = "not crash-safe: use crate::fsutil::write_atomic (app files) or crate::fsutil::save (user files)" },
+]

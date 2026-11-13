@@ -56,7 +56,7 @@ fn ensure() -> std::io::Result<()> {
     write_icon(&data_home)?;
     if !marker.exists() {
         std::fs::create_dir_all(crate::app_dirs::data_dir())?;
-        std::fs::write(&marker, b"")?;
+        crate::fsutil::write_atomic(&marker, b"").map_err(std::io::Error::other)?;
     }
     Ok(())
 }

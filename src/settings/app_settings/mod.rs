@@ -237,6 +237,10 @@ pub struct AppSettings {
     /// Text editor preferences.
     #[serde(default)]
     pub editor: EditorSettings,
+    /// Parts of `settings.json` this version could not read (usually written by a newer oxi):
+    /// kept aside and written back on save, so an older binary never erases them.
+    #[serde(skip)]
+    pub(crate) unreadable: persistence::UnreadableSettings,
 }
 
 fn default_require_approval() -> bool {
@@ -398,6 +402,7 @@ impl Default for AppSettings {
             auto_update: true,
             router: super::router::RouterSettings::default(),
             editor: EditorSettings::default(),
+            unreadable: Default::default(),
         }
     }
 }

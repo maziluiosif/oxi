@@ -130,9 +130,15 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let tmp_path = session_path.with_extension("jsonl.tmp");
+    // A name of its own per save: the app and the headless daemon can save the same chat at
+    // once, and a shared temporary file would interleave both writes into the renamed result.
+    let tmp_path = crate::fsutil::unique_temp_path(
+        session_path.parent().unwrap_or_else(|| Path::new(".")),
+        ".oxi-session",
+        "tmp",
+    );
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     // Transcripts carry tool output (file contents, environment, pasted secrets): owner-only,
     // like settings.json, even where home directories are world-readable.
     #[cfg(unix)]
@@ -140,6 +146,9 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+    // Removes the temporary file on every early return below; disarmed once it is installed.
+    // Declared before the file so it drops after it (Windows can't delete an open file).
+    let mut leftover = crate::fsutil::RemoveOnDrop::new(&tmp_path);
     let mut file = std::io::BufWriter::new(options.open(&tmp_path).map_err(|e| e.to_string())?);
 
     let session_id = session_file_stem_or_generated(&session_path);
@@ -234,10 +243,8 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
     let file = file.into_inner().map_err(|e| e.to_string())?;
     crate::fsutil::sync(&file).map_err(|e| e.to_string())?;
     drop(file);
-    if let Err(error) = crate::fsutil::install(&tmp_path, &session_path) {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(error);
-    }
+    crate::fsutil::install(&tmp_path, &session_path)?;
+    leftover.disarm();
 
     session.disk_mtime = fs::metadata(&session_path).and_then(|m| m.modified()).ok();
     session.session_file = Some(session_path.to_string_lossy().to_string());
