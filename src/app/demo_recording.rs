@@ -3476,6 +3476,154 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     // Node click coordinates are physical pixels; interact at 1x, then review scaling below.
     rec.harness.set_pixels_per_point(1.0);
     let root = rec.project.to_string_lossy().into_owned();
+    let worktree_action = format!(
+        "New worktree for {}",
+        crate::theme::workspace_sidebar_label(&root)
+    );
+    // Exercise the daily list and full history using the actual rendered sidebar.
+    for (title, pinned, archived, today) in [
+        ("Pinned sidebar example", true, false, false),
+        ("Today sidebar example", false, false, true),
+        ("Hidden history example", false, false, false),
+        ("Archived history example", false, true, true),
+    ] {
+        let mut session = OxiApp::blank_session(title);
+        session.title = title.into();
+        session.messages = vec![message(MsgRole::User, title, vec![])];
+        crate::session_store::save_session_messages(&root, &mut session).unwrap();
+        if !today {
+            assert!(
+                std::process::Command::new("touch")
+                    .args([
+                        "-t",
+                        "202601010900",
+                        session.session_file.as_deref().unwrap()
+                    ])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        session.modified = std::fs::metadata(session.session_file.as_deref().unwrap())
+            .unwrap()
+            .modified()
+            .unwrap();
+        let ws = &mut rec.app().conv.workspaces[0];
+        if pinned {
+            ws.pinned.push(session.session_file.clone().unwrap());
+        }
+        if archived {
+            ws.archived.push(session.session_file.clone().unwrap());
+        }
+        ws.sessions.push(session);
+    }
+    rec.harness.run_steps(4);
+    for title in ["Pinned sidebar example", "Today sidebar example"] {
+        assert!(
+            rec.harness.query_all_by_label(title).count() > 0,
+            "visible: {title}"
+        );
+    }
+    for title in ["Hidden history example", "Archived history example"] {
+        assert_eq!(
+            rec.harness.query_all_by_label(title).count(),
+            0,
+            "hidden: {title}"
+        );
+    }
+    rec.still("sidebar-daily");
+    rec.harness.get_by_label("History").click();
+    rec.harness.run_steps(3);
+    assert!(rec.app().conv.sidebar.history);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    assert!(
+        rec.harness
+            .query_all_by_label("Archived history example")
+            .count()
+            > 0
+    );
+    rec.still("sidebar-history");
+    rec.app().conv.sidebar.history_days = Some(1);
+    rec.harness.run_steps(3);
+    assert_eq!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count(),
+        0
+    );
+    rec.app().conv.sidebar.history_days = None;
+    rec.harness.get_by_label("Back to recent chats").click();
+    rec.app().conv.sidebar.search = "hidden history".into();
+    rec.harness.run_steps(4);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    rec.still("sidebar-history-search");
+    rec.app().conv.sidebar.search.clear();
+
+    let hidden_si = rec.app().conv.workspaces[0]
+        .sessions
+        .iter()
+        .position(|session| session.title == "Hidden history example")
+        .unwrap();
+    let hidden_key = rec.app().session_key(0, hidden_si);
+    rec.app()
+        .flow
+        .sessions
+        .entry(hidden_key)
+        .or_default()
+        .completion_unseen = true;
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    rec.app()
+        .flow
+        .sessions
+        .get_mut(&hidden_key)
+        .unwrap()
+        .completion_unseen = false;
+    let mut streaming = message(MsgRole::Assistant, "Working", vec![]);
+    streaming.streaming = true;
+    rec.app().conv.workspaces[0].sessions[hidden_si]
+        .messages
+        .push(streaming);
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    rec.app().conv.workspaces[0].sessions[hidden_si]
+        .messages
+        .pop();
+    rec.app().select_session_in_workspace(0, hidden_si);
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    let recent_si = rec.app().conv.workspaces[0]
+        .sessions
+        .iter()
+        .position(|session| session.title == "New chat")
+        .unwrap();
+    rec.app().select_session_in_workspace(0, recent_si);
+
     for branch in [
         "oxi/fix-sidebar",
         "oxi/a-long-feature-branch-name-for-truncation",
@@ -3496,11 +3644,9 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
         });
     }
     rec.harness.run_steps(4);
-    rec.harness.get_by_label("New worktree").click();
+    rec.harness.get_by_label("Other worktrees · 2").click();
     rec.harness.run_steps(3);
-    rec.still("worktree-create-preview");
-    rec.harness.key_press(egui::Key::Escape);
-    rec.harness.run_steps(3);
+    rec.still("other-worktrees-expanded");
     #[cfg(target_os = "macos")]
     {
         rec.harness.get_by_label("Hide sidebar").click();
@@ -3530,6 +3676,19 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
             rec.still(&format!("worktrees-{width}-{scale}"));
             rec.app().conv.workspaces[0].sidebar_folded = true;
             rec.harness.run_steps(3);
+            assert_eq!(
+                rec.harness
+                    .query_all_by_label("Pinned sidebar example")
+                    .count(),
+                0
+            );
+            assert_eq!(
+                rec.harness
+                    .query_all_by_label("Other worktrees · 2")
+                    .count(),
+                0
+            );
+            assert_eq!(rec.harness.query_all_by_label("oxi/fix-sidebar").count(), 0);
             rec.still(&format!("worktrees-folded-{width}-{scale}"));
         }
     }
@@ -3537,11 +3696,8 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     rec.app().conv.sidebar.width = 250.0;
     let before = rec.app().conv.workspaces.len();
     rec.harness.run_steps(3);
-    rec.harness.get_by_label("New worktree").click();
+    rec.harness.get_by_label(&worktree_action).click();
     rec.harness.run_steps(3);
-    rec.harness
-        .get_by_label("Create worktree & open chat")
-        .click();
     let deadline = Instant::now() + Duration::from_secs(10);
     while rec.app().conv.workspaces.len() == before && Instant::now() < deadline {
         rec.harness.step();
@@ -3552,8 +3708,53 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     assert!(!rec.app().conv.workspaces[0].sidebar_folded);
     rec.harness.run_steps(4);
     rec.still("worktree-created");
-    // The action stays available inside the linked checkout and targets the main project.
-    rec.harness.get_by_label("New worktree").click();
+    // Folding preserves the selected worktree while hiding inactive checkouts.
+    let branch = rec
+        .app()
+        .active_workspace()
+        .worktree
+        .as_ref()
+        .unwrap()
+        .branch
+        .clone();
+    rec.app().conv.workspaces[0].sidebar_folded = true;
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label(&branch)
+            .any(|node| node.rect().center().x < 250.0)
+    );
+    assert_eq!(
+        rec.harness
+            .query_all_by_label("Pinned sidebar example")
+            .count(),
+        0
+    );
+    assert_eq!(rec.harness.query_all_by_label("oxi/fix-sidebar").count(), 0);
+    let mut running_session = OxiApp::blank_session("Running in folded worktree");
+    let mut streaming = message(MsgRole::Assistant, "Working", vec![]);
+    streaming.streaming = true;
+    running_session.messages.push(streaming);
+    rec.app().conv.workspaces[1].sessions.push(running_session);
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_all_by_label("oxi/fix-sidebar").count() > 0);
+    assert!(
+        rec.harness
+            .query_all_by_label("Running in folded worktree")
+            .count()
+            > 0
+    );
+    rec.still("worktrees-active-folded");
+    // A single click still creates directly while the project is folded.
+    let before = rec.app().conv.workspaces.len();
+    rec.harness.get_by_label(&worktree_action).click();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rec.app().conv.workspaces.len() == before && Instant::now() < deadline {
+        rec.harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(rec.app().conv.workspaces.len(), before + 1);
+    assert!(!rec.app().conv.workspaces[0].sidebar_folded);
     rec.harness.run_steps(3);
     rec.still("worktree-create-from-linked-checkout");
 }

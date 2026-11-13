@@ -1,4 +1,4 @@
-//! One workspace in the sidebar: its header row, grouped chat rows and their context menus.
+//! Project and checkout headers, daily chat rows and their context menus.
 
 use super::*;
 
@@ -14,9 +14,12 @@ impl OxiApp {
     ) -> bool {
         const FS_WORKSPACE: f32 = FS_SMALL;
         let mut sidebar_changed = false;
+        let checkout_row = parent == Some(wi);
+        let project_header = parent.is_none();
         let is_main = self.conv.workspaces[wi].worktree.is_none();
         // Work trees need a repository; the general chats folder never is one.
-        let can_worktree = is_main
+        let can_worktree = project_header
+            && is_main
             && !crate::app_dirs::is_general_chats_dir(&self.conv.workspaces[wi].root_path)
             && !self.is_remote_workspace(wi);
         let remote_status = self.remote_status(wi);
@@ -24,11 +27,21 @@ impl OxiApp {
         let n_sessions = self.conv.workspaces[wi].sessions.len();
         let split_partner = self.split_partner_peek();
         let root_label = match &self.conv.workspaces[wi].worktree {
-            Some(info) if parent.is_some() => info.branch.clone(),
+            Some(_) if parent.is_some() => self.sidebar_branch_label(wi),
             Some(info) => crate::app::worktrees::worktree_label(info),
+            None if checkout_row => self.sidebar_branch_label(wi),
             None => workspace_sidebar_label(&self.conv.workspaces[wi].root_path),
         };
-        let folded = self.conv.workspaces[wi].sidebar_folded || parent_folded;
+        let searching_all = !q.is_empty() || self.conv.sidebar.history;
+        let own_folded = if checkout_row {
+            self.conv.workspaces[wi]
+                .folded_groups
+                .iter()
+                .any(|key| key == "checkout")
+        } else {
+            self.conv.workspaces[wi].sidebar_folded
+        };
+        let folded = !searching_all && (own_folded || parent_folded);
         ui.add_space(1.0);
 
         const ROW_H: f32 = 26.0;
@@ -51,7 +64,7 @@ impl OxiApp {
         // Leading glyph: branch for worktrees, folder for projects; chevron on hover.
         let remote = self.is_remote_workspace(wi);
         let glyph = match (row_hovered, folded) {
-            (false, _) if !is_main => ICON_BRANCH,
+            (false, _) if !is_main || checkout_row => ICON_BRANCH,
             (true, true) => ICON_CHEVRON_RIGHT,
             (true, false) => ICON_ANGLE_DOWN,
             (false, _) if remote => ICON_SERVER,
@@ -138,10 +151,10 @@ impl OxiApp {
                     format!("New worktree for {root_label}"),
                 )
             });
-            let root = self.conv.workspaces[wi].root_path.clone();
-            egui::Popup::menu(&action).show(|ui| {
-                self.render_worktree_creation(ui, wi, &root);
-            });
+            if action.clicked() {
+                self.start_worktree_chat(wi);
+                sidebar_changed = true;
+            }
             worktree_hovered = action.hovered();
             ui.painter().text(
                 action_rect.center(),
@@ -191,8 +204,17 @@ impl OxiApp {
             if remote_status.is_some() {
                 self.retry_remote(wi);
             }
-            self.conv.workspaces[wi].sidebar_folded = !folded;
-            if let Some(pi) = parent {
+            if checkout_row {
+                let folds = &mut self.conv.workspaces[wi].folded_groups;
+                if folded {
+                    folds.retain(|key| key != "checkout");
+                } else {
+                    folds.push("checkout".into());
+                }
+            } else {
+                self.conv.workspaces[wi].sidebar_folded = !folded;
+            }
+            if let Some(pi) = parent.filter(|pi| *pi != wi) {
                 self.conv.workspaces[pi].sidebar_folded = false;
             }
             self.sync_workspaces_to_settings();
@@ -300,89 +322,75 @@ impl OxiApp {
         if sidebar_changed {
             return true;
         }
-        // Work trees sit right under their main checkout's header, above its chats: after
-        // them they read as part of the last date group ("Older").
-        if !worktrees.is_empty() && (!folded || !q.is_empty()) {
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                ui.label(
-                    RichText::new(format!("Worktrees · {}", worktrees.len()))
-                        .size(FS_TINY)
-                        .color(c_text_faint()),
-                );
-            });
-        }
-        for &child in worktrees {
-            if self.render_sidebar_worktree_child(ui, child, wi, q) {
-                return true;
+        // A repository contains its main checkout and its linked checkouts at one level.
+        let has_branch = self
+            .conv
+            .sidebar
+            .branches
+            .values
+            .get(&self.conv.workspaces[wi].root_path)
+            .is_some_and(|branch| branch.is_some());
+        if project_header && is_main && (has_branch || !worktrees.is_empty()) {
+            // Folding keeps only checkouts with an open, running or attention chat.
+            if !folded || self.sidebar_workspace_has_active_chats(wi, ui.ctx()) {
+                ui.push_id(("main_checkout", wi), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.vertical(|ui| {
+                            sidebar_changed =
+                                self.render_sidebar_workspace(ui, wi, Some(wi), folded, q, &[]);
+                        });
+                    });
+                });
             }
+            let (visible, other): (Vec<_>, Vec<_>) =
+                worktrees.iter().copied().partition(|&child| {
+                    searching_all || self.sidebar_workspace_has_recent_chats(child, ui.ctx())
+                });
+            for child in visible {
+                if self.render_sidebar_worktree_child(ui, child, wi, q) {
+                    return true;
+                }
+            }
+            if !other.is_empty() && !folded {
+                egui::CollapsingHeader::new(format!("Other worktrees · {}", other.len()))
+                    .id_salt(("other_worktrees", wi))
+                    .show(ui, |ui| {
+                        for child in other {
+                            if !sidebar_changed {
+                                sidebar_changed =
+                                    self.render_sidebar_worktree_child(ui, child, wi, q);
+                            }
+                        }
+                    });
+            }
+            return sidebar_changed;
         }
         // Folding hides the normal chat list. The chat currently open in the main view,
         // in-progress chats, and chats that need attention remain visible.
         let mut visible_sessions = 0usize;
         let mut row_advance: Option<f32> = None;
         let order = sidebar_session_order(&self.conv.workspaces[wi]);
-        let mut group_counts = std::collections::HashMap::new();
-        for (_, group) in &order {
-            *group_counts.entry(*group).or_insert(0usize) += 1;
-        }
         let searching = !q.is_empty();
-        let mut last_group = None;
-        let mut hidden_by_group_fold = false;
         for (si, group) in order {
-            if sidebar_changed {
+            if sidebar_changed || self.conv.workspaces[wi].sessions.get(si).is_none() {
                 return true;
             }
-            if self.conv.workspaces[wi].sessions.get(si).is_none() {
-                return true;
+            let exceptional = self.sidebar_session_needs_visibility(wi, si, ui.ctx());
+            if !searching
+                && !self.conv.sidebar.history
+                && ((!matches!(group, SidebarGroup::Pinned | SidebarGroup::Today) || folded)
+                    && !exceptional)
+            {
+                continue;
             }
-            // While searching, every match is listed and date groups ignore their fold.
-            // The Archived group is folded unless its key is stored (it starts folded).
-            let key_stored = self.conv.workspaces[wi]
-                .folded_groups
-                .iter()
-                .any(|key| key == group.key());
-            let group_folded =
-                !folded && !searching && key_stored != (group == super::SidebarGroup::Archived);
-            // Headers of a folded group still show (that is how it unfolds); while searching
-            // only groups with a match get one.
-            if !folded && !searching && last_group != Some(group) {
-                last_group = Some(group);
-                if sidebar_group_header(ui, group, group_folded, group_counts[&group]) {
-                    let list = &mut self.conv.workspaces[wi].folded_groups;
-                    if key_stored {
-                        list.retain(|key| key != group.key());
-                    } else {
-                        list.push(group.key().to_string());
-                    }
-                    self.sync_workspaces_to_settings();
-                    sidebar_changed = true;
-                    continue;
-                }
-            }
-            if folded || group_folded {
-                let key = self.session_key(wi, si);
-                let globally_selected = wi == self.conv.active_workspace && si == active_si;
-                let running = self.session_row_is_running(wi, si);
-                let needs_attention = self.run_state(key).is_some_and(|run| {
-                    run.completion_unseen
-                        || (run.pending_approval.is_some()
-                            && (key != self.active_session_key()
-                                || !self.active_chat_is_visible(ui.ctx())))
-                });
-                if !globally_selected && !running && !needs_attention {
-                    hidden_by_group_fold |= group_folded;
-                    continue;
-                }
+            if self.conv.sidebar.history && !self.sidebar_session_in_history_period(wi, si) {
+                continue;
             }
             if searching && !self.session_matches_search(wi, si, q) {
                 continue;
             }
             visible_sessions += 1;
-            if !folded && searching && last_group != Some(group) {
-                last_group = Some(group);
-                sidebar_group_header(ui, group, false, group_counts[&group]);
-            }
             // Rows are all the same height: once one has been measured, a row scrolled out
             // of view only reserves its space. Long histories otherwise cost a full layout
             // of every row on every frame (~1.5 ms at 400 chats).
@@ -562,8 +570,7 @@ impl OxiApp {
                                     if ui
                                         .button(label)
                                         .on_hover_text(
-                                            "Archived chats are kept, listed under Archived at \
-                                             the end; sending a message brings one back",
+                                            "Archived chats stay in History and search; sending a message brings one back",
                                         )
                                         .clicked()
                                     {
@@ -698,19 +705,15 @@ impl OxiApp {
             }
         }
         // A folded workspace with no exceptional rows is intentionally just its header;
-        // "No chats yet" would otherwise make folding look as if the workspace were empty.
+        // "No recent chats" would otherwise make folding look as if the workspace were empty.
         // An empty work tree is just its header too: it sits under its repository, where a
         // line per empty work tree only adds noise.
         let empty_worktree = self.conv.workspaces[wi].worktree.is_some() && q.is_empty();
-        if visible_sessions == 0
-            && !hidden_by_group_fold
-            && !empty_worktree
-            && (!folded || !q.is_empty())
-        {
+        if visible_sessions == 0 && !empty_worktree && (!folded || !q.is_empty()) {
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
                 let msg = if q.is_empty() {
-                    "No chats yet"
+                    "No recent chats"
                 } else {
                     "No chats found"
                 };
@@ -804,6 +807,18 @@ impl OxiApp {
                         egui::vec2(lead_w, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
+                            let pinned = self.conv.workspaces[wi].sessions[si]
+                                .session_file
+                                .as_ref()
+                                .is_some_and(|file| self.conv.workspaces[wi].pinned.contains(file));
+                            if pinned && !has_error && !needs_approval && !completion_unseen {
+                                ui.label(
+                                    RichText::new("\u{f08d}")
+                                        .font(FontId::new(FS_TINY, icon_font()))
+                                        .color(c_text_muted()),
+                                )
+                                .on_hover_text("Pinned chat");
+                            }
                             if has_error || needs_approval || completion_unseen {
                                 let resp =
                                     ui.label(RichText::new("•").size(FS_SMALL).color(bullet_col));
@@ -878,63 +893,6 @@ impl OxiApp {
             }
         });
     }
-}
-
-/// Clickable date-group header: chevron, label, and the chat count while folded. Returns
-/// whether it was clicked (the caller toggles the fold).
-pub(super) fn sidebar_group_header(
-    ui: &mut Ui,
-    group: SidebarGroup,
-    group_folded: bool,
-    count: usize,
-) -> bool {
-    const H: f32 = 20.0;
-    ui.add_space(6.0);
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), H), Sense::click());
-    let response = response.on_hover_text(if group_folded {
-        "Show these chats"
-    } else {
-        "Hide these chats"
-    });
-    let hovered = response.hovered() || response.has_focus();
-    crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
-    if hovered {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
-    }
-    let color = if hovered {
-        c_text_muted()
-    } else {
-        c_text_faint()
-    };
-    let chevron_x = rect.left() + 13.0;
-    ui.painter().text(
-        egui::pos2(chevron_x, rect.center().y),
-        egui::Align2::CENTER_CENTER,
-        if group_folded {
-            ICON_CHEVRON_RIGHT
-        } else {
-            ICON_ANGLE_DOWN
-        },
-        FontId::new(FS_TINY - 2.0, icon_font()),
-        color,
-    );
-    let label = if group_folded {
-        format!("{}  ·  {count}", group.label())
-    } else {
-        group.label().to_string()
-    };
-    ui.painter().text(
-        egui::pos2(chevron_x + 10.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        FontId::proportional(FS_TINY),
-        color,
-    );
-    ui.add_space(1.0);
-    response.clicked()
 }
 
 /// Inline rename field for a sidebar chat row. `Some(true)` commits on Enter,
