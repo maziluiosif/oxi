@@ -252,45 +252,24 @@ fn keep_attributes(original: &Path, replacement: &fs::File, meta: &fs::Metadata)
 /// so the rename itself survives a crash. On failure the temporary file is left for the caller
 /// to remove.
 pub fn install(tmp: &Path, destination: &Path) -> Result<(), String> {
-    let parent = destination
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    // `fs::rename` replaces in one step on Windows too (POSIX-semantics rename, else
+    // MoveFileEx with REPLACE_EXISTING): it either succeeds or leaves the original in place,
+    // and readers never see the destination missing. Moving the original aside first opened
+    // exactly that gap for a concurrent reader. Sharing violations from editors/AV are often
+    // very brief, so retry those.
     #[cfg(windows)]
-    if destination.exists() {
-        // Move the original aside and roll back if installing the synced replacement fails,
-        // so an error never leaves the destination missing. Sharing violations from
-        // editors/AV are often very brief.
-        let backup = unique_temp_path(parent, ".oxi-backup", "tmp");
-        retry_windows_io("move original to backup", destination, || {
-            fs::rename(destination, &backup)
-        })?;
-        if let Err(install_error) = retry_windows_io("install replacement", destination, || {
-            fs::rename(tmp, destination)
-        }) {
-            if let Err(rollback_error) = retry_windows_io("restore original", destination, || {
-                fs::rename(&backup, destination)
-            }) {
-                return Err(format!(
-                    "{install_error}; rollback also failed: {rollback_error}; original remains at {}",
-                    backup.display()
-                ));
-            }
-            return Err(install_error);
-        }
-        let _ = retry_windows_io("remove replacement backup", &backup, || {
-            fs::remove_file(&backup)
-        });
-    } else {
-        retry_windows_io("install new file", destination, || {
-            fs::rename(tmp, destination)
-        })?;
-    }
+    retry_windows_io("install", destination, || fs::rename(tmp, destination))?;
     #[cfg(not(windows))]
     fs::rename(tmp, destination).map_err(|e| e.to_string())?;
     #[cfg(unix)]
-    if let Ok(dir) = fs::File::open(parent) {
-        let _ = sync(&dir);
+    {
+        let parent = destination
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = sync(&dir);
+        }
     }
     Ok(())
 }
