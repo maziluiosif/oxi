@@ -237,15 +237,13 @@ impl OxiApp {
 
     fn render_provider_selector(&mut self, ui: &mut Ui, width: f32) {
         let active_provider = self.conv.settings.active_provider;
+        let configured = self.cached_configured_providers(ui.ctx());
         let mut kinds = Vec::new();
         let picked = SelectMenu::new("provider", composer_provider_label(active_provider))
             .hover(active_provider.label())
+            .empty_text("Configure providers in Settings")
             .max_width(width)
             .show(ui, || {
-                // Only while the list is open: this clones the secrets blob and probes a
-                // legacy file, far too much work for every frame.
-                let oauth = crate::oauth::load_oauth_store();
-                let configured = self.conv.settings.configured_provider_kinds(&oauth);
                 let mut options = Vec::new();
                 for (group, providers) in composer_provider_groups(&configured) {
                     for kind in providers {

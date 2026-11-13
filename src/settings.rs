@@ -5,6 +5,7 @@
 //! so every existing `crate::settings::X` call site keeps working unchanged.
 
 mod app_settings;
+mod availability;
 mod provider;
 mod router;
 

@@ -504,3 +504,48 @@ fn acp_preferences_are_separate_per_workspace_and_survive_restart() {
     let legacy: AppSettings = serde_json::from_value(legacy).unwrap();
     assert!(legacy.acp_workspace_preferences.is_empty());
 }
+
+#[test]
+fn local_provider_placeholders_are_hidden_until_configured() {
+    let mut settings = AppSettings::default();
+    let oauth = crate::oauth::OAuthStore::default();
+    for kind in [
+        LlmProviderKind::Ollama,
+        LlmProviderKind::LmStudio,
+        LlmProviderKind::LlamaCpp,
+        LlmProviderKind::RemoteHf,
+    ] {
+        assert!(!settings.provider_is_configured(kind, &oauth), "{kind:?}");
+        settings.provider_mut(kind).model_id = "my-model".into();
+        assert!(settings.provider_is_configured(kind, &oauth), "{kind:?}");
+    }
+}
+
+#[test]
+fn custom_local_endpoint_and_ssh_host_count_as_configured() {
+    let mut settings = AppSettings::default();
+    let oauth = crate::oauth::OAuthStore::default();
+    settings.provider_mut(LlmProviderKind::Ollama).base_url = "http://server.local:11434/v1".into();
+    assert!(settings.provider_is_configured(LlmProviderKind::Ollama, &oauth));
+    if let crate::settings::ComputeLocation::RemoteSsh(ssh) =
+        &mut settings.provider_mut(LlmProviderKind::RemoteHf).location
+    {
+        ssh.host = "gpu.local".into();
+    }
+    assert!(settings.provider_is_configured(LlmProviderKind::RemoteHf, &oauth));
+}
+
+#[test]
+fn azure_requires_credentials_and_a_real_endpoint() {
+    let mut settings = AppSettings::default();
+    let kind = LlmProviderKind::AzureOpenAi;
+    let oauth = crate::oauth::OAuthStore::default();
+    assert!(!settings.provider_is_configured(kind, &oauth));
+    settings.provider_mut(kind).api_key = "key".into();
+    assert!(!settings.provider_is_configured(kind, &oauth));
+    settings.provider_mut(kind).base_url =
+        "https://resource.openai.azure.com/openai/deployments/model".into();
+    assert!(settings.provider_is_configured(kind, &oauth));
+    settings.provider_mut(kind).api_key = "  ".into();
+    assert!(!settings.provider_is_configured(kind, &oauth));
+}
