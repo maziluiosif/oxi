@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.40.0] - 2026-11-13
+
+### Added
+- **UI:** Toggle sidebar visibility from the titlebar for easier window management.
+
+### Changed
+- **Worktrees:** Clearer creation flow and improved display in the sidebar.
+- **Settings:** Providers panel now shows only configured providers instead of all available ones.
+- **Sidebar:** Clarified context menus to avoid duplicate worktree chats.
+
+### Fixed
+- **Security:** Updated quinn-udp dependency to resolve security audit failure.
+- **Code:** Fixed Clippy warnings for Rust 1.100 compatibility.
+
+
 ## [1.39.0] - 2026-11-10
 
 ### Added
@@ -1401,7 +1416,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.39.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.40.0...HEAD
+[1.40.0]: https://github.com/maziluiosif/oxi/compare/v1.39.0...v1.40.0
 [1.39.0]: https://github.com/maziluiosif/oxi/compare/v1.38.0...v1.39.0
 [1.38.0]: https://github.com/maziluiosif/oxi/compare/v1.37.0...v1.38.0
 [1.37.0]: https://github.com/maziluiosif/oxi/compare/v1.36.0...v1.37.0
