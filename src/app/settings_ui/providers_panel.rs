@@ -75,19 +75,63 @@ impl OxiApp {
 }
 
 impl OxiApp {
-    /// Providers with usable credentials, refreshed at most every 2 s: the check reads the
-    /// OAuth store (keychain-backed), far too slow to repeat every frame.
-    pub(super) fn cached_configured_providers(&self, ctx: &egui::Context) -> Vec<LlmProviderKind> {
-        let id = egui::Id::new("settings_configured_providers");
-        let now = ctx.input(|i| i.time);
-        if let Some((at, kinds)) = ctx.data(|d| d.get_temp::<(f64, Vec<LlmProviderKind>)>(id))
-            && now - at < 2.0
-        {
-            return kinds;
+    /// Cache discovery on a worker, including keychain access and login-shell PATH lookup.
+    /// Key by provider config so edits/session switches cannot reuse another config's result.
+    pub(in crate::app) fn cached_configured_providers(
+        &self,
+        ctx: &egui::Context,
+    ) -> Vec<LlmProviderKind> {
+        use std::hash::{Hash, Hasher};
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        #[derive(Default)]
+        struct Discovery {
+            result: Option<(Instant, Vec<LlmProviderKind>)>,
+            running: bool,
         }
-        let oauth = crate::oauth::load_oauth_store();
-        let kinds = self.conv.settings.configured_provider_kinds(&oauth);
-        ctx.data_mut(|d| d.insert_temp(id, (now, kinds.clone())));
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        // Hash only discovery inputs; cached model catalogs can be large, and secrets
+        // deliberately skip serde. No filesystem/keychain work happens on this thread.
+        for (kind, config) in &self.conv.settings.providers {
+            kind.hash(&mut hash);
+            config.api_key.hash(&mut hash);
+            config.acp_command.hash(&mut hash);
+            config.base_url.hash(&mut hash);
+            config.model_id.hash(&mut hash);
+            config.ssh_config().map(|ssh| &ssh.host).hash(&mut hash);
+        }
+        let id = egui::Id::new(("settings_configured_providers", hash.finish()));
+        let cache = ctx.data_mut(|data| {
+            data.get_temp_mut_or_default::<Arc<Mutex<Discovery>>>(id)
+                .clone()
+        });
+        let mut discovery = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let kinds = discovery
+            .result
+            .as_ref()
+            .map(|(_, kinds)| kinds.clone())
+            .unwrap_or_default();
+        if !discovery.running
+            && discovery
+                .result
+                .as_ref()
+                .is_none_or(|(at, _)| at.elapsed() >= Duration::from_secs(2))
+        {
+            discovery.running = true;
+            let settings = self.conv.settings.clone();
+            let ctx = ctx.clone();
+            let cache = cache.clone();
+            std::thread::spawn(move || {
+                let oauth = crate::oauth::load_oauth_store();
+                let kinds = settings.configured_provider_kinds(&oauth);
+                let mut discovery = cache.lock().unwrap_or_else(|e| e.into_inner());
+                discovery.result = Some((Instant::now(), kinds));
+                discovery.running = false;
+                ctx.request_repaint();
+            });
+        }
+        ctx.request_repaint_after(Duration::from_secs(2));
         kinds
     }
 }
@@ -107,8 +151,7 @@ fn chip_state(provider: LlmProviderKind, configured: &[LlmProviderKind]) -> Chip
         .iter()
         .find(|(label, _)| *label == "Hosted APIs")
         .is_some_and(|(_, kinds)| kinds.contains(&provider));
-    // Azure has no env fallback to detect, so it always reports configured; don't claim it.
-    if !hosted || provider == LlmProviderKind::AzureOpenAi {
+    if !hosted {
         ChipState::Neutral
     } else if configured.contains(&provider) {
         ChipState::Ready

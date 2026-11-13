@@ -84,8 +84,13 @@ fn selection_rects_in_clip(
     }
 
     let mut rects = Vec::with_capacity(last_row - first_row + 1);
-    for row_index in first_row..=last_row {
-        let row = &galley.rows[row_index];
+    for (row_index, row) in galley
+        .rows
+        .iter()
+        .enumerate()
+        .take(last_row + 1)
+        .skip(first_row)
+    {
         let left = if row_index == start.row {
             row.row.x_offset(start.column)
         } else {
@@ -147,8 +152,13 @@ fn selection_rects(
     let start = galley.layout_from_cursor(start);
     let end = galley.layout_from_cursor(end);
     let mut rects = Vec::new();
-    for row_index in start.row..=end.row {
-        let row = &galley.rows[row_index];
+    for (row_index, row) in galley
+        .rows
+        .iter()
+        .enumerate()
+        .take(end.row + 1)
+        .skip(start.row)
+    {
         let left = if row_index == start.row {
             row.row.x_offset(start.column)
         } else {

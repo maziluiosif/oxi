@@ -61,6 +61,8 @@ pub enum SettingsExitAction {
     BackToChat,
     NewChat,
     ToggleSidebar,
+    /// Hide/show the current sidebar view without switching to Chats.
+    ToggleSidebarVisibility,
     ToggleExplorer,
     /// Show the search sidebar (Cmd/Ctrl+Shift+F); `toggle` hides it when it is showing.
     ShowSearch {
@@ -393,7 +395,7 @@ pub struct Workspace {
     pub pinned: Vec<String>,
     /// Session files archived (see `WorkspaceEntry::archived`).
     pub archived: Vec<String>,
-    /// Keys of the sidebar date groups folded in this workspace (persisted in settings).
+    /// Persisted sidebar folds; `checkout` folds the main branch. Legacy date keys are ignored.
     pub folded_groups: Vec<String>,
     /// Set when the folder is a linked git work tree (see `worktrees.rs`).
     pub worktree: Option<crate::git::worktree::WorktreeInfo>,
@@ -707,6 +709,10 @@ pub struct SidebarState {
     pub width: f32,
     pub mode: SidebarMode,
     pub search: String,
+    pub history: bool,
+    pub history_project: Option<String>,
+    pub history_days: Option<i64>,
+    pub branches: super::sidebar::navigation::BranchCache,
     /// Cross-view notice shown in the Chats sidebar (for example, a blocked workspace switch).
     pub notice: Option<String>,
     /// When set, the sidebar shows an inline rename field for `(workspace_idx, session_idx)`.

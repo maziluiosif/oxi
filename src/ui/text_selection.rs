@@ -151,8 +151,13 @@ pub fn galley_selection_rects(
     let start = galley.layout_from_cursor(start);
     let end = galley.layout_from_cursor(end);
     let mut rects = Vec::new();
-    for row_index in start.row..=end.row {
-        let row = &galley.rows[row_index];
+    for (row_index, row) in galley
+        .rows
+        .iter()
+        .enumerate()
+        .take(end.row + 1)
+        .skip(start.row)
+    {
         let left = if row_index == start.row {
             row.row.x_offset(start.column)
         } else {

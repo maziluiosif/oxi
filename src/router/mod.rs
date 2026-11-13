@@ -104,7 +104,12 @@ pub fn helper_config(
         return cfg;
     }
     let oauth = crate::oauth::load_oauth_store();
-    let configured = settings.configured_provider_kinds(&oauth);
+    // Helpers only use HTTP providers. Avoid ACP installation/PATH discovery on the UI thread.
+    let configured: Vec<_> = LlmProviderKind::ALL
+        .into_iter()
+        .filter(|kind| !kind.is_acp() && *kind != LlmProviderKind::Router)
+        .filter(|kind| settings.provider_is_configured(*kind, &oauth))
+        .collect();
     let profile = classify::TaskProfile {
         tier: classify::Tier::Light,
         est_input_tokens: (input_chars / 4) as u64 + 500,

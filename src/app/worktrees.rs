@@ -205,7 +205,8 @@ impl OxiApp {
 
     fn open_worktree_workspace(&mut self, path: PathBuf) {
         let path = path.to_string_lossy().into_owned();
-        let sessions = Self::initial_workspace_sessions(&path, self.conn.no_session);
+        // A newly created checkout starts with exactly one fresh chat.
+        let sessions = vec![Self::blank_session("New chat")];
         let worktree = crate::git::worktree::info(std::path::Path::new(&path));
         if let Some(info) = &worktree {
             for ws in &mut self.conv.workspaces {
@@ -226,12 +227,23 @@ impl OxiApp {
             folded_groups: Vec::new(),
             worktree,
         });
-        self.select_workspace(self.conv.workspaces.len() - 1);
+        let wi = self.conv.workspaces.len() - 1;
+        self.conv.composer.notice = None;
+        self.select_workspace(wi);
         self.sync_workspaces_to_settings();
-        let root = self.active_workspace().root_path.clone();
+        let root = self.conv.workspaces[wi].root_path.clone();
         self.start_worktree_setup(&root);
-        self.new_chat();
-        self.finish_pending_split();
+        if self.conv.active_workspace == wi {
+            self.reveal_chat_view();
+            if self.conv.sidebar.open {
+                self.conv.sidebar.mode = super::state::SidebarMode::Chats;
+            }
+            self.conv.composer.focus_next_frame = true;
+            self.finish_pending_split();
+        } else {
+            // Switching can be blocked by an unsaved editor document.
+            self.conv.pending_split = None;
+        }
     }
 }
 
