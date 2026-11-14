@@ -847,7 +847,13 @@ mod integration_tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_else(|_| Duration::from_secs(0))
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("oxi-agent-loop-test-{name}-{nanos}"));
+        // The clock alone is not unique (macOS reports microseconds) across parallel tests.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let seq = NEXT.fetch_add(1, AtomicOrdering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "oxi-agent-loop-test-{name}-{}-{nanos}-{seq}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
