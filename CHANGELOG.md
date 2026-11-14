@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.42.0] - 2026-11-14
+
+### Added
+- **UI:** Titlebar button on macOS to show/hide the git panel, positioned in the top-right corner next to the sidebar toggle.
+
+
 ## [1.41.0] - 2026-11-14
 
 ### Added
@@ -1426,7 +1432,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.41.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.42.0...HEAD
+[1.42.0]: https://github.com/maziluiosif/oxi/compare/v1.41.0...v1.42.0
 [1.41.0]: https://github.com/maziluiosif/oxi/compare/v1.40.0...v1.41.0
 [1.40.0]: https://github.com/maziluiosif/oxi/compare/v1.39.0...v1.40.0
 [1.39.0]: https://github.com/maziluiosif/oxi/compare/v1.38.0...v1.39.0
