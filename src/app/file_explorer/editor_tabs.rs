@@ -30,6 +30,7 @@ impl OxiApp {
         let can_go_back = !self.conv.editor.navigation_back.is_empty();
         let can_go_forward = !self.conv.editor.navigation_forward.is_empty();
         let sidebar_open = self.conv.sidebar.open;
+        let git_open = self.conv.git_ui.open;
         let workspace_root = PathBuf::from(&self.active_workspace().root_path);
         let markdown_available = !git_diff_active
             && self
@@ -44,6 +45,11 @@ impl OxiApp {
                 0.0
             } else {
                 crate::ui::window_chrome::WINDOW_CONTROLS_W
+            }
+            - if git_open {
+                0.0
+            } else {
+                crate::ui::window_chrome::RIGHT_CONTROLS_W
             })
         .max(80.0);
 
@@ -247,6 +253,10 @@ impl OxiApp {
                         });
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if !git_open {
+                            // The title-bar git panel toggle sits over the top-right corner.
+                            ui.add_space(crate::ui::window_chrome::RIGHT_CONTROLS_W);
+                        }
                         if markdown_available
                             && text_tab_button(ui, "Preview")
                                 .on_hover_text("Open Markdown preview in a separate tab")

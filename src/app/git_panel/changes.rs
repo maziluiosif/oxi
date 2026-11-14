@@ -40,6 +40,8 @@ impl OxiApp {
                     .on_hover_text("Git operation in progress");
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // The title-bar git panel toggle floats over this corner on macOS.
+                ui.add_space(crate::ui::window_chrome::RIGHT_CONTROLS_W);
                 let busy = self.conv.git.busy;
                 let refresh = crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 22.0, false);
                 if busy {
