@@ -54,7 +54,57 @@ pub fn sidebar_toggle(ui: &mut Ui, open: bool) -> bool {
         egui::vec2(28.0, 28.0),
     );
     let label = if open { "Hide sidebar" } else { "Show sidebar" };
-    let response = ui.interact(rect, Id::new("titlebar_sidebar_toggle"), Sense::click());
+    panel_toggle(
+        ui,
+        rect,
+        "titlebar_sidebar_toggle",
+        label,
+        open,
+        PanelSide::Left,
+    )
+}
+
+/// Mirror of [`sidebar_toggle`] in the window's top-right corner, for the git panel.
+pub fn git_panel_toggle(ui: &mut Ui, open: bool) -> bool {
+    if TITLEBAR_H <= 0.0 {
+        return false;
+    }
+    let content = ui.ctx().content_rect();
+    let rect = Rect::from_min_size(
+        egui::pos2(content.right() - 4.0 - 28.0, content.top() + 3.0),
+        egui::vec2(28.0, 28.0),
+    );
+    let label = if open {
+        "Hide git panel"
+    } else {
+        "Show git panel"
+    };
+    panel_toggle(
+        ui,
+        rect,
+        "titlebar_git_panel_toggle",
+        label,
+        open,
+        PanelSide::Right,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PanelSide {
+    Left,
+    Right,
+}
+
+/// Window-layout glyph: a rounded frame split by a divider, the `side` column filled while open.
+fn panel_toggle(
+    ui: &mut Ui,
+    rect: Rect,
+    id: &str,
+    label: &str,
+    open: bool,
+    side: PanelSide,
+) -> bool {
+    let response = ui.interact(rect, Id::new(id), Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
     });
@@ -74,16 +124,23 @@ pub fn sidebar_toggle(ui: &mut Ui, open: bool) -> bool {
         egui::Stroke::new(1.2, color),
         egui::StrokeKind::Inside,
     );
-    let divider = icon.left() + 6.0;
+    let divider = match side {
+        PanelSide::Left => icon.left() + 6.0,
+        PanelSide::Right => icon.right() - 6.0,
+    };
     if open {
-        ui.painter().rect_filled(
-            Rect::from_min_max(
+        let column = match side {
+            PanelSide::Left => Rect::from_min_max(
                 icon.min + egui::vec2(1.5, 1.5),
                 egui::pos2(divider, icon.bottom() - 1.5),
             ),
-            0,
-            crate::theme::c_text_faint(),
-        );
+            PanelSide::Right => Rect::from_min_max(
+                egui::pos2(divider, icon.top() + 1.5),
+                icon.max - egui::vec2(1.5, 1.5),
+            ),
+        };
+        ui.painter()
+            .rect_filled(column, 0, crate::theme::c_text_faint());
     }
     ui.painter().line_segment(
         [
@@ -101,3 +158,6 @@ pub const WINDOW_CONTROLS_W: f32 = if cfg!(target_os = "macos") {
 } else {
     0.0
 };
+
+/// Room the top-right git panel toggle needs when a strip reaches the window's right edge.
+pub const RIGHT_CONTROLS_W: f32 = if cfg!(target_os = "macos") { 30.0 } else { 0.0 };

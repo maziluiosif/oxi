@@ -190,6 +190,16 @@ impl eframe::App for OxiApp {
         if crate::ui::window_chrome::sidebar_toggle(ui, self.conv.sidebar.open) {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleSidebarVisibility);
         }
+        let git_shown = self.conv.git_ui.open && !self.conv.settings_page.open;
+        if crate::ui::window_chrome::git_panel_toggle(ui, git_shown) {
+            // Settings covers an open git panel: leaving Settings is what reveals it.
+            let action = if self.conv.git_ui.open && self.conv.settings_page.open {
+                super::state::SettingsExitAction::BackToChat
+            } else {
+                super::state::SettingsExitAction::ToggleGitPanel
+            };
+            self.request_settings_exit(action);
+        }
 
         self.render_file_picker(ui.ctx());
 
