@@ -6,6 +6,9 @@
 //! crate-private visibility it had when this was a binary-only crate, so internal call
 //! sites keep using the same `crate::…` paths unchanged.
 
+// Test fixtures write files directly; production code must use `fsutil` (see clippy.toml).
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 mod agent;
 mod app;
 mod app_dirs;

@@ -65,10 +65,12 @@ pub fn unsaved(path: &Path) -> Option<Arc<str>> {
 }
 
 /// Write to disk and publish the successful edit together. The UI cannot drain the edit
-/// before the disk write finishes, and failed writes never replace an editor buffer.
+/// before the disk write finishes, and failed writes never replace an editor buffer. The write
+/// is crash-safe like an editor save ([`crate::fsutil::save`]): a crash or a full disk mid-way
+/// leaves the old content, never a truncated file.
 pub fn write_text(path: &Path, content: &str) -> std::io::Result<()> {
     let open = with(|buffers| -> std::io::Result<bool> {
-        std::fs::write(path, content)?;
+        crate::fsutil::save(path, content.as_bytes())?;
         let Some((_, text)) = buffers.open.get_mut(path) else {
             return Ok(false);
         };
@@ -153,6 +155,40 @@ mod tests {
 
         publish(std::iter::empty());
         assert_eq!(unsaved(&dirty), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Agent writes go through the crash-safe save: a linked file stays a link to the edited
+    /// target, and no temporary files are left next to it.
+    #[cfg(unix)]
+    #[test]
+    fn agent_writes_keep_links_and_leave_no_temporary_files() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!(
+            "oxi-open-buffers-link-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("real.rs");
+        let link = dir.join("link.rs");
+        std::fs::write(&target, "old").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        write_text(&link, "new").unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names.len(), 2, "unexpected files: {names:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

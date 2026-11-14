@@ -48,7 +48,9 @@ pub(super) fn apply_block(cwd: &str, edit: &BlockEdit) -> Result<(), String> {
             let content = String::from_utf8(content)
                 .map_err(|_| format!("{} is not UTF-8 text", edit.path))?;
             let updated = splice_lines(&content, edit)?;
-            std::fs::write(&path, updated).map_err(|e| format!("{}: {e}", edit.path))
+            // Like an editor save: a crash mid-write leaves the old text, links stay links.
+            crate::fsutil::save(&path, updated.as_bytes())
+                .map_err(|e| format!("{}: {e}", edit.path))
         }
         BlockTarget::Index => write_index_block(&repo, edit),
     }

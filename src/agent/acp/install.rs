@@ -541,7 +541,7 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
 }
 
 fn touch(path: &Path) -> Result<(), String> {
-    std::fs::write(path, b"").map_err(|e| e.to_string())
+    crate::fsutil::write_atomic(path, b"")
 }
 
 #[cfg(test)]

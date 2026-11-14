@@ -16,7 +16,14 @@ fn temp_workspace(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("oxi-tools-{name}-{nanos}"));
+    // The clock alone is not unique: macOS reports microseconds, so tests that set up
+    // workspaces on parallel threads could share (and clobber) one directory.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "oxi-tools-{name}-{}-{nanos}-{seq}",
+        std::process::id()
+    ));
     fs::create_dir_all(&path).unwrap();
     path
 }

@@ -398,7 +398,8 @@ fn save_image(data_b64: &str, mime: &str) -> Option<PathBuf> {
     let path = dir.join(format!("{:016x}.{ext}", h.finish()));
     if !path.is_file() {
         std::fs::create_dir_all(&dir).ok()?;
-        std::fs::write(&path, &bytes).ok()?;
+        // Atomic: the cache trusts any file already there, so a torn write would stick.
+        crate::fsutil::write_atomic(&path, &bytes).ok()?;
     }
     Some(path)
 }

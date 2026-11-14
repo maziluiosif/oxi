@@ -54,14 +54,19 @@ impl FileState {
     }
 
     fn restore(&self, path: &Path) -> Result<(), String> {
-        remove_current(path)?;
+        // A file replaces whatever file or link is there in one atomic rename: deleting first
+        // would lose both versions if the write then failed (full disk). Only a directory in
+        // its place has to go first.
+        let replaced_by_rename = matches!(self, Self::File { .. })
+            && fs::symlink_metadata(path).map_or(true, |m| !m.is_dir());
+        if !replaced_by_rename {
+            remove_current(path)?;
+        }
         match self {
             Self::Missing => Ok(()),
             Self::File { bytes, permissions } => {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                }
-                fs::write(path, bytes).map_err(|e| format!("Restore {}: {e}", path.display()))?;
+                crate::fsutil::write_atomic(path, bytes)
+                    .map_err(|e| format!("Restore {}: {e}", path.display()))?;
                 fs::set_permissions(path, permissions.clone())
                     .map_err(|e| format!("Restore permissions for {}: {e}", path.display()))
             }

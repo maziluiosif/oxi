@@ -520,6 +520,67 @@ mod tests {
         assert!(chat_messages_equal(&loaded[1], &session.messages[1]));
     }
 
+    /// The app and the headless daemon can save one chat at the same moment: every result on
+    /// disk must still be one whole save, and no temporary files may be left behind.
+    #[test]
+    fn concurrent_saves_of_one_chat_never_mix() {
+        let root = temp_root("concurrent-saves");
+        let session_for = |text: &str| Session {
+            delegated: Default::default(),
+            title: "Chat".into(),
+            config: None,
+            messages: hydrate::messages_from_get_messages(&json!({
+                "messages": [{ "role": "user", "content": text }]
+            })),
+            session_file: None,
+            messages_loaded: true,
+            input_text: String::new(),
+            pending_images: Vec::new(),
+            pending_texts: Vec::new(),
+            chars_per_token: None,
+            agent_context: None,
+            wire_cache: None,
+            disk_mtime: None,
+            modified: SystemTime::now(),
+        };
+        let mut first = session_for("seed");
+        save_session_messages(root.to_str().unwrap(), &mut first).unwrap();
+        let file = first.session_file.clone().unwrap();
+
+        let writers: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                let root = root.clone();
+                let file = file.clone();
+                let mut session = session_for(&name.repeat(50_000));
+                session.session_file = Some(file);
+                std::thread::spawn(move || {
+                    for _ in 0..20 {
+                        save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for _ in 0..200 {
+            let loaded = load_session_messages(&file).expect("a whole session on disk");
+            assert_eq!(loaded.len(), 1);
+            let text = &loaded[0].text;
+            assert!(text == "seed" || text.chars().all(|c| c == text.chars().next().unwrap()));
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let dir = std::path::Path::new(&file).parent().unwrap();
+        let leftovers: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn save_and_reload_preserves_assistant_block_formatting() {
         let root = temp_root("formatting-roundtrip");

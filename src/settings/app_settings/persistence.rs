@@ -1,7 +1,10 @@
 //! On-disk settings persistence and OS-keychain synchronization.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+
+use serde_json::{Map, Value};
 
 use super::migration::LegacyAppSettings;
 use super::*;
@@ -38,7 +41,10 @@ impl AppSettings {
         // in sequence: a profiles-era file must never silently parse as the new shape
         // (it would come out with empty provider configs and drop the user's setup).
         let (mut settings, ssh_renames, migrated) = if value.get("providers").is_some() {
-            let s = serde_json::from_value::<AppSettings>(value).unwrap_or_default();
+            let (s, error) = Self::from_current_value(value);
+            if let Some(e) = error {
+                preserve_unreadable_copy(&path, &e);
+            }
             (s, Vec::new(), false)
         } else if value.get("profiles").is_some() {
             let (s, renames) = Self::from_profiles_era(value, |profile_id| {
@@ -54,6 +60,7 @@ impl AppSettings {
             (Self::default(), Vec::new(), false)
         };
         settings.normalize();
+        settings.remember_fallbacks();
         settings.migrate_secrets_to_keychain();
         let unified = crate::secrets::load_unified();
         settings.github_token = unified.github_token.clone();
@@ -146,9 +153,207 @@ impl AppSettings {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let json = self.to_json_string()?;
         // Owner-only as defense in depth for the rest of this file (base URLs, model ids,
         // etc.); the actual secrets (API keys) live in the OS keychain, not here.
         crate::fsutil::write_atomic_private(&path, json.as_bytes())
+    }
+
+    /// The `settings.json` text for these settings, with anything this version could not read
+    /// put back as it was (see [`UnreadableSettings`]).
+    pub(crate) fn to_json_string(&self) -> Result<String, String> {
+        if self.unreadable.is_empty() {
+            return serde_json::to_string_pretty(self).map_err(|e| e.to_string());
+        }
+        let mut value = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        self.unreadable.restore_into(&mut value);
+        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
+    }
+
+    /// Parse current-shape settings JSON. When this version can't fully read it (typically a
+    /// newer oxi wrote a provider or option this one doesn't know), keep everything it can
+    /// read instead of starting from defaults, and remember the rest, plus any fields it has
+    /// never heard of, so saves carry them through. Returns the strict parse error, if any.
+    pub(crate) fn from_current_value(value: Value) -> (Self, Option<serde_json::Error>) {
+        let (mut settings, error) = match serde_json::from_value::<Self>(value.clone()) {
+            Ok(settings) => (settings, None),
+            Err(e) => (Self::from_value_lenient(value.clone()), Some(e)),
+        };
+        if let Value::Object(file) = &value
+            && let Ok(Value::Object(known)) = serde_json::to_value(Self::default())
+        {
+            for (key, raw) in file {
+                if !known.contains_key(key) && !NOT_SAVED.contains(&key.as_str()) {
+                    settings
+                        .unreadable
+                        .fields
+                        .insert(key.clone(), Unreadable::new(raw.clone()));
+                }
+            }
+        }
+        if !settings.unreadable.is_empty() {
+            log::warn!(
+                "settings.json: keeping what this version can't read: {}",
+                settings.unreadable.describe()
+            );
+        }
+        (settings, error)
+    }
+
+    /// Parse settings JSON one top-level field (and one provider entry) at a time: whatever
+    /// parses is kept, the rest falls back to its default and goes to `unreadable`.
+    fn from_value_lenient(value: Value) -> Self {
+        let Value::Object(file) = value else {
+            return Self::default();
+        };
+        let Ok(Value::Object(mut kept)) = serde_json::to_value(Self::default()) else {
+            return Self::default();
+        };
+        let parses = |candidate: &Map<String, Value>| {
+            serde_json::from_value::<Self>(Value::Object(candidate.clone())).is_ok()
+        };
+        let mut unreadable = UnreadableSettings::default();
+        for (key, raw) in file {
+            if key == PROVIDERS
+                && let Value::Object(entries) = raw
+            {
+                let mut readable = Map::new();
+                for (kind, entry) in entries {
+                    let mut trial = readable.clone();
+                    trial.insert(kind.clone(), entry.clone());
+                    kept.insert(PROVIDERS.to_string(), Value::Object(trial.clone()));
+                    if parses(&kept) {
+                        readable = trial;
+                    } else {
+                        let mut entry = entry;
+                        // API keys belong in the keychain, never back in settings.json.
+                        if let Value::Object(fields) = &mut entry {
+                            fields.remove("api_key");
+                        }
+                        unreadable.providers.insert(kind, Unreadable::new(entry));
+                    }
+                }
+                kept.insert(PROVIDERS.to_string(), Value::Object(readable));
+                continue;
+            }
+            let previous = kept.insert(key.clone(), raw.clone());
+            if !parses(&kept) {
+                match previous {
+                    Some(previous) => kept.insert(key.clone(), previous),
+                    None => kept.remove(&key),
+                };
+                unreadable.fields.insert(key, Unreadable::new(raw));
+            }
+        }
+        let mut settings = serde_json::from_value::<Self>(Value::Object(kept)).unwrap_or_default();
+        settings.unreadable = unreadable;
+        settings
+    }
+
+    /// Record what each unreadable entry falls back to in this version, so a save can tell
+    /// whether the user changed it here (their change wins) or not (the original is restored).
+    pub(crate) fn remember_fallbacks(&mut self) {
+        if self.unreadable.is_empty() {
+            return;
+        }
+        let Ok(value) = serde_json::to_value(&*self) else {
+            return;
+        };
+        for (key, entry) in &mut self.unreadable.fields {
+            entry.fallback = value.get(key).cloned();
+        }
+        for (kind, entry) in &mut self.unreadable.providers {
+            entry.fallback = value.get(PROVIDERS).and_then(|p| p.get(kind)).cloned();
+        }
+    }
+}
+
+const PROVIDERS: &str = "providers";
+
+/// Fields this version reads but deliberately never writes (legacy or secret): dropping them
+/// on save is intended, so they are not "unknown".
+const NOT_SAVED: [&str; 2] = ["require_approval", "github_token"];
+
+/// Parts of `settings.json` that did not parse in this version, with what they fell back to.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct UnreadableSettings {
+    /// Top-level fields, by key.
+    fields: BTreeMap<String, Unreadable>,
+    /// Entries of the `providers` object, by provider slug.
+    providers: BTreeMap<String, Unreadable>,
+}
+
+/// One unreadable value: what the file had, and what this version used instead (`None` when
+/// it has no such entry at all, e.g. a provider it doesn't know).
+#[derive(Debug, Clone, PartialEq)]
+struct Unreadable {
+    raw: Value,
+    fallback: Option<Value>,
+}
+
+impl Unreadable {
+    fn new(raw: Value) -> Self {
+        Self {
+            raw,
+            fallback: None,
+        }
+    }
+}
+
+impl UnreadableSettings {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.fields.is_empty() && self.providers.is_empty()
+    }
+
+    fn describe(&self) -> String {
+        self.fields
+            .keys()
+            .cloned()
+            .chain(self.providers.keys().map(|k| format!("{PROVIDERS}.{k}")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Put each original value back into `value` (serialized settings) unless the user changed
+    /// that entry in this version.
+    fn restore_into(&self, value: &mut Value) {
+        let Value::Object(root) = value else {
+            return;
+        };
+        restore(root, &self.fields);
+        if let Some(Value::Object(providers)) = root.get_mut(PROVIDERS) {
+            restore(providers, &self.providers);
+        }
+    }
+}
+
+fn restore(target: &mut Map<String, Value>, unreadable: &BTreeMap<String, Unreadable>) {
+    for (key, entry) in unreadable {
+        if target.get(key) == entry.fallback.as_ref() {
+            target.insert(key.clone(), entry.raw.clone());
+        }
+    }
+}
+
+/// Keep one copy of a `settings.json` this version can't fully read, per version, so a newer
+/// file is never lost even if something goes wrong later. Launching repeatedly doesn't pile up
+/// copies.
+fn preserve_unreadable_copy(path: &std::path::Path, error: &serde_json::Error) {
+    let backup = path.with_file_name(format!(
+        "settings.unreadable-by-{}.json",
+        crate::update::APP_VERSION
+    ));
+    if backup.exists() {
+        log::warn!("settings.json: {error}; reading what this version can");
+        return;
+    }
+    match fs::copy(path, &backup) {
+        Ok(_) => log::warn!(
+            "settings.json: {error}; reading what this version can (original copied to {})",
+            backup.display()
+        ),
+        Err(copy_err) => {
+            log::error!("settings.json: {error}; could not copy it aside: {copy_err}")
+        }
     }
 }
