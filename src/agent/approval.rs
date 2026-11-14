@@ -27,6 +27,8 @@ pub enum ApprovalDecision {
     ApproveRest,
     /// Refuse this tool call; the model is told the user denied it.
     Deny,
+    /// The `elicitation/create` response to a question the agent asked.
+    Elicitation(serde_json::Value),
 }
 
 /// Build a short human-readable summary of a pending tool call for the approval prompt.
@@ -63,6 +65,10 @@ impl ApprovalPolicy {
     }
 
     pub fn requires_approval(self, name: &str) -> bool {
+        // Only there when the user switched computer use on, which is the approval.
+        if crate::computer_use::is_tool(name) {
+            return false;
+        }
         match crate::agent::tools::tool_side_effect(name) {
             crate::agent::tools::ToolSideEffect::ReadOnly => false,
             crate::agent::tools::ToolSideEffect::WorkspaceMutation => self.write_edit,
@@ -232,7 +238,7 @@ impl ApprovalGate {
                     self.auto_approve = true;
                     return Ok(());
                 }
-                Ok(ApprovalDecision::Deny) => {
+                Ok(ApprovalDecision::Deny | ApprovalDecision::Elicitation(_)) => {
                     return Err(format!("User denied running the `{name}` tool."));
                 }
                 Err(RecvTimeoutError::Timeout) => continue,

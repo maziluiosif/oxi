@@ -350,7 +350,7 @@ fn status(dir: &Path, args: &Value) -> Result<String, String> {
         if status.state.ended() || started.elapsed() >= wait {
             if status.state.ended() {
                 // The parent has the result now; the app need not send it again.
-                let _ = std::fs::write(fetched_path(dir, task), b"");
+                let _ = crate::fsutil::write_atomic(&fetched_path(dir, task), b"");
             }
             return Ok(describe(&status));
         }

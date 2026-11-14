@@ -8,6 +8,24 @@ It speaks the same JSON-lines protocol as the Sublime Text package
 (`src/headless/mod.rs`) over TCP to the daemon's phone listener
 (`src/headless/phone.rs`), which accepts Tailscale peers carrying the pairing token.
 
+## What it does
+
+- **Chats**: streaming replies, tool calls with diffs, the agent's checklist above the
+  composer, plan mode, evidence mode, model and agent picker, context use.
+- **Attachments**: take a photo with the camera, pick photos and files, or share text,
+  links, photos and files into oxi from any other app. Drafts are kept per chat.
+- **Questions and approvals**: tool approvals, and the agent's questions
+  (`AskUserQuestion`, MCP forms, sign-in pages) as a form to fill.
+- **In the background**: while a chat the phone sent a prompt to is running,
+  `TurnService` (a foreground service) keeps the connection up. A notification tells
+  when the reply is ready, with a Reply field for the follow-up, or when a tool waits for
+  approval, with Allow (needs the phone unlocked) and Deny.
+- **Source control**: changed files and their diffs, stage, commit (the server's model
+  can write the message), pull, push, recent commits.
+
+The connection belongs to the process (`OxiApp` in `Core.kt`), not to a screen, so the
+service and the notification actions (`Background.kt`) use it without an activity.
+
 ## Build
 
 Needs JDK 17 and the Android SDK (platform 35). With Homebrew:

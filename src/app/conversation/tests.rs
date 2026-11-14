@@ -132,3 +132,29 @@ fn selection_scroll_survives_nested_scroll_areas_and_stops_on_release() {
     let stopped = frame(vec![]);
     assert_eq!(released, stopped);
 }
+
+#[test]
+fn error_banner_title_names_the_kind_of_failure() {
+    use super::stream_error_title as title;
+    assert_eq!(
+        title("HTTP 401 Unauthorized: invalid API key for this endpoint"),
+        "Sign-in or API key rejected"
+    );
+    assert_eq!(
+        title("HTTP 429: Rate limit exceeded, retry in 20s"),
+        "Rate limit or quota reached"
+    );
+    assert_eq!(
+        title("error sending request for url (http://127.0.0.1:8080/v1)"),
+        "Could not reach the provider"
+    );
+    assert_eq!(
+        title("This model's maximum context length is 128000 tokens"),
+        "Conversation too long for this model"
+    );
+    assert_eq!(
+        title("HTTP 404: model not found"),
+        "Model or endpoint not found"
+    );
+    assert_eq!(title("the agent process exited"), "Something went wrong");
+}

@@ -24,6 +24,10 @@ const LOCAL_COMMANDS: &[(&str, &str)] = &[
         "evidence",
         "Toggle evidence mode (the agent proves changes with before/after captures and checks)",
     ),
+    (
+        "learn",
+        "Turn this chat's corrections into rules later chats start with; /learn <focus> narrows it",
+    ),
 ];
 
 const ROW_H: f32 = 26.0;
@@ -65,7 +69,7 @@ fn filter_commands(all: Vec<AcpSlashCommand>, query: &str) -> Vec<AcpSlashComman
 }
 
 /// Local commands an agent's command of the same name can't replace.
-const ALWAYS_LOCAL: &[&str] = &["new", "plan", "evidence"];
+const ALWAYS_LOCAL: &[&str] = &["new", "plan", "evidence", "learn"];
 
 /// oxi's commands followed by the agent's. `/new` and `/plan` always stay oxi's; an agent
 /// `/compact` replaces oxi's, which can't shrink the context an ACP agent keeps itself.
@@ -331,11 +335,14 @@ mod tests {
         let merged = merge_commands(&[cmd("compact"), cmd("init"), cmd("new"), cmd("plan")]);
         assert_eq!(
             names(&merged),
-            ["new", "plan", "evidence", "compact", "init"]
+            ["new", "plan", "evidence", "learn", "compact", "init"]
         );
-        assert_eq!(merged[3].description, "");
+        assert_eq!(merged[4].description, "");
         assert!(!merged[1].description.is_empty());
         let local_only = merge_commands(&[]);
-        assert_eq!(names(&local_only), ["new", "compact", "plan", "evidence"]);
+        assert_eq!(
+            names(&local_only),
+            ["new", "compact", "plan", "evidence", "learn"]
+        );
     }
 }

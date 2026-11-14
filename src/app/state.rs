@@ -23,6 +23,21 @@ pub struct PendingApproval {
     pub summary: String,
     /// For a simple `bash` command, the prefix "Always allow" would add to the allowlist.
     pub allow_prefix: Option<String>,
+    /// The agent asks something instead of wanting to run a tool; holds the answers so far.
+    pub elicitation: Option<crate::agent::elicitation::Elicitation>,
+}
+
+impl PendingApproval {
+    /// An `elicitation/create` request waits on the user exactly like an approval does.
+    pub fn for_elicitation(params: &serde_json::Value) -> Self {
+        let elicitation = crate::agent::elicitation::parse(params);
+        Self {
+            name: "question".to_string(),
+            summary: elicitation.message.clone(),
+            allow_prefix: None,
+            elicitation: Some(elicitation),
+        }
+    }
 }
 
 /// Active section in the settings window (sidebar).
@@ -46,6 +61,8 @@ pub enum SettingsExitAction {
     BackToChat,
     NewChat,
     ToggleSidebar,
+    /// Hide/show the current sidebar view without switching to Chats.
+    ToggleSidebarVisibility,
     ToggleExplorer,
     /// Show the search sidebar (Cmd/Ctrl+Shift+F); `toggle` hides it when it is showing.
     ShowSearch {
@@ -227,6 +244,9 @@ pub struct EditorState {
     /// Keyboard focus when the picker opened (`None` until the picker captures it), given back
     /// after a palette command so its keys land where the user was.
     pub file_picker_return_focus: Option<Option<eframe::egui::Id>>,
+    /// Put the query field's caret after its text on the next frame (set when the picker
+    /// opens with a prefix such as `>`, which egui would otherwise leave the caret before).
+    pub file_picker_caret_to_end: bool,
     /// Palette commands run most recently, newest first (indices into the palette's list).
     pub palette_recent: Vec<usize>,
     /// Goto Symbol outline of the picker's document, keyed by path and content revision.
@@ -375,7 +395,7 @@ pub struct Workspace {
     pub pinned: Vec<String>,
     /// Session files archived (see `WorkspaceEntry::archived`).
     pub archived: Vec<String>,
-    /// Keys of the sidebar date groups folded in this workspace (persisted in settings).
+    /// Persisted sidebar folds; `checkout` folds the main branch. Legacy date keys are ignored.
     pub folded_groups: Vec<String>,
     /// Set when the folder is a linked git work tree (see `worktrees.rs`).
     pub worktree: Option<crate::git::worktree::WorktreeInfo>,
@@ -689,6 +709,10 @@ pub struct SidebarState {
     pub width: f32,
     pub mode: SidebarMode,
     pub search: String,
+    pub history: bool,
+    pub history_project: Option<String>,
+    pub history_days: Option<i64>,
+    pub branches: super::sidebar::navigation::BranchCache,
     /// Cross-view notice shown in the Chats sidebar (for example, a blocked workspace switch).
     pub notice: Option<String>,
     /// When set, the sidebar shows an inline rename field for `(workspace_idx, session_idx)`.

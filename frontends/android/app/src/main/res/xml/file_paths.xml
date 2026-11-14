@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photos taken from the composer wait here until they are read into the prompt. -->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>

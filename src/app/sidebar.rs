@@ -1,5 +1,6 @@
 //! Sidebar: workspace list, session rows, search.
 
+pub(super) mod navigation;
 mod workspace_list;
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
@@ -17,6 +18,7 @@ impl OxiApp {
     /// Sidebar list and controls.
     pub(crate) fn render_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
+        self.poll_sidebar_branches(ui.ctx());
 
         // Primary action first, with its shortcut, like other chat apps.
         let new_chat = crate::ui::chrome::flat_button_icon(
@@ -145,13 +147,38 @@ impl OxiApp {
             ui.add_space(8.0);
         }
 
+        if self.conv.sidebar.history {
+            self.render_sidebar_history_filters(ui);
+        }
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
+            .max_height((ui.available_height() - 38.0).max(40.0))
             .auto_shrink([false, false])
             .scroll_bar_visibility(ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
+
+        ui.add_space(SPACE_SM);
+        let history = self.conv.sidebar.history;
+        let label = if history {
+            "Back to recent chats"
+        } else {
+            "History"
+        };
+        if crate::ui::chrome::flat_button_icon(
+            ui,
+            ICON_UNDO,
+            label,
+            FS_SMALL,
+            egui::vec2(ui.available_width(), 28.0),
+            c_text_muted(),
+        )
+        .on_hover_text("Browse all saved chats, including older and archived conversations")
+        .clicked()
+        {
+            self.conv.sidebar.history = !history;
+        }
 
         // The outer sidebar allocation already owns the full fixed width/height. Expanding
         // again from content made Conversations report a subtly different size than Explorer.
@@ -171,11 +198,10 @@ impl OxiApp {
                     .color(c_text_muted()),
             );
             ui.add_space(6.0);
-            if ui.button("Open folder…").clicked() {
+            if crate::ui::chrome::primary_button(ui, "Open folder…").clicked() {
                 self.open_workspace_folder();
             }
-            if ui
-                .button("Start a general chat")
+            if crate::ui::chrome::ghost_button(ui, "Start a general chat", false)
                 .on_hover_text("A chat that isn't about any project, run in ~/oxi-general")
                 .clicked()
             {
@@ -200,6 +226,16 @@ impl OxiApp {
                 .filter(|(_, p)| *p == Some(wi))
                 .map(|&(child, _)| child)
                 .collect();
+            if self.conv.sidebar.history
+                && self
+                    .conv
+                    .sidebar
+                    .history_project
+                    .as_ref()
+                    .is_some_and(|root| root != &self.conv.workspaces[wi].root_path)
+            {
+                continue;
+            }
             sidebar_changed = self.render_sidebar_workspace(ui, wi, None, false, &q, &children);
         }
     }
@@ -296,8 +332,10 @@ impl OxiApp {
         parent: usize,
         q: &str,
     ) -> bool {
-        let parent_folded = self.conv.workspaces[parent].sidebar_folded && q.is_empty();
-        if parent_folded && !self.sidebar_workspace_needs_visibility(wi, ui.ctx()) {
+        let parent_folded = self.conv.workspaces[parent].sidebar_folded
+            && q.is_empty()
+            && !self.conv.sidebar.history;
+        if parent_folded && !self.sidebar_workspace_has_active_chats(wi, ui.ctx()) {
             return false;
         }
         let mut sidebar_changed = false;
@@ -323,20 +361,6 @@ impl OxiApp {
             });
         });
         sidebar_changed
-    }
-
-    fn sidebar_workspace_needs_visibility(&self, wi: usize, ctx: &egui::Context) -> bool {
-        wi == self.conv.active_workspace
-            || (0..self.conv.workspaces[wi].sessions.len()).any(|si| {
-                let key = self.session_key(wi, si);
-                self.session_row_is_running(wi, si)
-                    || self.run_state(key).is_some_and(|run| {
-                        run.completion_unseen
-                            || (run.pending_approval.is_some()
-                                && (key != self.active_session_key()
-                                    || !self.active_chat_is_visible(ctx)))
-                    })
-            })
     }
 
     /// Whether a chat's title or loaded messages contain `query` (already lowercased). The
@@ -394,57 +418,22 @@ impl OxiApp {
     }
 }
 
-/// Soft vertical fade behind the floating composer so transcript text doesn't compete
-/// with the input card.
-/// Sidebar section a chat row is listed under.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+/// Ordering and daily visibility, independent of the saved archive state.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum SidebarGroup {
     Pinned,
     Today,
-    Yesterday,
-    Week,
-    Month,
     Older,
-    /// Archived chats, last and folded until opened.
     Archived,
 }
 
 impl SidebarGroup {
-    /// Stable id persisted in settings for a folded group.
-    fn key(self) -> &'static str {
-        match self {
-            Self::Pinned => "pinned",
-            Self::Today => "today",
-            Self::Yesterday => "yesterday",
-            Self::Week => "week",
-            Self::Month => "month",
-            Self::Older => "older",
-            // Stored when the group is open: it starts folded.
-            Self::Archived => "archived",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Pinned => "Pinned",
-            Self::Today => "Today",
-            Self::Yesterday => "Yesterday",
-            Self::Week => "Previous 7 days",
-            Self::Month => "Previous 30 days",
-            Self::Older => "Older",
-            Self::Archived => "Archived",
-        }
-    }
-
-    /// Bucket by local calendar day, so "Yesterday" means the previous date, not 24–48 h ago.
     fn for_time(modified: std::time::SystemTime, today: chrono::NaiveDate) -> Self {
         let day = chrono::DateTime::<chrono::Local>::from(modified).date_naive();
-        match (today - day).num_days() {
-            ..=0 => Self::Today,
-            1 => Self::Yesterday,
-            2..=7 => Self::Week,
-            8..=30 => Self::Month,
-            _ => Self::Older,
+        if day >= today {
+            Self::Today
+        } else {
+            Self::Older
         }
     }
 }

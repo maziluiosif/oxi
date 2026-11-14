@@ -54,6 +54,8 @@ impl Server {
         let id = str_param(params, "chat")?;
         self.load_chat(&root, &id)?;
         let config = self.ensure_config(&id);
+        let agent_options =
+            crate::agent::acp::config_options::options(&id, &self.agent_command(&id));
         let chat = &self.chats[&id];
         let messages = &chat.session.messages;
         let from = (params["from"].as_u64().unwrap_or(0) as usize).min(messages.len());
@@ -72,6 +74,7 @@ impl Server {
             "running": chat.run.is_some(),
             "queued": chat.queued.len(),
             "approval": chat.pending_approval,
+            "agent_options": agent_options.as_deref(),
             "plan": chat.plan_mode,
             "evidence": chat.evidence_mode.enabled(),
             "context": chat.session.agent_context.map(|(_, used, size)| json!({"used": used, "size": size})),

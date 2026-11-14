@@ -132,6 +132,45 @@ fn agent_row(ui: &mut Ui, c: &DelegatedChat, selected: bool, compact: bool) -> e
     crate::ui::chrome::keyboard_focus_ring(ui, &response, egui::CornerRadius::same(RADIUS_ROW));
     response.on_hover_text(format!("{} · {}\n{}", c.label(), status(c), c.description))
 }
+/// Fold row for a chat's agents: "▸ Agents · 3 · 1 running".
+fn subagents_toggle(ui: &mut Ui, open: bool, count: usize, running: usize) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
+    let label = format!("Agents · {count}");
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, &label)
+    });
+    if response.hovered() {
+        ui.painter().rect_filled(rect, RADIUS_ROW, c_bg_elevated());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let y = rect.center().y;
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, y),
+        egui::Align2::CENTER_CENTER,
+        if open { "▾" } else { "▸" },
+        egui::FontId::proportional(FS_TINY),
+        c_text_faint(),
+    );
+    let text = ui.painter().text(
+        egui::pos2(rect.left() + 22.0, y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(FS_TINY),
+        c_text_muted(),
+    );
+    if running > 0 {
+        ui.painter().text(
+            egui::pos2(text.right() + 4.0, y),
+            egui::Align2::LEFT_CENTER,
+            format!("· {running} running"),
+            egui::FontId::proportional(FS_TINY),
+            c_accent(),
+        );
+    }
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, egui::CornerRadius::same(RADIUS_ROW));
+    response
+}
 impl OxiApp {
     pub(super) fn selected_subagent(&self, ctx: &egui::Context) -> Option<(String, String)> {
         let key = self.active_session_key();
@@ -233,26 +272,30 @@ impl OxiApp {
             })
             .map(|(i, _)| i)
             .collect();
+        // Same numbers as the transcript roster: agents, not the workflows that group them.
+        let agents = chats.iter().filter(|c| !c.task).count();
+        let count = if agents == 0 { chats.len() } else { agents };
+        let running = chats
+            .iter()
+            .filter(|c| (!c.task || agents == 0) && c.running() && c.live)
+            .count();
+        // Agents stay folded under their chat until asked for; opening one from the
+        // transcript roster unfolds the list so the selected row is visible.
+        let fold_id = egui::Id::new(("subagents_open", selected_id(self, key)));
+        let mut open = ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(fold_id))
+            .unwrap_or_else(|| self.selected_subagent(ui.ctx()).is_some());
         let mut visited = std::collections::HashSet::new();
         ui.indent(("subagents", key), |ui| {
-            let mut rows = |ui: &mut Ui| {
+            if subagents_toggle(ui, open, count, running).clicked() {
+                open = !open;
+                ui.ctx().data_mut(|d| d.insert_temp(fold_id, open));
+            }
+            if open {
                 for index in &roots {
                     self.render_subagent_sidebar_node(ui, key, *index, &mut visited);
                 }
-            };
-            // Direct Agent calls have no workflow parent. Give large batches the same
-            // folded hierarchy so a burst of spawned agents cannot take over the sidebar.
-            if roots.len() > 4 {
-                egui::CollapsingHeader::new(
-                    RichText::new(format!("Agents · {}", roots.len()))
-                        .size(FS_SMALL)
-                        .color(c_text_muted()),
-                )
-                .id_salt(("direct_agents", selected_id(self, key)))
-                .default_open(false)
-                .show(ui, rows);
-            } else {
-                rows(ui);
             }
         });
     }
@@ -368,7 +411,7 @@ impl OxiApp {
         {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(c_error_fg(), error);
-                if ui.small_button("Dismiss").clicked() {
+                if crate::ui::chrome::mini_button(ui, "Dismiss").clicked() {
                     ui.ctx()
                         .data_mut(|d| d.remove::<String>(egui::Id::new("subagent_control_error")));
                 }

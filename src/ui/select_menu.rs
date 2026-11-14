@@ -69,6 +69,7 @@ pub struct SelectMenu<'a> {
     id: Id,
     text: &'a str,
     hover: &'a str,
+    empty_text: &'a str,
     max_w: f32,
     min_popup_w: f32,
     /// Fixed button width for a framed, form-style button (Settings); `None` is the quiet
@@ -82,6 +83,7 @@ impl<'a> SelectMenu<'a> {
             id: Id::new(("select_menu", id_salt)),
             text,
             hover: "",
+            empty_text: "No matches",
             max_w: 160.0,
             min_popup_w: 180.0,
             framed: None,
@@ -91,6 +93,12 @@ impl<'a> SelectMenu<'a> {
     /// Hover text for the closed button.
     pub fn hover(mut self, hover: &'a str) -> Self {
         self.hover = hover;
+        self
+    }
+
+    /// Message when there are no options yet (search misses still say "No matches").
+    pub fn empty_text(mut self, text: &'a str) -> Self {
+        self.empty_text = text;
         self
     }
 
@@ -137,7 +145,20 @@ impl<'a> SelectMenu<'a> {
         }
         let framed = self.framed.is_some();
         let options = options();
-        let width = popup_width(ui, &options, self.min_popup_w);
+        let min_w = if options.is_empty() {
+            ui.painter()
+                .layout_no_wrap(
+                    self.empty_text.to_owned(),
+                    egui::FontId::proportional(FS_SMALL),
+                    c_text_faint(),
+                )
+                .size()
+                .x
+                + 20.0
+        } else {
+            self.min_popup_w
+        };
+        let width = popup_width(ui, &options, self.min_popup_w.max(min_w));
         let room = room_around(ui.ctx(), button.rect);
         let mut picked = None;
         egui::Popup::from_toggle_button_response(&button)
@@ -166,7 +187,7 @@ impl<'a> SelectMenu<'a> {
             )
             .show(|ui| {
                 ui.set_width(width);
-                picked = list(ui, &options, popup_id, room);
+                picked = list(ui, &options, popup_id, room, self.empty_text);
             });
         if picked.is_some() {
             egui::Popup::close_id(ui.ctx(), popup_id);
@@ -193,7 +214,13 @@ fn popup_width(ui: &Ui, options: &[SelectOption], min_w: f32) -> f32 {
     (widest + 2.0 * 10.0 + 28.0).clamp(min_w, POPUP_MAX_W)
 }
 
-fn list(ui: &mut Ui, options: &[SelectOption], popup_id: Id, room: f32) -> Option<usize> {
+fn list(
+    ui: &mut Ui,
+    options: &[SelectOption],
+    popup_id: Id,
+    room: f32,
+    empty_text: &str,
+) -> Option<usize> {
     let mut state = ui
         .ctx()
         .data(|d| d.get_temp::<MenuState>(popup_id))
@@ -244,7 +271,11 @@ fn list(ui: &mut Ui, options: &[SelectOption], popup_id: Id, room: f32) -> Optio
                 ui.painter().text(
                     egui::pos2(rect.left() + 10.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
-                    "No matches",
+                    if options.is_empty() {
+                        empty_text
+                    } else {
+                        "No matches"
+                    },
                     egui::FontId::proportional(FS_SMALL),
                     c_text_faint(),
                 );

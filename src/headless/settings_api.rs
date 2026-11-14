@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::settings::{ALL_TOOL_NAMES, AppSettings, LlmProviderKind, ProviderConfig};
 
-use super::{Server, provider_from_slug, str_param};
+use super::{Input, ReplyTo, Server, provider_from_slug, str_param};
 
 impl Server {
     pub(super) fn settings_get(&mut self) -> Result<Value, String> {
@@ -34,6 +34,31 @@ impl Server {
         self.settings_mtime = super::settings_mtime();
         self.notify("settings_changed", Value::Null);
         settings_json(&self.settings)
+    }
+
+    /// `{"enabled": bool, "guide": bool}`: take the app's Computer use switch, which covers this
+    /// machine's agents, and report the tool here. `guide` opens the Accessibility grant on this
+    /// machine's desktop.
+    pub(super) fn computer_use_sync(&mut self, params: &Value, to: ReplyTo) -> Result<(), String> {
+        self.refresh_settings();
+        let enabled = params["enabled"]
+            .as_bool()
+            .ok_or("missing parameter: enabled")?;
+        if enabled != self.settings.computer_use {
+            let mut settings = AppSettings::load();
+            settings.computer_use = enabled;
+            settings.save()?;
+            self.settings = settings;
+            self.settings_mtime = super::settings_mtime();
+            self.notify("settings_changed", Value::Null);
+        }
+        let guide = params["guide"].as_bool() == Some(true);
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let result = crate::computer_use::refresh(enabled, guide);
+            let _ = tx.send(Input::Reply { to, result });
+        });
+        Ok(())
     }
 
     /// `{"provider": slug, "key": "..."}` or `{"github_token": "..."}`; an empty value clears it.

@@ -3,6 +3,7 @@
 use super::super::OxiApp;
 use super::layout::tool_chip;
 use crate::agent::mcp::McpServerStatus;
+use crate::app::remote::LOCAL_MACHINE;
 use crate::settings::{ALL_TOOL_NAMES, DEFAULT_MCP_TIMEOUT_SECS, McpServerConfig, McpTransport};
 use crate::theme::*;
 use crate::ui::chrome::{
@@ -13,6 +14,7 @@ use crate::ui::chrome::{
 };
 use crate::ui::select_menu::SelectOption;
 use eframe::egui::{self, Align, Layout, RichText, Ui};
+use serde_json::{Value, json};
 
 /// Tool chips grouped by intent. Keep this list in sync with `ALL_TOOL_NAMES`.
 const TOOL_GROUPS: &[(&str, &[&str])] = &[
@@ -188,6 +190,8 @@ impl OxiApp {
             });
         });
 
+        self.render_computer_use_section(ui);
+
         // ── Web search ─────────────────────────────────────────────────────
         settings_section(ui, "Web search", None, |ui| {
             use crate::settings::WebSearchBackend;
@@ -238,9 +242,7 @@ impl OxiApp {
             |ui| {
                 let statuses = self.mcp.statuses();
                 let mut remove_idx: Option<usize> = None;
-                let n = self.conv.settings.mcp_servers.len();
-                for i in 0..n {
-                    let server = &mut self.conv.settings.mcp_servers[i];
+                for (i, server) in self.conv.settings.mcp_servers.iter_mut().enumerate() {
                     let status = statuses.iter().find(|s| s.name == server.name);
                     setting_item(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -334,7 +336,7 @@ impl OxiApp {
                         .clicked()
                 {
                     let mcp = self.mcp.clone();
-                    let servers = self.conv.settings.mcp_servers.clone();
+                    let servers = self.conv.settings.effective_mcp_servers();
                     let ctx = ui.ctx().clone();
                     std::thread::spawn(move || {
                         mcp.reconnect_all(&servers);
@@ -406,6 +408,70 @@ impl OxiApp {
 }
 
 /// One-line connection state for an MCP server row.
+impl OxiApp {
+    fn render_computer_use_section(&mut self, ui: &mut Ui) {
+        settings_section(ui, "Computer use", None, |ui| {
+            let was_on = self.conv.settings.computer_use;
+            setting_switch(
+                ui,
+                &mut self.conv.settings.computer_use,
+                "Let agents use the desktop",
+                Some(
+                    "See and operate desktop apps through agent-desktop, without asking. Agents get the latest version when they start. In SSH workspaces this is the server's desktop.",
+                ),
+            );
+            let switched = self.conv.settings.computer_use != was_on;
+            let mut machines = vec![(LOCAL_MACHINE.to_string(), "This computer".to_string())];
+            machines.extend(self.connected_hosts().into_iter().map(|h| (h.clone(), h)));
+            for (machine, label) in machines {
+                let state = self.computer_use_state(&machine);
+                if switched || (state.is_none() && self.conv.settings.computer_use) {
+                    self.sync_computer_use(&machine, false);
+                }
+                if !self.conv.settings.computer_use {
+                    continue;
+                }
+                let state = state.unwrap_or_else(|| Ok(json!({"checking": true})));
+                setting_row(ui, &label, Some(&computer_use_summary(&state)), |ui| {
+                    if ghost_button(ui, "Check again", false).clicked() {
+                        self.sync_computer_use(&machine, false);
+                    }
+                    let missing = state
+                        .as_ref()
+                        .is_ok_and(|s| s["accessibility"].as_str().is_some_and(|a| a != "granted"));
+                    if missing && ghost_button(ui, "Grant access", false).clicked() {
+                        self.sync_computer_use(&machine, true);
+                    }
+                });
+            }
+        });
+    }
+
+    fn computer_use_state(&self, machine: &str) -> Option<Result<Value, String>> {
+        self.remote
+            .computer_use
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(machine)
+            .cloned()
+    }
+}
+
+fn computer_use_summary(state: &Result<Value, String>) -> String {
+    match state {
+        Err(e) => e.clone(),
+        Ok(state) if state["checking"] == true => "Checking...".to_string(),
+        Ok(state) => match (state["version"].as_str(), state["accessibility"].as_str()) {
+            (None, _) => "Not installed yet.".to_string(),
+            (Some(version), Some("granted")) => format!("agent-desktop {version}, ready."),
+            (Some(version), Some(_)) => {
+                format!("agent-desktop {version}, needs Accessibility access for oxi.")
+            }
+            (Some(version), None) => format!("agent-desktop {version}."),
+        },
+    }
+}
+
 fn mcp_status_label(ui: &mut Ui, server: &McpServerConfig, status: Option<&McpServerStatus>) {
     let (text, color, hover) = match status {
         _ if !server.enabled => ("disabled".to_string(), c_text_faint(), None),

@@ -131,7 +131,8 @@ impl OxiApp {
             |ui| {
                 if let Some(label) = option_label.as_deref() {
                     ui.add_space(10.0);
-                    ui.checkbox(
+                    crate::ui::chrome::checkbox(
+                        ui,
                         &mut option_value,
                         RichText::new(label).size(FS_SMALL).color(c_text()),
                     );
@@ -571,7 +572,8 @@ fn render_worktree_risk(ui: &mut egui::Ui, check: &mut WorktreeRiskCheck) {
                     .size(FS_SMALL)
                     .color(c_error_fg()),
             );
-            ui.checkbox(
+            crate::ui::chrome::checkbox(
+                ui,
                 &mut check.force,
                 RichText::new("Delete the work tree anyway")
                     .size(FS_SMALL)
@@ -632,7 +634,8 @@ fn render_worktree_risk(ui: &mut egui::Ui, check: &mut WorktreeRiskCheck) {
     }
     if risk.loses_commits() && !risk.detached {
         ui.add_space(4.0);
-        ui.checkbox(
+        crate::ui::chrome::checkbox(
+            ui,
             &mut check.keep_branch,
             RichText::new(format!(
                 "Keep the branch \u{201c}{}\u{201d} and its commits",
@@ -651,7 +654,8 @@ fn render_worktree_risk(ui: &mut egui::Ui, check: &mut WorktreeRiskCheck) {
     }
     if risk.blocks(check.options()) {
         ui.add_space(4.0);
-        ui.checkbox(
+        crate::ui::chrome::checkbox(
+            ui,
             &mut check.force,
             RichText::new("Delete anyway and lose the work listed above")
                 .size(FS_SMALL)

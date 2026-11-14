@@ -195,7 +195,7 @@ pub async fn download_and_install(
     Ok(target)
 }
 
-async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     let resp = client
         .get(url)
         .header("User-Agent", format!("oxi/{APP_VERSION}"))
@@ -210,7 +210,7 @@ async fn fetch_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Str
 }
 
 /// The checksum `sha256sum` wrote for `asset` (`<hex>  <name>`, or `<hex> *<name>` in binary mode).
-fn expected_sha256(sums: &str, asset: &str) -> Option<String> {
+pub(crate) fn expected_sha256(sums: &str, asset: &str) -> Option<String> {
     sums.lines().find_map(|line| {
         let (hash, name) = line.split_once(char::is_whitespace)?;
         (name.trim().trim_start_matches('*') == asset).then(|| hash.to_string())

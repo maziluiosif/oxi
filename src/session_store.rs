@@ -46,6 +46,37 @@ pub fn list_session_files(dir: &Path) -> Option<Vec<(String, SystemTime)>> {
     Some(files)
 }
 
+/// Every chat file in the default session store, plus those in `extra` (a workspace with its own
+/// session folder), with their mtimes.
+pub fn all_session_files(extra: Option<&Path>) -> Vec<(String, SystemTime)> {
+    let store = agent_dir().join("sessions");
+    let dirs = fs::read_dir(&store)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok);
+    let mut dirs: Vec<PathBuf> = dirs.map(|dir| dir.path()).collect();
+    dirs.extend(
+        extra
+            .filter(|dir| !dir.starts_with(&store))
+            .map(Path::to_path_buf),
+    );
+    dirs.iter()
+        .filter_map(|dir| list_session_files(dir))
+        .flatten()
+        .collect()
+}
+
+/// The workspace folder a chat file belongs to, for showing: its header's `cwd`, else the folder
+/// its session folder's name was made from, else that name.
+pub fn session_file_workspace(file: &str) -> String {
+    let file = Path::new(file);
+    let name = || Some(file.parent()?.file_name()?.to_string_lossy().to_string());
+    header_cwd(file)
+        .or_else(|| folder_from_session_dir_name(&name()?, Path::new("/")))
+        .or_else(name)
+        .unwrap_or_default()
+}
+
 /// Folders that have chats in the default session store, newest chat first, with that
 /// chat's mtime and the number of chats. The folder is the `cwd` in the newest file's header
 /// when it has one, else the existing folder the session folder's name was made from.
@@ -487,6 +518,67 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert!(chat_messages_equal(&loaded[0], &session.messages[0]));
         assert!(chat_messages_equal(&loaded[1], &session.messages[1]));
+    }
+
+    /// The app and the headless daemon can save one chat at the same moment: every result on
+    /// disk must still be one whole save, and no temporary files may be left behind.
+    #[test]
+    fn concurrent_saves_of_one_chat_never_mix() {
+        let root = temp_root("concurrent-saves");
+        let session_for = |text: &str| Session {
+            delegated: Default::default(),
+            title: "Chat".into(),
+            config: None,
+            messages: hydrate::messages_from_get_messages(&json!({
+                "messages": [{ "role": "user", "content": text }]
+            })),
+            session_file: None,
+            messages_loaded: true,
+            input_text: String::new(),
+            pending_images: Vec::new(),
+            pending_texts: Vec::new(),
+            chars_per_token: None,
+            agent_context: None,
+            wire_cache: None,
+            disk_mtime: None,
+            modified: SystemTime::now(),
+        };
+        let mut first = session_for("seed");
+        save_session_messages(root.to_str().unwrap(), &mut first).unwrap();
+        let file = first.session_file.clone().unwrap();
+
+        let writers: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                let root = root.clone();
+                let file = file.clone();
+                let mut session = session_for(&name.repeat(50_000));
+                session.session_file = Some(file);
+                std::thread::spawn(move || {
+                    for _ in 0..20 {
+                        save_session_messages(root.to_str().unwrap(), &mut session).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for _ in 0..200 {
+            let loaded = load_session_messages(&file).expect("a whole session on disk");
+            assert_eq!(loaded.len(), 1);
+            let text = &loaded[0].text;
+            assert!(text == "seed" || text.chars().all(|c| c == text.chars().next().unwrap()));
+        }
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let dir = std::path::Path::new(&file).parent().unwrap();
+        let leftovers: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

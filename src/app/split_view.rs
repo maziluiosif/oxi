@@ -397,11 +397,10 @@ impl OxiApp {
         let close = ui
             .interact(close_rect, ui.id().with("split_close"), Sense::click())
             .on_hover_text("Close split view");
-        ui.painter().text(
+        crate::ui::chrome::paint_close_mark(
+            ui.painter(),
             close_rect.center(),
-            Align2::CENTER_CENTER,
-            ICON_CLOSE,
-            FontId::new(FS_TINY, icon_font()),
+            3.0,
             if close.hovered() {
                 c_text()
             } else {

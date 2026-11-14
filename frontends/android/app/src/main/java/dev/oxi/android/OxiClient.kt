@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -65,7 +66,8 @@ class OxiClient(private val scope: CoroutineScope) {
     @Volatile private var socket: Socket? = null
     @Volatile private var out: OutputStream? = null
     private var loop: Job? = null
-    private var endpoint: Endpoint? = null
+    @Volatile private var endpoint: Endpoint? = null
+    val current: Endpoint? get() = endpoint
     private val wake = Channel<Unit>(Channel.CONFLATED)
     @Volatile private var lastReceived = 0L
 
@@ -88,9 +90,16 @@ class OxiClient(private val scope: CoroutineScope) {
      * that went away and would only notice after a long TCP timeout, so start over right away.
      */
     fun reconnect() {
+        if (loop?.isActive != true) return
         closeSocket()
+        // Until the loop notices: nothing can be asked over the socket that was just closed.
+        if (_state.value is ConnState.Connected) _state.value = ConnState.Connecting
         wake.trySend(Unit)
     }
+
+    /** Suspends until the handshake is done; false when that takes longer than [timeoutMs]. */
+    suspend fun awaitConnected(timeoutMs: Long): Boolean =
+        withTimeoutOrNull(timeoutMs) { state.first { it is ConnState.Connected } } != null
 
     /**
      * The app came back. Android freezes cached apps, so a socket idle since before then is
@@ -127,6 +136,7 @@ class OxiClient(private val scope: CoroutineScope) {
         while (scope.isActive) {
             _state.value = ConnState.Connecting
             try {
+                var greeted = false
                 val s = Socket()
                 s.tcpNoDelay = true
                 s.keepAlive = true
@@ -145,6 +155,7 @@ class OxiClient(private val scope: CoroutineScope) {
                         val result = withTimeout(10_000) {
                             request("daemon.hello", JSONObject().put("token", endpoint.token).put("client", "android"))
                         } as JSONObject
+                        greeted = true
                         _state.value = ConnState.Connected(result.optString("version"))
                         _connected.tryEmit(Unit)
                     } catch (e: Exception) {
@@ -161,7 +172,7 @@ class OxiClient(private val scope: CoroutineScope) {
                 hello.cancel()
                 heartbeat.cancel()
                 _state.value = ConnState.Failed(
-                    if (_state.value is ConnState.Connecting) "Connection closed (wrong token?)" else "Connection lost"
+                    if (greeted) "Connection lost" else "Connection closed (wrong token?)"
                 )
             } catch (e: Exception) {
                 _state.value = ConnState.Failed(e.message ?: e.javaClass.simpleName)

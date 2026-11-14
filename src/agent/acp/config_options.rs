@@ -17,10 +17,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// One option from `configOptions`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AcpConfigOption {
     pub id: String,
     pub name: String,
@@ -30,7 +31,7 @@ pub struct AcpConfigOption {
     pub kind: AcpConfigKind,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AcpConfigKind {
     Select {
         current: String,
@@ -39,7 +40,7 @@ pub enum AcpConfigKind {
     Boolean(bool),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AcpConfigValue {
     pub value: String,
     pub name: String,
@@ -121,13 +122,32 @@ type Key = (String, String);
 
 static REGISTRY: Mutex<Option<HashMap<Key, Arc<Vec<AcpConfigOption>>>>> = Mutex::new(None);
 
+type Listener = Box<dyn Fn(&str, &[AcpConfigOption]) + Send>;
+
+/// Told of every list an agent publishes: the server passes them on to its clients.
+static LISTENER: Mutex<Option<Listener>> = Mutex::new(None);
+
+pub fn set_listener(listener: impl Fn(&str, &[AcpConfigOption]) + Send + 'static) {
+    *LISTENER.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(listener));
+}
+
 /// Publish the latest `configOptions` of a session's agent.
 pub(crate) fn publish(session_key: &str, command_line: &str, options: &Value) {
-    let parsed = Arc::new(parse(options));
+    let parsed = parse(options);
+    if let Some(listener) = LISTENER.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        listener(session_key, &parsed);
+    }
+    show(session_key, command_line, parsed);
+}
+
+/// Show `options` as what the session's agent offers now. Used directly for an agent running on
+/// a server.
+pub(crate) fn show(session_key: &str, command_line: &str, options: Vec<AcpConfigOption>) {
     let mut registry = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    registry
-        .get_or_insert_with(HashMap::new)
-        .insert((session_key.to_owned(), command_line.to_owned()), parsed);
+    registry.get_or_insert_with(HashMap::new).insert(
+        (session_key.to_owned(), command_line.to_owned()),
+        Arc::new(options),
+    );
     drop(registry);
     // The agent's own list replaces whatever was picked before it ran.
     let mut picks = PICKS.lock().unwrap_or_else(|e| e.into_inner());
@@ -227,7 +247,7 @@ pub fn before_launch(session_key: &str, command_line: &str) -> Option<Arc<Vec<Ac
 }
 
 /// The options picked before the agent launched, as they should end up on it.
-pub(super) fn picked_before_launch(session_key: &str, command_line: &str) -> Vec<AcpConfigOption> {
+pub(crate) fn picked_before_launch(session_key: &str, command_line: &str) -> Vec<AcpConfigOption> {
     let ids: Vec<String> = {
         let picks = PICKS.lock().unwrap_or_else(|e| e.into_inner());
         let Some(picks) = picks

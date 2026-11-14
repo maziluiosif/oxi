@@ -43,7 +43,7 @@ impl OxiApp {
             - if sidebar_open {
                 0.0
             } else {
-                crate::ui::window_chrome::TRAFFIC_LIGHTS_W
+                crate::ui::window_chrome::WINDOW_CONTROLS_W
             })
         .max(80.0);
 
@@ -58,7 +58,7 @@ impl OxiApp {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if !sidebar_open {
                         // The macOS traffic lights sit over the window's top-left corner.
-                        ui.add_space(crate::ui::window_chrome::TRAFFIC_LIGHTS_W);
+                        ui.add_space(crate::ui::window_chrome::WINDOW_CONTROLS_W);
                     }
                     let back = ui.add_enabled(
                         can_go_back,
@@ -163,6 +163,15 @@ impl OxiApp {
                                                 diff_request = Some((index, None));
                                                 ui.close();
                                             }
+                                        } else if document.media == Some(super::MediaKind::Image) {
+                                            if ui.button("Show Git Changes").clicked() {
+                                                select = Some(index);
+                                                diff_request = Some((
+                                                    index,
+                                                    Some(super::DiffSource::WorkTree),
+                                                ));
+                                                ui.close();
+                                            }
                                         } else if !document.is_scratchpad
                                             && document.media.is_none()
                                         {
@@ -239,8 +248,7 @@ impl OxiApp {
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if markdown_available
-                            && ui
-                                .button("Preview")
+                            && text_tab_button(ui, "Preview")
                                 .on_hover_text("Open Markdown preview in a separate tab")
                                 .clicked()
                         {
@@ -517,6 +525,37 @@ pub(crate) fn compare_base(title: &str) -> Option<&str> {
     rest.split_once(": ").map(|(base, _)| base)
 }
 
+/// A frameless text button for the tab strip. Painted by hand: an `egui::Button` grows by
+/// its hover expansion, which nudged the strip when the pointer crossed it.
+fn text_tab_button(ui: &mut Ui, label: &str) -> egui::Response {
+    let galley = ui.fonts_mut(|fonts| {
+        fonts.layout_no_wrap(
+            label.to_owned(),
+            FontId::proportional(FS_SMALL),
+            c_text_muted(),
+        )
+    });
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(galley.size().x + 16.0, 22.0),
+        egui::Sense::click(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    let hovered = response.hovered();
+    if hovered {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(RADIUS_ROW), c_row_hover());
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    ui.painter().galley_with_override_text_color(
+        rect.center() - galley.size() / 2.0,
+        galley,
+        if hovered { c_text() } else { c_text_muted() },
+    );
+    response
+}
+
 struct EditorTab {
     response: egui::Response,
     close_clicked: bool,
@@ -548,6 +587,16 @@ fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool)
             label,
         )
     });
+    if active {
+        // A tab activated from elsewhere (Ctrl+Tab, Goto Anything, the explorer) may sit
+        // outside the scrolled strip: bring it into view once, when it becomes the active one.
+        let slot = egui::Id::new("editor_tabs_last_active");
+        let previous = ui.data(|data| data.get_temp::<egui::Id>(slot));
+        if previous != Some(id) {
+            ui.data_mut(|data| data.insert_temp(slot, id));
+            ui.scroll_to_rect(rect, None);
+        }
+    }
     // The close target overlaps the tab; test the whole tab so both share one hover state.
     let hovered = ui.rect_contains_pointer(rect);
     let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + TOP_INSET), rect.max);
@@ -587,7 +636,7 @@ fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool)
 
     let close_rect = egui::Rect::from_center_size(
         egui::pos2(body.right() - CLOSE_SLOT / 2.0, rect.center().y),
-        egui::vec2(18.0, 18.0),
+        egui::vec2(16.0, 16.0),
     );
     let close = ui.interact(close_rect, id.with("close"), egui::Sense::click());
     close.widget_info(|| {
@@ -605,13 +654,14 @@ fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool)
         );
     }
     if hovered || active && !dirty {
-        ui.painter().text(
+        crate::ui::chrome::paint_close_mark(
+            ui.painter(),
             close_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            ICON_CLOSE,
-            FontId::new(FS_TINY, icon_font()),
+            3.0,
             if close.hovered() {
                 c_text_strong()
+            } else if active {
+                c_text_muted()
             } else {
                 c_text_faint()
             },
@@ -619,7 +669,7 @@ fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool)
     } else if dirty {
         ui.painter().circle_filled(
             close_rect.center(),
-            3.5,
+            3.0,
             if active { c_text() } else { c_text_muted() },
         );
     }

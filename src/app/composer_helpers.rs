@@ -104,11 +104,17 @@ pub(super) fn context_indicator_color(pct: f32) -> Color32 {
     }
 }
 
+/// `3.4k`, `128k`, `1m`: one decimal, dropped when it is zero so round limits read cleanly.
 pub(super) fn format_context_tokens(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.1}m", tokens as f64 / 1_000_000.0)
+    let scaled = |value: f64, unit: &str| {
+        let text = format!("{value:.1}");
+        format!("{}{unit}", text.strip_suffix(".0").unwrap_or(&text))
+    };
+    // 999_950 and up would round to "1000.0k".
+    if tokens >= 999_950 {
+        scaled(tokens as f64 / 1_000_000.0, "m")
     } else if tokens >= 1_000 {
-        format!("{:.1}k", tokens as f64 / 1_000.0)
+        scaled(tokens as f64 / 1_000.0, "k")
     } else {
         tokens.to_string()
     }
@@ -150,7 +156,17 @@ pub(super) fn estimate_message_chars(m: &ChatMessage) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{short_model_label, truncate_label};
+    use super::{format_context_tokens, short_model_label, truncate_label};
+
+    #[test]
+    fn context_tokens_drop_a_zero_decimal() {
+        assert_eq!(format_context_tokens(950), "950");
+        assert_eq!(format_context_tokens(3_400), "3.4k");
+        assert_eq!(format_context_tokens(128_000), "128k");
+        assert_eq!(format_context_tokens(999_949), "999.9k");
+        assert_eq!(format_context_tokens(999_950), "1m");
+        assert_eq!(format_context_tokens(1_300_000), "1.3m");
+    }
 
     #[test]
     fn truncate_label_respects_unicode_boundaries() {

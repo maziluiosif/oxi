@@ -437,7 +437,7 @@ impl OxiApp {
             .add_filter("Markdown", &["md"])
             .save_file()
         {
-            match std::fs::write(&path, md) {
+            match crate::fsutil::save(&path, md.as_bytes()) {
                 Ok(()) => {}
                 Err(e) => {
                     self.run_state_mut(self.active_session_key()).stream_error =

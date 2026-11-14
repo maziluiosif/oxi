@@ -2,7 +2,7 @@
 //! tool output and leave out middle turns of long chats; this is where the agent gets them back.
 //! Before each prompt the app writes the chat's turns (numbered like the transcripts) into the
 //! connection folder the MCP server shares with it ([`crate::evidence::DIR_ENV`]), and the server
-//! reads them from there.
+//! reads them from there. With a `chat` id (from `chat_search`) it reads another saved chat.
 
 use std::path::Path;
 
@@ -19,23 +19,45 @@ fn path(conn_dir: &Path) -> std::path::PathBuf {
     conn_dir.join("chat.json")
 }
 
-/// Save the chat's turns for this connection's `chat_read`.
-pub(super) fn write(conn_dir: &Path, turns: &[(usize, String)]) -> Result<(), String> {
+/// Save the chat's turns for this connection's `chat_read`, with which chat and folder this is
+/// for `chat_search`.
+pub(super) fn write(
+    conn_dir: &Path,
+    turns: &[(usize, String)],
+    session_key: &str,
+    cwd: &Path,
+) -> Result<(), String> {
     let turns: Vec<Value> = turns
         .iter()
         .map(|(n, text)| json!({ "n": n, "text": text }))
         .collect();
-    let bytes = serde_json::to_vec(&json!({ "turns": turns })).map_err(|e| e.to_string())?;
+    // Desktop chats are keyed by their file, headless ones by their id: the stem fits both.
+    let chat = Path::new(session_key)
+        .file_stem()
+        .and_then(|stem| stem.to_str());
+    let saved = json!({ "turns": turns, "chat": chat, "cwd": cwd.to_string_lossy() });
+    let bytes = serde_json::to_vec(&saved).map_err(|e| e.to_string())?;
     crate::fsutil::write_atomic_private(&path(conn_dir), &bytes)
+}
+
+/// The id of the chat on this connection and its folder, as saved by [`write`].
+pub(super) fn origin(conn_dir: &Path) -> (Option<String>, Option<String>) {
+    let saved: Value = std::fs::read(path(conn_dir))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let field = |key: &str| saved[key].as_str().map(str::to_owned);
+    (field("chat"), field("cwd"))
 }
 
 pub(super) fn definition() -> Value {
     json!({
         "name": TOOL,
-        "description": "Read earlier turns of this oxi conversation in full, including turns other agents answered. Turn numbers match the [#n] markers in the transcript oxi gave you. Use it when the transcript left turns out or trimmed tool output you need. `from` is the first turn number (default 1), `limit` how many turns (default 10, max 40); `query` keeps only turns containing that text (case-insensitive).",
+        "description": "Read earlier turns of this oxi conversation in full, including turns other agents answered. Turn numbers match the [#n] markers in the transcript oxi gave you. Use it when the transcript left turns out or trimmed tool output you need. `chat` reads another chat instead, by the id chat_search gave. `from` is the first turn number (default 1), `limit` how many turns (default 10, max 40); `query` keeps only turns containing that text (case-insensitive).",
         "inputSchema": {
             "type": "object",
             "properties": {
+                "chat": { "type": "string" },
                 "from": { "type": "integer", "minimum": 1 },
                 "limit": { "type": "integer", "minimum": 1, "maximum": MAX_LIMIT },
                 "query": { "type": "string" }
@@ -51,6 +73,13 @@ pub(super) fn call(args: &Value) -> Result<String, String> {
 }
 
 fn read(conn_dir: &Path, args: &Value) -> Result<String, String> {
+    if let Some(id) = args["chat"].as_str().filter(|id| !id.is_empty()) {
+        let (title, turns) = super::chat_history::load_chat(id)?;
+        let turns: Vec<(u64, &str)> = turns.iter().map(|(n, t)| (*n as u64, t.as_str())).collect();
+        let heading = format!("Chat \"{title}\"");
+        let page = page(&turns, args, &heading, &format!("chat=\"{id}\" "));
+        return Ok(format!("{}\n{page}", super::chat_history::RECORD_NOTE));
+    }
     let Ok(bytes) = std::fs::read(path(conn_dir)) else {
         return Ok("(No earlier turns in this conversation.)".into());
     };
@@ -64,8 +93,13 @@ fn read(conn_dir: &Path, args: &Value) -> Result<String, String> {
                 .collect()
         })
         .unwrap_or_default();
+    Ok(page(&turns, args, "Conversation", ""))
+}
+
+/// One page of `turns` for `args`, under `heading`; `more` is what a follow-up call must repeat.
+fn page(turns: &[(u64, &str)], args: &Value, heading: &str, more: &str) -> String {
     let (Some(first), Some(last)) = (turns.first(), turns.last()) else {
-        return Ok("(No earlier turns in this conversation.)".into());
+        return "(No earlier turns in this conversation.)".into();
     };
     let (first, last) = (first.0, last.0);
     let from = args["from"].as_u64().unwrap_or(1);
@@ -78,7 +112,7 @@ fn read(conn_dir: &Path, args: &Value) -> Result<String, String> {
         .map(str::trim)
         .filter(|q| !q.is_empty())
         .map(str::to_lowercase);
-    let mut out = format!("Conversation turns #{first}–#{last}.");
+    let mut out = format!("{heading} turns #{first}–#{last}.");
     if let Some(q) = &query {
         out.push_str(&format!(" Turns containing \"{q}\":"));
     }
@@ -101,11 +135,11 @@ fn read(conn_dir: &Path, args: &Value) -> Result<String, String> {
         shown += 1;
     }
     match next {
-        Some(n) => out.push_str(&format!("\n\n[More: call chat_read with from={n}.]")),
+        Some(n) => out.push_str(&format!("\n\n[More: call chat_read with {more}from={n}.]")),
         None if shown == 0 => out.push_str("\n\n(No matching turns.)"),
         None => {}
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
@@ -119,7 +153,8 @@ mod tests {
         let turns: Vec<(usize, String)> = (1..=15)
             .map(|n| (n, format!("[#{n}] User: step {n}")))
             .collect();
-        write(&dir, &turns).unwrap();
+        write(&dir, &turns, "/s/--a--/session-7.jsonl", Path::new("/a")).unwrap();
+        assert_eq!(origin(&dir), (Some("session-7".into()), Some("/a".into())));
 
         let page = read(&dir, &json!({})).unwrap();
         assert!(page.starts_with("Conversation turns #1–#15."));

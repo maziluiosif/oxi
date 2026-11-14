@@ -50,6 +50,10 @@ pub(crate) use workflows::saved_workflow_snapshot;
 
 #[path = "acp/chat_archive.rs"]
 mod chat_archive;
+#[path = "acp/chat_history.rs"]
+mod chat_history;
+#[path = "acp/learned_rules.rs"]
+mod learned_rules;
 
 #[path = "acp/client_fs.rs"]
 mod client_fs;
@@ -685,6 +689,9 @@ struct ConnHandles {
     /// Set when the session was created blank rather than resumed; the first prompt then carries
     /// oxi's transcript of the chat so far.
     needs_history: Arc<AtomicBool>,
+    /// Nothing went out on this connection yet; the first prompt carries the learned rules, so
+    /// a resumed session picks up the ones added since.
+    needs_rules: Arc<AtomicBool>,
     /// The agent's session modes, kept current by the reader task.
     modes: SharedModes,
     /// The agent accepts embedded `resource` blocks (`promptCapabilities.embeddedContext`).
@@ -755,6 +762,10 @@ impl PromptCtx {
         })
     }
     fn emit_permission_tool(&mut self, params: &Value) {
+        // An elicitation is no tool call of its own.
+        if params["toolCall"].is_null() {
+            return;
+        }
         if params["sessionId"].as_str() == Some(&self.session_id) {
             self.updates.emit_tool(&params["toolCall"], &self.event_tx);
         } else {
@@ -784,8 +795,9 @@ impl PromptCtx {
         for (id, params) in requests {
             self.emit_permission_tool(&params);
             let _ = self.perm_tx.send(PermReq {
-                id,
                 child_cancel: held.permission_cancel(&params),
+                withdrawn: held.elicitation_flag(&id, &params),
+                id,
                 params,
             });
         }
@@ -1032,6 +1044,8 @@ async fn spawn_conn(
             "fs": { "readTextFile": true, "writeTextFile": true },
             "terminal": true,
             "subagents": {},
+            // Questions, MCP forms and logins, and the retry offered after a refusal.
+            "elicitation": { "form": {}, "url": {} },
             // Fast mode and similar switches arrive as `type: "boolean"` options.
             "session": { "configOptions": { "boolean": {} } },
             // Command output as appended chunks on the tool call (Claude Code and Codex). Codex
@@ -1166,6 +1180,7 @@ async fn spawn_conn(
         session_id,
         available_models,
         needs_history: Arc::new(AtomicBool::new(needs_history)),
+        needs_rules: Arc::new(AtomicBool::new(true)),
         modes,
         embedded_context: caps["promptCapabilities"]["embeddedContext"].as_bool() == Some(true),
         images: caps["promptCapabilities"]["image"].as_bool() == Some(true),
@@ -1465,6 +1480,7 @@ async fn run_prompt(
     // await — an async fn holds all its params for the whole future, so `&Receiver`/`&Sender`
     // params would make this future `!Send` and unspawnable.
     let AcpPrompt {
+        session_key,
         cwd,
         command_line,
         text,
@@ -1493,7 +1509,7 @@ async fn run_prompt(
         let _ = reply.send(Ok(()));
         return;
     }
-    if let Err(e) = chat_archive::write(&handles.evidence_dir, &archive) {
+    if let Err(e) = chat_archive::write(&handles.evidence_dir, &archive, &session_key, &cwd) {
         log::warn!("chat_read: could not save the conversation: {e}");
     }
     let evidence_turn = format!("t{}", crate::evidence::now_ms());
@@ -1581,6 +1597,7 @@ async fn run_prompt(
     // Agents only run a slash command when the prompt starts with it, so a command goes out
     // verbatim: plan mode is still enforced through the permission requests, and the replayed
     // history waits for the next regular message.
+    let text = learned_rules::expand(&text, &cwd).unwrap_or(text);
     let slash_command = is_advertised_command(&text, &command_line, &cwd);
     // A slash command may itself change the mode (Codex `/plan`), so it runs in whatever mode
     // the agent is in. Otherwise the agent's own plan mode is switched to match oxi's; agents
@@ -1608,6 +1625,11 @@ async fn run_prompt(
         with_history(&history, &text)
     } else {
         with_missed(&missed, &text)
+    };
+    let text = if !slash_command && handles.needs_rules.swap(false, Ordering::SeqCst) {
+        learned_rules::with_rules(&cwd, &text)
+    } else {
+        text
     };
     let mut prompt_blocks = build_prompt_blocks(
         &text,

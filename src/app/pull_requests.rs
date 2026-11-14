@@ -289,12 +289,11 @@ impl OxiApp {
                         });
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("Open").clicked() {
+                    if crate::ui::chrome::mini_button(ui, "Open").clicked() {
                         let _ = webbrowser::open(&pr.url);
                     }
                     if pr.checks.failed > 0
-                        && ui
-                            .small_button("Fix checks")
+                        && crate::ui::chrome::mini_button(ui, "Fix checks")
                             .on_hover_text("Ask the agent of this chat to fix the failing checks")
                             .clicked()
                     {
@@ -403,6 +402,24 @@ impl OxiApp {
         });
     }
 
+    /// The dialog with a drafted pull request, for the gallery stills.
+    #[cfg(test)]
+    pub(crate) fn demo_pr_dialog(&mut self) {
+        self.pull_requests.dialog = Some(PrDialog {
+            root: self.active_workspace().root_path.clone(),
+            new: NewPullRequest {
+                title: "Average the middle pair in median()".into(),
+                body:
+                    "Fixes the even-length case.\n\n- Average the two middle elements\n- Add a test"
+                        .into(),
+                base: "main".into(),
+                draft: false,
+            },
+            rx: None,
+            error: None,
+        });
+    }
+
     fn poll_pr_dialog(&mut self) {
         let Some(dialog) = self.pull_requests.dialog.as_mut() else {
             return;
@@ -440,85 +457,95 @@ impl OxiApp {
         let mut submit = false;
         let busy = dialog.rx.is_some();
         let branch = self.conv.git.branch.clone();
-        egui::Window::new("Open a pull request")
-            .id(egui::Id::new("pr_dialog"))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .frame(
-                Frame::new()
-                    .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(RADIUS_PANEL)
-                    .inner_margin(Margin::same(16)),
-            )
-            .title_bar(false)
+        if crate::ui::chrome::modal_backdrop(ctx, "pr_dialog_backdrop") && !busy {
+            close = true;
+        }
+        let frame = Frame::new()
+            .fill(c_bg_elevated())
+            .stroke(Stroke::new(1.0, c_border()))
+            .corner_radius(RADIUS_CHIP)
+            .inner_margin(Margin::same(16));
+        egui::Area::new(egui::Id::new("pr_dialog"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                let width = 460.0_f32.min(ctx.content_rect().width() - 64.0);
-                ui.set_width(width);
-                ui.label(
-                    RichText::new("Open a pull request")
-                        .size(FS_BODY)
-                        .color(c_text_strong()),
-                );
-                ui.label(
-                    RichText::new(format!(
-                        "Pushes {branch} and opens it against {}.",
-                        if dialog.new.base.is_empty() {
-                            "the default branch"
-                        } else {
-                            &dialog.new.base
-                        }
-                    ))
-                    .size(FS_SMALL)
-                    .color(c_text_muted()),
-                );
-                ui.add_space(10.0);
-                ui.add_enabled_ui(!busy, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut dialog.new.title)
-                            .hint_text("Title")
-                            .desired_width(f32::INFINITY),
+                frame.show(ui, |ui| {
+                    let width = 460.0_f32.min(ctx.content_rect().width() - 64.0);
+                    ui.set_width(width);
+                    ui.label(
+                        RichText::new("Open a pull request")
+                            .size(FS_BODY)
+                            .color(c_text())
+                            .strong(),
                     );
-                    ui.add_space(6.0);
-                    egui::ScrollArea::vertical()
-                        .max_height(220.0)
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut dialog.new.body)
-                                    .hint_text("Description")
-                                    .desired_rows(8)
-                                    .desired_width(f32::INFINITY),
-                            );
-                        });
-                    ui.add_space(6.0);
-                    ui.checkbox(&mut dialog.new.draft, "Open as a draft");
-                });
-                if let Some(error) = &dialog.error {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
-                }
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if busy {
-                        small_spinner(ui);
-                        ui.label(
-                            RichText::new("Pushing and opening…")
-                                .size(FS_SMALL)
-                                .color(c_text_muted()),
-                        );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Pushes {branch} and opens it against {}.",
+                            if dialog.new.base.is_empty() {
+                                "the default branch"
+                            } else {
+                                &dialog.new.base
+                            }
+                        ))
+                        .size(FS_SMALL)
+                        .color(c_text_muted()),
+                    );
+                    ui.add_space(10.0);
+                    ui.add_enabled_ui(!busy, |ui| {
+                        crate::ui::chrome::settings_text_field(ui, &mut dialog.new.title, "Title");
+                        ui.add_space(6.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(220.0)
+                            .show(ui, |ui| {
+                                crate::ui::chrome::settings_text_area(
+                                    ui,
+                                    &mut dialog.new.body,
+                                    "Description",
+                                    8,
+                                );
+                            });
+                        ui.add_space(6.0);
+                        crate::ui::chrome::checkbox(ui, &mut dialog.new.draft, "Open as a draft");
+                    });
+                    if let Some(error) = &dialog.error {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let ready = !busy && !dialog.new.title.trim().is_empty();
-                        if ui
-                            .add_enabled(ready, egui::Button::new("Open pull request"))
-                            .clicked()
-                        {
-                            submit = true;
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if busy {
+                            small_spinner(ui);
+                            ui.label(
+                                RichText::new("Pushing and opening…")
+                                    .size(FS_SMALL)
+                                    .color(c_text_muted()),
+                            );
                         }
-                        if ui.add_enabled(!busy, egui::Button::new("Cancel")).clicked() {
-                            close = true;
-                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let ready = !busy && !dialog.new.title.trim().is_empty();
+                            if ui
+                                .add_enabled(
+                                    ready,
+                                    crate::ui::chrome::primary_button_widget("Open pull request"),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                submit = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    !busy,
+                                    crate::ui::chrome::ghost_button_widget("Cancel", false),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text("Esc")
+                                .clicked()
+                            {
+                                close = true;
+                            }
+                        });
                     });
                 });
             });

@@ -1,6 +1,6 @@
 [package]
 name = "oxi"
-version = "1.33.0"
+version = "1.40.0"
 edition = "2024"
 # Floor set by the strictest dependency (egui 0.35 requires 1.92).
 rust-version = "1.92"
@@ -69,6 +69,8 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
 cpal = "0.18"
+pdf-extract = "0.12.1"
+roxmltree = "0.20"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

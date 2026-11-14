@@ -71,7 +71,7 @@ fn file_uri(path: &Path) -> String {
 
 /// The image's URI for egui's loaders. A remote file is fetched once and handed to egui as
 /// bytes under its own URI.
-fn image_uri(ctx: &egui::Context, path: &Path) -> String {
+pub(super) fn image_uri(ctx: &egui::Context, path: &Path) -> String {
     if !crate::vfs::is_remote(path) {
         return file_uri(path);
     }
@@ -91,16 +91,11 @@ impl OxiApp {
         let Some(document) = self.conv.editor.active_document_mut() else {
             return;
         };
-        // Nothing to lose in a read-only preview, so external changes reload silently.
-        if document.externally_modified {
-            ui.ctx().forget_image(&file_uri(&document.path));
-            ui.ctx()
-                .forget_image(&format!("bytes://{}", document.path.display()));
-            let loaded_id = egui::Id::new(("oxi_remote_image", document.path.as_path()));
-            ui.ctx().data_mut(|d| d.remove::<bool>(loaded_id));
-            document.disk_modified = crate::vfs::modified(&document.path);
-            document.externally_modified = false;
+        if kind == MediaKind::Image && document.diff.is_some() {
+            self.render_image_diff(ui);
+            return;
         }
+        reload_if_changed(ui.ctx(), document);
         let path = document.path.clone();
         let modified = document.disk_modified;
         match kind {
@@ -110,7 +105,23 @@ impl OxiApp {
     }
 }
 
-fn file_size_label(path: &Path) -> String {
+/// Nothing to lose in a read-only preview, so external changes reload silently.
+pub(super) fn reload_if_changed(
+    ctx: &egui::Context,
+    document: &mut crate::app::state::EditorDocument,
+) {
+    if !document.externally_modified {
+        return;
+    }
+    ctx.forget_image(&file_uri(&document.path));
+    ctx.forget_image(&format!("bytes://{}", document.path.display()));
+    let loaded_id = egui::Id::new(("oxi_remote_image", document.path.as_path()));
+    ctx.data_mut(|d| d.remove::<bool>(loaded_id));
+    document.disk_modified = crate::vfs::modified(&document.path);
+    document.externally_modified = false;
+}
+
+pub(super) fn file_size_label(path: &Path) -> String {
     // Drawn every frame: a remote file's size comes from what is already known.
     let meta = if crate::vfs::is_remote(path) {
         crate::vfs::cached_metadata(path).flatten()
@@ -120,7 +131,7 @@ fn file_size_label(path: &Path) -> String {
     meta.map_or_else(String::new, |m| human_size(m.len))
 }
 
-fn human_size(bytes: u64) -> String {
+pub(super) fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
     if bytes < 1024 {
         return format!("{bytes} B");
@@ -283,7 +294,7 @@ fn image_view(ui: &mut Ui, path: &Path) {
 }
 
 /// Transparency backdrop, painted only over the visible part of the image.
-fn paint_checkerboard(ui: &Ui, visible: Rect) {
+pub(super) fn paint_checkerboard(ui: &Ui, visible: Rect) {
     if !visible.is_positive() {
         return;
     }
@@ -351,7 +362,7 @@ fn media_card(ui: &mut Ui, path: &Path, kind: MediaKind, modified: Option<std::t
                     }
                     Some(PosterState::Pending) => {
                         ui.add_space(60.0);
-                        ui.spinner();
+                        crate::theme::spinner(ui, 18.0, crate::theme::c_text_muted());
                         ui.add_space(60.0);
                     }
                     _ => {
@@ -467,6 +478,12 @@ fn poster_for(
 }
 
 fn quiet(command: &mut std::process::Command) -> bool {
+    // No console window for ffmpeg on a Windows GUI process.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

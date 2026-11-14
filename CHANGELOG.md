@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.40.0] - 2026-11-13
+
+### Added
+- **UI:** Toggle sidebar visibility from the titlebar for easier window management.
+
+### Changed
+- **Worktrees:** Clearer creation flow and improved display in the sidebar.
+- **Settings:** Providers panel now shows only configured providers instead of all available ones.
+- **Sidebar:** Clarified context menus to avoid duplicate worktree chats.
+
+### Fixed
+- **Security:** Updated quinn-udp dependency to resolve security audit failure.
+- **Code:** Fixed Clippy warnings for Rust 1.100 compatibility.
+
+
+## [1.39.0] - 2026-11-10
+
+### Added
+- **Camera:** Take photos directly from the composer and attach them to messages.
+- **Notifications:** Get alerts when replies are ready, tools need approval, or the agent asks a question.
+- **Share:** Send text, links, photos and files into oxi from other apps.
+- **Agent questions:** View and respond to agent questions as forms instead of simple approvals.
+- **Git:** View changed files and diffs, stage, commit with optional generated messages, pull, push, and browse recent commits.
+- **Chat persistence:** Drafts and open chats survive the app being backgrounded or killed.
+- **Agent checklist:** See the agent's plan and context usage above the composer.
+- **Reply actions:** Copy and share replies, jump to the end of a conversation.
+
+
+## [1.38.0] - 2026-11-09
+
+### Added
+- **Editor:** View Git and current versions of images side by side or with a swipe divider in image tabs.
+- **UI:** Modal dialogs for pull requests, import sessions, and remote operations.
+- **UI:** Dialog review gallery for testing dialogs and inline components.
+
+### Changed
+- **UI:** Replaced small buttons across panels with consistent mini_button and dismiss_button components.
+- **Markdown:** Tables now fit within available width and balance column sizes based on content.
+- **Editor:** Active tab automatically scrolls into view when selected.
+- **UI:** Improved spacing and alignment in file picker, activity log toolbar, and suggestion cards.
+- **UI:** Clearer error messages for stream failures.
+
+
+## [1.37.0] - 2026-11-08
+
+### Added
+- **Chat:** Search across all saved chats in your workspace with the new chat_search tool.
+- **Agent:** Use `/learn [focus]` to turn chat corrections into numbered candidate rules, then save picked ones as project rules that apply to all future chats.
+- **Chat:** Open any saved chat by ID with the chat_read tool.
+
+
+## [1.36.0] - 2026-11-06
+
+### Added
+- **Agent:** Computer use mode lets agents control your desktop, keyboard, and mouse when enabled in settings.
+- **Agent:** Computer use tools skip approval checks while the feature is on; plan mode still blocks them.
+- **Settings:** Computer use switch in Agent panel with version and accessibility state display for each machine.
+- **SSH:** Computer use setting syncs to connected SSH servers, which install and manage it automatically.
+- **CLI:** `oxi computer-use-mcp` command fetches the latest agent-desktop release, verifies it, and runs the MCP server.
+
+
+## [1.35.0] - 2026-11-06
+
+### Added
+- **Agent:** Declare elicitation capability so Claude can ask questions during autonomous turns and handle MCP forms without auto-declining them.
+- **Remote:** Agent option changes now sync to the server, so the agent mode matches what you see in the picker on SSH workspaces.
+
+### Fixed
+- **Remote:** Tool approval requests no longer keep appearing after changing agent options on SSH workspaces.
+
+
+## [1.34.0] - 2026-11-05
+
+### Added
+- **Android:** Attach photos and files to messages with a composer menu.
+- **Android:** Evidence mode to create per-reply reports with claims, checks, and captured screenshots.
+- **Server:** Accept file attachments and automatically extract text from PDFs, Word, Excel, PowerPoint, and OpenDocument files.
+- Sent images now appear in your message for reference.
+
+### Fixed
+- **Android:** Sent messages no longer appear twice in the chat.
+
+
+## [1.33.1] - 2026-11-03
+
+### Fixed
+- **Windows:** Console windows no longer flash when checking Claude quota, capturing evidence, generating video thumbnails, or pushing pull requests.
+
+### Security
+- Updated markdown parser to patch RUSTSEC-2026-0433.
+
+
 ## [1.33.0] - 2026-10-30
 
 ### Added
@@ -1324,7 +1416,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.33.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.40.0...HEAD
+[1.40.0]: https://github.com/maziluiosif/oxi/compare/v1.39.0...v1.40.0
+[1.39.0]: https://github.com/maziluiosif/oxi/compare/v1.38.0...v1.39.0
+[1.38.0]: https://github.com/maziluiosif/oxi/compare/v1.37.0...v1.38.0
+[1.37.0]: https://github.com/maziluiosif/oxi/compare/v1.36.0...v1.37.0
+[1.36.0]: https://github.com/maziluiosif/oxi/compare/v1.35.0...v1.36.0
+[1.35.0]: https://github.com/maziluiosif/oxi/compare/v1.34.0...v1.35.0
+[1.34.0]: https://github.com/maziluiosif/oxi/compare/v1.33.1...v1.34.0
+[1.33.1]: https://github.com/maziluiosif/oxi/compare/v1.33.0...v1.33.1
 [1.33.0]: https://github.com/maziluiosif/oxi/compare/v1.32.0...v1.33.0
 [1.32.0]: https://github.com/maziluiosif/oxi/compare/v1.31.2...v1.32.0
 [1.31.2]: https://github.com/maziluiosif/oxi/compare/v1.31.1...v1.31.2

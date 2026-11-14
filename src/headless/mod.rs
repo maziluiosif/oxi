@@ -23,6 +23,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{Value, json};
 
+use crate::agent::acp::config_options::{self, AcpConfigOption};
 use crate::agent::runner::{AgentExecutor, AgentRunRequest};
 use crate::agent::{AgentEvent, AgentOutcome, ApprovalDecision};
 use crate::model::{
@@ -80,6 +81,11 @@ enum Input {
     },
     /// An ACP agent started a turn on its own.
     Autonomous,
+    /// An agent's options changed; clients show them in their composer.
+    AgentOptions {
+        chat: String,
+        options: Vec<AcpConfigOption>,
+    },
 }
 
 /// Who a reply goes to: the editor that asked, and its request id.
@@ -102,6 +108,8 @@ struct Prompt {
     evidence: Option<bool>,
     /// The client's id for this request, so a retransmission is recognized.
     request: Option<String>,
+    /// Agent options picked in the client before this chat's agent was known to it.
+    agent_options: Vec<(String, Value)>,
 }
 
 struct Chat {
@@ -296,6 +304,15 @@ fn serve(as_daemon: bool) -> i32 {
         let tx = tx.clone();
         crate::agent::acp::set_autonomous_waker(move || {
             let _ = tx.send(Input::Autonomous);
+        });
+    }
+    {
+        let tx = tx.clone();
+        config_options::set_listener(move |chat, options| {
+            let _ = tx.send(Input::AgentOptions {
+                chat: chat.to_owned(),
+                options: options.to_vec(),
+            });
         });
     }
     if as_daemon {
@@ -496,6 +513,9 @@ impl Server {
             Input::AgentGone { chat, run } => self.agent_gone(&chat, run),
             Input::Reply { to, result } => self.reply(to, result),
             Input::Autonomous => self.attach_autonomous_turns(),
+            Input::AgentOptions { chat, options } => {
+                self.notify("agent_options", json!({"chat": chat, "options": options}));
+            }
         }
         true
     }
@@ -531,6 +551,16 @@ impl Server {
             "ping" => Ok(Value::Null),
             "chat.open" => self.open_chat(&params),
             "chat.set_config" => self.set_config(&params),
+            "chat.set_option" => match self.set_agent_option(&params, to) {
+                // Answered from a worker thread once the agent took it.
+                Ok(()) => return true,
+                Err(e) => Err(e),
+            },
+            "computer_use.sync" => match self.computer_use_sync(&params, to) {
+                // Answered from a worker thread: it may download.
+                Ok(()) => return true,
+                Err(e) => Err(e),
+            },
             "chat.rename" => self.rename_chat(&params),
             "chat.delete" => self.delete_chat(&params),
             "prompt.send" => self.send_prompt(&params),
@@ -625,6 +655,8 @@ impl Server {
             "protocol": PROTOCOL_VERSION,
             "version": env!("CARGO_PKG_VERSION"),
             "providers": providers,
+            // `prompt.send` takes `{"name", "file"}` attachments (any file, as base64).
+            "features": ["file_attachments"],
         })
     }
 
@@ -850,6 +882,61 @@ impl Server {
         Ok(config_json(&config))
     }
 
+    /// Set one of the agent's options (permission mode, fast mode…) as the composer does for a
+    /// local chat: on the running agent, else kept for its launch.
+    fn set_agent_option(&mut self, params: &Value, to: ReplyTo) -> Result<(), String> {
+        let root = root_param(params)?;
+        let id = str_param(params, "chat")?;
+        let config_id = str_param(params, "configId")?;
+        self.load_chat(&root, &id)?;
+        let command_line = self.agent_command(&id);
+        let tx = self.tx.clone();
+        self.apply_agent_option(
+            &id,
+            &command_line,
+            config_id,
+            params["value"].clone(),
+            move |result| {
+                let _ = tx.send(Input::Reply {
+                    to,
+                    result: result.map(|()| Value::Null),
+                });
+            },
+        );
+        Ok(())
+    }
+
+    /// The command the chat's agent runs under, which keys its options.
+    fn agent_command(&mut self, id: &str) -> String {
+        let config = self.ensure_config(id);
+        let mut settings = self.settings.clone();
+        config.apply_to_settings(&mut settings);
+        settings.active_config().effective_acp_command()
+    }
+
+    fn apply_agent_option(
+        &self,
+        id: &str,
+        command_line: &str,
+        config_id: String,
+        value: Value,
+        done: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
+        config_options::set_local(id, command_line, &config_id, &value);
+        let request = crate::agent::acp::AcpSetOption {
+            session_key: id.to_owned(),
+            command_line: command_line.to_owned(),
+            config_id,
+            value,
+            model: None,
+            effort: None,
+        };
+        let acp = self.acp.clone();
+        std::thread::spawn(move || {
+            done(crate::runtime::runtime().and_then(|rt| rt.block_on(acp.set_option(request))));
+        });
+    }
+
     fn rename_chat(&mut self, params: &Value) -> Result<Value, String> {
         let root = root_param(params)?;
         let id = str_param(params, "chat")?;
@@ -885,22 +972,36 @@ impl Server {
     fn send_prompt(&mut self, params: &Value) -> Result<Value, String> {
         self.refresh_settings();
         let root = root_param(params)?;
+        let mut attachments = Vec::new();
+        for item in params["attachments"].as_array().into_iter().flatten() {
+            if item.get("file").is_some() {
+                attachments.push(file_attachment(&root, item)?);
+            } else if let Some(attachment) = attachment_param(item) {
+                attachments.push(attachment);
+            }
+        }
         let prompt = Prompt {
             text: params["text"]
                 .as_str()
                 .unwrap_or_default()
                 .trim()
                 .to_string(),
-            attachments: params["attachments"]
-                .as_array()
-                .map(|items| items.iter().filter_map(attachment_param).collect())
-                .unwrap_or_default(),
+            attachments,
             plan: params["plan"].as_bool(),
             evidence: params["evidence"].as_bool(),
             request: params["requestId"]
                 .as_str()
                 .filter(|r| !r.is_empty())
                 .map(str::to_owned),
+            agent_options: params["agent_options"]
+                .as_array()
+                .map(|picks| {
+                    picks
+                        .iter()
+                        .filter_map(|p| Some((p["id"].as_str()?.to_owned(), p["value"].clone())))
+                        .collect()
+                })
+                .unwrap_or_default(),
         };
         if prompt.text.is_empty() && prompt.attachments.is_empty() {
             return Err("Nothing to send".into());
@@ -1072,6 +1173,14 @@ impl Server {
 
         let mut settings = self.settings.clone();
         config.apply_to_settings(&mut settings);
+        let command_line = settings.active_config().effective_acp_command();
+        for (config_id, value) in prompt.agent_options {
+            self.apply_agent_option(&id, &command_line, config_id, value, |result| {
+                if let Err(e) = result {
+                    log::warn!("headless: could not set an agent option: {e}");
+                }
+            });
+        }
         let run_id = self.next_run;
         self.next_run += 1;
         let (approval_tx, approval_rx) = mpsc::channel();
@@ -1381,6 +1490,18 @@ impl Server {
                 self.notify("approval", json!({"chat": id, "approval": approval}));
                 return;
             }
+            AgentEvent::ElicitationRequest { params } => {
+                // Clients that don't know elicitations show the question as an approval.
+                let approval = json!({
+                    "tool": "question",
+                    "summary": params["message"],
+                    "elicitation": params,
+                });
+                chat.pending_approval = Some(approval.clone());
+                self.flush_chat(id);
+                self.notify("approval", json!({"chat": id, "approval": approval}));
+                return;
+            }
             AgentEvent::StreamRetry { attempt, reason } => {
                 log::info!("headless: stream retry (attempt {attempt}): {reason}");
                 if let Some(m) = chat.last_assistant_mut() {
@@ -1527,6 +1648,7 @@ impl Server {
             "approve" => ApprovalDecision::Approve,
             "approve_rest" => ApprovalDecision::ApproveRest,
             "deny" => ApprovalDecision::Deny,
+            "elicitation" => ApprovalDecision::Elicitation(params["response"].clone()),
             "allow_prefix" => {
                 let prefix = str_param(params, "prefix")?;
                 self.update_settings(|settings| {
@@ -1586,7 +1708,7 @@ impl Server {
             env: cfg.acp_env(),
             model: cfg.model_id.clone(),
             effort: cfg.effort.clone(),
-            mcp_servers: self.settings.mcp_servers.clone(),
+            mcp_servers: self.settings.effective_mcp_servers(),
         };
         let acp = self.acp.clone();
         let tx = self.tx.clone();
@@ -1923,6 +2045,126 @@ fn attachment_param(value: &Value) -> Option<UserAttachment> {
     })
 }
 
+/// Largest file a prompt may carry.
+const MAX_FILE_ATTACHMENT: usize = 30 * 1024 * 1024;
+/// Text of an attached document that goes into the prompt; the agent reads the rest from the file.
+const MAX_DOCUMENT_TEXT: usize = 100_000;
+/// Where attached files are kept, under the workspace root, so the agent's tools reach them.
+const ATTACHMENTS_DIR: &str = ".oxi/attachments";
+
+/// A file sent with a prompt (`{"name", "file": base64}`, from a phone): saved in the
+/// workspace, and passed to the agent as a note with its path and, for documents oxi can
+/// read (PDF, Office, OpenDocument, plain text), their text.
+fn file_attachment(root: &str, value: &Value) -> Result<UserAttachment, String> {
+    use base64::Engine as _;
+    let name = attachment_file_name(value["name"].as_str().unwrap_or_default());
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(value["file"].as_str().unwrap_or_default().trim())
+        .map_err(|e| format!("{name}: bad data: {e}"))?;
+    if data.len() > MAX_FILE_ATTACHMENT {
+        return Err(format!(
+            "{name} is larger than {} MB",
+            MAX_FILE_ATTACHMENT / (1024 * 1024)
+        ));
+    }
+    let dir = Path::new(root).join(ATTACHMENTS_DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        // Attachments are the user's files, not the project's: keep them out of commits.
+        let _ = crate::fsutil::write_atomic(&ignore, b"*\n");
+    }
+    let path = unique_file(&dir, &name);
+    crate::fsutil::save(&path, &data).map_err(|e| format!("{}: {e}", path.display()))?;
+    let shown = path
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| path.display().to_string());
+    let mut text = format!(
+        "The user attached {name} ({}). It is saved in the workspace at `{shown}`.",
+        human_size(data.len())
+    );
+    let content = crate::documents::extract_text(&name, &data).or_else(|| {
+        // Text files (code, CSV, Markdown...) need no extracting.
+        (!data.contains(&0))
+            .then(|| String::from_utf8(data).ok())
+            .flatten()
+            .filter(|t| !t.trim().is_empty())
+    });
+    match content {
+        Some(content) => {
+            let cut = content.len() > MAX_DOCUMENT_TEXT;
+            let mut end = MAX_DOCUMENT_TEXT.min(content.len());
+            while !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            text.push_str(" Its text:\n\n");
+            text.push_str(&content[..end]);
+            if cut {
+                text.push_str("\n\n[The text is cut off here; read the file for the rest.]");
+            }
+        }
+        None => text.push_str(
+            " oxi could not read its text; open the file with your tools if you need its content.",
+        ),
+    }
+    Ok(UserAttachment::Text { name, text })
+}
+
+/// A file name safe on every OS, from what a client sent.
+fn attachment_file_name(raw: &str) -> String {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or_default();
+    let clean: String = base
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '|' | '?' | '*' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    let clean = clean.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    let clean: String = if clean.chars().count() > 120 {
+        // Keep the extension: it says what the file is.
+        let ext = clean
+            .rsplit_once('.')
+            .map(|(_, e)| e)
+            .filter(|e| e.len() <= 10);
+        let stem: String = clean.chars().take(100).collect();
+        ext.map_or(stem.clone(), |e| format!("{stem}.{e}"))
+    } else {
+        clean.to_string()
+    };
+    if clean.is_empty() {
+        "attachment".into()
+    } else {
+        clean
+    }
+}
+
+/// `dir/name`, or `dir/stem-2.ext` and so on when that is taken.
+fn unique_file(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    if !path.exists() {
+        return path;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
+        _ => (name, String::new()),
+    };
+    (2..)
+        .map(|n| dir.join(format!("{stem}-{n}{ext}")))
+        .find(|p| !p.exists())
+        .expect("a free name")
+}
+
+fn human_size(bytes: usize) -> String {
+    match bytes {
+        b if b < 1024 => format!("{b} B"),
+        b if b < 1024 * 1024 => format!("{:.0} KB", b as f64 / 1024.0),
+        b => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+    }
+}
+
 fn paths_param(params: &Value) -> Result<Vec<String>, String> {
     let paths: Vec<String> = params["paths"]
         .as_array()
@@ -2253,6 +2495,127 @@ mod tests {
         let _ = std::fs::remove_file(session_store::run_journal::path_for(&chat));
     }
 
+    /// A remote client's picks reach the agent on the server, the bug being a composer showing
+    /// "Bypass permissions" over an agent that stayed in its default mode and kept asking.
+    #[test]
+    fn agent_options_picked_in_a_client_reach_the_agent_on_the_server() {
+        const AGENT: &str = r#"
+import json, sys
+mode = 'default'
+def send(v):
+    print(json.dumps(dict(jsonrpc='2.0', **v)), flush=True)
+def options():
+    return [dict(id='mode', name='Mode', category='mode', type='select', currentValue=mode,
+        options=[dict(value='default', name='Manual'), dict(value='bypassPermissions', name='Bypass')])]
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    if method == 'initialize':
+        send(dict(id=m['id'], result=dict(protocolVersion=1, agentCapabilities={})))
+    elif method == 'session/new':
+        send(dict(id=m['id'], result=dict(sessionId='fake', configOptions=options())))
+    elif method == 'session/set_config_option':
+        mode = m['params']['value']
+        send(dict(id=m['id'], result=dict(configOptions=options())))
+    elif method == 'session/prompt':
+        send(dict(method='session/update', params=dict(sessionId='fake', update=dict(
+            sessionUpdate='agent_message_chunk', content=dict(type='text', text='mode=' + mode)))))
+        send(dict(id=m['id'], result=dict(stopReason='end_turn')))
+    elif 'id' in m:
+        send(dict(id=m['id'], result={}))
+"#;
+        crate::secrets::use_mock_store();
+        let root = crate::app_dirs::test_root().join("headless-agent-options");
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("agent.py");
+        std::fs::write(&script, AGENT).unwrap();
+        let root = root.canonicalize().unwrap().to_string_lossy().to_string();
+
+        let (tx, rx) = mpsc::channel();
+        let mut server = Server::new(tx.clone(), AgentExecutor::new().unwrap(), false);
+        let kind = LlmProviderKind::ClaudeCodeAcp;
+        server.settings.active_provider = kind;
+        server.settings.provider_mut(kind).acp_command = format!(
+            "{} {}",
+            crate::agent::test_python_executable().display(),
+            script.display()
+        );
+        config_options::set_listener(move |chat, options| {
+            let _ = tx.send(Input::AgentOptions {
+                chat: chat.to_owned(),
+                options: options.to_vec(),
+            });
+        });
+        // Serves the server until the chat's turn is over; returns the option lists published.
+        fn finish_turn(
+            server: &mut Server,
+            rx: &mpsc::Receiver<Input>,
+            chat: &str,
+        ) -> Vec<Vec<AcpConfigOption>> {
+            let mut published = Vec::new();
+            while server.chats[chat].run.is_some() {
+                match rx
+                    .recv_timeout(Duration::from_secs(20))
+                    .expect("agent hung")
+                {
+                    Input::AgentOptions { chat: of, options } if of == chat => {
+                        published.push(options)
+                    }
+                    input => {
+                        server.handle(input);
+                    }
+                }
+            }
+            published
+        }
+        let reply = |server: &Server, chat: &str| {
+            let last = server.chats[chat].session.messages.last().unwrap();
+            message_json(last).to_string()
+        };
+
+        // Picked before the chat existed: arrives with its first prompt.
+        let sent = server
+            .send_prompt(&json!({
+                "root": root, "text": "one",
+                "agent_options": [{"id": "mode", "value": "bypassPermissions"}],
+            }))
+            .unwrap();
+        let chat = sent["chat"].as_str().unwrap().to_string();
+        let published = finish_turn(&mut server, &rx, &chat);
+        let text = reply(&server, &chat);
+        assert!(text.contains("mode=bypassPermissions"), "{text}");
+        let last = published
+            .last()
+            .expect("the agent's options were published");
+        assert!(matches!(
+            &last[0].kind,
+            config_options::AcpConfigKind::Select { current, .. } if current == "bypassPermissions"
+        ));
+
+        // Picked while the agent runs: set on it, not only shown.
+        let (done_tx, done_rx) = mpsc::channel();
+        let command = server.agent_command(&chat);
+        server.apply_agent_option(&chat, &command, "mode".into(), json!("default"), move |r| {
+            let _ = done_tx.send(r);
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(20))
+            .unwrap()
+            .unwrap();
+        server
+            .send_prompt(&json!({"root": root, "chat": chat, "text": "two"}))
+            .unwrap();
+        finish_turn(&mut server, &rx, &chat);
+        let text = reply(&server, &chat);
+        assert!(text.contains("mode=default"), "{text}");
+
+        let snapshot = server
+            .get_chat(&json!({"root": root, "chat": chat}))
+            .unwrap();
+        assert_eq!(snapshot["agent_options"][0]["id"], "mode");
+        server.acp.close(&chat);
+    }
+
     #[test]
     fn head_and_tail_cut_on_char_boundaries() {
         assert_eq!(head("ăîșț", 2), ("ăî", true));
@@ -2317,6 +2680,55 @@ mod tests {
         let value = message_json(&ChatMessage::user(&expanded, &[]));
         assert_eq!(value["text"], "look at @a.txt");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn files_are_saved_in_the_workspace_with_their_text() {
+        use base64::Engine as _;
+        let root = std::env::temp_dir().join(format!("oxi-attach-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root_str = root.to_string_lossy().to_string();
+        let send = |name: &str, bytes: &[u8]| {
+            let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+            match file_attachment(&root_str, &json!({"name": name, "file": data})).unwrap() {
+                UserAttachment::Text { name, text } => (name, text),
+                UserAttachment::Image { .. } => panic!("a file is not an image"),
+            }
+        };
+        let (name, text) = send("../notes.csv", b"a,b\n1,2\n");
+        assert_eq!(name, "notes.csv");
+        assert!(text.contains("`.oxi/attachments/notes.csv`"), "{text}");
+        assert!(text.ends_with("Its text:\n\na,b\n1,2\n"), "{text}");
+        assert_eq!(
+            std::fs::read(root.join(".oxi/attachments/notes.csv")).unwrap(),
+            b"a,b\n1,2\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".oxi/attachments/.gitignore")).unwrap(),
+            "*\n"
+        );
+        // Same name again: a new file next to it, not over it.
+        let (_, text) = send("notes.csv", b"other");
+        assert!(text.contains("`.oxi/attachments/notes-2.csv`"), "{text}");
+        let (_, text) = send("scan.bin", &[0, 1, 2]);
+        assert!(text.contains("could not read its text"), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn attachment_names_are_safe() {
+        assert_eq!(
+            attachment_file_name("C:\\Users\\a\\Q3 report.pdf"),
+            "Q3 report.pdf"
+        );
+        assert_eq!(attachment_file_name("what?.docx"), "what_.docx");
+        assert_eq!(attachment_file_name(".."), "attachment");
+        assert_eq!(attachment_file_name(""), "attachment");
+        let long = format!("{}.xlsx", "x".repeat(300));
+        assert_eq!(
+            attachment_file_name(&long),
+            format!("{}.xlsx", "x".repeat(100))
+        );
     }
 
     #[test]

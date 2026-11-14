@@ -33,7 +33,7 @@ pub(super) fn acp_history_transcript(chat: &[ChatMessage]) -> String {
 
 /// Every turn of `chat` with its number, tool output only lightly trimmed: what `chat_read`
 /// serves when a transcript left something out.
-pub(super) fn acp_chat_archive(chat: &[ChatMessage]) -> Vec<(usize, String)> {
+pub(crate) fn acp_chat_archive(chat: &[ChatMessage]) -> Vec<(usize, String)> {
     turns(chat, 0, Detail::Archive)
         .into_iter()
         .map(|t| (t.n, t.text))
@@ -151,7 +151,7 @@ fn claude_project_slug(cwd: &Path) -> String {
 /// Tools that only look things up; their output is not worth repeating in a recap.
 fn read_only(name: &str, metadata: Option<&ToolMetadata>) -> bool {
     // Agents report MCP tools as `other`, so oxi's own lookups go by name.
-    if matches!(name, "chat_read" | "scratchpad_read") {
+    if matches!(name, "chat_read" | "chat_search" | "scratchpad_read") {
         return true;
     }
     match metadata {
@@ -319,7 +319,7 @@ fn block_text(block: &AssistantBlock, recent: bool, detail: Detail) -> Option<St
             }
             let limit = match detail {
                 // Earlier turns read back: archiving them would nest the chat in itself.
-                Detail::Archive if name == "chat_read" => 0,
+                Detail::Archive if matches!(name.as_str(), "chat_read" | "chat_search") => 0,
                 Detail::Archive => ARCHIVE_TOOL_CHARS,
                 _ if failed => TOOL_OUTPUT_RECENT_CHARS,
                 Detail::Recap if read_only(name, metadata.as_deref()) => 0,

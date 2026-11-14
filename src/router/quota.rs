@@ -496,6 +496,10 @@ async fn probe_claude_cli() -> Result<QuotaSnapshot, String> {
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::null())
     .kill_on_drop(true);
+    // No console on a Windows GUI process: without CREATE_NO_WINDOW every background quota
+    // refresh (every few minutes) flashes a cmd window.
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("could not start the claude CLI: {e}"))?;

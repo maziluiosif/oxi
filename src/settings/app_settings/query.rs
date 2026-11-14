@@ -4,6 +4,17 @@ use super::super::provider::{LlmProviderKind, ProviderConfig, WebSearchBackend};
 use super::*;
 
 impl AppSettings {
+    /// The MCP servers agents get: the user's, plus agent-desktop when computer use is on. A
+    /// server the user set up under that name wins.
+    pub fn effective_mcp_servers(&self) -> Vec<super::McpServerConfig> {
+        let mut servers = self.mcp_servers.clone();
+        let name = crate::computer_use::SERVER_NAME;
+        if self.computer_use && !servers.iter().any(|s| s.name.trim() == name) {
+            servers.extend(crate::computer_use::server_config());
+        }
+        servers
+    }
+
     /// Config for the given provider kind. Infallible: `AppSettings::normalize` runs on
     /// every load and guarantees an entry per kind.
     pub fn provider(&self, kind: LlmProviderKind) -> &ProviderConfig {
@@ -35,12 +46,8 @@ impl AppSettings {
         cfg
     }
 
-    /// Provider kinds the user has actually configured (has usable credentials for),
-    /// in the same display order as [`LlmProviderKind::ALL`]. Local runtimes (Ollama, LM
-    /// Studio) need no key so they always count as configured; hosted providers need a
-    /// configured API key or the matching env var (mirrors the fallback chain in
-    /// `agent::runner::configured_*_key`); GPT Codex additionally counts as configured via
-    /// its "Sign in with ChatGPT" OAuth token.
+    /// Providers with credentials, installed ACP clients, or explicitly configured local
+    /// runtimes. Call off the UI thread: ACP detection resolves the login-shell environment.
     pub fn configured_provider_kinds(
         &self,
         oauth: &crate::oauth::OAuthStore,
@@ -64,42 +71,56 @@ impl AppSettings {
             | LlmProviderKind::LlamaCpp
             | LlmProviderKind::Ollama
             | LlmProviderKind::LocalHf
-            | LlmProviderKind::RemoteHf => true,
-            // Claude Code handles its own auth (subscription login or ANTHROPIC_API_KEY),
-            // so it's always offered; the subprocess reports a clear error if not logged in.
+            | LlmProviderKind::RemoteHf => {
+                let config = self.provider(kind);
+                let defaults = ProviderConfig::new(kind);
+                config
+                    .ssh_config()
+                    .is_some_and(|ssh| !ssh.host.trim().is_empty())
+                    || (!config.base_url.trim().is_empty() && config.base_url != defaults.base_url)
+                    || (!config.model_id.trim().is_empty() && config.model_id != defaults.model_id)
+                    || has_profile_key(kind)
+                    || (kind == LlmProviderKind::LocalHf
+                        && crate::local_models::load_manifest()
+                            .models
+                            .iter()
+                            .any(|model| std::path::Path::new(&model.path).is_file()))
+            }
             LlmProviderKind::ClaudeCodeAcp
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
             | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp
-            | LlmProviderKind::OpenCodeAcp => true,
-            LlmProviderKind::AzureOpenAi => true,
-            // Picks among the providers above; local runtimes always count as configured.
-            LlmProviderKind::Router => true,
+            | LlmProviderKind::OpenCodeAcp => {
+                super::super::availability::acp_client_installed(self.provider(kind))
+            }
+            LlmProviderKind::AzureOpenAi => {
+                let config = self.provider(kind);
+                (has_profile_key(kind) || env_key("AZURE_OPENAI_API_KEY"))
+                    && !config.base_url.trim().is_empty()
+                    && !config.base_url.contains("YOUR_RESOURCE")
+                    && !config.base_url.contains("YOUR_DEPLOYMENT")
+            }
+            LlmProviderKind::Router => LlmProviderKind::ALL.into_iter().any(|candidate| {
+                candidate != LlmProviderKind::Router
+                    && self.provider_is_configured(candidate, oauth)
+            }),
             LlmProviderKind::CustomAnthropic => {
                 has_profile_key(kind)
-                    || std::env::var("CUSTOM_ANTHROPIC_API_KEY").is_ok()
-                    || std::env::var("ANTHROPIC_API_KEY").is_ok()
+                    || env_key("CUSTOM_ANTHROPIC_API_KEY")
+                    || env_key("ANTHROPIC_API_KEY")
             }
-            LlmProviderKind::OpenAi => {
-                has_profile_key(kind) || std::env::var("OPENAI_API_KEY").is_ok()
-            }
-            LlmProviderKind::OpenRouter => {
-                has_profile_key(kind) || std::env::var("OPENROUTER_API_KEY").is_ok()
-            }
-            LlmProviderKind::MetaMuse => {
-                has_profile_key(kind) || std::env::var("MODEL_API_KEY").is_ok()
-            }
+            LlmProviderKind::OpenAi => has_profile_key(kind) || env_key("OPENAI_API_KEY"),
+            LlmProviderKind::OpenRouter => has_profile_key(kind) || env_key("OPENROUTER_API_KEY"),
+            LlmProviderKind::MetaMuse => has_profile_key(kind) || env_key("MODEL_API_KEY"),
             LlmProviderKind::OpenCodeGo => {
                 has_profile_key(kind)
-                    || std::env::var("OPENCODE_GO_API_KEY").is_ok()
-                    || std::env::var("OPENCODE_API_KEY").is_ok()
+                    || env_key("OPENCODE_GO_API_KEY")
+                    || env_key("OPENCODE_API_KEY")
             }
             LlmProviderKind::GptCodex => {
-                oauth.openai_codex.is_some()
-                    || has_profile_key(kind)
-                    || std::env::var("OPENAI_API_KEY").is_ok()
+                oauth.openai_codex.is_some() || has_profile_key(kind) || env_key("OPENAI_API_KEY")
             }
         }
     }
@@ -138,4 +159,9 @@ impl AppSettings {
             WebSearchBackend::Bing | WebSearchBackend::DuckDuckGo => String::new(),
         }
     }
+}
+
+/// Empty environment variables are not credentials.
+fn env_key(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
 }

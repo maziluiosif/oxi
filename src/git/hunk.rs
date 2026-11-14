@@ -48,7 +48,9 @@ pub(super) fn apply_block(cwd: &str, edit: &BlockEdit) -> Result<(), String> {
             let content = String::from_utf8(content)
                 .map_err(|_| format!("{} is not UTF-8 text", edit.path))?;
             let updated = splice_lines(&content, edit)?;
-            std::fs::write(&path, updated).map_err(|e| format!("{}: {e}", edit.path))
+            // Like an editor save: a crash mid-write leaves the old text, links stay links.
+            crate::fsutil::save(&path, updated.as_bytes())
+                .map_err(|e| format!("{}: {e}", edit.path))
         }
         BlockTarget::Index => write_index_block(&repo, edit),
     }
@@ -195,31 +197,87 @@ pub fn diff_texts(
     ) {
         return result.and_then(|r| r);
     }
+    let (base, staged) = local_diff_blobs(cwd, relative, base)?;
+    let text = |bytes: Option<Vec<u8>>| {
+        String::from_utf8(bytes.unwrap_or_default())
+            .map_err(|_| format!("{relative} is not UTF-8 text"))
+    };
+    Ok((
+        text(base)?,
+        staged.map(|bytes| text(Some(bytes))).transpose()?,
+    ))
+}
+
+/// Old and new bytes of a file's diff; see [`diff_blobs`].
+pub type DiffBlobs = (Option<Vec<u8>>, Option<Vec<u8>>);
+
+/// The two sides of a binary file's diff (an image), like [`diff_texts`] but as raw bytes:
+/// the base (`None` when the file is not there), and for [`DiffBase::Staged`] the index
+/// version (`None` otherwise, or when the file is not in the index).
+pub fn diff_blobs(cwd: &str, relative: &str, base: &DiffBase) -> Result<DiffBlobs, String> {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    type Encoded = Result<(Option<String>, Option<String>), String>;
+    if let Some(result) = super::remote::call::<Encoded>(
+        cwd,
+        "diff_blobs",
+        serde_json::json!({ "relative": relative, "base": base }),
+    ) {
+        let (old, new) = result.and_then(|r| r)?;
+        let decode = |side: Option<String>| {
+            side.map(|text| engine.decode(text).map_err(|e| e.to_string()))
+                .transpose()
+        };
+        return Ok((decode(old)?, decode(new)?));
+    }
+    let (old, new) = local_diff_blobs(cwd, relative, base)?;
+    Ok((old, if *base == DiffBase::Staged { new } else { None }))
+}
+
+/// [`diff_blobs`] for the server: base64 sides, so they travel as JSON strings.
+pub(super) fn diff_blobs_encoded(
+    cwd: &str,
+    relative: &str,
+    base: &DiffBase,
+) -> Result<(Option<String>, Option<String>), String> {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let (old, new) = diff_blobs(cwd, relative, base)?;
+    Ok((
+        old.map(|bytes| engine.encode(bytes)),
+        new.map(|bytes| engine.encode(bytes)),
+    ))
+}
+
+/// Base bytes (`None`: the file is not there), and for [`DiffBase::Staged`] `Some` index
+/// bytes (empty when the file is not in the index).
+fn local_diff_blobs(cwd: &str, relative: &str, base: &DiffBase) -> Result<DiffBlobs, String> {
     let repo = open_repo(cwd)?;
     let head_tree = || repo.head().and_then(|head| head.peel_to_tree()).ok();
+    let index_bytes = |repo: &Repository| -> Result<Option<Vec<u8>>, String> {
+        let index = repo.index().map_err(err)?;
+        match index.get_path(Path::new(relative), 0) {
+            Some(entry) => blob_bytes(repo, entry.id).map(Some),
+            None => Ok(None),
+        }
+    };
     match base {
         DiffBase::Index => {
-            let index = repo.index().map_err(err)?;
-            let text = match index.get_path(Path::new(relative), 0) {
-                Some(entry) => blob_text(&repo, entry.id, relative)?,
+            let bytes = match index_bytes(&repo)? {
+                Some(bytes) => Some(bytes),
                 None => match head_tree() {
-                    Some(tree) => tree_text(&repo, &tree, relative)?,
-                    None => String::new(),
+                    Some(tree) => tree_bytes(&repo, &tree, relative)?,
+                    None => None,
                 },
             };
-            Ok((text, None))
+            Ok((bytes, None))
         }
         DiffBase::Staged => {
             let old = match head_tree() {
-                Some(tree) => tree_text(&repo, &tree, relative)?,
-                None => String::new(),
+                Some(tree) => tree_bytes(&repo, &tree, relative)?,
+                None => None,
             };
-            let index = repo.index().map_err(err)?;
-            let new = match index.get_path(Path::new(relative), 0) {
-                Some(entry) => blob_text(&repo, entry.id, relative)?,
-                None => String::new(),
-            };
-            Ok((old, Some(new)))
+            Ok((old, Some(index_bytes(&repo)?.unwrap_or_default())))
         }
         DiffBase::Compare { base, old_path } => {
             // An agent turn's snapshot is compared directly, without a merge base.
@@ -241,21 +299,24 @@ pub fn diff_texts(
                 }
             };
             let path = old_path.as_deref().unwrap_or(relative);
-            Ok((tree_text(&repo, &tree, path)?, None))
+            Ok((tree_bytes(&repo, &tree, path)?, None))
         }
     }
 }
 
-fn tree_text(repo: &Repository, tree: &git2::Tree<'_>, relative: &str) -> Result<String, String> {
+fn tree_bytes(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    relative: &str,
+) -> Result<Option<Vec<u8>>, String> {
     match tree.get_path(Path::new(relative)) {
-        Ok(entry) => blob_text(repo, entry.id(), relative),
-        Err(_) => Ok(String::new()),
+        Ok(entry) => blob_bytes(repo, entry.id()).map(Some),
+        Err(_) => Ok(None),
     }
 }
 
-fn blob_text(repo: &Repository, id: git2::Oid, relative: &str) -> Result<String, String> {
-    let blob = repo.find_blob(id).map_err(err)?;
-    String::from_utf8(blob.content().to_vec()).map_err(|_| format!("{relative} is not UTF-8 text"))
+fn blob_bytes(repo: &Repository, id: git2::Oid) -> Result<Vec<u8>, String> {
+    Ok(repo.find_blob(id).map_err(err)?.content().to_vec())
 }
 
 /// Line changes from `old` to `new`, without context. Line endings don't count: a base blob

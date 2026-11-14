@@ -259,8 +259,7 @@ impl OxiApp {
                     {
                         crate::ui::text_attachment::open_draft(ui.ctx(), name, text, scope);
                     }
-                    if ui
-                        .small_button("×")
+                    if crate::ui::chrome::dismiss_button(ui)
                         .on_hover_text("Remove text attachment")
                         .clicked()
                     {
@@ -434,7 +433,7 @@ impl OxiApp {
                                         .size(FS_SMALL)
                                         .color(c_warning_fg()),
                                 );
-                                if ui.small_button("Cancel").clicked() {
+                                if crate::ui::chrome::mini_button(ui, "Cancel").clicked() {
                                     self.cancel_edit_last_prompt();
                                 }
                             });

@@ -54,13 +54,19 @@ fn message_text(line: &str) -> Option<String> {
 /// One line of `text` around the first case-insensitive match of `query` (lowercased), with
 /// an ellipsis where it was cut.
 pub(crate) fn excerpt(text: &str, query: &str) -> Option<String> {
+    excerpt_around(text, query, CONTEXT)
+}
+
+/// [`excerpt`] with `context` characters kept on each side of the match.
+pub(crate) fn excerpt_around(text: &str, query: &str, context: usize) -> Option<String> {
     let lower = text.to_lowercase();
     // Lowercasing can change byte lengths; map back through char positions.
     let at = lower.find(query)?;
     let char_at = lower[..at].chars().count();
     let chars: Vec<char> = text.chars().collect();
-    let start = char_at.saturating_sub(CONTEXT);
-    let end = (char_at + query.chars().count() + CONTEXT).min(chars.len());
+    let end = (char_at + query.chars().count() + context).min(chars.len());
+    // `char_at` can run past the original text when lowercasing grew it.
+    let start = char_at.saturating_sub(context).min(end);
     let mut out: String = chars[start..end]
         .iter()
         .map(|c| if c.is_whitespace() { ' ' } else { *c })

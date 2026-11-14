@@ -246,8 +246,7 @@ impl OxiApp {
                 "Sent into the response in progress; the agent reads it at its next step",
                 preview,
                 |ui| {
-                    if ui
-                        .small_button("Undo")
+                    if crate::ui::chrome::mini_button(ui, "Undo")
                         .on_hover_text("Take it back to the queue (until the agent reads it)")
                         .clicked()
                     {
@@ -288,8 +287,7 @@ impl OxiApp {
                 .response
                 .on_hover_text("More");
                 if !running {
-                    if ui
-                        .small_button("Send")
+                    if crate::ui::chrome::mini_button(ui, "Send")
                         .on_hover_text("Send this message")
                         .clicked()
                     {
@@ -301,8 +299,7 @@ impl OxiApp {
                     } else {
                         ""
                     };
-                    if ui
-                        .small_button(RichText::new("Steer").color(c_accent()))
+                    if crate::ui::chrome::mini_button_accent(ui, "Steer")
                         .on_hover_text(format!(
                             "Add this to the response in progress: the agent reads it at its \
                                  next step, without stopping{hint}"
@@ -433,15 +430,13 @@ impl OxiApp {
                     .color(crate::theme::c_warning_fg()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button("Dismiss")
+                if crate::ui::chrome::mini_button(ui, "Dismiss")
                     .on_hover_text("Nothing is resent")
                     .clicked()
                 {
                     action = Some(false);
                 }
-                if ui
-                    .small_button(RichText::new("Continue").color(c_accent()))
+                if crate::ui::chrome::mini_button_accent(ui, "Continue")
                     .on_hover_text(
                         "Ask the agent to check what the interrupted actions did, then carry on",
                     )

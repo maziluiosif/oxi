@@ -32,6 +32,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Commit
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
@@ -187,6 +190,7 @@ fun WorkspacesScreen(vm: OxiViewModel, state: UiState) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 item { UpdateBanner(vm, state) }
+                item { ShareBanner(vm, state, "Pick a project, then a chat") }
                 item { SectionLabel("Projects") }
                 items(state.workspaces, key = { it.path }) { ws -> WorkspaceRow(ws, state.home) { vm.openWorkspace(ws.path) } }
                 if (state.workspaces.isEmpty()) {
@@ -201,6 +205,32 @@ fun WorkspacesScreen(vm: OxiViewModel, state: UiState) {
             browse = false
             vm.openWorkspace(path)
         }
+    }
+}
+
+/** Something shared from another app is waiting for the chat it should go to. */
+@Composable
+fun ShareBanner(vm: OxiViewModel, state: UiState, hint: String) {
+    val share = state.share ?: return
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Oxi.copperDim)
+            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Share, null, tint = Oxi.copper, modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(
+                if (share.count == 1) "1 item to share" else "${share.count} items to share",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = Oxi.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = { vm.cancelShare() }) { Icon(Icons.Rounded.Close, "Don't share", tint = Oxi.muted) }
     }
 }
 
@@ -302,6 +332,7 @@ fun ChatsScreen(vm: OxiViewModel, state: UiState) {
                 subtitle = root.let { r -> state.home?.let { if (r.startsWith(it)) "~" + r.removePrefix(it) else r } ?: r },
                 onBack = { vm.openWorkspace(null) },
                 actions = {
+                    IconButton(onClick = { vm.openGit() }) { Icon(Icons.Rounded.Commit, "Source control", tint = Oxi.muted) }
                     Box(Modifier.padding(end = 14.dp)) { ConnDot(state.conn) }
                 },
             )
@@ -320,6 +351,7 @@ fun ChatsScreen(vm: OxiViewModel, state: UiState) {
             Modifier.fillMaxSize().padding(pad),
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 96.dp),
         ) {
+            item { ShareBanner(vm, state, "Open a chat or start a new one") }
             if (state.chats.isEmpty() && !state.chatsLoading) {
                 item {
                     Column(Modifier.fillMaxWidth().padding(top = 80.dp), horizontalAlignment = Alignment.CenterHorizontally) {

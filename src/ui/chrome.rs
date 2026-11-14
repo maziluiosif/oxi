@@ -148,6 +148,7 @@ pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usiz
             ui.add(
                 TextEdit::multiline(text)
                     .frame(egui::Frame::NONE)
+                    .font(FontId::proportional(FS_SMALL))
                     .desired_width(f32::INFINITY)
                     .desired_rows(rows)
                     .hint_text(hint),
@@ -373,6 +374,148 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: impl Into<egui::WidgetText>) ->
             c_text(),
         );
     }
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// Side of the box or dot [`paint_choice_mark`] draws.
+pub const CHOICE_MARK: f32 = 14.0;
+
+/// A thin tab-close cross, `arm` px from the center to each tip. The icon font's xmark is a
+/// heavy solid glyph that looks oversized next to a tab label; this stays light at any DPI.
+pub fn paint_close_mark(painter: &egui::Painter, center: egui::Pos2, arm: f32, color: Color32) {
+    let stroke = Stroke::new(1.25, color);
+    painter.line_segment(
+        [
+            center + egui::vec2(-arm, -arm),
+            center + egui::vec2(arm, arm),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            center + egui::vec2(-arm, arm),
+            center + egui::vec2(arm, -arm),
+        ],
+        stroke,
+    );
+}
+
+/// Paint an icon-font glyph centered at `center`. The close icon is drawn as the thin
+/// [`paint_close_mark`] cross instead, so every "×" in the app has the same light weight.
+pub fn paint_icon_glyph(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    icon: &str,
+    glyph_size: f32,
+    color: Color32,
+) {
+    if icon == ICON_CLOSE {
+        paint_close_mark(painter, center, (glyph_size * 0.3).max(2.5), color);
+    } else {
+        painter.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            icon,
+            FontId::new(glyph_size, icon_font()),
+            color,
+        );
+    }
+}
+
+/// A check box (`multi`) or radio dot, drawn by hand in `mark`: egui's own take the faint
+/// widget fill and border, and nearly vanish on cards and tinted backgrounds.
+pub fn paint_choice_mark(
+    painter: &egui::Painter,
+    mark: egui::Rect,
+    multi: bool,
+    picked: bool,
+    hovered: bool,
+) {
+    let outline = Stroke::new(
+        1.5,
+        if picked {
+            c_accent()
+        } else if hovered {
+            c_text()
+        } else {
+            c_text_muted()
+        },
+    );
+    if multi {
+        let radius = CornerRadius::same(3);
+        if picked {
+            painter.rect_filled(mark, radius, c_accent());
+            let c = mark.center();
+            let tick = Stroke::new(1.6, c_on_accent());
+            painter.line_segment([c + egui::vec2(-3.5, 0.0), c + egui::vec2(-1.2, 2.6)], tick);
+            painter.line_segment([c + egui::vec2(-1.2, 2.6), c + egui::vec2(3.6, -2.8)], tick);
+        } else {
+            painter.rect_stroke(mark, radius, outline, egui::StrokeKind::Inside);
+        }
+    } else {
+        painter.circle_stroke(mark.center(), mark.width() * 0.5 - 0.75, outline);
+        if picked {
+            painter.circle_filled(mark.center(), mark.width() * 0.25, c_accent());
+        }
+    }
+}
+
+/// Check box with a label, a drop-in for `ui.checkbox` where a switch would read wrong (an
+/// option of an action about to happen, not a setting).
+pub fn checkbox(ui: &mut Ui, on: &mut bool, label: impl Into<egui::WidgetText>) -> Response {
+    const GAP: f32 = 8.0;
+    let text: egui::WidgetText = label.into();
+    let label_text = text.text().to_owned();
+    let galley = text.into_galley(
+        ui,
+        Some(egui::TextWrapMode::Wrap),
+        (ui.available_width() - CHOICE_MARK - GAP).max(40.0),
+        egui::TextStyle::Body,
+    );
+    let row_h = galley.size().y / galley.rows.len().max(1) as f32;
+    let line_h = row_h.max(CHOICE_MARK + 6.0);
+    let size = egui::vec2(
+        CHOICE_MARK + GAP + galley.size().x,
+        galley.size().y + line_h - row_h,
+    );
+    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            *on,
+            &label_text,
+        )
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let hovered = ui.is_enabled() && (response.hovered() || response.has_focus());
+    let mark = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + CHOICE_MARK * 0.5, rect.top() + line_h * 0.5),
+        egui::vec2(CHOICE_MARK, CHOICE_MARK),
+    );
+    paint_choice_mark(ui.painter(), mark, true, *on, hovered);
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            mark.expand(2.0),
+            CornerRadius::same(5),
+            Stroke::new(1.0, c_accent()),
+            egui::StrokeKind::Outside,
+        );
+    }
+    ui.painter().galley(
+        egui::pos2(mark.right() + GAP, rect.top() + (line_h - row_h) * 0.5),
+        galley,
+        c_text(),
+    );
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -719,11 +862,11 @@ pub fn icon_button_core_with_hover(
             egui::StrokeKind::Middle,
         );
     }
-    ui.painter().text(
+    paint_icon_glyph(
+        ui.painter(),
         rect.center(),
-        egui::Align2::CENTER_CENTER,
         icon,
-        FontId::new(glyph_size, icon_font()),
+        glyph_size,
         if active || hovered {
             c_accent()
         } else {
@@ -812,11 +955,11 @@ pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color
         ui.painter()
             .rect_filled(rect, CornerRadius::same(4), c_row_active());
     }
-    ui.painter().text(
+    paint_icon_glyph(
+        ui.painter(),
         rect.center(),
-        egui::Align2::CENTER_CENTER,
         icon,
-        FontId::new(glyph_size, icon_font()),
+        glyph_size,
         if hovered { c_accent() } else { color },
     );
     if hovered {
@@ -1171,6 +1314,40 @@ pub fn mini_button_icon_enabled(ui: &mut Ui, icon: &str, label: &str, enabled: b
         c_accent(),
         enabled,
     )
+}
+
+/// Text-only [`mini_button_icon_enabled`]: the small inline action next to a status line
+/// ("Restore", "Run again", "Clear"). Use it instead of `ui.small_button`, whose default egui
+/// frame matches nothing else in the app.
+pub fn mini_button(ui: &mut Ui, label: &str) -> Response {
+    mini_button_icon_enabled(ui, "", label, true)
+}
+
+/// [`mini_button`] with an accent label, for the one action in a row the user most likely wants.
+pub fn mini_button_accent(ui: &mut Ui, label: &str) -> Response {
+    icon_text_button_core(
+        ui,
+        "",
+        label,
+        FS_TINY,
+        egui::vec2(0.0, 24.0),
+        &IconButtonLook {
+            fill: c_bg_elevated(),
+            hover_fill: c_row_hover(),
+            stroke: c_border_subtle(),
+            hover_stroke: c_border(),
+            rounding: CornerRadius::same(RADIUS_BUTTON),
+            glyph: c_accent(),
+        },
+        c_accent(),
+        c_accent(),
+        true,
+    )
+}
+
+/// The small "×" that dismisses an inline notice or row.
+pub fn dismiss_button(ui: &mut Ui) -> Response {
+    icon_button_plain(ui, ICON_CLOSE, 20.0, false)
 }
 
 /// Frameless icon + label button (transparent at rest, `c_row_hover` fill + accent icon on

@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Holding the connection while an agent works and the app is not on screen (Background.kt). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Self-update from GitHub releases (Updater.kt). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -31,7 +34,33 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="oxi" android:host="pair" />
             </intent-filter>
+            <!-- Share text, photos and files from other apps into a chat. -->
+            <intent-filter android:label="oxi">
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
         <receiver android:name=".InstallReceiver" android:exported="false" />
+        <receiver android:name=".NoteActionReceiver" android:exported="false" />
+        <service
+            android:name=".TurnService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the connection to the user's own computer while a coding agent they started there is still working, to notify them when it finishes or needs an approval." />
+        </service>
+        <!-- Hands the camera app a file to write the photo to (takePhoto in MainActivity). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

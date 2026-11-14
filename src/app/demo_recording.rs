@@ -141,6 +141,10 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         review_ui_polish(rec);
         return;
     }
+    if std::env::var_os("OXI_DIALOG_REVIEW").is_some() {
+        review_dialogs(rec);
+        return;
+    }
     if std::env::var_os("OXI_SPLIT_REVIEW").is_some() {
         review_split_view(rec);
         return;
@@ -480,10 +484,31 @@ fn run_gallery(rec: &mut Recorder<'_>) {
                 name: "bash".into(),
                 summary: "rm -rf build/ && python3 -m unittest -q".into(),
                 allow_prefix: None,
+                elicitation: None,
             });
         }
         rec.harness.run_steps(3);
         rec.still("chat-approval");
+        {
+            let app = rec.app();
+            let key = app.active_session_key();
+            let request = serde_json::json!({
+                "mode": "form",
+                "message": "Which storage should the stats cache use?",
+                "requestedSchema": {"type": "object", "properties": {
+                    "question_0": {"type": "string", "title": "Storage", "oneOf": [
+                        {"const": "SQLite", "title": "SQLite", "description": "One file, queryable"},
+                        {"const": "JSON", "title": "JSON", "description": "Simple, readable by hand"},
+                    ]},
+                    "question_0_custom": {"type": "string", "title": "Other",
+                        "description": "Type your own answer, or add a note (optional)."},
+                }},
+            });
+            app.run_state_mut(key).pending_approval =
+                Some(super::state::PendingApproval::for_elicitation(&request));
+        }
+        rec.harness.run_steps(3);
+        rec.still("chat-question");
         // A small window: every row has to wrap or truncate instead of overflowing.
         rec.harness.set_size(egui::vec2(760.0, 560.0));
         rec.harness.run_steps(4);
@@ -908,6 +933,57 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         }
         rec.app().close_editor_git_diff();
         rec.harness.run_steps(2);
+        // An image's diff: the staged picture next to the changed one, then under the divider.
+        {
+            let logo = project.join("logo.png");
+            let draw = |tint: [u8; 3], radius: f32| {
+                image::RgbaImage::from_fn(320, 200, |x, y| {
+                    let (dx, dy) = (x as f32 - 160.0, y as f32 - 100.0);
+                    if (dx * dx + dy * dy).sqrt() < radius {
+                        image::Rgba([tint[0], tint[1], tint[2], 255])
+                    } else if y > 150 {
+                        image::Rgba([40, 44, 52, 255])
+                    } else {
+                        image::Rgba([0, 0, 0, 0])
+                    }
+                })
+            };
+            let git = |args: &[&str]| {
+                let ok = std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&project)
+                    .status()
+                    .is_ok_and(|status| status.success());
+                assert!(ok, "git {args:?} failed");
+            };
+            draw([97, 175, 239], 60.0).save(&logo).unwrap();
+            git(&["add", "logo.png"]);
+            draw([229, 192, 123], 80.0).save(&logo).unwrap();
+            assert!(rec.app().open_diff_editor(
+                "logo.png",
+                crate::app::file_explorer::DiffSource::WorkTree,
+                None
+            ));
+            for _ in 0..60 {
+                rec.harness.step();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            rec.still("image-diff");
+            rec.harness
+                .ctx
+                .data_mut(|d| d.insert_temp(egui::Id::new("oxi_image_diff_swipe"), true));
+            rec.harness.run_steps(4);
+            rec.still("image-diff-swipe");
+            rec.harness
+                .ctx
+                .data_mut(|d| d.insert_temp(egui::Id::new("oxi_image_diff_swipe"), false));
+            if let Some(index) = rec.app().conv.editor.active {
+                rec.app().request_close_editor_tab(index);
+            }
+            git(&["rm", "-q", "-f", "--cached", "logo.png"]);
+            std::fs::remove_file(&logo).unwrap();
+            rec.harness.run_steps(4);
+        }
         rec.profile("editor idle", false);
         rec.profile("editor hover", true);
         // A typical source file (~2k lines): typing at the caret.
@@ -1173,6 +1249,75 @@ fn review_live_resize(rec: &mut Recorder<'_>) {
             }
             println!("LIVE RESIZE stable: {theme}, scale {scale}");
         }
+    }
+}
+
+/// The dialogs and inline rows the main gallery does not reach, in the dark and light themes.
+/// Run with OXI_DIALOG_REVIEW=1 OXI_GALLERY=/tmp/oxi-dialogs cargo test --release
+/// --lib render_gallery -- --ignored --nocapture.
+fn review_dialogs(rec: &mut Recorder<'_>) {
+    for theme in ["dark", "light"] {
+        rec.app().conv.settings.theme_id = theme.into();
+        crate::theme::apply_theme(&rec.harness.ctx, theme);
+        rec.app().demo_pr_dialog();
+        rec.harness.run_steps(4);
+        rec.still(&format!("dialog-pr-{theme}"));
+        rec.app().pull_requests.dialog = None;
+
+        rec.app().demo_import_dialog();
+        rec.harness.run_steps(4);
+        rec.still(&format!("dialog-import-{theme}"));
+        // The agent list opens above the dialog, and picking from it leaves the dialog open.
+        let pos = rec.label_center("Claude Code (ACP)").expect("agent picker");
+        rec.harness.event(Event::PointerMoved(pos));
+        for pressed in [true, false] {
+            rec.harness.event(Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            rec.harness.step();
+        }
+        rec.harness.run_steps(3);
+        rec.still(&format!("dialog-import-picker-{theme}"));
+        assert!(rec.app().conv.import_sessions.is_some());
+        egui::Popup::close_all(&rec.harness.ctx);
+        rec.app().conv.import_sessions = None;
+
+        rec.app().remote.dialog = Some(super::remote::ConnectDialog {
+            host: String::new(),
+            suggestions: vec!["mac-mini".into(), "build-box".into()],
+            connected_host: None,
+            path: String::new(),
+            parent: None,
+            entries: Vec::new(),
+            error: None,
+            browsing: false,
+            focus_host: true,
+        });
+        rec.harness.run_steps(4);
+        rec.still(&format!("dialog-remote-{theme}"));
+        rec.app().remote.dialog = None;
+
+        for text in [
+            "Also check the percentile helper",
+            "Write the changelog entry",
+        ] {
+            rec.app()
+                .conv
+                .composer
+                .stash
+                .push(super::compaction::QueuedSend {
+                    text: text.into(),
+                    images: Vec::new(),
+                    texts: Vec::new(),
+                });
+        }
+        rec.harness.run_steps(4);
+        rec.still(&format!("inline-stash-{theme}"));
+        rec.app().conv.composer.stash.clear();
+        rec.harness.run_steps(2);
     }
 }
 
@@ -1702,6 +1847,11 @@ impl Recorder<'_> {
             let _ = ctx.tessellate(output.shapes, output.pixels_per_point);
             if i >= WARM_UP {
                 times.push(started.elapsed());
+            } else if i < 3 && std::env::var_os("OXI_COLD_FRAMES").is_some() {
+                println!(
+                    "PROFILE   cold frame {i} of {label}: {:.2} ms",
+                    started.elapsed().as_secs_f64() * 1e3
+                );
             }
             if i + 1 == WARM_UP + frames {
                 repaint_causes = ctx
@@ -3323,7 +3473,157 @@ fn review_split_view(rec: &mut Recorder<'_>) {
 
 fn review_worktree_sidebar(rec: &mut Recorder) {
     use super::state::Workspace;
+    // Node click coordinates are physical pixels; interact at 1x, then review scaling below.
+    rec.harness.set_pixels_per_point(1.0);
     let root = rec.project.to_string_lossy().into_owned();
+    let worktree_action = format!(
+        "New worktree for {}",
+        crate::theme::workspace_sidebar_label(&root)
+    );
+    // Exercise the daily list and full history using the actual rendered sidebar.
+    for (title, pinned, archived, today) in [
+        ("Pinned sidebar example", true, false, false),
+        ("Today sidebar example", false, false, true),
+        ("Hidden history example", false, false, false),
+        ("Archived history example", false, true, true),
+    ] {
+        let mut session = OxiApp::blank_session(title);
+        session.title = title.into();
+        session.messages = vec![message(MsgRole::User, title, vec![])];
+        crate::session_store::save_session_messages(&root, &mut session).unwrap();
+        if !today {
+            assert!(
+                std::process::Command::new("touch")
+                    .args([
+                        "-t",
+                        "202601010900",
+                        session.session_file.as_deref().unwrap()
+                    ])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        session.modified = std::fs::metadata(session.session_file.as_deref().unwrap())
+            .unwrap()
+            .modified()
+            .unwrap();
+        let ws = &mut rec.app().conv.workspaces[0];
+        if pinned {
+            ws.pinned.push(session.session_file.clone().unwrap());
+        }
+        if archived {
+            ws.archived.push(session.session_file.clone().unwrap());
+        }
+        ws.sessions.push(session);
+    }
+    rec.harness.run_steps(4);
+    for title in ["Pinned sidebar example", "Today sidebar example"] {
+        assert!(
+            rec.harness.query_all_by_label(title).count() > 0,
+            "visible: {title}"
+        );
+    }
+    for title in ["Hidden history example", "Archived history example"] {
+        assert_eq!(
+            rec.harness.query_all_by_label(title).count(),
+            0,
+            "hidden: {title}"
+        );
+    }
+    rec.still("sidebar-daily");
+    rec.harness.get_by_label("History").click();
+    rec.harness.run_steps(3);
+    assert!(rec.app().conv.sidebar.history);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    assert!(
+        rec.harness
+            .query_all_by_label("Archived history example")
+            .count()
+            > 0
+    );
+    rec.still("sidebar-history");
+    rec.app().conv.sidebar.history_days = Some(1);
+    rec.harness.run_steps(3);
+    assert_eq!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count(),
+        0
+    );
+    rec.app().conv.sidebar.history_days = None;
+    rec.harness.get_by_label("Back to recent chats").click();
+    rec.app().conv.sidebar.search = "hidden history".into();
+    rec.harness.run_steps(4);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    rec.still("sidebar-history-search");
+    rec.app().conv.sidebar.search.clear();
+
+    let hidden_si = rec.app().conv.workspaces[0]
+        .sessions
+        .iter()
+        .position(|session| session.title == "Hidden history example")
+        .unwrap();
+    let hidden_key = rec.app().session_key(0, hidden_si);
+    rec.app()
+        .flow
+        .sessions
+        .entry(hidden_key)
+        .or_default()
+        .completion_unseen = true;
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    rec.app()
+        .flow
+        .sessions
+        .get_mut(&hidden_key)
+        .unwrap()
+        .completion_unseen = false;
+    let mut streaming = message(MsgRole::Assistant, "Working", vec![]);
+    streaming.streaming = true;
+    rec.app().conv.workspaces[0].sessions[hidden_si]
+        .messages
+        .push(streaming);
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    rec.app().conv.workspaces[0].sessions[hidden_si]
+        .messages
+        .pop();
+    rec.app().select_session_in_workspace(0, hidden_si);
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label("Hidden history example")
+            .count()
+            > 0
+    );
+    let recent_si = rec.app().conv.workspaces[0]
+        .sessions
+        .iter()
+        .position(|session| session.title == "New chat")
+        .unwrap();
+    rec.app().select_session_in_workspace(0, recent_si);
+
     for branch in [
         "oxi/fix-sidebar",
         "oxi/a-long-feature-branch-name-for-truncation",
@@ -3343,6 +3643,30 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
             }),
         });
     }
+    rec.harness.run_steps(4);
+    rec.harness.get_by_label("Other worktrees · 2").click();
+    rec.harness.run_steps(3);
+    rec.still("other-worktrees-expanded");
+    #[cfg(target_os = "macos")]
+    {
+        rec.harness.get_by_label("Hide sidebar").click();
+        rec.harness.run_steps(3);
+        assert!(!rec.app().conv.sidebar.open);
+        rec.still("titlebar-sidebar-hidden");
+        rec.harness.get_by_label("Show sidebar").click();
+        rec.harness.run_steps(3);
+        assert!(rec.app().conv.sidebar.open);
+        // Hiding Files must preserve that view when it is shown again.
+        rec.app().conv.sidebar.mode = super::state::SidebarMode::Explorer;
+        rec.harness.run_steps(3);
+        rec.harness.get_by_label("Hide sidebar").click();
+        rec.harness.run_steps(3);
+        assert!(!rec.app().conv.sidebar.open);
+        rec.harness.get_by_label("Show sidebar").click();
+        rec.harness.run_steps(3);
+        assert!(rec.app().conv.sidebar.mode == super::state::SidebarMode::Explorer);
+        rec.app().conv.sidebar.mode = super::state::SidebarMode::Chats;
+    }
     for scale in [1.0, 1.25, 1.5] {
         rec.harness.set_pixels_per_point(scale);
         for width in [180.0, 250.0] {
@@ -3352,9 +3676,175 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
             rec.still(&format!("worktrees-{width}-{scale}"));
             rec.app().conv.workspaces[0].sidebar_folded = true;
             rec.harness.run_steps(3);
+            assert_eq!(
+                rec.harness
+                    .query_all_by_label("Pinned sidebar example")
+                    .count(),
+                0
+            );
+            assert_eq!(
+                rec.harness
+                    .query_all_by_label("Other worktrees · 2")
+                    .count(),
+                0
+            );
+            assert_eq!(rec.harness.query_all_by_label("oxi/fix-sidebar").count(), 0);
             rec.still(&format!("worktrees-folded-{width}-{scale}"));
         }
     }
+    rec.harness.set_pixels_per_point(1.0);
+    rec.app().conv.sidebar.width = 250.0;
+    let before = rec.app().conv.workspaces.len();
+    rec.harness.run_steps(3);
+    rec.harness.get_by_label(&worktree_action).click();
+    rec.harness.run_steps(3);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rec.app().conv.workspaces.len() == before && Instant::now() < deadline {
+        rec.harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(rec.app().conv.workspaces.len(), before + 1);
+    assert!(rec.app().active_workspace().worktree.is_some());
+    assert!(!rec.app().conv.workspaces[0].sidebar_folded);
+    rec.harness.run_steps(4);
+    assert_eq!(
+        rec.app().active_workspace().sessions.len(),
+        1,
+        "one fresh chat per worktree"
+    );
+    assert_eq!(rec.app().active_session().title, "New chat");
+    assert!(rec.app().conv.composer.notice.is_none());
+    rec.still("worktree-created");
+
+    // Right-click targets the checkout under the pointer, even with another one active.
+    let project_label = format!("Project {}", crate::theme::workspace_sidebar_label(&root));
+    rec.harness.get_by_label(&project_label).click_secondary();
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_by_label("New chat in a work tree")
+            .is_some()
+    );
+    assert!(rec.harness.query_by_label("Remove work tree…").is_none());
+    rec.still("sidebar-project-context-menu");
+    let project_chats = rec.app().conv.workspaces[0].sessions.len();
+    rec.harness.get_by_label("New chat here").click();
+    rec.harness.run_steps(3);
+    assert_eq!(rec.app().conv.active_workspace, 0);
+    assert_eq!(
+        rec.app().conv.workspaces[0].sessions.len(),
+        project_chats + 1
+    );
+    assert_eq!(rec.app().conv.workspaces[before].sessions.len(), 1);
+    let main_branch = rec.app().conv.workspaces[before]
+        .worktree
+        .as_ref()
+        .unwrap()
+        .main_branch
+        .clone();
+    let checkout_label = format!("Checkout {main_branch}");
+    rec.harness.get_by_label(&checkout_label).click_secondary();
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_by_label("New chat here").is_some());
+    assert!(rec.harness.query_by_label("Remove workspace").is_none());
+    assert!(
+        rec.harness
+            .query_by_label("New chat in a work tree")
+            .is_none()
+    );
+    rec.still("sidebar-checkout-context-menu");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    rec.app().select_workspace(before);
+    rec.harness.run_steps(3);
+    let tree_label = format!(
+        "Worktree {}",
+        rec.app()
+            .active_workspace()
+            .worktree
+            .as_ref()
+            .unwrap()
+            .branch
+    );
+    rec.harness.get_by_label(&tree_label).click_secondary();
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_by_label("Remove work tree…").is_some());
+    assert!(
+        rec.harness
+            .query_by_label("New chat in a work tree")
+            .is_none()
+    );
+    assert!(rec.harness.query_by_label("Remove workspace").is_none());
+    rec.still("sidebar-worktree-context-menu");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    rec.app().conv.workspaces[before].sessions[0].title = "Context menu target chat".into();
+    rec.harness.run_steps(3);
+    rec.harness
+        .query_all_by_label("Context menu target chat")
+        .next()
+        .unwrap()
+        .click_secondary();
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_by_label("Rename chat").is_some());
+    assert!(rec.harness.query_by_label("Remove work tree…").is_none());
+    assert!(
+        rec.harness
+            .query_by_label("Import agent session…")
+            .is_none()
+    );
+    rec.still("sidebar-chat-context-menu");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    // Folding preserves the selected worktree while hiding inactive checkouts.
+    let branch = rec
+        .app()
+        .active_workspace()
+        .worktree
+        .as_ref()
+        .unwrap()
+        .branch
+        .clone();
+    rec.app().conv.workspaces[0].sidebar_folded = true;
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label(&branch)
+            .any(|node| node.rect().center().x < 250.0)
+    );
+    assert_eq!(
+        rec.harness
+            .query_all_by_label("Pinned sidebar example")
+            .count(),
+        0
+    );
+    assert_eq!(rec.harness.query_all_by_label("oxi/fix-sidebar").count(), 0);
+    let mut running_session = OxiApp::blank_session("Running in folded worktree");
+    let mut streaming = message(MsgRole::Assistant, "Working", vec![]);
+    streaming.streaming = true;
+    running_session.messages.push(streaming);
+    rec.app().conv.workspaces[1].sessions.push(running_session);
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_all_by_label("oxi/fix-sidebar").count() > 0);
+    assert!(
+        rec.harness
+            .query_all_by_label("Running in folded worktree")
+            .count()
+            > 0
+    );
+    rec.still("worktrees-active-folded");
+    // A single click still creates directly while the project is folded.
+    let before = rec.app().conv.workspaces.len();
+    rec.harness.get_by_label(&worktree_action).click();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rec.app().conv.workspaces.len() == before && Instant::now() < deadline {
+        rec.harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(rec.app().conv.workspaces.len(), before + 1);
+    assert!(!rec.app().conv.workspaces[0].sidebar_folded);
+    rec.harness.run_steps(3);
+    rec.still("worktree-create-from-linked-checkout");
 }
 
 /// Keyboard chat switching: `#` in Goto Anything (Cmd+Shift+O) and Ctrl+Tab, driven with real
@@ -4083,6 +4573,12 @@ fn review_subagent_chats(rec: &mut Recorder<'_>) {
             modifiers: egui::Modifiers::NONE,
         });
         rec.harness.run_steps(3);
+        // Sidebar agents start folded under their chat.
+        if rec.harness.query_by_label("Editor review").is_none() {
+            rec.still(&format!("subagents-folded-{width}"));
+            click_label(rec, "Agents · 2");
+            rec.harness.run_steps(3);
+        }
         click_label(rec, "Editor review");
         rec.harness.run_steps(5);
         rec.still(&format!("subagents-workflow-{width}"));
