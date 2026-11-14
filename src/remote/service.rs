@@ -512,7 +512,8 @@ pub fn install() -> Result<String, String> {
     let _ = run_tool("launchctl", &["bootout", &service]);
     // A daemon started by a bridge (not by launchd) would hold the lock; stop it.
     crate::headless::stop_running_daemon();
-    std::fs::write(&plist, body).map_err(|e| format!("{}: {e}", plist.display()))?;
+    crate::fsutil::write_atomic(&plist, body.as_bytes())
+        .map_err(|e| format!("{}: {e}", plist.display()))?;
     run_tool(
         "launchctl",
         &["bootstrap", &target, &plist.to_string_lossy()],
@@ -583,7 +584,8 @@ pub fn install() -> Result<String, String> {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     crate::headless::stop_running_daemon();
-    std::fs::write(&unit, body).map_err(|e| format!("{}: {e}", unit.display()))?;
+    crate::fsutil::write_atomic(&unit, body.as_bytes())
+        .map_err(|e| format!("{}: {e}", unit.display()))?;
     run_tool("systemctl", &["--user", "daemon-reload"])?;
     run_tool("systemctl", &["--user", "enable", "--now", UNIT])?;
     // Without lingering the user's services stop at logout and start only at login.
@@ -637,7 +639,7 @@ pub fn install() -> Result<String, String> {
     if let Some(parent) = marker.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&marker, exe.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
+    crate::fsutil::write_atomic(&marker, exe.to_string_lossy().as_bytes())?;
     crate::headless::stop_running_daemon();
     crate::headless::start_daemon(true).map_err(|e| format!("start the server: {e}"))?;
     Ok(format!(

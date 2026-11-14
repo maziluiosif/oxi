@@ -291,22 +291,9 @@ fn load_server_file(path: &std::path::Path) -> UnifiedSecrets {
 }
 
 fn write_server_file(path: &std::path::Path, json: &str) -> Result<(), String> {
-    use std::io::Write as _;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
-    file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    // A unique, owner-only temporary file renamed into place: the app, the headless daemon
+    // and `oxi server` all write this file, and a shared temporary name could mix their writes.
+    crate::fsutil::write_atomic_private(path, json.as_bytes())
 }
 
 /// Windows Credential Manager caps a single credential blob at

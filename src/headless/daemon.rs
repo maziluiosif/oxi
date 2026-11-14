@@ -176,9 +176,12 @@ pub(super) fn listen(tx: Sender<Input>) -> io::Result<Option<DaemonGuard>> {
         let port = listener.local_addr()?.port();
         let token = format!("{:032x}", rand::random::<u128>());
         let path = endpoint_path();
-        let tmp = path.with_extension("tmp");
-        fs::write(&tmp, json!({"port": port, "token": token}).to_string())?;
-        fs::rename(&tmp, &path)?;
+        // Owner-only and atomic: clients must never read a half-written token.
+        crate::fsutil::write_atomic_private(
+            &path,
+            json!({"port": port, "token": token}).to_string().as_bytes(),
+        )
+        .map_err(std::io::Error::other)?;
         let token: Arc<str> = token.into();
         std::thread::Builder::new()
             .name("oxi-headless-accept".into())

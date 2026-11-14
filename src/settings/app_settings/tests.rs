@@ -1,5 +1,6 @@
 use super::migration::LegacyAppSettings;
 use super::*;
+use serde_json::json;
 
 #[test]
 fn default_has_all_provider_kinds() {
@@ -548,4 +549,78 @@ fn azure_requires_credentials_and_a_real_endpoint() {
     assert!(settings.provider_is_configured(kind, &oauth));
     settings.provider_mut(kind).api_key = "  ".into();
     assert!(!settings.provider_is_configured(kind, &oauth));
+}
+
+/// Settings JSON written by a newer oxi: a provider kind, an option value and a field this
+/// version doesn't know, next to settings it reads fine.
+fn newer_settings_json() -> serde_json::Value {
+    let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+    value["theme_id"] = json!("my-theme");
+    value["ui_density"] = json!("ultra-dense");
+    value["shiny_new_feature"] = json!({"on": true});
+    value["providers"]["futurellm"] = json!({"provider": "futurellm", "model_id": "f-1"});
+    value
+}
+
+fn load_from_value(value: serde_json::Value) -> AppSettings {
+    let (mut settings, _) = AppSettings::from_current_value(value);
+    settings.normalize();
+    settings.remember_fallbacks();
+    settings
+}
+
+#[test]
+fn settings_from_a_newer_version_keep_what_this_one_can_read() {
+    let (settings, error) = AppSettings::from_current_value(newer_settings_json());
+    assert!(error.is_some(), "the strict parse must report the problem");
+    assert_eq!(settings.theme_id, "my-theme");
+    assert_eq!(settings.ui_density, UiDensity::Normal);
+}
+
+#[test]
+fn saving_in_an_older_version_writes_back_what_it_could_not_read() {
+    let settings = load_from_value(newer_settings_json());
+    let saved: serde_json::Value =
+        serde_json::from_str(&settings.to_json_string().unwrap()).unwrap();
+    assert_eq!(saved["ui_density"], "ultra-dense");
+    assert_eq!(saved["shiny_new_feature"], json!({"on": true}));
+    assert_eq!(saved["providers"]["futurellm"]["model_id"], "f-1");
+    assert_eq!(saved["theme_id"], "my-theme");
+    // And the newer version reads its own values again.
+    let again = load_from_value(saved);
+    assert_eq!(again.theme_id, "my-theme");
+}
+
+#[test]
+fn a_change_made_in_the_older_version_wins_over_the_kept_value() {
+    let mut settings = load_from_value(newer_settings_json());
+    settings.ui_density = UiDensity::Compact;
+    let saved: serde_json::Value =
+        serde_json::from_str(&settings.to_json_string().unwrap()).unwrap();
+    assert_eq!(saved["ui_density"], "compact");
+    assert_eq!(saved["providers"]["futurellm"]["model_id"], "f-1");
+}
+
+#[test]
+fn readable_settings_save_exactly_as_before() {
+    let settings = load_from_value(serde_json::to_value(AppSettings::default()).unwrap());
+    assert!(settings.unreadable.is_empty());
+    assert_eq!(
+        settings.to_json_string().unwrap(),
+        serde_json::to_string_pretty(&settings).unwrap()
+    );
+}
+
+#[test]
+fn fields_never_saved_on_purpose_are_not_kept_as_unknown() {
+    let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+    value["github_token"] = json!("ghp_secret");
+    value["require_approval"] = json!(true);
+    value["providers"]["futurellm"] = json!({"api_key": "sk-secret", "model_id": "f-1"});
+    let settings = load_from_value(value);
+    let saved = settings.to_json_string().unwrap();
+    assert!(!saved.contains("ghp_secret"));
+    assert!(!saved.contains("sk-secret"));
+    assert!(!saved.contains("require_approval"));
+    assert!(saved.contains("futurellm"));
 }

@@ -57,18 +57,10 @@ pub fn ensure(reset: bool) -> Result<(PhoneConfig, bool), String> {
 
 pub fn save(config: &PhoneConfig) -> Result<(), String> {
     let path = config_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    let tmp = path.with_extension("tmp");
     let body = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(&tmp, body).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+    // Owner-only from the first byte: the file holds the pairing token.
+    crate::fsutil::write_atomic_private(&path, body.as_bytes())
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Remove the phone settings: the daemon stops listening once restarted.
