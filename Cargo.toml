@@ -37,7 +37,7 @@ serde_json = "1.0"
 pulldown-cmark = "0.13"
 base64 = "0.23"
 arboard = "3.6"
-rfd = "0.17"
+rfd = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
 russh = "0.65"
