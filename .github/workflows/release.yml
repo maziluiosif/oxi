@@ -100,9 +100,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Cached CMake build dirs keep absolute compiler paths, and a new runner image moves
+      # them (windows-check died on "CMAKE_ASM_COMPILER ... is not a full path to an existing
+      # compiler tool" for whisper-rs-sys), so each runner image gets its own cache.
+      - name: Record runner image
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}-${{ env.RUNNER_IMAGE }}
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
