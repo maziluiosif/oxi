@@ -120,6 +120,17 @@ jobs:
       - name: Build
         run: cargo build --locked --profile dist --target ${{ matrix.target }}
 
+      - name: Check dynamic libraries (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Users don't have the runner's Homebrew; anything outside the OS dies at launch in dyld.
+          bin="target/${{ matrix.target }}/dist/oxi"
+          otool -L "$bin"
+          if otool -L "$bin" | tail -n +2 | grep -vE '^\s+(/System/Library/|/usr/lib/)'; then
+            echo "::error::$bin links libraries that are not part of macOS (see above)"
+            exit 1
+          fi
+
       - name: Package (macOS)
         if: runner.os == 'macOS'
         env:

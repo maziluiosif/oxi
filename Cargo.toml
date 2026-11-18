@@ -47,7 +47,9 @@ regex = "1"
 log = "0.4"
 memchr = "2"
 glob = "0.3"
-git2 = { version = "0.21", features = ["https", "ssh", "vendored-libgit2"] }
+# vendored-openssl: libssh2 (and libgit2 https on Linux) link OpenSSL; without it the
+# release binary picks up the CI runner's Homebrew libssl.dylib and dies at launch on Macs without it.
+git2 = { version = "0.21", features = ["https", "ssh", "vendored-libgit2", "vendored-openssl"] }
 walkdir = "2"
 # ripgrep's walker: the agent's search tools honour .gitignore like rg does.
 ignore = "0.4"
