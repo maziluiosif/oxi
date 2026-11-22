@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.43.0] - 2026-11-22
+
+### Added
+- **UI:** Antigravity theme as default with refined typography, semibold fonts, and improved type scale
+- **UI:** Chat header breadcrumb navigation
+- **Antigravity:** CLI ACP/completion support with automatic detection of installed `agy` CLI
+- **Antigravity:** Model catalog entries for Gemini 3.1, 3.5, and 4 with context limits
+- **Antigravity:** Usage quota probing and router settings toggle
+- **Composer:** Effort controls for Antigravity provider
+
+### Changed
+- **UI:** Inline code, pills, and list markers now align vertically across bundled and system fonts
+
+### Fixed
+- **Security:** Updated dependencies to patch RUSTSEC-2026-0592 (url), RUSTSEC-2026-0544 (libz-sys heap overflow), and RUSTSEC-2026-0486 (rustix)
+- **macOS:** Release binaries now vendor OpenSSL to run on Macs without Homebrew libssl installed
+
+
 ## [1.42.0] - 2026-11-14
 
 ### Added
@@ -1432,7 +1450,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.42.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.43.0...HEAD
+[1.43.0]: https://github.com/maziluiosif/oxi/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/maziluiosif/oxi/compare/v1.41.0...v1.42.0
 [1.41.0]: https://github.com/maziluiosif/oxi/compare/v1.40.0...v1.41.0
 [1.40.0]: https://github.com/maziluiosif/oxi/compare/v1.39.0...v1.40.0
