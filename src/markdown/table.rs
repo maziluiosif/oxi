@@ -173,10 +173,10 @@ pub(super) fn render_table(
     }
     let cols = alignments.len().max(1);
     let grid = c_md_code_block_border();
-    let outer = c_border();
+    let outer = c_md_code_block_border();
     let header_bg = c_md_code_block_header_bg();
     let body_bg = c_md_code_block_bg();
-    const CELL_PAD_X: f32 = 10.0;
+    const CELL_PAD_X: f32 = 12.0;
     const CELL_PAD_Y: f32 = 8.0;
 
     allocate_full_width_block(ui, wrap_w, |ui| {
@@ -275,7 +275,7 @@ pub(super) fn render_table(
                 }
             });
     });
-    ui.add_space(6.0);
+    ui.add_space(12.0);
 }
 
 #[cfg(test)]

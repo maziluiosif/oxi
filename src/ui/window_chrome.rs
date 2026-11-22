@@ -5,7 +5,11 @@
 use eframe::egui::{self, Id, Rect, Sense, Ui, ViewportBuilder, ViewportCommand};
 
 /// Height of the band the (transparent) title bar and traffic lights occupy.
-pub const TITLEBAR_H: f32 = if cfg!(target_os = "macos") { 34.0 } else { 0.0 };
+pub const TITLEBAR_H: f32 = if cfg!(target_os = "macos") { 38.0 } else { 0.0 };
+
+/// Height of the chat header strip (matches [`TITLEBAR_H`] on macOS so traffic lights,
+/// breadcrumb and top-right toggles share one crisp horizontal band).
+pub const CHAT_HEADER_H: f32 = 38.0;
 
 /// Horizontal room the traffic lights need when a column starts at the window's left edge.
 pub const TRAFFIC_LIGHTS_W: f32 = if cfg!(target_os = "macos") { 76.0 } else { 0.0 };
@@ -50,7 +54,7 @@ pub fn sidebar_toggle(ui: &mut Ui, open: bool) -> bool {
     }
     let origin = ui.ctx().content_rect().min;
     let rect = Rect::from_min_size(
-        origin + egui::vec2(TRAFFIC_LIGHTS_W + 4.0, 3.0),
+        origin + egui::vec2(TRAFFIC_LIGHTS_W + 4.0, (TITLEBAR_H - 28.0) * 0.5),
         egui::vec2(28.0, 28.0),
     );
     let label = if open { "Hide sidebar" } else { "Show sidebar" };
@@ -71,7 +75,10 @@ pub fn git_panel_toggle(ui: &mut Ui, open: bool) -> bool {
     }
     let content = ui.ctx().content_rect();
     let rect = Rect::from_min_size(
-        egui::pos2(content.right() - 4.0 - 28.0, content.top() + 3.0),
+        egui::pos2(
+            content.right() - 8.0 - 28.0,
+            content.top() + (TITLEBAR_H - 28.0) * 0.5,
+        ),
         egui::vec2(28.0, 28.0),
     );
     let label = if open {
@@ -108,13 +115,34 @@ fn panel_toggle(
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
     });
-    if response.hovered() || response.has_focus() {
-        ui.painter()
-            .rect_filled(rect, 4, crate::theme::c_row_hover());
+    let hovered = response.hovered() || response.has_focus();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    let icon = rect.shrink2(egui::vec2(5.0, 7.0));
-    let color = if open {
-        crate::theme::c_text()
+    let pill_radius = egui::CornerRadius::same(14);
+    if open && side == PanelSide::Left {
+        ui.painter()
+            .rect_filled(rect, pill_radius, crate::theme::c_bg_elevated_2());
+        ui.painter().rect_stroke(
+            rect,
+            pill_radius,
+            egui::Stroke::new(
+                1.0,
+                if hovered {
+                    crate::theme::c_text_faint()
+                } else {
+                    crate::theme::c_border()
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+    } else if hovered {
+        ui.painter()
+            .rect_filled(rect, pill_radius, crate::theme::c_row_hover());
+    }
+    let icon = rect.shrink2(egui::vec2(6.5, 7.5));
+    let color = if open || hovered {
+        crate::theme::c_text_strong()
     } else {
         crate::theme::c_text_muted()
     };
@@ -125,8 +153,8 @@ fn panel_toggle(
         egui::StrokeKind::Inside,
     );
     let divider = match side {
-        PanelSide::Left => icon.left() + 6.0,
-        PanelSide::Right => icon.right() - 6.0,
+        PanelSide::Left => icon.left() + 5.5,
+        PanelSide::Right => icon.right() - 5.5,
     };
     if open {
         let column = match side {
@@ -154,10 +182,10 @@ fn panel_toggle(
 
 /// Space for native controls and the sidebar toggle when editor tabs reach the left edge.
 pub const WINDOW_CONTROLS_W: f32 = if cfg!(target_os = "macos") {
-    112.0
+    114.0
 } else {
     0.0
 };
 
 /// Room the top-right git panel toggle needs when a strip reaches the window's right edge.
-pub const RIGHT_CONTROLS_W: f32 = if cfg!(target_os = "macos") { 30.0 } else { 0.0 };
+pub const RIGHT_CONTROLS_W: f32 = if cfg!(target_os = "macos") { 38.0 } else { 0.0 };

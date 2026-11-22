@@ -81,7 +81,8 @@ pub fn selectable_text_job_with_links(ui: &mut Ui, mut job: LayoutJob, links: &[
         .map(|section| section.format.color)
         .unwrap_or_else(|| ui.style().visuals.text_color());
     let fallback = ui.style().visuals.text_color();
-    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    center_line_height_glyphs(&mut galley);
     let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::click_and_drag());
     let saved = ui.visuals().selection;
     ui.visuals_mut().selection.bg_fill = editor_selection_fill();
@@ -248,6 +249,91 @@ fn use_emoji_font(job: &mut LayoutJob) {
     job.sections = sections;
 }
 
+/// Center glyphs vertically inside an explicit `TextFormat::line_height`.
+///
+/// epaint's `galley_from_rows` applies `valign` to `max_row_height - glyph.line_height` rather
+/// than `max_row_height - glyph.font_height`. When prose and inline code both set the same
+/// `line_height` (e.g. `1.55x` body size), `max_row_height - glyph.line_height` is zero, so
+/// `Align::Center` has no effect and every face sits top-aligned inside the row. Shorter faces
+/// (such as smaller inline code monospace fonts) then ride visibly above the prose and above
+/// their centered pill background.
+fn center_line_height_glyphs(galley: &mut std::sync::Arc<eframe::egui::Galley>) {
+    let has_centered_override =
+        galley.job.sections.iter().any(|s| {
+            s.format.line_height.is_some() && s.format.valign == eframe::egui::Align::Center
+        });
+    if !has_centered_override {
+        return;
+    }
+    let ppp = if galley.pixels_per_point > 0.0 {
+        galley.pixels_per_point
+    } else {
+        1.0
+    };
+    let galley_mut = std::sync::Arc::make_mut(galley);
+    let job = galley_mut.job.clone();
+    let mut chars = job.text.char_indices();
+    let mut section_idx = 0usize;
+    let mut galley_bounds = eframe::egui::Rect::NOTHING;
+    for placed in &mut galley_mut.rows {
+        let mut shifts: Vec<(usize, usize, f32)> = Vec::new();
+        {
+            let glyphs = &placed.row.glyphs;
+            let glyph_vertex_end = placed.row.visuals.glyph_vertex_range.end;
+            for (i, glyph) in glyphs.iter().enumerate() {
+                let byte = chars.next().map_or(job.text.len(), |(byte, _)| byte);
+                while section_idx + 1 < job.sections.len()
+                    && job.sections[section_idx].byte_range.end.0 <= byte
+                {
+                    section_idx += 1;
+                }
+                let Some(section) = job.sections.get(section_idx) else {
+                    continue;
+                };
+                if section.format.line_height.is_none()
+                    || section.format.valign != eframe::egui::Align::Center
+                {
+                    continue;
+                }
+                let raw_dy = 0.5 * (glyph.line_height - glyph.font_height);
+                let dy = (raw_dy * ppp).round() / ppp;
+                if dy == 0.0 {
+                    continue;
+                }
+                let v_start = glyph.first_vertex as usize;
+                let v_end = glyphs
+                    .get(i + 1)
+                    .map_or(glyph_vertex_end, |next| next.first_vertex as usize);
+                if v_start < v_end {
+                    shifts.push((v_start, v_end, dy));
+                }
+            }
+        }
+        if placed.ends_with_newline {
+            chars.next();
+        }
+        if !shifts.is_empty() {
+            let row = std::sync::Arc::make_mut(&mut placed.row);
+            let vertex_len = row.visuals.mesh.vertices.len();
+            for (v_start, v_end, dy) in shifts {
+                let end = v_end.min(vertex_len);
+                if v_start < end {
+                    for vertex in &mut row.visuals.mesh.vertices[v_start..end] {
+                        vertex.pos.y += dy;
+                    }
+                }
+            }
+            row.visuals.mesh_bounds = row.visuals.mesh.calc_bounds();
+        }
+        galley_bounds |= placed
+            .row
+            .visuals
+            .mesh_bounds
+            .translate(placed.pos.to_vec2());
+    }
+    galley_mut.mesh_bounds = galley_bounds;
+}
+
 /// Clears every section background in `job` and returns them by section index, for
 /// [`section_background_shapes`]. egui paints section backgrounds as square boxes grown a point
 /// past the row on every side, which hug the glyphs and run into the row above and below.
@@ -266,8 +352,8 @@ fn section_background_shapes(
     backgrounds: &[Color32],
 ) -> Vec<eframe::egui::Shape> {
     use eframe::egui::{CornerRadius, Rect, Shape};
-    const PAD_X: f32 = 2.0;
-    const INSET_Y: f32 = 1.0;
+    const PAD_X: f32 = 2.5;
+    const INSET_Y: f32 = 2.5;
     if backgrounds
         .iter()
         .all(|color| *color == Color32::TRANSPARENT)
@@ -289,7 +375,7 @@ fn section_background_shapes(
                     left - PAD_X..=right + PAD_X,
                     row_rect.top() + INSET_Y..=row_rect.bottom() - INSET_Y,
                 );
-                shapes.push(Shape::rect_filled(rect, CornerRadius::same(3), color));
+                shapes.push(Shape::rect_filled(rect, CornerRadius::same(4), color));
             }
         };
         for glyph in &placed.row.glyphs {

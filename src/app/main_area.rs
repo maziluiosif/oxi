@@ -36,10 +36,10 @@ impl OxiApp {
                 Frame::new()
                     .fill(c_bg_sidebar())
                     .inner_margin(Margin {
-                        left: 12,
+                        left: 10,
                         right: 10,
-                        top: 12 + crate::ui::window_chrome::TITLEBAR_H as i8,
-                        bottom: 12,
+                        top: 8 + crate::ui::window_chrome::TITLEBAR_H as i8,
+                        bottom: 10,
                     })
                     .show(&mut sidebar_ui, |ui| {
                         ui.set_min_width(ui.max_rect().width());
@@ -86,40 +86,39 @@ impl OxiApp {
                 // default home for every diff, whether or not a file was already open.
                 let editor_open = self.conv.editor.active_document().is_some()
                     || (self.conv.diff_view.open && self.conv.git.diff.is_some());
-                Frame::new()
-                    .fill(c_bg_main())
-                    .inner_margin(Margin {
-                        // The editor gutter starts directly at the sidebar boundary; the chat
-                        // view keeps its usual breathing room.
-                        left: if editor_open {
-                            0
-                        } else {
-                            CHAT_VIEW_MARGIN_LEFT as i8
-                        },
-                        right: if editor_open {
-                            CHAT_VIEW_MARGIN_RIGHT as i8
-                        } else {
-                            crate::theme::CHAT_VIEW_MARGIN_RIGHT_CHAT as i8
-                        },
-                        top: if editor_open { 0 } else { CHAT_FRAME_TOP as i8 },
-                        // The editor owns a bottom-docked find panel, so it must meet the
-                        // status bar without the chat view's composer breathing room.
-                        bottom: if editor_open {
-                            0
-                        } else {
-                            CHAT_FRAME_BOTTOM as i8
-                        },
-                    })
-                    .show(ui, |ui| {
-                        if editor_open {
+                if editor_open {
+                    Frame::new()
+                        .fill(c_bg_main())
+                        .inner_margin(Margin {
+                            left: 0,
+                            right: CHAT_VIEW_MARGIN_RIGHT as i8,
+                            top: 0,
+                            bottom: 0,
+                        })
+                        .show(ui, |ui| {
                             self.render_text_editor(ui);
-                            return;
-                        }
-
-                        if !self.render_split_chat(ui) {
-                            self.render_chat_column(ui);
-                        }
-                    });
+                        });
+                } else {
+                    Frame::new()
+                        .fill(c_bg_main())
+                        .inner_margin(Margin::same(0))
+                        .show(ui, |ui| {
+                            self.render_chat_header(ui);
+                            Frame::new()
+                                .fill(c_bg_main())
+                                .inner_margin(Margin {
+                                    left: CHAT_VIEW_MARGIN_LEFT as i8,
+                                    right: crate::theme::CHAT_VIEW_MARGIN_RIGHT_CHAT as i8,
+                                    top: CHAT_FRAME_TOP as i8,
+                                    bottom: CHAT_FRAME_BOTTOM as i8,
+                                })
+                                .show(ui, |ui| {
+                                    if !self.render_split_chat(ui) {
+                                        self.render_chat_column(ui);
+                                    }
+                                });
+                        });
+                }
                 ui.expand_to_include_rect(ui.max_rect());
             }
             drop(chat_ui);
@@ -149,6 +148,104 @@ impl OxiApp {
                 );
             }
         });
+    }
+
+    /// Top breadcrumb bar over the chat column (`workspace / conversation title`) with quick
+    /// toggles for real oxi workspace panels, aligned with the macOS title bar strip.
+    fn render_chat_header(&mut self, ui: &mut Ui) {
+        let h = crate::ui::window_chrome::CHAT_HEADER_H;
+        let full_w = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(full_w, h), Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, c_bg_main());
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            Stroke::new(1.0, c_border_subtle()),
+        );
+
+        let left_inset = if self.conv.sidebar.open {
+            16.0
+        } else {
+            crate::ui::window_chrome::WINDOW_CONTROLS_W + 8.0
+        };
+        let right_inset = if self.conv.git_ui.open {
+            10.0
+        } else {
+            crate::ui::window_chrome::RIGHT_CONTROLS_W + 4.0
+        };
+        let inner = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + left_inset, rect.top()),
+            egui::pos2(
+                (rect.right() - right_inset).max(rect.left() + left_inset),
+                rect.bottom(),
+            ),
+        );
+
+        let ws_root = self.active_workspace().root_path.clone();
+        let ws_name = header_workspace_name(&ws_root);
+        let session_title = sidebar_session_title_display(&self.active_session().title);
+        let term_open = self.conv.terminal_panel.open;
+        let explorer_open =
+            self.conv.sidebar.open && self.conv.sidebar.mode == super::state::SidebarMode::Explorer;
+
+        let mut toggle_term = false;
+        let mut toggle_explorer = false;
+
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(inner)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if crate::ui::chrome::icon_button_plain(ui, ICON_TERMINAL, 26.0, term_open)
+                    .on_hover_text("Toggle terminal panel (Cmd/Ctrl+`)")
+                    .clicked()
+                {
+                    toggle_term = true;
+                }
+                if crate::ui::chrome::icon_button_plain(ui, ICON_EXPLORER, 26.0, explorer_open)
+                    .on_hover_text(if explorer_open {
+                        "Hide workspace explorer (Cmd/Ctrl+E)"
+                    } else {
+                        "Open workspace explorer (Cmd/Ctrl+E)"
+                    })
+                    .clicked()
+                {
+                    toggle_explorer = true;
+                }
+                ui.add_space(6.0);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(
+                        egui::RichText::new(&ws_name)
+                            .size(FS_SMALL)
+                            .color(c_text_muted()),
+                    );
+                    ui.label(
+                        egui::RichText::new("/")
+                            .size(FS_SMALL)
+                            .color(c_text_faint()),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&session_title)
+                                .size(FS_SMALL)
+                                .color(c_text()),
+                        )
+                        .truncate()
+                        .selectable(false),
+                    )
+                    .on_hover_text(&session_title);
+                });
+            },
+        );
+
+        if toggle_term {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleTerminal);
+        }
+        if toggle_explorer {
+            self.request_settings_exit(super::state::SettingsExitAction::ToggleExplorer);
+        }
     }
 
     /// The active chat's transcript with the composer floating over its bottom edge.
@@ -278,6 +375,27 @@ impl OxiApp {
         ui.painter()
             .vline(boundary_x, sep_rect.y_range(), Stroke::new(1.0, col));
     }
+}
+
+/// Short single-segment project name for the top breadcrumb (`oxi` instead of `Projects/oxi`).
+fn header_workspace_name(root_path: &str) -> String {
+    if crate::app_dirs::is_general_chats_dir(root_path) {
+        return "General".to_string();
+    }
+    if let Some((host, path)) = crate::remote::split(root_path) {
+        let trimmed = path.trim_end_matches('/');
+        let name = trimmed
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(trimmed);
+        return format!("{name} · {host}");
+    }
+    std::path::Path::new(root_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| workspace_sidebar_label(root_path))
 }
 
 pub(super) fn paint_composer_scrim(ui: &mut Ui, rect: egui::Rect) {

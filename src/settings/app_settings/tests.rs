@@ -12,9 +12,9 @@ fn default_has_all_provider_kinds() {
 }
 
 #[test]
-fn fresh_install_starts_on_the_zed_theme_and_fonts() {
+fn fresh_install_starts_on_the_antigravity_theme_and_fonts() {
     let s = AppSettings::default();
-    assert_eq!(s.theme_id, "zed");
+    assert_eq!(s.theme_id, "antigravity");
     assert_eq!(s.ui_font, "bundled:ibm_plex_sans");
     assert_eq!(s.mono_font, "bundled:lilex");
     assert!(crate::theme::ui_font_is_known(&s.ui_font));

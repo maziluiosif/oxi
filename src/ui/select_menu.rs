@@ -476,7 +476,7 @@ pub(crate) fn select_button_width(ui: &Ui, text: &str, max_w: f32) -> f32 {
 fn quiet_button(ui: &mut Ui, id: Id, text: &str, max_w: f32, open: bool) -> Response {
     let max_w = max_w.min(ui.available_width()).max(1.0);
     let pad = ui.spacing().button_padding;
-    let color = if open { c_accent() } else { c_text_muted() };
+    let color = if open { c_text_strong() } else { c_text() };
     let mut job = egui::text::LayoutJob::single_section(
         text.to_owned(),
         egui::TextFormat::simple(egui::FontId::proportional(FS_SMALL), color),

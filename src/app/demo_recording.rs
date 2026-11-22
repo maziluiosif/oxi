@@ -4273,7 +4273,11 @@ fn review_composer_typing(rec: &mut Recorder<'_>) {
                 .shapes
                 .iter()
                 .find_map(|s| match &s.shape {
-                    egui::Shape::Text(t) if t.galley.job.text == "Message oxi…" => Some(t),
+                    egui::Shape::Text(t)
+                        if t.galley.job.text == "Ask anything, @ to mention, / for actions" =>
+                    {
+                        Some(t)
+                    }
                     _ => None,
                 })
                 .expect("empty composer placeholder");

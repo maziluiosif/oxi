@@ -165,9 +165,9 @@ pub(super) fn create_project(project: &Path) {
 pub(super) fn seed_settings() {
     let mut settings = crate::settings::AppSettings::load();
     settings.theme_id = "mariana".into();
-    // OXI_GALLERY_THEME=zed renders the gallery in another theme (Zed also gets Zed's fonts).
+    // OXI_GALLERY_THEME=antigravity (or zed) renders the gallery in another theme with Plex+Lilex.
     if let Ok(theme) = std::env::var("OXI_GALLERY_THEME") {
-        if theme == "zed" {
+        if theme == "zed" || theme == "antigravity" {
             settings.ui_font = "bundled:ibm_plex_sans".into();
             settings.mono_font = "bundled:lilex".into();
         }

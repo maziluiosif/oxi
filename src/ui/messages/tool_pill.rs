@@ -46,14 +46,14 @@ fn render_static_preview_job_panel(
     overflows: bool,
 ) {
     let (border, corner_radius) = match shape {
-        PanelShape::Card => (c_border(), CornerRadius::same(RADIUS_CHIP)),
+        PanelShape::Card => (c_border(), CornerRadius::same(RADIUS_CARD)),
         PanelShape::Drawer(border) => (
             border,
             CornerRadius {
                 nw: 0,
                 ne: 0,
-                sw: RADIUS_BUTTON,
-                se: RADIUS_BUTTON,
+                sw: RADIUS_CARD,
+                se: RADIUS_CARD,
             },
         ),
     };
@@ -61,7 +61,7 @@ fn render_static_preview_job_panel(
         .fill(panel_fill)
         .stroke(Stroke::new(1.0, border))
         .corner_radius(corner_radius)
-        .inner_margin(Margin::symmetric(8, 5))
+        .inner_margin(Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let inner = ui.available_width().max(40.0);
@@ -184,23 +184,28 @@ pub(super) fn render_tool_pill(
     // Unfolded, the output hangs off the pill as one card instead of a second box below it.
     let header_radius = if expanded {
         CornerRadius {
-            nw: RADIUS_BUTTON,
-            ne: RADIUS_BUTTON,
+            nw: RADIUS_CARD,
+            ne: RADIUS_CARD,
             sw: 0,
             se: 0,
         }
     } else {
-        CornerRadius::same(RADIUS_BUTTON)
+        CornerRadius::same(RADIUS_CARD)
+    };
+    let active_border = if expanded && !has_error {
+        c_border()
+    } else {
+        pill_border
     };
     let frame = Frame::new()
         .fill(pill_bg)
-        .stroke(Stroke::new(1.0, pill_border))
+        .stroke(Stroke::new(1.0, active_border))
         .corner_radius(header_radius)
-        .inner_margin(Margin::symmetric(12, 6))
+        .inner_margin(Margin::symmetric(14, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 7.0;
+                ui.spacing_mut().item_spacing.x = 8.0;
                 ui.label(
                     RichText::new(icon)
                         .font(FontId::new(FS_SMALL + 0.5, icon_font()))
@@ -212,11 +217,11 @@ pub(super) fn render_tool_pill(
                     ui.add(
                         Label::new(
                             RichText::new(if expanded {
-                                ICON_ANGLE_UP
-                            } else {
                                 ICON_ANGLE_DOWN
+                            } else {
+                                ICON_CHEVRON_RIGHT
                             })
-                            .font(FontId::new(FS_TINY, icon_font()))
+                            .font(FontId::new(FS_TINY - 1.5, icon_font()))
                             .color(c_text_faint()),
                         )
                         .selectable(false),
@@ -233,8 +238,11 @@ pub(super) fn render_tool_pill(
                 });
             });
         });
-    if is_bash && let Some(command) = bash_command(args_summary.as_deref()) {
-        command_context_menu(ui, header_rect, persist_id, &command);
+    let bash_cmd = is_bash
+        .then(|| bash_command(args_summary.as_deref()))
+        .flatten();
+    if let Some(command) = bash_cmd.as_deref() {
+        command_context_menu(ui, header_rect, persist_id, command);
     }
     clickable_expand_overlay_or(ui, frame.response.rect, persist_id, open_by_default);
 
@@ -243,7 +251,7 @@ pub(super) fn render_tool_pill(
     if expanded {
         // Pull the drawer up over the item spacing so its top edge shares the pill's bottom border.
         ui.add_space(-ui.spacing().item_spacing.y - 1.0);
-        let drawer = PanelShape::Drawer(pill_border);
+        let drawer = PanelShape::Drawer(active_border);
         let bubble_w = ui.available_width().max(40.0);
         let detail_id = persist_id.with("detail");
         if let Some(diff_text) = diff.as_deref().filter(|t| !t.trim().is_empty()) {
@@ -274,12 +282,51 @@ pub(super) fn render_tool_pill(
             } else {
                 truncate_lines_preview(text, BLOCK_PREVIEW_LINES)
             };
+            let cmd_line = bash_cmd.clone();
+            let make_job = move |body: &str, width: f32| -> LayoutJob {
+                if let Some(cmd) = cmd_line.as_deref() {
+                    let mut job = LayoutJob::default();
+                    job.wrap.max_width = width;
+                    job.break_on_newline = true;
+                    job.append(
+                        "$ ",
+                        0.0,
+                        egui::text::TextFormat::simple(FontId::monospace(FS_TINY), c_text_faint()),
+                    );
+                    job.append(
+                        cmd,
+                        0.0,
+                        egui::text::TextFormat::simple(FontId::monospace(FS_TINY), c_text_strong()),
+                    );
+                    if !body.is_empty() && has_output {
+                        job.append(
+                            "\n\n",
+                            0.0,
+                            egui::text::TextFormat::simple(
+                                FontId::monospace(FS_TINY),
+                                c_text_muted(),
+                            ),
+                        );
+                        job.append(
+                            body,
+                            0.0,
+                            egui::text::TextFormat::simple(
+                                FontId::monospace(FS_TINY),
+                                c_text_muted(),
+                            ),
+                        );
+                    }
+                    job
+                } else {
+                    mono_output_job(body, width)
+                }
+            };
             render_static_preview_job_panel(
                 ui,
                 crate::theme::c_tool_diff_bg(),
                 drawer,
-                mono_output_job(&preview, bubble_w),
-                |inner| mono_output_job(text, inner),
+                make_job(&preview, bubble_w),
+                |inner| make_job(text, inner),
                 detail_id,
                 overflow,
             );

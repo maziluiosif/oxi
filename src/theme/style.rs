@@ -64,15 +64,15 @@ const SYMBOLS_NERD_FONT_MONO: &[u8] =
     include_bytes!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
 
 /// App-wide type scale — single source of truth for every text size in the UI.
-/// Headings step down 20 → 17 → 15; body is 14; secondary text 12.5 / 11.5; code 13.
+/// Headings step down 19 → 16.5 → 15; body is 14; secondary text 13 / 11.5; code 13.
 /// Keep all `.size(...)` / `FontId` text sizes routed through these so the app stays uniform.
-pub const FS_H1: f32 = 20.0;
-pub const FS_H2: f32 = 17.0;
+pub const FS_H1: f32 = 19.0;
+pub const FS_H2: f32 = 16.5;
 pub const FS_H3: f32 = 15.0;
 pub const FS_BODY: f32 = 14.0;
-pub const FS_SMALL: f32 = 12.5;
+pub const FS_SMALL: f32 = 13.0;
 pub const FS_TINY: f32 = 11.5;
-/// Monospace code (blocks). Inline code matches the size of the surrounding prose/heading.
+/// Monospace code (blocks). Inline code sits slightly more compact inside rounded pills.
 pub const FS_CODE: f32 = 13.0;
 
 /// [`FontFamily`] for Nerd Font icon glyphs used in tool pills.
@@ -83,10 +83,19 @@ pub fn icon_font() -> FontFamily {
 }
 
 /// [`FontFamily`] for bold/strong prose: a real semibold face when the interface font ships
-/// one (IBM Plex Sans), otherwise the regular proportional chain (strong is then color-only).
+/// one (IBM Plex Sans, or a system family's semibold/bold face), otherwise the regular chain.
 #[inline]
 pub fn strong_font() -> FontFamily {
     FontFamily::Name("strong".into())
+}
+
+/// [`egui::RichText`] set in [`strong_font`] so headings, sidebar titles, and emphasized UI
+/// labels render in a true semibold weight (egui's `.strong()` alone only alters ink color).
+#[inline]
+pub fn strong_rich(text: impl Into<String>, size: f32, color: egui::Color32) -> egui::RichText {
+    egui::RichText::new(text)
+        .font(FontId::new(size, strong_font()))
+        .color(color)
 }
 
 // ─── Icon glyphs (Nerd Font, rendered with [`icon_font`]) ───────────────────────
@@ -139,6 +148,8 @@ pub const ICON_REFRESH: &str = "\u{f021}";
 pub const ICON_UNDO: &str = "\u{f0e2}";
 /// Arrow pointing up — send message button (`nf-fa-arrow-up`).
 pub const ICON_SEND: &str = "\u{f062}";
+/// Arrow pointing down — scroll-to-bottom jump button (`nf-fa-arrow-down`).
+pub const ICON_ARROW_DOWN: &str = "\u{f063}";
 /// Filled stop square — stop streaming (`nf-fa-stop`).
 pub const ICON_STOP: &str = "\u{f04d}";
 /// Paperclip — attach image composer button (`nf-fa-paperclip`).
@@ -304,12 +315,12 @@ fn system_fonts() -> &'static SystemFontCatalog {
         let mut all = options(&[
             ("default", "Default — Inter"),
             ("bundled:noto_sans", "Noto Sans (bundled)"),
-            ("bundled:ibm_plex_sans", "IBM Plex Sans (bundled, Zed)"),
+            ("bundled:ibm_plex_sans", "IBM Plex Sans (bundled)"),
         ]);
         let mut monospace = options(&[
             ("default", "Default — JetBrains Mono"),
             ("bundled:ubuntu_mono", "Ubuntu Mono (bundled)"),
-            ("bundled:lilex", "Lilex (bundled, Zed)"),
+            ("bundled:lilex", "Lilex (bundled)"),
         ]);
         for (_, (name, is_monospace)) in families {
             let option = FontOption {
@@ -594,16 +605,30 @@ fn centered_text_font(data: FontData) -> FontData {
     }
 }
 
-/// Find the best normal face for a discovered family and register it with egui.
-fn install_system_font(fonts: &mut FontDefinitions, key: &str, family: &str) -> Option<String> {
+/// Find the best face at `weight` for a discovered family and register it with egui.
+fn install_system_font_weight(
+    fonts: &mut FontDefinitions,
+    key: &str,
+    family: &str,
+    weight: fontdb::Weight,
+) -> Option<String> {
     let catalog = system_fonts();
     let family_query = [fontdb::Family::Name(family)];
     let id = catalog.db.query(&fontdb::Query {
         families: &family_query,
-        weight: fontdb::Weight::NORMAL,
+        weight,
         stretch: fontdb::Stretch::Normal,
         style: fontdb::Style::Normal,
     })?;
+    // When looking for a heavier face, reject a fallback that resolved back to regular weight.
+    if weight.0 >= fontdb::Weight::SEMIBOLD.0
+        && catalog
+            .db
+            .face(id)
+            .is_some_and(|face| face.weight.0 <= fontdb::Weight::NORMAL.0)
+    {
+        return None;
+    }
     let (bytes, index) = catalog
         .db
         .with_face_data(id, |data, index| (data.to_vec(), index))?;
@@ -614,6 +639,11 @@ fn install_system_font(fonts: &mut FontDefinitions, key: &str, family: &str) -> 
         std::sync::Arc::new(centered_text_font(data)),
     );
     Some(key.to_string())
+}
+
+/// Find the best normal face for a discovered family and register it with egui.
+fn install_system_font(fonts: &mut FontDefinitions, key: &str, family: &str) -> Option<String> {
+    install_system_font_weight(fonts, key, family, fontdb::Weight::NORMAL)
 }
 
 /// Every face Oxi renders with. egui's own default fonts are disabled in Cargo.toml: these
@@ -694,6 +724,17 @@ pub(crate) fn font_definitions(sel: &FontSelection) -> FontDefinitions {
     // yields `None` and the bundled font is used instead.
     let sys_ui = selected_family(&sel.ui)
         .and_then(|family| install_system_font(&mut fonts, "sys_ui", family));
+    let sys_ui_strong = selected_family(&sel.ui).and_then(|family| {
+        install_system_font_weight(
+            &mut fonts,
+            "sys_ui_strong",
+            family,
+            fontdb::Weight::SEMIBOLD,
+        )
+        .or_else(|| {
+            install_system_font_weight(&mut fonts, "sys_ui_strong", family, fontdb::Weight::BOLD)
+        })
+    });
     let sys_mono = selected_family(&sel.mono)
         .and_then(|family| install_system_font(&mut fonts, "sys_mono", family));
 
@@ -735,10 +776,22 @@ pub(crate) fn font_definitions(sel: &FontSelection) -> FontDefinitions {
         );
     }
 
-    // Strong prose: the semibold face first while Plex is the UI font, then the normal chain.
+    // Strong prose: real semibold/bold face first (system family's own weight when picked,
+    // bundled IBM Plex Sans SemiBold when Plex is active, or system Inter SemiBold if present).
     let mut strong_chain = fonts.families[&FontFamily::Proportional].clone();
-    if plex_ui {
+    if let Some(key) = &sys_ui_strong {
+        strong_chain.insert(0, key.clone());
+    } else if plex_ui {
         strong_chain.insert(0, "ibm_plex_sans_semibold".into());
+    } else if sel.ui == "default"
+        && let Some(key) = install_system_font_weight(
+            &mut fonts,
+            "sys_inter_strong",
+            "Inter",
+            fontdb::Weight::SEMIBOLD,
+        )
+    {
+        strong_chain.insert(0, key);
     }
     fonts.families.insert(strong_font(), strong_chain);
 

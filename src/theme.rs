@@ -23,7 +23,7 @@ use eframe::egui::{self, Id, Ui};
 /// Default max width for message/composer column (left-aligned; extra space stays on the
 /// right). The user can widen this via the "Chat width" slider in Appearance settings; see
 /// [`chat_column_max_width`].
-pub const CHAT_COLUMN_MAX_DEFAULT: f32 = 720.0;
+pub const CHAT_COLUMN_MAX_DEFAULT: f32 = 760.0;
 
 /// Slider bounds for the user-configurable chat column width (see
 /// [`crate::settings::AppSettings::chat_column_max_width`]).
@@ -51,15 +51,15 @@ pub fn chat_column_max_width(ctx: &egui::Context) -> f32 {
 
 /// Shared corner radii — every rounded surface should use one of these tokens.
 /// List rows (sidebar chats, settings nav, git changes).
-pub const RADIUS_ROW: u8 = 6;
+pub const RADIUS_ROW: u8 = 7;
 /// Buttons, inputs, small inline banners.
-pub const RADIUS_BUTTON: u8 = 7;
+pub const RADIUS_BUTTON: u8 = 8;
 /// Chips, pills, toolbar icons, nested panels.
 pub const RADIUS_CHIP: u8 = 8;
 /// Cards and bubbles (settings cards, user bubbles, code blocks' outer frame).
 pub const RADIUS_CARD: u8 = 10;
 /// Large floating surfaces (composer card).
-pub const RADIUS_PANEL: u8 = 14;
+pub const RADIUS_PANEL: u8 = 16;
 
 /// Shared spacing rhythm for app chrome and conversation surfaces, in logical points.
 pub const SPACE_XS: f32 = 4.0;
@@ -70,14 +70,14 @@ pub const CONTROL_HEIGHT: f32 = 28.0;
 
 /// Draggable strip between sidebar and chat (must match `render_main_area`).
 pub const SIDEBAR_RESIZE_SEP_W: f32 = 5.0;
-pub const CHAT_VIEW_MARGIN_LEFT: f32 = 16.0;
+pub const CHAT_VIEW_MARGIN_LEFT: f32 = 20.0;
 pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 12.0;
 /// Right margin of the chat view (not the editor): the transcript scroll bar sits in it, and
 /// [`chat_column_center_width`] adds the rest so text ends as far from the edge as it starts.
 pub const CHAT_VIEW_MARGIN_RIGHT_CHAT: f32 = 6.0;
 /// Inner margin of the chat [`Frame`] (transcript + composer stack).
-pub const CHAT_FRAME_TOP: f32 = 10.0;
-pub const CHAT_FRAME_BOTTOM: f32 = 10.0;
+pub const CHAT_FRAME_TOP: f32 = 0.0;
+pub const CHAT_FRAME_BOTTOM: f32 = 12.0;
 
 /// Usable width for the chat column (transcript + bottom composer). Subtracts a scroll bar gutter
 /// so input and transcript line up. Floating bars take no layout space, but they are painted over

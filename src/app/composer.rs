@@ -135,7 +135,7 @@ fn composer_text_edit(
     let hint = if plan_mode {
         "Describe what to plan…"
     } else {
-        "Message oxi…"
+        "Ask anything, @ to mention, / for actions"
     };
     // Offset this pass paints with: what the scroll area stored at the end of the last pass.
     let painted_offset_id = input_id.with("painted_scroll_offset");
@@ -394,11 +394,21 @@ impl OxiApp {
                     .fill(c_bg_elevated())
                     .stroke(Stroke::new(1.0, card_border))
                     .corner_radius(crate::theme::RADIUS_PANEL)
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 4],
+                        blur: 18,
+                        spread: 0,
+                        color: if active_palette().dark_base {
+                            Color32::from_black_alpha(95)
+                        } else {
+                            Color32::from_black_alpha(24)
+                        },
+                    })
                     .inner_margin(Margin {
-                        left: COMPOSER_FRAME_MARGIN as i8,
-                        right: COMPOSER_FRAME_MARGIN as i8,
-                        top: COMPOSER_FRAME_MARGIN as i8,
-                        bottom: 6,
+                        left: 16,
+                        right: 14,
+                        top: 14,
+                        bottom: 10,
                     })
                     .show(ui, |ui| {
                         // === Tray: checklist, plan hand-off, recovery, delegated tasks, work
@@ -586,19 +596,19 @@ impl OxiApp {
         );
     }
 
-    /// Round paper-clip button that opens the image picker.
+    /// Round `+` button that opens the image picker.
     fn render_attach_button(&mut self, ui: &mut Ui) {
         let attach = crate::ui::chrome::icon_button_core(
             ui,
-            ICON_ATTACH,
+            ICON_PLUS,
             egui::vec2(ATTACH_DIAM, ATTACH_DIAM),
-            15.0,
+            13.5,
             false,
             &crate::ui::chrome::IconButtonLook {
                 fill: Color32::TRANSPARENT,
                 hover_fill: c_row_hover(),
                 stroke: Color32::TRANSPARENT,
-                hover_stroke: c_border(),
+                hover_stroke: Color32::TRANSPARENT,
                 rounding: CornerRadius::same((ATTACH_DIAM * 0.5) as u8),
                 glyph: c_text_muted(),
             },
@@ -697,8 +707,8 @@ impl OxiApp {
                     .is_some_and(|run| run.steer.is_some());
             let (fill, fg, enabled, icon, hover) = if queue_instead {
                 (
-                    c_accent(),
-                    crate::theme::c_on_accent(),
+                    crate::theme::c_send_bg(),
+                    crate::theme::c_send_fg(),
                     true,
                     ICON_SEND,
                     if steers {
@@ -709,16 +719,16 @@ impl OxiApp {
                 )
             } else if active_session_streaming {
                 (
-                    c_accent(),
-                    crate::theme::c_on_accent(),
+                    crate::theme::c_send_bg(),
+                    crate::theme::c_send_fg(),
                     true,
                     ICON_STOP,
                     "Stop generation (Cmd/Ctrl+.)",
                 )
             } else if can_send {
                 (
-                    c_accent(),
-                    crate::theme::c_on_accent(),
+                    crate::theme::c_send_bg(),
+                    crate::theme::c_send_fg(),
                     true,
                     ICON_SEND,
                     if self.conv.composer.editing_last_prompt.is_some() {
@@ -730,7 +740,7 @@ impl OxiApp {
             } else {
                 (
                     c_bg_elevated_2(),
-                    c_text_muted(),
+                    c_text_faint(),
                     false,
                     ICON_SEND,
                     "Type a message or attach an image",
@@ -975,7 +985,7 @@ mod layout_tests {
                         if plan_mode {
                             "Describe what to plan…"
                         } else {
-                            "Message oxi…"
+                            "Ask anything, @ to mention, / for actions"
                         }
                     } else {
                         &input

@@ -5,8 +5,7 @@ mod workspace_list;
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::{
-    self, Align, Color32, CornerRadius, FontFamily, FontId, Layout, RichText, ScrollArea, Sense,
-    Stroke, Ui,
+    self, Align, Color32, CornerRadius, FontId, Layout, RichText, ScrollArea, Sense, Stroke, Ui,
 };
 
 use crate::theme::*;
@@ -20,14 +19,14 @@ impl OxiApp {
         ui.set_min_width(ui.max_rect().width());
         self.poll_sidebar_branches(ui.ctx());
 
-        // Primary action first, with its shortcut, like other chat apps.
+        // Primary action first, with its shortcut, like Antigravity's "+ New Conversation".
         let new_chat = crate::ui::chrome::flat_button_icon(
             ui,
             ICON_PLUS,
             "New chat",
             FS_SMALL,
-            egui::vec2(ui.available_width(), 30.0),
-            c_text(),
+            egui::vec2(ui.available_width(), 32.0),
+            c_text_strong(),
         )
         .on_hover_text("Start a new chat in the active workspace");
         if new_chat.rect.width() >= 170.0 {
@@ -73,35 +72,31 @@ impl OxiApp {
         });
         ui.add_space(SPACE_SM);
 
-        // Search row + add-workspace button.
+        // Full-width quiet search field (with inline clear when active).
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.set_height(28.0);
-
-            let add_w = 22.0;
-            let general_w = 22.0;
-            let remote_w = 22.0;
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.set_height(30.0);
             let clear_w = if self.conv.sidebar.search.is_empty() {
                 0.0
             } else {
-                22.0
+                24.0
             };
             let search_w = (ui.available_width()
-                - add_w
-                - general_w
-                - remote_w
                 - clear_w
-                - ui.spacing().item_spacing.x * if clear_w > 0.0 { 4.0 } else { 3.0 })
+                - if clear_w > 0.0 {
+                    ui.spacing().item_spacing.x
+                } else {
+                    0.0
+                })
             .max(48.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(search_w, 28.0),
+                egui::vec2(search_w, 30.0),
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_width(search_w);
                     let _ = sidebar_text_field(ui, &mut self.conv.sidebar.search, "Search chats…");
                 },
             );
-
             if clear_w > 0.0
                 && crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, clear_w, false)
                     .on_hover_text("Clear chat search")
@@ -109,36 +104,50 @@ impl OxiApp {
             {
                 self.conv.sidebar.search.clear();
             }
-
-            if crate::ui::chrome::icon_button_plain(ui, ICON_GLOBE, general_w, false)
-                .on_hover_text("New general chat: not about any project, run in ~/oxi-general")
-                .clicked()
-            {
-                self.new_general_chat();
-            }
-
-            if crate::ui::chrome::icon_button_plain(ui, ICON_SERVER, remote_w, false)
-                .on_hover_text(
-                    "Connect to a remote host: open a folder on another machine over SSH; \
-                     its oxi server runs the agents there.",
-                )
-                .clicked()
-            {
-                self.open_remote_dialog();
-            }
-
-            if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, add_w, false)
-                .on_hover_text(
-                    "Add a project folder. Each workspace has its own chats; \
-                     tools run with that folder as cwd.",
-                )
-                .clicked()
-            {
-                self.open_workspace_folder();
-            }
         });
 
         ui.add_space(SPACE_MD);
+
+        // "Projects" section header with right-aligned workspace actions (Antigravity-style).
+        ui.horizontal(|ui| {
+            ui.set_height(22.0);
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("Projects")
+                    .size(FS_TINY)
+                    .color(c_sidebar_section()),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, 22.0, false)
+                    .on_hover_text(
+                        "Add a project folder. Each workspace has its own chats; \
+                         tools run with that folder as cwd.",
+                    )
+                    .clicked()
+                {
+                    self.open_workspace_folder();
+                }
+                if crate::ui::chrome::icon_button_plain(ui, ICON_SERVER, 22.0, false)
+                    .on_hover_text(
+                        "Connect to a remote host: open a folder on another machine over SSH; \
+                         its oxi server runs the agents there.",
+                    )
+                    .clicked()
+                {
+                    self.open_remote_dialog();
+                }
+                if crate::ui::chrome::icon_button_plain(ui, ICON_GLOBE, 22.0, false)
+                    .on_hover_text("New general chat: not about any project, run in ~/oxi-general")
+                    .clicked()
+                {
+                    self.new_general_chat();
+                }
+            });
+        });
+
+        ui.add_space(SPACE_XS);
 
         if let Some(notice) = self.conv.sidebar.notice.clone() {
             if crate::ui::chrome::dismissible_notice(ui, "sidebar_notice", &notice) {
@@ -150,16 +159,21 @@ impl OxiApp {
         if self.conv.sidebar.history {
             self.render_sidebar_history_filters(ui);
         }
+        // Reserve room for the bottom footer (History + Settings).
+        let footer_h = 74.0;
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
-            .max_height((ui.available_height() - 38.0).max(40.0))
+            .max_height((ui.available_height() - footer_h).max(40.0))
             .auto_shrink([false, false])
             .scroll_bar_visibility(ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
 
-        ui.add_space(SPACE_SM);
+        ui.add_space(6.0);
+        crate::ui::chrome::hairline(ui);
+        ui.add_space(6.0);
+
         let history = self.conv.sidebar.history;
         let label = if history {
             "Back to recent chats"
@@ -178,6 +192,19 @@ impl OxiApp {
         .clicked()
         {
             self.conv.sidebar.history = !history;
+        }
+        if crate::ui::chrome::flat_button_icon(
+            ui,
+            ICON_SETTINGS,
+            "Settings",
+            FS_SMALL,
+            egui::vec2(ui.available_width(), 28.0),
+            c_text_muted(),
+        )
+        .on_hover_text("Settings (Cmd/Ctrl+,)")
+        .clicked()
+        {
+            self.toggle_settings_page();
         }
 
         // The outer sidebar allocation already owns the full fixed width/height. Expanding

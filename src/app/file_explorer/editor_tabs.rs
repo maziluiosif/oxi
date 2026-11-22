@@ -57,7 +57,7 @@ impl OxiApp {
             .fill(c_bg_elevated_2())
             .inner_margin(Margin::symmetric(6, 0))
             .show(ui, |ui| {
-                ui.set_height(34.0);
+                ui.set_height(crate::ui::window_chrome::CHAT_HEADER_H);
                 // Not `ui.horizontal`: that caps the row at `interact_size.y`, so the tabs would
                 // stop short of the strip's lower edge and a hovered tab would float above it.
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {

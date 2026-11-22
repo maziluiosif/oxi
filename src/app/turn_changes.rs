@@ -143,16 +143,15 @@ impl OxiApp {
 
         let mut action = None;
         egui::Frame::new()
-            .fill(c_bg_elevated())
+            .fill(c_md_code_block_bg())
             .stroke(egui::Stroke::new(1.0, c_border()))
-            .corner_radius(crate::theme::RADIUS_PANEL)
-            // The Revert button sits CARD_INSET from the top, right and bottom edges, so its
-            // corners run concentric with the card's.
+            .corner_radius(crate::theme::RADIUS_CARD)
+            // The action buttons sit CARD_INSET from the top, right and bottom edges.
             .inner_margin(egui::Margin {
-                left: 12,
-                right: CARD_INSET as i8,
-                top: CARD_INSET as i8,
-                bottom: CARD_INSET as i8,
+                left: 14,
+                right: 8,
+                top: 7,
+                bottom: 7,
             })
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -160,22 +159,6 @@ impl OxiApp {
                     // Same height with or without the button ("Reverted" is a plain label).
                     ui.set_min_height(HEADER_H);
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    let chevron = if expanded {
-                        ICON_ANGLE_DOWN
-                    } else {
-                        ICON_CHEVRON_RIGHT
-                    };
-                    let icon = ui
-                        .add(
-                            egui::Label::new(
-                                RichText::new(chevron)
-                                    .font(FontId::new(FS_TINY, icon_font()))
-                                    .color(c_text_muted()),
-                            )
-                            .sense(Sense::click())
-                            .selectable(false),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
                     let header = ui
                         .add(
                             egui::Label::new(
@@ -191,19 +174,35 @@ impl OxiApp {
                             .selectable(false),
                         )
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if header.clicked() || icon.clicked() {
-                        action = Some(CardAction::Toggle);
-                    }
                     ui.label(
                         RichText::new(format!("+{added}"))
-                            .font(FontId::monospace(FS_TINY))
+                            .font(FontId::proportional(FS_SMALL))
                             .color(c_success()),
                     );
                     ui.label(
-                        RichText::new(format!("−{deleted}"))
-                            .font(FontId::monospace(FS_TINY))
+                        RichText::new(format!("-{deleted}"))
+                            .font(FontId::proportional(FS_SMALL))
                             .color(c_danger()),
                     );
+                    let chevron = if expanded {
+                        ICON_ANGLE_DOWN
+                    } else {
+                        ICON_CHEVRON_RIGHT
+                    };
+                    let icon = ui
+                        .add(
+                            egui::Label::new(
+                                RichText::new(chevron)
+                                    .font(FontId::new(FS_TINY - 1.5, icon_font()))
+                                    .color(c_text_faint()),
+                            )
+                            .sense(Sense::click())
+                            .selectable(false),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if header.clicked() || icon.clicked() {
+                        action = Some(CardAction::Toggle);
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if all_reverted || reverting {
                             ui.label(
