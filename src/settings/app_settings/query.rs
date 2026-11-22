@@ -90,10 +90,14 @@ impl AppSettings {
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::MuseCodeAcp
-            | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp
             | LlmProviderKind::OpenCodeAcp => {
                 super::super::availability::acp_client_installed(self.provider(kind))
+            }
+            LlmProviderKind::AntigravityAcp => {
+                has_profile_key(kind)
+                    || crate::agent::acp::antigravity_installed()
+                    || super::super::availability::acp_client_installed(self.provider(kind))
             }
             LlmProviderKind::AzureOpenAi => {
                 let config = self.provider(kind);

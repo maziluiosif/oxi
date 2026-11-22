@@ -371,6 +371,7 @@ impl OxiApp {
                 | LlmProviderKind::CodexAcp
                 | LlmProviderKind::CursorAcp
                 | LlmProviderKind::MuseCodeAcp
+                | LlmProviderKind::AntigravityAcp
         )
     }
 
@@ -381,7 +382,9 @@ impl OxiApp {
         }
         let values: &[(&str, &str)] = if matches!(
             kind,
-            LlmProviderKind::CustomAnthropic | LlmProviderKind::ClaudeCodeAcp
+            LlmProviderKind::CustomAnthropic
+                | LlmProviderKind::ClaudeCodeAcp
+                | LlmProviderKind::AntigravityAcp
         ) {
             &[
                 ("", "Auto"),

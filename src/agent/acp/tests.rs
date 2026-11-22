@@ -1161,6 +1161,86 @@ for line in sys.stdin:
     }
 }
 
+#[tokio::test]
+async fn antigravity_cli_server_authenticates_and_retries_resume() {
+    const AGENT: &str = r#"
+import json, sys
+from pathlib import Path
+authed = False
+def send(id, **body):
+    print(json.dumps(dict(jsonrpc='2.0', id=id, **body)), flush=True)
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    with Path('calls').open('a') as f:
+        f.write(method + '\n')
+    if method == 'initialize':
+        send(m['id'], result=dict(
+            protocolVersion=1,
+            agentInfo=dict(name='Antigravity ACP Server', version='1.5.13'),
+            agentCapabilities=dict(sessionCapabilities=dict(resume={})),
+            authMethods=[dict(id='oauth-personal'), dict(id='gemini-api-key')],
+        ))
+    elif method == 'session/resume':
+        if not authed:
+            send(m['id'], error=dict(code=-32000, message='Authentication required'))
+        else:
+            send(m['id'], result=dict(
+                configOptions=[dict(
+                    id='model',
+                    category='model',
+                    type='select',
+                    currentValue='gemini-4-neon',
+                    options=[dict(
+                        group='google',
+                        name='Google',
+                        options=[dict(value='gemini-4-neon', name='Gemini 4 Neon')],
+                    )],
+                )]
+            ))
+    elif method == 'authenticate':
+        assert m['params']['methodId'] == 'oauth-personal'
+        authed = True
+        send(m['id'], result={})
+    else:
+        send(m['id'], result={})
+"#;
+    let dir = std::env::temp_dir().join(format!("oxi-acp-agy-resume-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("agent.py");
+    std::fs::write(&script, AGENT).unwrap();
+    let command = format!(
+        "{} {}",
+        install::shell_quote(&crate::agent::test_python_executable()),
+        install::shell_quote(&script)
+    );
+    let session_key = format!("agy-resume-{}", rand::random::<u64>());
+    sessions::remember(&session_key, &command, &dir, "saved-agy-session");
+    let spec = LaunchSpec {
+        session_key: &session_key,
+        command_line: &command,
+        cwd: &dir,
+        env: &[],
+        model: "gemini-4-neon",
+        effort: "",
+        mcp_servers: &[],
+    };
+    let conn = tokio::time::timeout(Duration::from_secs(10), spawn_conn(&spec, vec![]))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(conn.handles.session_id, "saved-agy-session");
+    assert!(!conn.handles.needs_history.load(Ordering::SeqCst));
+    assert_eq!(conn.handles.available_models, ["gemini-4-neon"]);
+    drop(conn);
+    sessions::forget(&session_key);
+    let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+    assert_eq!(calls.lines().filter(|m| *m == "authenticate").count(), 1);
+    assert_eq!(calls.lines().filter(|m| *m == "session/resume").count(), 2);
+    assert_eq!(calls.lines().filter(|m| *m == "session/new").count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A fake agent that lists, replays and forks its sessions.
 const SESSION_STORE_AGENT: &str = r#"
 import json, sys

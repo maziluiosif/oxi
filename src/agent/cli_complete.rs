@@ -30,7 +30,9 @@ const CLAUDE_WRITE_TOOLS: &str = "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetc
 pub fn supports(provider: LlmProviderKind) -> bool {
     matches!(
         provider,
-        LlmProviderKind::ClaudeCodeAcp | LlmProviderKind::CodexAcp
+        LlmProviderKind::ClaudeCodeAcp
+            | LlmProviderKind::CodexAcp
+            | LlmProviderKind::AntigravityAcp
     )
 }
 
@@ -60,6 +62,13 @@ pub async fn complete(
                  model for commit messages in Settings.",
             )?;
             codex(&program, cfg, system, &user, &dir).await
+        }
+        LlmProviderKind::AntigravityAcp => {
+            let program = find_program("agy", path.as_deref()).ok_or(
+                "The `agy` command was not found. Install the Antigravity CLI, or pick another \
+                 model for commit messages in Settings.",
+            )?;
+            antigravity(&program, cfg, system, &user, &dir).await
         }
         other => Err(format!("{} has no one-shot CLI", other.label())),
     };
@@ -98,9 +107,15 @@ fn find_program(name: &str, shell_path: Option<&str>) -> Option<PathBuf> {
         .or_else(|| std::env::var_os("PATH"))
         .unwrap_or_default();
     let home = dirs::home_dir();
-    let extra = [".claude/local", ".local/bin", ".npm-global/bin", ".bun/bin"]
-        .into_iter()
-        .filter_map(|dir| home.as_ref().map(|h| h.join(dir)));
+    let extra = [
+        ".claude/local",
+        ".local/bin",
+        ".antigravity/bin",
+        ".npm-global/bin",
+        ".bun/bin",
+    ]
+    .into_iter()
+    .filter_map(|dir| home.as_ref().map(|h| h.join(dir)));
     let names: Vec<String> = if cfg!(windows) {
         ["exe", "cmd"]
             .iter()
@@ -220,6 +235,75 @@ async fn codex(
         return Err(format!("codex exec failed: {}", tail(&output.stderr)));
     }
     std::fs::read_to_string(&answer).map_err(|_| "Codex wrote no answer".to_string())
+}
+
+async fn antigravity(
+    program: &Path,
+    cfg: &ProviderConfig,
+    system: &str,
+    prompt: &str,
+    dir: &Path,
+) -> Result<String, String> {
+    let mut args: Vec<OsString> = [
+        "--output-format",
+        "json",
+        "--mode",
+        "plan",
+        "--sandbox",
+        "--disable-slash-commands",
+        "--effort",
+        "low",
+    ]
+    .map(OsString::from)
+    .to_vec();
+    let model = cfg.model_id.trim();
+    if !model.is_empty() && model != "default" {
+        args.extend(["--model", model].map(OsString::from));
+    }
+    let instruction = if system.trim().is_empty() {
+        "Respond to the input provided on stdin."
+    } else {
+        system
+    };
+    args.extend(["-p", instruction].map(OsString::from));
+    let output = run(program, &args, prompt, dir, &cfg.acp_env()).await?;
+    parse_antigravity(&output.stdout).map_err(|e| {
+        let stderr = tail(&output.stderr);
+        if stderr.is_empty() {
+            e
+        } else {
+            format!("{e}: {stderr}")
+        }
+    })
+}
+
+/// The answer in `agy -p --output-format json` output: `{ status, response }`.
+fn parse_antigravity(stdout: &[u8]) -> Result<String, String> {
+    let text = String::from_utf8_lossy(stdout);
+    let result: serde_json::Value = text
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str(line.trim()).ok())
+        .or_else(|| serde_json::from_str(text.trim()).ok())
+        .ok_or("Antigravity CLI printed no result")?;
+    let answer = result["response"]
+        .as_str()
+        .or_else(|| result["result"].as_str())
+        .unwrap_or_default();
+    let status = result["status"].as_str().unwrap_or_default();
+    let failed = result["is_error"] == true
+        || (!status.is_empty() && !status.eq_ignore_ascii_case("success"));
+    if failed {
+        return Err(if answer.is_empty() {
+            result["error"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Antigravity CLI stopped ({status})"))
+        } else {
+            answer.to_string()
+        });
+    }
+    Ok(answer.to_string())
 }
 
 async fn run(
@@ -366,6 +450,31 @@ input=$(cat); printf 'Fix: %s\n[%s]' "$input" "$*" > "$out""#,
         );
         assert!(answer.contains("--sandbox read-only"), "{answer}");
         assert!(!answer.contains("--model"), "{answer}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn antigravity_runs_sandboxed_in_plan_mode_and_reads_json_response() {
+        let (dir, program) = fake(
+            "agy",
+            r#"input=$(cat); printf '{"status":"SUCCESS","response":"%s | %s"}\n' "$*" "$input""#,
+        );
+        let cfg = config(LlmProviderKind::AntigravityAcp, "gemini-4-hydrogen");
+        let answer = block_on(antigravity(
+            &program,
+            &cfg,
+            "Write a commit message.",
+            "the diff",
+            &dir,
+        ))
+        .unwrap();
+        assert!(answer.contains("--output-format json"), "{answer}");
+        assert!(answer.contains("--mode plan"), "{answer}");
+        assert!(answer.contains("--sandbox"), "{answer}");
+        assert!(answer.contains("--model gemini-4-hydrogen"), "{answer}");
+        assert!(answer.ends_with("| the diff"), "{answer}");
+        assert!(parse_antigravity(br#"{"status":"ERROR","error":"quota exceeded"}"#).is_err());
+        assert!(parse_antigravity(b"").is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -185,7 +185,7 @@ pub(super) fn installed_launch(command_line: &str) -> Option<String> {
 /// already installed (it was used before), or another command whose program exists.
 pub(super) async fn is_ready(command_line: &str) -> bool {
     if super::antigravity::is_default(command_line) {
-        return super::antigravity::is_ready();
+        return super::antigravity::is_ready().await;
     }
     if let Some(adapter) = adapter_for(command_line) {
         return adapter.installed_bin().is_some();

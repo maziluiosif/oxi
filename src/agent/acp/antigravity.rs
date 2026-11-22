@@ -1,9 +1,11 @@
 //! Official native Antigravity ACP distribution (pinned to the reviewed registry release).
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use tokio::process::Command;
 use tokio::sync::Mutex;
 
 use crate::settings::ProviderConfig;
@@ -11,15 +13,35 @@ use crate::settings::ProviderConfig;
 const VERSION: &str = "1.4.0";
 
 pub(super) fn needs_authentication(init: &serde_json::Value, error: &str) -> bool {
-    init["agentInfo"]["name"].as_str() == Some("antigravity-acp")
-        && error.contains("Authentication required")
+    is_antigravity_agent(init) && error_requires_authentication(error)
+}
+
+fn is_antigravity_agent(init: &serde_json::Value) -> bool {
+    let by_name = init["agentInfo"]["name"]
+        .as_str()
+        .is_some_and(|name| name.to_ascii_lowercase().contains("antigravity"));
+    let by_auth_methods = init["authMethods"].as_array().is_some_and(|methods| {
+        methods.iter().any(|m| {
+            matches!(
+                m["id"].as_str(),
+                Some("oauth-personal" | "oauth-business" | "gemini-api-key")
+            )
+        })
+    });
+    by_name || by_auth_methods
+}
+
+fn error_requires_authentication(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("authentication required")
+        || lower.contains("unauthenticated")
+        || lower.contains("not authenticated")
 }
 
 pub(super) fn auth_method(env: &[(String, String)]) -> &'static str {
     if env
         .iter()
         .any(|(key, value)| key == "GEMINI_API_KEY" && !value.trim().is_empty())
-        || std::env::var("GEMINI_API_KEY").is_ok_and(|key| !key.trim().is_empty())
     {
         "gemini-api-key"
     } else {
@@ -60,11 +82,82 @@ fn binary(root: &Path) -> PathBuf {
     })
 }
 
-pub(super) fn is_ready() -> bool {
+pub(crate) fn is_managed_installed() -> bool {
     binary(&root()).is_file()
 }
 
+/// The installed Antigravity CLI (`agy`) when it supports the native `agy acp` subcommand
+/// (CLI v1.5+). Checked once per binary path and cached for the process lifetime.
+async fn installed_cli_acp() -> Option<PathBuf> {
+    let agy = find_agy_cli().await?;
+    static SUPPORTED: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, bool>>> =
+        OnceLock::new();
+    let cache = SUPPORTED.get_or_init(Default::default);
+    if let Some(&ok) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&agy) {
+        return ok.then_some(agy);
+    }
+    let ok = cli_supports_acp(&agy).await;
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(agy.clone(), ok);
+    ok.then_some(agy)
+}
+
+async fn find_agy_cli() -> Option<PathBuf> {
+    let path = super::install::shell_path()
+        .await
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let exts: &[&str] = if cfg!(windows) {
+        &["", ".exe", ".cmd", ".bat"]
+    } else {
+        &[""]
+    };
+    let mut dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    if let Some(home) = dirs::home_dir() {
+        for rel in [".local/bin", ".antigravity/bin"] {
+            dirs.push(home.join(rel));
+        }
+    }
+    #[cfg(unix)]
+    for sys in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        dirs.push(PathBuf::from(sys));
+    }
+    dirs.into_iter().find_map(|dir| {
+        exts.iter()
+            .map(|ext| dir.join(format!("agy{ext}")))
+            .find(|p| p.is_file())
+    })
+}
+
+async fn cli_supports_acp(agy: &Path) -> bool {
+    let mut cmd = Command::new(agy);
+    cmd.args(["acp", "--help"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    tokio::time::timeout(Duration::from_secs(5), cmd.status())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .is_some_and(|s| s.success())
+}
+
+pub(super) async fn is_ready() -> bool {
+    is_managed_installed() || installed_cli_acp().await.is_some()
+}
+
 pub(super) async fn resolve() -> Result<String, String> {
+    if let Some(agy) = installed_cli_acp().await {
+        return Ok(format!("{} acp", super::install::shell_quote(&agy)));
+    }
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let _guard = LOCK.get_or_init(|| Mutex::new(())).lock().await;
     let root = root();
@@ -220,5 +313,37 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recognizes_antigravity_auth_across_standalone_and_cli_servers() {
+        use serde_json::json;
+        let standalone = json!({"agentInfo": {"name": "antigravity-acp"}});
+        let cli_acp = json!({
+            "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.13"},
+            "authMethods": [{"id": "oauth-personal"}, {"id": "gemini-api-key"}]
+        });
+        let by_methods_only = json!({
+            "agentInfo": {"name": "custom-wrapper"},
+            "authMethods": [{"id": "oauth-personal"}]
+        });
+        let other = json!({"agentInfo": {"name": "other-agent"}});
+
+        assert!(needs_authentication(&standalone, "Authentication required"));
+        assert!(needs_authentication(&cli_acp, "Authentication required"));
+        assert!(needs_authentication(&cli_acp, "User is unauthenticated"));
+        assert!(needs_authentication(&by_methods_only, "Not authenticated"));
+        assert!(!needs_authentication(&cli_acp, "invalid workspace"));
+        assert!(!needs_authentication(&other, "Authentication required"));
+
+        assert_eq!(auth_method(&[]), "oauth-personal");
+        assert_eq!(
+            auth_method(&[("GEMINI_API_KEY".into(), "  ".into())]),
+            "oauth-personal"
+        );
+        assert_eq!(
+            auth_method(&[("GEMINI_API_KEY".into(), "test-key".into())]),
+            "gemini-api-key"
+        );
     }
 }

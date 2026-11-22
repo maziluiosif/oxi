@@ -154,6 +154,15 @@ impl OxiApp {
             .on_hover_text(
                 "Reads ~/.codex/auth.json only to query the ChatGPT usage windows for Codex (ACP).",
             );
+            crate::ui::chrome::toggle(ui,
+                &mut router.read_antigravity_usage,
+                RichText::new("Read Antigravity subscription usage (/usage)")
+                    .size(FS_SMALL)
+                    .color(c_text()),
+            )
+            .on_hover_text(
+                "Asks the agy CLI for its /usage quota summary (no model prompt is sent, so it costs nothing). Uses Antigravity's own login.",
+            );
             field_hint(
                 ui,
                 "GPT Codex (ChatGPT sign-in) and OpenRouter report usage without extra permissions. Other providers are tracked from oxi's own usage history.",

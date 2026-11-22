@@ -49,6 +49,7 @@ fn antigravity_settings_preserve_command_and_keep_api_key_in_environment_only() 
     assert_eq!(restored.active_provider, kind);
     assert_eq!(restored.active_config().effective_acp_command(), command);
     assert_eq!(restored.active_config().provider, kind);
+    assert!(settings.provider_is_configured(kind, &crate::oauth::OAuthStore::default()));
 }
 
 /// Provider API keys must never be written to `settings.json` — they live in the OS

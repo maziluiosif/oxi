@@ -287,7 +287,7 @@
 	const EFFORT_SHORT = ['', 'low', 'medium', 'high'];
 	const effortValues = $derived.by(() => {
 		const p = chat.config?.provider ?? '';
-		if (['customanthropic', 'claudecodeacp'].includes(p)) return EFFORT_FULL;
+		if (['customanthropic', 'claudecodeacp', 'antigravityacp'].includes(p)) return EFFORT_FULL;
 		if (['openai', 'gptcodex', 'opencodego', 'azureopenai', 'codexacp', 'cursoracp', 'musecodeacp'].includes(p)) return EFFORT_SHORT;
 		return null;
 	});
