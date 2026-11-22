@@ -75,6 +75,11 @@ pub(crate) fn bundled_claude_cli() -> Option<std::path::PathBuf> {
     install::bundled_claude_cli()
 }
 
+/// Whether oxi's managed standalone Antigravity ACP server is already downloaded on disk.
+pub(crate) fn antigravity_installed() -> bool {
+    antigravity::is_managed_installed()
+}
+
 /// Whether `cfg`'s agent can start without installing anything first, i.e. it is set up on this
 /// machine. Failover only moves a turn to agents that are.
 pub async fn is_ready(cfg: &crate::settings::ProviderConfig) -> bool {
@@ -959,6 +964,9 @@ fn launch_error(command_line: &str, error: &std::io::Error) -> String {
             " Install Node.js/npm so `npx` is available, or install the ACP adapter globally and set its command here."
         }
         "codex-acp" => " Install it with `npm install -g @agentclientprotocol/codex-acp`.",
+        "agy" | "agy_acp_server.par" | "agy_acp_server.exe" => {
+            " Install the Antigravity CLI (`agy`) or leave the Agent command blank to use the official server."
+        }
         _ => " Check that the executable is installed and available in PATH.",
     };
     format!("Could not launch ACP agent `{command}`: {error}.{hint}")
@@ -1095,10 +1103,23 @@ async fn spawn_conn(
     ) {
         list.push(todo);
     }
+    let mut authenticated = false;
     let resumed = match sessions::lookup(session_key, command_line, cwd) {
-        Some(id) => resume_session(&stdin, &next_id, &pending, caps, cwd, &id, &mcp)
+        Some(id) => match resume_session(&stdin, &next_id, &pending, &init, caps, cwd, &id, &mcp)
             .await
-            .map(|res| (id, res)),
+        {
+            ResumeOutcome::Resumed(res) => Some((id, res)),
+            ResumeOutcome::AuthRequired => {
+                authenticate_antigravity(&stdin, &next_id, &pending, env).await?;
+                authenticated = true;
+                match resume_session(&stdin, &next_id, &pending, &init, caps, cwd, &id, &mcp).await
+                {
+                    ResumeOutcome::Resumed(res) => Some((id, res)),
+                    ResumeOutcome::AuthRequired | ResumeOutcome::Failed => None,
+                }
+            }
+            ResumeOutcome::Failed => None,
+        },
         None => None,
     };
     let (session_id, res, needs_history) = match resumed {
@@ -1106,14 +1127,10 @@ async fn spawn_conn(
         None => {
             let session = new_session(&stdin, &next_id, &pending, cwd, &mcp).await;
             let (id, res) = match session {
-                Err(error) if antigravity::needs_authentication(&init, &error) => {
-                    let method = antigravity::auth_method(env);
-                    tokio::time::timeout(
-                        Duration::from_secs(300),
-                        request(&stdin, &next_id, &pending, "authenticate", json!({"methodId": method})),
-                    ).await
-                        .map_err(|_| "Antigravity sign-in timed out. Complete Google sign-in in the browser and retry.".to_string())?
-                        .map_err(|e| format!("Antigravity authentication failed: {e}"))?;
+                Err(error)
+                    if !authenticated && antigravity::needs_authentication(&init, &error) =>
+                {
+                    authenticate_antigravity(&stdin, &next_id, &pending, env).await?;
                     new_session(&stdin, &next_id, &pending, cwd, &mcp).await?
                 }
                 result => result?,
@@ -1238,19 +1255,54 @@ async fn new_session(
     Ok((session_id, res))
 }
 
+enum ResumeOutcome {
+    Resumed(Value),
+    AuthRequired,
+    Failed,
+}
+
+async fn authenticate_antigravity(
+    stdin: &Arc<AsyncMutex<ChildStdin>>,
+    next_id: &Arc<AtomicI64>,
+    pending: &Pending,
+    env: &[(String, String)],
+) -> Result<(), String> {
+    let method = antigravity::auth_method(env);
+    tokio::time::timeout(
+        Duration::from_secs(300),
+        request(
+            stdin,
+            next_id,
+            pending,
+            "authenticate",
+            json!({"methodId": method}),
+        ),
+    )
+    .await
+    .map_err(|_| {
+        "Antigravity sign-in timed out. Complete Google sign-in in the browser and retry."
+            .to_string()
+    })?
+    .map_err(|e| format!("Antigravity authentication failed: {e}"))?;
+    Ok(())
+}
+
 /// Reattach to a previous agent session so it keeps its conversation context: `session/resume`
 /// when advertised (no history replay), else `session/load` (the agent replays the history as
 /// `session/update` notifications, which are dropped because no prompt is in flight). Returns
-/// `None` when the agent supports neither or the session can no longer be restored.
+/// [`ResumeOutcome::Failed`] when the agent supports neither or the session can no longer be
+/// restored, or [`ResumeOutcome::AuthRequired`] when Antigravity asks to sign in first.
+#[allow(clippy::too_many_arguments)]
 async fn resume_session(
     stdin: &Arc<AsyncMutex<ChildStdin>>,
     next_id: &Arc<AtomicI64>,
     pending: &Pending,
+    init: &Value,
     caps: &Value,
     cwd: &std::path::Path,
     session_id: &str,
     mcp_servers: &Value,
-) -> Option<Value> {
+) -> ResumeOutcome {
     let params = json!({
         "sessionId": session_id,
         "cwd": cwd.to_string_lossy(),
@@ -1270,28 +1322,31 @@ async fn resume_session(
         )
         .await;
         match res {
-            Ok(Ok(res)) => return Some(res),
-            Ok(Err(e)) => log::warn!("ACP {method} {session_id} failed: {e}"),
+            Ok(Ok(res)) => return ResumeOutcome::Resumed(res),
+            Ok(Err(e)) => {
+                if antigravity::needs_authentication(init, &e) {
+                    return ResumeOutcome::AuthRequired;
+                }
+                log::warn!("ACP {method} {session_id} failed: {e}");
+            }
             Err(_) => log::warn!("ACP {method} {session_id} timed out"),
         }
     }
-    None
+    ResumeOutcome::Failed
 }
 
 /// Extract the selectable model ids from a `session/new` response, supporting both adapter
-/// shapes: the current adapter exposes them under `configOptions` (a `model` select option),
-/// while the older `@zed-industries/claude-code-acp` used `models.availableModels`.
+/// shapes: the current adapter exposes them under `configOptions` (a `model` select option,
+/// flat or grouped), while the older `@zed-industries/claude-code-acp` used
+/// `models.availableModels`.
 fn parse_available_models(res: &Value) -> Vec<String> {
-    if let Some(opts) = res.get("configOptions").and_then(|c| c.as_array())
-        && let Some(model_opt) = opts
-            .iter()
-            .find(|o| o.get("id").and_then(|v| v.as_str()) == Some("model"))
-        && let Some(values) = model_opt.get("options").and_then(|o| o.as_array())
+    if let Some(opts) = res.get("configOptions")
+        && let Some(model_opt) = config_options::parse(opts)
+            .into_iter()
+            .find(config_options::AcpConfigOption::is_model)
+        && let config_options::AcpConfigKind::Select { values, .. } = model_opt.kind
     {
-        let ids: Vec<String> = values
-            .iter()
-            .filter_map(|o| o.get("value").and_then(|v| v.as_str()).map(String::from))
-            .collect();
+        let ids: Vec<String> = values.into_iter().map(|v| v.value).collect();
         if !ids.is_empty() {
             return ids;
         }
@@ -1322,30 +1377,23 @@ async fn set_matching_config_option(
     if value.is_empty() || value == "default" {
         return Ok(config_options.clone());
     }
-    let Some(option) = config_options.as_array().and_then(|opts| {
-        opts.iter().find(|o| {
-            o.get("id").and_then(Value::as_str) == Some(config_id)
-                || (config_id == "thought_level"
-                    && o.get("category").and_then(Value::as_str) == Some("thought_level"))
-        })
+    let parsed = config_options::parse(config_options);
+    let Some(option) = parsed.iter().find(|o| {
+        o.id == config_id
+            || (config_id == "model" && o.is_model())
+            || (config_id == "thought_level" && o.is_thought_level())
     }) else {
         return Ok(config_options.clone());
     };
-    let supported = option
-        .get("options")
-        .and_then(Value::as_array)
-        .is_some_and(|values| {
-            values
-                .iter()
-                .any(|v| v.get("value").and_then(Value::as_str) == Some(value))
-        });
+    let supported = matches!(
+        &option.kind,
+        config_options::AcpConfigKind::Select { values, .. }
+            if values.iter().any(|v| v.value == value)
+    );
     if !supported {
         return Ok(config_options.clone());
     }
-    let actual_id = option
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or(config_id);
+    let actual_id = option.id.as_str();
     let response = request(
         stdin,
         next_id,

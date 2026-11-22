@@ -159,14 +159,9 @@ pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usiz
 
 /// Primary section title inside a panel.
 pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) {
-    ui.label(
-        RichText::new(title)
-            .size(FS_H2)
-            .color(c_text_strong())
-            .strong(),
-    );
+    ui.label(strong_rich(title, FS_H2, c_text_strong()));
     if let Some(sub) = subtitle {
-        ui.add_space(3.0);
+        ui.add_space(4.0);
         ui.label(RichText::new(sub).size(FS_SMALL).color(c_text_muted()));
     }
     ui.add_space(18.0);
@@ -175,14 +170,7 @@ pub fn settings_section_title(ui: &mut Ui, title: &str, subtitle: Option<&str>) 
 /// Card header: caption + optional one-line helper. Returns nothing; just paints.
 pub fn settings_card_header(ui: &mut Ui, title: &str, help: Option<&str>) {
     let flash = ui.painter().add(egui::Shape::Noop);
-    let mut rect = ui
-        .label(
-            RichText::new(title)
-                .size(FS_BODY)
-                .color(c_text_strong())
-                .strong(),
-        )
-        .rect;
+    let mut rect = ui.label(strong_rich(title, FS_BODY, c_text_strong())).rect;
     if let Some(help) = help {
         ui.add_space(1.0);
         rect = rect.union(
@@ -1404,26 +1392,39 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
         Color32::TRANSPARENT
     };
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
-    keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
+        .rect_filled(rect, CornerRadius::same(RADIUS_CHIP), fill);
     if selected {
-        let rail = egui::Rect::from_min_max(
-            rect.left_top() + egui::vec2(0.0, 8.0),
-            rect.left_bottom() + egui::vec2(2.0, -8.0),
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(RADIUS_CHIP),
+            Stroke::new(1.0, c_border()),
+            egui::StrokeKind::Inside,
         );
-        ui.painter().rect_filled(rail, 1.0, c_accent());
     }
-    let text_color = if selected { c_text() } else { c_text_muted() };
+    keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_CHIP));
+    let text_color = if selected {
+        c_text_strong()
+    } else {
+        c_text_muted()
+    };
     ui.painter().text(
         egui::pos2(rect.left() + 18.0, rect.center().y),
         egui::Align2::CENTER_CENTER,
         icon,
         FontId::new(FS_SMALL, icon_font()),
-        if selected { c_accent() } else { c_text_faint() },
+        if selected {
+            c_text_strong()
+        } else {
+            c_text_faint()
+        },
     );
     let mut job = egui::text::LayoutJob::simple_singleline(
         label.to_owned(),
-        FontId::proportional(FS_SMALL),
+        if selected {
+            FontId::new(FS_SMALL, strong_font())
+        } else {
+            FontId::proportional(FS_SMALL)
+        },
         text_color,
     );
     job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 40.0).max(0.0));

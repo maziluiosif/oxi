@@ -239,6 +239,7 @@ fn normalize_model_key(model: &str) -> String {
         "openrouter/",
         "openai/",
         "anthropic/",
+        "google/",
     ] {
         if let Some(rest) = m.strip_prefix(prefix) {
             m = rest.to_string();
@@ -354,10 +355,19 @@ static CONTEXT_CATALOG: &[(&str, usize)] = &[
     ("o3", 200_000),
     ("o3-mini", 200_000),
 
-    // ── Google Gemini (also served via OpenCode Zen) ──────────────────────────
+    // ── Google Gemini (also served via OpenCode Zen / Antigravity) ───────────
+    ("gemini-4-carbon", 1_000_000),
+    ("gemini-4-neon", 1_000_000),
+    ("gemini-4-argon", 1_000_000),
+    ("gemini-4-hydrogen", 1_000_000),
+    ("gemini-4", 1_000_000),
+    ("gemini-3.5-pro", 1_000_000),
     ("gemini-3.5-flash", 1_000_000),
     ("gemini-3.1-pro", 1_000_000),
+    ("gemini-3-pro", 1_000_000),
     ("gemini-3-flash", 1_000_000),
+    ("gemini-2.5-pro", 1_000_000),
+    ("gemini-2.5-flash", 1_000_000),
 
     // ── DeepSeek native ───────────────────────────────────────────────────────
     ("deepseek-v3", 128_000),

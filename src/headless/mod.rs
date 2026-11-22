@@ -1853,6 +1853,7 @@ impl Server {
         let enabled = match kind {
             LlmProviderKind::ClaudeCodeAcp => Some(router.read_claude_code_usage),
             LlmProviderKind::CodexAcp => Some(router.read_codex_cli_usage),
+            LlmProviderKind::AntigravityAcp => Some(router.read_antigravity_usage),
             LlmProviderKind::GptCodex => Some(true),
             _ => None,
         };

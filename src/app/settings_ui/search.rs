@@ -401,7 +401,7 @@ const PROVIDER_ENTRIES: &[ProviderEntry] = &[
         Some(LlmProviderKind::Router),
         "Usage & quota",
         "Read subscription usage",
-        "router claude codex usage quota limits",
+        "router claude codex antigravity agy usage quota limits",
     ),
     (
         Some(LlmProviderKind::Router),
@@ -538,6 +538,7 @@ fn kind_keywords(kind: LlmProviderKind) -> &'static str {
     match kind {
         LlmProviderKind::ClaudeCodeAcp => "anthropic acp agent subscription",
         LlmProviderKind::CodexAcp | LlmProviderKind::GptCodex => "openai chatgpt gpt",
+        LlmProviderKind::AntigravityAcp => "google gemini agy acp agent subscription",
         LlmProviderKind::Router => "auto routing quota",
         _ => "",
     }
@@ -563,6 +564,18 @@ mod tests {
                 card: None,
             }
         )));
+        for query in ["gemini", "agy"] {
+            assert!(
+                search(query).iter().any(|hit| matches!(
+                    hit.target,
+                    SettingsTarget::Provider {
+                        kind: Some(LlmProviderKind::AntigravityAcp),
+                        card: None,
+                    }
+                )),
+                "{query}"
+            );
+        }
         // Fields inside the provider forms and the Router page are searchable too.
         for (query, card) in [
             ("api key", "Connection"),

@@ -66,6 +66,7 @@ pub fn supports_effort(kind: LlmProviderKind) -> bool {
             | LlmProviderKind::CodexAcp
             | LlmProviderKind::CursorAcp
             | LlmProviderKind::MuseCodeAcp
+            | LlmProviderKind::AntigravityAcp
     )
 }
 

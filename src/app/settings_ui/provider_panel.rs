@@ -71,9 +71,10 @@ impl OxiApp {
                             ui.add_space(6.0);
                             ui.label(
                                 RichText::new(
-                                    "The official server is downloaded on first launch. Sign in \
-                                     with Google in the browser when asked, or give a Gemini API \
-                                     key below.",
+                                    "Uses your installed `agy` CLI (`agy acp`) when present, or \
+                                     downloads the official server on first launch. Sign in with \
+                                     Google in the browser when asked, or give a Gemini API key \
+                                     below.",
                                 )
                                 .size(FS_TINY)
                                 .color(c_text_muted()),

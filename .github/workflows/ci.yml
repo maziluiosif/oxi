@@ -83,8 +83,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev
 
+      # Cached CMake build dirs keep absolute compiler paths, and a new runner image moves
+      # them (windows-check died on "CMAKE_ASM_COMPILER ... is not a full path to an existing
+      # compiler tool" for whisper-rs-sys), so each runner image gets its own cache.
+      - name: Record runner image
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         if: env.RUST == 'true'
+        with:
+          key: ${{ env.RUNNER_IMAGE }}
 
       - name: Validate GitHub Actions workflows
         uses: raven-actions/actionlint@v2
@@ -153,9 +162,16 @@ jobs:
         with:
           components: clippy
 
+      # Cached CMake build dirs keep absolute compiler paths, and a new runner image moves
+      # them (windows-check died on "CMAKE_ASM_COMPILER ... is not a full path to an existing
+      # compiler tool" for whisper-rs-sys), so each runner image gets its own cache.
+      - name: Record runner image
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
-          key: macos-check
+          key: macos-check-${{ env.RUNNER_IMAGE }}
 
       - name: cargo clippy
         run: cargo clippy --locked --all-targets -- -D warnings
@@ -184,9 +200,16 @@ jobs:
         with:
           components: clippy
 
+      # Cached CMake build dirs keep absolute compiler paths, and a new runner image moves
+      # them (windows-check died on "CMAKE_ASM_COMPILER ... is not a full path to an existing
+      # compiler tool" for whisper-rs-sys), so each runner image gets its own cache.
+      - name: Record runner image
+        shell: bash
+        run: echo "RUNNER_IMAGE=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
-          key: windows-check
+          key: windows-check-${{ env.RUNNER_IMAGE }}
 
       # Lint the cfg(windows) code too, so platform-specific warnings can't reach a release.
       - name: cargo clippy

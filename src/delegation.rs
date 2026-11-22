@@ -213,7 +213,9 @@ pub fn parse_provider(name: &str) -> Option<LlmProviderKind> {
         "codex" | "openai codex" | "codex cli" => Some(LlmProviderKind::CodexAcp),
         "cursor" => Some(LlmProviderKind::CursorAcp),
         "copilot" | "github copilot" => Some(LlmProviderKind::CopilotAcp),
-        "gemini" | "antigravity" => Some(LlmProviderKind::AntigravityAcp),
+        "gemini" | "antigravity" | "google antigravity" | "agy" => {
+            Some(LlmProviderKind::AntigravityAcp)
+        }
         "muse" | "muse code" => Some(LlmProviderKind::MuseCodeAcp),
         "opencode" | "open code" => Some(LlmProviderKind::OpenCodeAcp),
         _ => None,
@@ -487,6 +489,11 @@ mod tests {
         assert_eq!(
             parse_provider("openrouter"),
             Some(LlmProviderKind::OpenRouter)
+        );
+        assert_eq!(parse_provider("agy"), Some(LlmProviderKind::AntigravityAcp));
+        assert_eq!(
+            parse_provider("Google Antigravity"),
+            Some(LlmProviderKind::AntigravityAcp)
         );
         assert_eq!(parse_provider("nope"), None);
     }

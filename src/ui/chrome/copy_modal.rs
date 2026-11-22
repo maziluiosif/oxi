@@ -36,12 +36,33 @@ pub fn copy_chip(ui: &mut Ui, id: egui::Id, text: &str) {
 /// [`copy_chip`] that only builds the copied text when clicked.
 pub fn copy_chip_lazy(ui: &mut Ui, id: egui::Id, text: impl FnOnce() -> String) {
     let copied = copied_recently(ui.ctx(), id);
-    let (icon, label, ink) = if copied {
-        (ICON_CHECK, "Copied", crate::theme::c_success())
+    let resp = if copied {
+        flat_button_icon(
+            ui,
+            ICON_CHECK,
+            "Copied",
+            FS_TINY,
+            egui::vec2(0.0, 20.0),
+            crate::theme::c_success(),
+        )
     } else {
-        (ICON_COPY, "Copy", c_text_muted())
+        super::icon_button_core(
+            ui,
+            ICON_COPY,
+            egui::vec2(22.0, 20.0),
+            FS_TINY + 0.5,
+            false,
+            &super::IconButtonLook {
+                fill: egui::Color32::TRANSPARENT,
+                hover_fill: c_row_hover(),
+                stroke: egui::Color32::TRANSPARENT,
+                hover_stroke: egui::Color32::TRANSPARENT,
+                rounding: egui::CornerRadius::same(RADIUS_ROW),
+                glyph: c_text_muted(),
+            },
+        )
+        .on_hover_text("Copy")
     };
-    let resp = flat_button_icon(ui, icon, label, FS_TINY, egui::vec2(0.0, 18.0), ink);
     if resp.clicked() {
         ui.ctx().copy_text(text());
         mark_copied(ui.ctx(), id);

@@ -40,27 +40,23 @@ fn allocate_full_width_block(ui: &mut Ui, column_w: f32, add_contents: impl FnOn
 // All markdown sizes route through the shared type scale in `theme` (FS_*) so prose, code,
 // and headings stay uniform with the rest of the app.
 const SZ_BODY: f32 = FS_BODY;
-/// Floor for raw-HTML / math fallbacks shown in monospace; real inline `code` matches prose.
-const SZ_CODE_INLINE: f32 = FS_CODE;
+/// Compact monospace size for inline `code` pills so they balance visually inside body prose.
+const SZ_CODE_INLINE: f32 = 12.5;
 const SZ_CODE: f32 = FS_CODE;
 const SZ_TINY: f32 = FS_TINY;
 
-/// Lists are inset from body text so bullets do not sit flush on the column edge (Cursor-like).
-const LIST_BLOCK_MARGIN: f32 = 12.0;
+/// Clean Antigravity-style list inset and tight hanging bullet column.
+const LIST_BLOCK_MARGIN: f32 = 6.0;
 /// Left inset for a nested list, relative to the parent item text column.
-///
-/// Nested lists are rendered inside the parent item's content column, so applying the full
-/// root-list margin plus a depth multiplier here makes deeper items drift too far right and makes
-/// spacing look inconsistent between ordered/unordered combinations.
-const LIST_NESTED_MARGIN: f32 = 10.0;
-const LIST_BULLET_GAP: f32 = 8.0;
-const LIST_BULLET_COL_UNORD: f32 = 22.0;
+const LIST_NESTED_MARGIN: f32 = 12.0;
+const LIST_BULLET_GAP: f32 = 4.0;
+const LIST_BULLET_COL_UNORD: f32 = 14.0;
 /// Wide enough for two-digit ordered markers (`10.`).
-const LIST_BULLET_COL_ORD: f32 = 34.0;
+const LIST_BULLET_COL_ORD: f32 = 22.0;
 /// Gap after each list row. Also the target exterior gap *before* the first item when we swap margins.
-const LIST_GAP_AFTER_ITEM: f32 = 2.0;
-/// Must match `render_inline_until` Normal tail (`1.5`) + `render_paragraph` spacing (`4.0`): gap the preceding paragraph leaves before the next block.
-const PARA_GAP_BEFORE_NEXT_BLOCK: f32 = 1.5 + 4.0;
+const LIST_GAP_AFTER_ITEM: f32 = 6.0;
+/// Must match `render_inline_until` Normal tail (`2.0`) + `render_paragraph` spacing (`8.0`): gap the preceding paragraph leaves before the next block.
+const PARA_GAP_BEFORE_NEXT_BLOCK: f32 = 2.0 + 8.0;
 
 type ParserPeek<'a> = std::iter::Peekable<MarkdownParser<'a>>;
 
@@ -177,7 +173,7 @@ fn strip_quote_markers(quote: &str) -> String {
 
 #[inline]
 fn line_height_for_body_size(size: f32) -> f32 {
-    (size * 1.35).max(16.0)
+    (size * 1.55).max(18.0)
 }
 
 fn consume_until_end(it: &mut ParserPeek<'_>, end: TagEnd) {
@@ -335,8 +331,8 @@ fn render_list(
                 ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
                     ui.add_space(block_left);
                     ui.allocate_ui_with_layout(
-                        vec2(bullet_col, 0.0),
-                        Layout::left_to_right(Align::TOP),
+                        vec2(bullet_col, line_height_for_body_size(SZ_BODY)),
+                        Layout::left_to_right(Align::Center),
                         |ui| {
                             ui.label(
                                 RichText::new(bullet)

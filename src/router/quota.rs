@@ -8,6 +8,8 @@
 //! - **Claude Code (ACP)**: `GET api.anthropic.com/api/oauth/usage` (what Claude Code's `/usage`
 //!   shows) with Claude Code's OAuth token, opt-in. The token is never refreshed here: refreshing
 //!   rotates the refresh token and would sign Claude Code out.
+//! - **Antigravity (ACP)**: `agy --print /usage --output-format json` (what Antigravity CLI's
+//!   `/usage` shows) using `agy`'s own login, opt-in.
 //! - **OpenRouter**: `GET /api/v1/key` for credit left, `GET /api/v1/models` for live prices.
 //! - Anything else: rate-limit / quota errors put the provider on a cooldown.
 //!
@@ -364,6 +366,14 @@ pub async fn refresh(settings: &AppSettings, force: bool) {
             store(LlmProviderKind::ClaudeCodeAcp, r);
         }
     };
+    let antigravity = async {
+        if has(LlmProviderKind::AntigravityAcp) && settings.router.read_antigravity_usage {
+            store(
+                LlmProviderKind::AntigravityAcp,
+                probe_antigravity_cli().await,
+            );
+        }
+    };
     let openrouter = async {
         if has(LlmProviderKind::OpenRouter) {
             let cfg = settings.provider(LlmProviderKind::OpenRouter);
@@ -380,7 +390,7 @@ pub async fn refresh(settings: &AppSettings, force: bool) {
             }
         }
     };
-    futures_util::join!(codex_oxi, codex_cli, claude, openrouter);
+    futures_util::join!(codex_oxi, codex_cli, claude, antigravity, openrouter);
 }
 
 async fn get_json(req: reqwest::RequestBuilder) -> Result<Value, String> {
@@ -587,6 +597,466 @@ pub(crate) fn parse_claude_usage(v: &Value) -> QuotaSnapshot {
         updated_at: now_secs(),
         ..Default::default()
     }
+}
+
+/// Ask the `agy` CLI for its `/usage` quota summary (`agy --print /usage --output-format json`).
+/// Antigravity reads its own login, so oxi never touches Google credentials directly, and `/usage`
+/// runs without sending a model prompt.
+async fn probe_antigravity_cli() -> Result<QuotaSnapshot, String> {
+    let mut cmd = tokio::process::Command::new("agy");
+    crate::shell_env::apply_async(&mut cmd).await;
+    cmd.args(["--print", "/usage", "--output-format", "json"])
+        .current_dir(std::env::temp_dir())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    let out = tokio::time::timeout(Duration::from_secs(20), cmd.output())
+        .await
+        .map_err(|_| "agy CLI: /usage request timed out".to_string())?
+        .map_err(|e| format!("could not start the agy CLI: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    match parse_antigravity_usage_output(&stdout) {
+        Ok(mut snap) => {
+            snap.source = "Antigravity usage (agy CLI)".into();
+            Ok(snap)
+        }
+        Err(e) => {
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let msg = stderr
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .trim();
+                if !msg.is_empty() {
+                    return Err(format!("agy /usage failed: {msg}"));
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+pub(crate) fn parse_antigravity_usage_output(stdout: &str) -> Result<QuotaSnapshot, String> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Err("agy CLI returned no usage data".into());
+    }
+    let json = serde_json::from_str::<Value>(trimmed).ok().or_else(|| {
+        trimmed
+            .lines()
+            .rev()
+            .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+    });
+    if let Some(v) = json {
+        return parse_antigravity_usage(&v);
+    }
+    parse_antigravity_usage_text(trimmed)
+}
+
+/// Lenient parser for `agy --print /usage --output-format json`. Handles:
+/// - `{ command: { status, data: { groups: [{ family, buckets: [{ id, window, remaining_fraction,
+///   reset_time, reset_in_seconds }] }] } } }` (or `data.groups` / `quota_summary.groups` / `groups`),
+/// - `{ models: [{ name, remaining, resets_in }] }`,
+/// - `{ response: "<rendered /usage text>" }` fallback.
+pub(crate) fn parse_antigravity_usage(v: &Value) -> Result<QuotaSnapshot, String> {
+    let now = now_secs();
+    for status_node in [v.get("status"), v.pointer("/command/status")]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(s) = status_node.as_str()
+            && !s.is_empty()
+            && !s.eq_ignore_ascii_case("success")
+            && !s.eq_ignore_ascii_case("ok")
+        {
+            let detail = v["error"]
+                .as_str()
+                .or_else(|| v.pointer("/command/error").and_then(Value::as_str))
+                .or_else(|| v["message"].as_str())
+                .unwrap_or(s);
+            return Err(format!("agy /usage failed: {detail}"));
+        }
+    }
+    let plan = v
+        .pointer("/command/data/plan")
+        .or_else(|| v.pointer("/command/data/plan_tier"))
+        .or_else(|| v.pointer("/command/data/tier"))
+        .or_else(|| v.pointer("/data/plan"))
+        .or_else(|| v.pointer("/data/plan_tier"))
+        .or_else(|| v.get("plan"))
+        .or_else(|| v.get("plan_tier"))
+        .or_else(|| v.get("tier"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let mut windows = Vec::new();
+    let groups = v
+        .pointer("/command/data/groups")
+        .or_else(|| v.pointer("/data/groups"))
+        .or_else(|| v.pointer("/quota_summary/groups"))
+        .or_else(|| v.pointer("/quotaSummary/groups"))
+        .or_else(|| v.get("groups"))
+        .and_then(Value::as_array);
+    if let Some(groups) = groups {
+        let multi_group = groups.len() > 1;
+        for group in groups {
+            let family = group["family"]
+                .as_str()
+                .or_else(|| group["name"].as_str())
+                .or_else(|| group["label"].as_str())
+                .unwrap_or("")
+                .trim();
+            let (prefix, scope) = antigravity_family_scope(family, multi_group);
+            let buckets = group["buckets"]
+                .as_array()
+                .or_else(|| group["windows"].as_array());
+            for bucket in buckets.into_iter().flatten() {
+                let Some(used_pct) = bucket_used_pct(bucket) else {
+                    continue;
+                };
+                let raw_win = bucket["window"]
+                    .as_str()
+                    .or_else(|| bucket["label"].as_str())
+                    .or_else(|| bucket["id"].as_str())
+                    .unwrap_or("");
+                let win = normalize_antigravity_window(raw_win);
+                let label = match (prefix.is_empty(), win.is_empty()) {
+                    (true, true) => "quota".to_string(),
+                    (true, false) => win,
+                    (false, true) => prefix.clone(),
+                    (false, false) => format!("{prefix} {win}"),
+                };
+                let resets_at = parse_reset_timestamp(bucket, now);
+                windows.push(UsageWindow {
+                    label,
+                    used_pct,
+                    resets_at,
+                    model_scope: scope.clone(),
+                });
+            }
+        }
+    }
+
+    if windows.is_empty()
+        && let Some(models) = v
+            .pointer("/command/data/models")
+            .or_else(|| v.pointer("/data/models"))
+            .or_else(|| v.get("models"))
+            .and_then(Value::as_array)
+    {
+        for model in models {
+            let Some(used_pct) = bucket_used_pct(model) else {
+                continue;
+            };
+            let name = model["name"]
+                .as_str()
+                .or_else(|| model["display_name"].as_str())
+                .or_else(|| model["id"].as_str())
+                .unwrap_or("")
+                .trim();
+            let (prefix, scope) = antigravity_family_scope(name, true);
+            let label = if prefix.is_empty() {
+                if name.is_empty() {
+                    "quota".to_string()
+                } else {
+                    name.to_string()
+                }
+            } else {
+                prefix
+            };
+            let resets_at = parse_reset_timestamp(model, now);
+            // Models in the same billing pool share one meter; merge identical labels keeping
+            // the fullest reading and earliest reset.
+            if let Some(existing) = windows
+                .iter_mut()
+                .find(|w| w.label == label && w.model_scope == scope)
+            {
+                existing.used_pct = existing.used_pct.max(used_pct);
+                existing.resets_at = match (existing.resets_at, resets_at) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+            } else {
+                windows.push(UsageWindow {
+                    label,
+                    used_pct,
+                    resets_at,
+                    model_scope: scope,
+                });
+            }
+        }
+    }
+
+    if windows.is_empty()
+        && let Some(response) = v["response"]
+            .as_str()
+            .or_else(|| v["result"].as_str())
+            .filter(|s| !s.trim().is_empty())
+    {
+        let mut snap = parse_antigravity_usage_text(response)?;
+        if snap.plan.is_none() {
+            snap.plan = plan;
+        }
+        return Ok(snap);
+    }
+
+    if windows.is_empty() {
+        return Err("Antigravity CLI returned no quota windows".into());
+    }
+    let unscoped_any = windows.iter().any(|w| w.model_scope.is_none());
+    let limit_reached = windows
+        .iter()
+        .filter(|w| !unscoped_any || w.model_scope.is_none())
+        .any(|w| w.used_pct >= 100.0);
+    Ok(QuotaSnapshot {
+        windows,
+        plan,
+        limit_reached,
+        updated_at: now,
+        ..Default::default()
+    })
+}
+
+/// Fallback parser when `/usage` arrives as rendered text (e.g. `Gemini 3 Pro: 85% remaining (resets in 4h 30m)`).
+fn parse_antigravity_usage_text(text: &str) -> Result<QuotaSnapshot, String> {
+    let now = now_secs();
+    let clean = strip_ansi(text);
+    let mut windows = Vec::new();
+    for line in clean.lines() {
+        let line = line.trim();
+        let Some(pct_idx) = line.find('%') else {
+            continue;
+        };
+        let before = line[..pct_idx].trim_end();
+        let num_start = before
+            .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let Ok(pct) = before[num_start..].parse::<f64>() else {
+            continue;
+        };
+        let lower = line.to_ascii_lowercase();
+        let used_pct = if lower.contains("remain") || lower.contains("left") {
+            (100.0 - pct).clamp(0.0, 100.0)
+        } else {
+            pct.clamp(0.0, 100.0)
+        };
+        let head = before[..num_start]
+            .trim()
+            .trim_end_matches([':', '-', '·', '|'])
+            .trim();
+        let (prefix, scope) = antigravity_family_scope(head, true);
+        let win = normalize_antigravity_window(head);
+        let label = match (prefix.is_empty(), win.is_empty()) {
+            (true, true) => {
+                if head.is_empty() {
+                    "quota".to_string()
+                } else {
+                    head.to_string()
+                }
+            }
+            (true, false) => win,
+            (false, true) => prefix,
+            (false, false) => format!("{prefix} {win}"),
+        };
+        let resets_at = extract_reset_from_text(&lower, now);
+        if let Some(existing) = windows
+            .iter_mut()
+            .find(|w: &&mut UsageWindow| w.label == label && w.model_scope == scope)
+        {
+            existing.used_pct = existing.used_pct.max(used_pct);
+            existing.resets_at = existing.resets_at.or(resets_at);
+        } else {
+            windows.push(UsageWindow {
+                label,
+                used_pct,
+                resets_at,
+                model_scope: scope,
+            });
+        }
+    }
+    if windows.is_empty() {
+        return Err("could not parse Antigravity /usage output".into());
+    }
+    let unscoped_any = windows.iter().any(|w| w.model_scope.is_none());
+    let limit_reached = windows
+        .iter()
+        .filter(|w| !unscoped_any || w.model_scope.is_none())
+        .any(|w| w.used_pct >= 100.0);
+    Ok(QuotaSnapshot {
+        windows,
+        limit_reached,
+        updated_at: now,
+        ..Default::default()
+    })
+}
+
+/// Short status-bar prefix + router `model_scope` for an Antigravity quota group.
+/// The primary Gemini pool stays unscoped (`None`) so default-model chats and status bars
+/// always see it; secondary model pools (Claude/GPT, Argon) carry a model scope.
+fn antigravity_family_scope(family: &str, multi_group: bool) -> (String, Option<String>) {
+    let lower = family.to_ascii_lowercase();
+    if lower.contains("claude") || lower.contains("gpt") || lower.contains("third") {
+        let label = if lower.contains("claude") && lower.contains("gpt") {
+            "Claude/GPT"
+        } else if lower.contains("claude") {
+            "Claude"
+        } else {
+            "GPT"
+        };
+        return (label.into(), Some("claude".into()));
+    }
+    if lower.contains("argon") {
+        return ("Argon".into(), Some("argon".into()));
+    }
+    if lower.contains("gemini") {
+        let prefix = if multi_group { "Gemini" } else { "" };
+        return (prefix.into(), None);
+    }
+    (String::new(), None)
+}
+
+fn normalize_antigravity_window(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("5h") || lower.contains("5 hour") {
+        "5h".into()
+    } else if lower.contains("7d") || lower.contains("7 day") || lower.contains("week") {
+        "7d".into()
+    } else if lower.contains("24h") || lower.contains("1 day") || lower.contains("daily") {
+        "24h".into()
+    } else if lower.contains("hour") || lower.contains("day") || lower.contains("min") {
+        raw.trim().to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn bucket_used_pct(v: &Value) -> Option<f64> {
+    if let Some(rem) = as_f64(&v["remaining_fraction"]).or_else(|| as_f64(&v["remainingFraction"]))
+    {
+        return Some(((1.0 - rem) * 100.0).clamp(0.0, 100.0));
+    }
+    if let Some(used) = as_f64(&v["used_fraction"]).or_else(|| as_f64(&v["usedFraction"])) {
+        return Some((used * 100.0).clamp(0.0, 100.0));
+    }
+    if let Some(used) = as_f64(&v["used_percent"])
+        .or_else(|| as_f64(&v["usedPercent"]))
+        .or_else(|| as_f64(&v["utilization"]))
+    {
+        return Some(used.clamp(0.0, 100.0));
+    }
+    if let Some(rem) = as_percent(&v["remaining_percent"])
+        .or_else(|| as_percent(&v["remainingPercent"]))
+        .or_else(|| as_percent(&v["remaining"]))
+    {
+        return Some((100.0 - rem).clamp(0.0, 100.0));
+    }
+    None
+}
+
+fn as_percent(v: &Value) -> Option<f64> {
+    v.as_f64().or_else(|| {
+        v.as_str()
+            .map(str::trim)
+            .and_then(|s| s.strip_suffix('%').unwrap_or(s).trim().parse::<f64>().ok())
+    })
+}
+
+fn parse_reset_timestamp(v: &Value, now: u64) -> Option<u64> {
+    for key in ["reset_time", "resetTime", "resets_at", "resetsAt"] {
+        let node = &v[key];
+        if let Some(s) = node.as_str()
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s)
+        {
+            return Some(dt.timestamp().max(0) as u64);
+        }
+        if let Some(ts) = as_f64(node) {
+            return Some(ts.max(0.0) as u64);
+        }
+    }
+    for key in [
+        "reset_in_seconds",
+        "resetInSeconds",
+        "reset_after_seconds",
+        "resetAfterSeconds",
+    ] {
+        if let Some(secs) = as_f64(&v[key]) {
+            return Some(now + secs.max(0.0) as u64);
+        }
+    }
+    for key in ["resets_in", "resetsIn"] {
+        if let Some(s) = v[key].as_str()
+            && let Some(secs) = parse_duration_secs(s)
+        {
+            return Some(now + secs);
+        }
+    }
+    None
+}
+
+fn extract_reset_from_text(lower: &str, now: u64) -> Option<u64> {
+    let idx = lower.find("reset")?;
+    parse_duration_secs(&lower[idx..]).map(|secs| now + secs)
+}
+
+/// Parse compact human durations like `"4h 59m"`, `"2d 3h"`, `"105h 49m"`, `"45s"`.
+fn parse_duration_secs(s: &str) -> Option<u64> {
+    let mut total: u64 = 0;
+    let mut found = false;
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let Ok(n) = s[start..i].parse::<u64>() else {
+            continue;
+        };
+        let unit_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+            i += 1;
+        }
+        let mult = match &s[unit_start..i] {
+            "d" | "day" | "days" => 86_400,
+            "h" | "hr" | "hrs" | "hour" | "hours" => 3_600,
+            "m" | "min" | "mins" | "minute" | "minutes" => 60,
+            "s" | "sec" | "secs" | "second" | "seconds" => 1,
+            _ => continue,
+        };
+        total = total.saturating_add(n.saturating_mul(mult));
+        found = true;
+    }
+    found.then_some(total)
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 async fn probe_openrouter_key(
@@ -800,5 +1270,100 @@ mod tests {
         assert!(!is_quota_error("HTTP 404: model not found"));
         assert!(!is_quota_error("Could not read credits configuration"));
         assert!(!is_quota_error("Invalid quota settings"));
+    }
+
+    #[test]
+    fn parses_antigravity_groups_payload() {
+        let v = json!({
+            "command": {
+                "status": "SUCCESS",
+                "data": {
+                    "plan_tier": "pro",
+                    "groups": [
+                        {
+                            "family": "Gemini Models",
+                            "buckets": [
+                                {
+                                    "id": "gemini-5h",
+                                    "window": "5 hours",
+                                    "remaining_fraction": 0.75,
+                                    "reset_time": "2099-01-01T00:00:00Z"
+                                },
+                                {
+                                    "id": "gemini-weekly",
+                                    "window": "7 days",
+                                    "remaining_fraction": 0.60,
+                                    "reset_in_seconds": 3600
+                                }
+                            ]
+                        },
+                        {
+                            "family": "Claude and GPT models",
+                            "buckets": [
+                                {
+                                    "id": "claude-weekly",
+                                    "window": "7 days",
+                                    "remaining_fraction": 0.20,
+                                    "reset_time": "2099-01-03T00:00:00Z"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        });
+        let s = parse_antigravity_usage(&v).unwrap();
+        assert_eq!(s.plan.as_deref(), Some("pro"));
+        assert_eq!(s.windows.len(), 3);
+        assert_eq!(s.windows[0].label, "Gemini 5h");
+        assert!((s.windows[0].used_pct - 25.0).abs() < 1e-6);
+        assert_eq!(s.windows[0].model_scope, None);
+        assert_eq!(s.windows[1].label, "Gemini 7d");
+        assert!((s.windows[1].used_pct - 40.0).abs() < 1e-6);
+        assert_eq!(s.windows[2].label, "Claude/GPT 7d");
+        assert!((s.windows[2].used_pct - 80.0).abs() < 1e-6);
+        assert_eq!(s.windows[2].model_scope.as_deref(), Some("claude"));
+        assert!(!s.limit_reached);
+        assert!((s.used_pct_for("gemini-4-neon").unwrap() - 40.0).abs() < 1e-6);
+        assert!((s.used_pct_for("claude-sonnet-4-6").unwrap() - 80.0).abs() < 1e-6);
+        assert!((s.used_pct_for("default").unwrap() - 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parses_antigravity_models_and_text_fallbacks() {
+        let models = json!({
+            "status": "success",
+            "models": [
+                {"name": "Claude Sonnet 4.5", "remaining": "N/A", "resets_in": "105h 49m"},
+                {"name": "Gemini 3 Flash", "remaining": "90%", "resets_in": "4h 59m"},
+                {"name": "Gemini 3 Pro (High)", "remaining": "65%", "resets_in": "2h 10m"}
+            ]
+        });
+        let s = parse_antigravity_usage(&models).unwrap();
+        assert_eq!(s.windows.len(), 1);
+        assert_eq!(s.windows[0].label, "Gemini");
+        assert!((s.windows[0].used_pct - 35.0).abs() < 1e-6);
+        assert!(s.windows[0].resets_at.is_some());
+
+        let text_wrapped = json!({
+            "status": "SUCCESS",
+            "response": "\x1b[1mGemini 5h:\x1b[0m 80% remaining (resets in 3h 15m)\nClaude 7d: 50% used (resets in 2d 1h)"
+        });
+        let s = parse_antigravity_usage(&text_wrapped).unwrap();
+        assert_eq!(s.windows.len(), 2);
+        assert!((s.windows[0].used_pct - 20.0).abs() < 1e-6);
+        assert!((s.windows[1].used_pct - 50.0).abs() < 1e-6);
+
+        let err = json!({"status": "ERROR", "error": "not signed in"});
+        assert!(parse_antigravity_usage(&err).is_err());
+    }
+
+    /// Runs the real `agy` CLI (needs an Antigravity login), so it's ignored by default:
+    /// `cargo test -- --ignored antigravity_cli_reports_usage`.
+    #[tokio::test]
+    #[ignore]
+    async fn antigravity_cli_reports_usage() {
+        let snap = probe_antigravity_cli().await.unwrap();
+        assert!(!snap.windows.is_empty(), "{snap:?}");
     }
 }

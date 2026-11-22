@@ -29,11 +29,10 @@ pub(super) enum InlineDensity {
 
 impl InlineDensity {
     pub(super) fn line_height(self, size: f32) -> f32 {
-        // One line-height for all flowing prose (paragraphs and list items) so a wrapped list
-        // line matches a wrapped paragraph line. List compactness comes from the inter-item gap
-        // (`LIST_GAP_AFTER_ITEM`) and the zero tail below, not from a tighter line-height.
+        // One airy line-height for all flowing prose (paragraphs and list items) so wrapped lines
+        // breathe comfortably without crowding inline code pills.
         match self {
-            InlineDensity::Normal | InlineDensity::ListItem => (size * 1.35).max(16.0),
+            InlineDensity::Normal | InlineDensity::ListItem => (size * 1.55).max(18.0),
         }
     }
 }
@@ -58,12 +57,10 @@ pub(super) fn inline_text_format(
 }
 
 pub(super) fn inline_code_format(density: InlineDensity) -> TextFormat {
-    // Use the same proportional font and size as the surrounding prose so inline code shares
-    // its exact baseline — the monospace font's much shorter ascent (Ubuntu Mono ~0.83 vs
-    // Noto Sans ~1.07) made code glyphs ride above the text line. The code styling now comes
-    // from the background tint and color, not a different typeface.
+    // Monospace at a slightly tighter optical size inside a rounded pill (all bundled code
+    // faces are optically centered so the glyphs sit cleanly on the prose line).
     let lh = density.line_height(SZ_BODY);
-    let mut f = TextFormat::simple(FontId::proportional(SZ_BODY), c_md_code_fg());
+    let mut f = TextFormat::simple(FontId::monospace(SZ_CODE_INLINE), c_md_code_fg());
     f.background = c_md_code_bg();
     f.line_height = Some(lh);
     f.valign = Align::Center;
@@ -173,7 +170,7 @@ pub(super) fn fmt_body(size: f32, strong: u32) -> TextFormat {
     } else {
         c_text()
     };
-    let lh = (size * 1.35).max(16.0);
+    let lh = (size * 1.55).max(18.0);
     let mut f = TextFormat::simple(prose_font(size, strong), color);
     f.line_height = Some(lh);
     f.valign = Align::Center;
@@ -197,124 +194,140 @@ pub(super) fn render_inline_until(
     density: InlineDensity,
 ) {
     // Inline images participate in the same wrapping row as the surrounding text. Links
-    // stay inside the text galley so selection and copying remain continuous.
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
+    // stay inside the text galley so selection and copying remain continuous. Use zero
+    // initial height instead of `horizontal_wrapped`'s `interact_size.y` (24 pt) so single-
+    // and multi-line list items start at the exact same y as their bullet.
+    ui.allocate_ui_with_layout(
+        eframe::egui::vec2(ui.available_size_before_wrap().x, 0.0),
+        eframe::egui::Layout::left_to_right(Align::Center).with_main_wrap(true),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
 
-        let mut job = LayoutJob::default();
-        set_job_wrap(&mut job, wrap_w);
+            let mut job = LayoutJob::default();
+            set_job_wrap(&mut job, wrap_w);
 
-        let mut links = Vec::new();
-        let mut active_link: Option<(usize, usize, String)> = None;
-        let mut bold = 0u32;
-        let mut italic = 0u32;
-        let mut strike = 0u32;
-        while let Some(ev) = it.next() {
-            match (&ev, end) {
-                (Event::End(TagEnd::Paragraph), InlineEnd::Paragraph) => break,
-                (Event::End(TagEnd::Item), InlineEnd::Item) => break,
-                _ => {}
-            }
-            match ev {
-                Event::Start(Tag::Strong) => bold += 1,
-                Event::End(TagEnd::Strong) => bold = bold.saturating_sub(1),
-                Event::Start(Tag::Emphasis) => italic += 1,
-                Event::End(TagEnd::Emphasis) => italic = italic.saturating_sub(1),
-                Event::Start(Tag::Strikethrough) => strike += 1,
-                Event::End(TagEnd::Strikethrough) => strike = strike.saturating_sub(1),
-                Event::Text(t) => {
-                    let mut tf = inline_text_format(SZ_BODY, bold, italic > 0, density);
-                    if strike > 0 {
-                        tf.strikethrough = Stroke::new(1.0, c_text());
-                    }
-                    job.append(t.as_ref(), 0.0, tf);
+            let mut links = Vec::new();
+            let mut active_link: Option<(usize, usize, String)> = None;
+            let mut bold = 0u32;
+            let mut italic = 0u32;
+            let mut strike = 0u32;
+            while let Some(ev) = it.next() {
+                match (&ev, end) {
+                    (Event::End(TagEnd::Paragraph), InlineEnd::Paragraph) => break,
+                    (Event::End(TagEnd::Item), InlineEnd::Item) => break,
+                    _ => {}
                 }
-                Event::Code(c) => {
-                    job.append(c.as_ref(), 0.0, inline_code_format(density));
-                }
-                Event::SoftBreak => {
-                    job.append(
-                        " ",
-                        0.0,
-                        inline_text_format(SZ_BODY, bold, italic > 0, density),
-                    );
-                }
-                Event::HardBreak => {
-                    job.append(
-                        "\n",
-                        0.0,
-                        inline_text_format(SZ_BODY, bold, italic > 0, density),
-                    );
-                }
-                Event::Start(Tag::Link { dest_url, .. }) => {
-                    active_link = Some((
-                        job.text.chars().count(),
-                        job.text.len(),
-                        dest_url.into_string(),
-                    ));
-                }
-                Event::End(TagEnd::Link) => {
-                    finish_link(&mut job, &mut links, active_link.take());
-                }
-                Event::Start(Tag::Image { dest_url, .. }) => {
-                    if !job.text.is_empty() {
-                        if let Some((start, section, url)) = active_link.take() {
-                            finish_link(&mut job, &mut links, Some((start, section, url.clone())));
-                            active_link = Some((0, 0, url));
+                match ev {
+                    Event::Start(Tag::Strong) => bold += 1,
+                    Event::End(TagEnd::Strong) => bold = bold.saturating_sub(1),
+                    Event::Start(Tag::Emphasis) => italic += 1,
+                    Event::End(TagEnd::Emphasis) => italic = italic.saturating_sub(1),
+                    Event::Start(Tag::Strikethrough) => strike += 1,
+                    Event::End(TagEnd::Strikethrough) => strike = strike.saturating_sub(1),
+                    Event::Text(t) => {
+                        let mut tf = inline_text_format(SZ_BODY, bold, italic > 0, density);
+                        if strike > 0 {
+                            tf.strikethrough = Stroke::new(1.0, c_text());
                         }
-                        selectable_text_job_with_links(ui, std::mem::take(&mut job), &links);
-                        links.clear();
-                        set_job_wrap(&mut job, wrap_w);
+                        job.append(t.as_ref(), 0.0, tf);
                     }
-                    let mut alt = String::new();
-                    while let Some(inner) = it.next() {
-                        match inner {
-                            Event::End(TagEnd::Image) => break,
-                            Event::Text(t) => alt.push_str(t.as_ref()),
-                            Event::Code(c) => alt.push_str(c.as_ref()),
-                            Event::SoftBreak => alt.push(' '),
-                            Event::HardBreak => alt.push('\n'),
-                            Event::Start(nested) => consume_until_end(it, nested.to_end()),
-                            _ => {}
+                    Event::Code(c) => {
+                        job.append(c.as_ref(), 0.0, inline_code_format(density));
+                    }
+                    Event::SoftBreak => {
+                        job.append(
+                            " ",
+                            0.0,
+                            inline_text_format(SZ_BODY, bold, italic > 0, density),
+                        );
+                    }
+                    Event::HardBreak => {
+                        job.append(
+                            "\n",
+                            0.0,
+                            inline_text_format(SZ_BODY, bold, italic > 0, density),
+                        );
+                    }
+                    Event::Start(Tag::Link { dest_url, .. }) => {
+                        active_link = Some((
+                            job.text.chars().count(),
+                            job.text.len(),
+                            dest_url.into_string(),
+                        ));
+                    }
+                    Event::End(TagEnd::Link) => {
+                        finish_link(&mut job, &mut links, active_link.take());
+                    }
+                    Event::Start(Tag::Image { dest_url, .. }) => {
+                        if !job.text.is_empty() {
+                            if let Some((start, section, url)) = active_link.take() {
+                                finish_link(
+                                    &mut job,
+                                    &mut links,
+                                    Some((start, section, url.clone())),
+                                );
+                                active_link = Some((0, 0, url));
+                            }
+                            selectable_text_job_with_links(ui, std::mem::take(&mut job), &links);
+                            links.clear();
+                            set_job_wrap(&mut job, wrap_w);
                         }
+                        let mut alt = String::new();
+                        while let Some(inner) = it.next() {
+                            match inner {
+                                Event::End(TagEnd::Image) => break,
+                                Event::Text(t) => alt.push_str(t.as_ref()),
+                                Event::Code(c) => alt.push_str(c.as_ref()),
+                                Event::SoftBreak => alt.push(' '),
+                                Event::HardBreak => alt.push('\n'),
+                                Event::Start(nested) => consume_until_end(it, nested.to_end()),
+                                _ => {}
+                            }
+                        }
+                        render_markdown_inline_image(
+                            ui,
+                            wrap_w,
+                            dest_url.as_ref(),
+                            alt.trim(),
+                            false,
+                        );
                     }
-                    render_markdown_inline_image(ui, wrap_w, dest_url.as_ref(), alt.trim(), false);
+                    Event::Html(t) | Event::InlineHtml(t) => {
+                        append_inline_fallback(
+                            &mut job,
+                            wrap_w,
+                            t.as_ref(),
+                            density.line_height(SZ_BODY),
+                        );
+                    }
+                    Event::FootnoteReference(t) => {
+                        let s = format!("[^{}]", t);
+                        job.append(
+                            &s,
+                            0.0,
+                            inline_text_format(SZ_BODY, bold, italic > 0, density),
+                        );
+                    }
+                    Event::TaskListMarker(done) => {
+                        let mark = if done { "☑ " } else { "☐ " };
+                        job.append(
+                            mark,
+                            0.0,
+                            inline_text_format(SZ_BODY, bold, italic > 0, density),
+                        );
+                    }
+                    Event::InlineMath(t) | Event::DisplayMath(t) => {
+                        job.append(t.as_ref(), 0.0, inline_code_format(density));
+                    }
+                    _ => {}
                 }
-                Event::Html(t) | Event::InlineHtml(t) => {
-                    append_inline_fallback(
-                        &mut job,
-                        wrap_w,
-                        t.as_ref(),
-                        density.line_height(SZ_CODE_INLINE),
-                    );
-                }
-                Event::FootnoteReference(t) => {
-                    let s = format!("[^{}]", t);
-                    job.append(
-                        &s,
-                        0.0,
-                        inline_text_format(SZ_BODY, bold, italic > 0, density),
-                    );
-                }
-                Event::TaskListMarker(done) => {
-                    let mark = if done { "☑ " } else { "☐ " };
-                    job.append(
-                        mark,
-                        0.0,
-                        inline_text_format(SZ_BODY, bold, italic > 0, density),
-                    );
-                }
-                Event::InlineMath(t) | Event::DisplayMath(t) => {
-                    job.append(t.as_ref(), 0.0, inline_code_format(density));
-                }
-                _ => {}
             }
-        }
-        finish_link(&mut job, &mut links, active_link.take());
-        selectable_text_job_with_links(ui, job, &links);
-    });
+            finish_link(&mut job, &mut links, active_link.take());
+            selectable_text_job_with_links(ui, job, &links);
+        },
+    );
     let tail = match (end, density) {
-        (InlineEnd::Paragraph | InlineEnd::Item, InlineDensity::Normal) => 1.5,
+        (InlineEnd::Paragraph | InlineEnd::Item, InlineDensity::Normal) => 2.0,
         (InlineEnd::Paragraph | InlineEnd::Item, InlineDensity::ListItem) => 0.0,
     };
     ui.add_space(tail);
@@ -509,5 +522,118 @@ mod link_selection_tests {
                 .any(|command| matches!(command,
             egui::OutputCommand::CopyText(text) if text.contains("Și înainte open source")))
         );
+    }
+
+    #[test]
+    fn inline_code_aligns_vertically_with_prose_and_pill_across_bundled_fonts() {
+        let pairs = [
+            ("default", "default"),
+            ("bundled:noto_sans", "bundled:lilex"),
+            ("bundled:ibm_plex_sans", "bundled:lilex"),
+            ("bundled:noto_sans", "bundled:ubuntu_mono"),
+        ];
+        for (ui_font, mono_font) in pairs {
+            let ctx = egui::Context::default();
+            crate::theme::setup_style(&ctx);
+            ctx.set_fonts(crate::theme::font_definitions(
+                &crate::theme::FontSelection {
+                    ui: ui_font.into(),
+                    mono: mono_font.into(),
+                },
+            ));
+            let render = || {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(600.0, 200.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        crate::markdown::render_markdown(ui, "1. Hx `Hx` Hx\n\n- xoxo `xoxo` xoxo");
+                    },
+                )
+            };
+            // Frame 1 applies `set_fonts`; frames 2 and 3 verify cached galleys do not double-shift.
+            let _ = render();
+            let frame2 = render();
+            let frame3 = render();
+
+            let glyph_center_y = |output: &egui::FullOutput,
+                                  needle: &str,
+                                  range: std::ops::Range<usize>| {
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.text() == needle => Some(t),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing text {needle:?} for {ui_font}/{mono_font}"));
+                let row = &text.galley.rows[0];
+                let end = row.row.visuals.glyph_vertex_range.end;
+                let mut min_y = f32::INFINITY;
+                let mut max_y = f32::NEG_INFINITY;
+                for idx in range {
+                    let v_start = row.row.glyphs[idx].first_vertex as usize;
+                    let v_end = row
+                        .row
+                        .glyphs
+                        .get(idx + 1)
+                        .map_or(end, |g| g.first_vertex as usize);
+                    for v in &row.row.visuals.mesh.vertices[v_start..v_end] {
+                        let y = text.pos.y + row.pos.y + v.pos.y;
+                        min_y = min_y.min(y);
+                        max_y = max_y.max(y);
+                    }
+                }
+                (min_y + max_y) * 0.5
+            };
+
+            let pill_center_y = |output: &egui::FullOutput, target_y: f32| {
+                output
+                    .shapes
+                    .iter()
+                    .flat_map(|s| match &s.shape {
+                        egui::Shape::Vec(shapes) => shapes.as_slice(),
+                        _ => &[],
+                    })
+                    .filter_map(|inner| match inner {
+                        egui::Shape::Rect(r) if r.fill == crate::theme::c_md_code_bg() => {
+                            Some(r.rect.center().y)
+                        }
+                        _ => None,
+                    })
+                    .min_by(|a, b| (a - target_y).abs().total_cmp(&(b - target_y).abs()))
+                    .expect("inline code pill rect")
+            };
+
+            let prose_y2 = glyph_center_y(&frame2, "xoxo xoxo xoxo", 0..4);
+            let code_y2 = glyph_center_y(&frame2, "xoxo xoxo xoxo", 5..9);
+            let pill_y2 = pill_center_y(&frame2, code_y2);
+            let ord_marker_y2 = glyph_center_y(&frame2, "1.", 0..1);
+            let ord_cap_y2 = glyph_center_y(&frame2, "Hx Hx Hx", 0..1);
+
+            let prose_y3 = glyph_center_y(&frame3, "xoxo xoxo xoxo", 0..4);
+            let code_y3 = glyph_center_y(&frame3, "xoxo xoxo xoxo", 5..9);
+
+            assert!(
+                (prose_y2 - prose_y3).abs() < 0.01 && (code_y2 - code_y3).abs() < 0.01,
+                "{ui_font}/{mono_font}: cached galley shifted twice across frames: ({prose_y2}, {code_y2}) vs ({prose_y3}, {code_y3})"
+            );
+            assert!(
+                (prose_y2 - code_y2).abs() <= 1.0,
+                "{ui_font}/{mono_font}: prose center {prose_y2:.2} vs inline code center {code_y2:.2}"
+            );
+            assert!(
+                (code_y2 - pill_y2).abs() <= 1.5,
+                "{ui_font}/{mono_font}: inline code center {code_y2:.2} vs pill center {pill_y2:.2}"
+            );
+            assert!(
+                (ord_marker_y2 - ord_cap_y2).abs() <= 1.0,
+                "{ui_font}/{mono_font}: list marker center {ord_marker_y2:.2} vs item center {ord_cap_y2:.2}"
+            );
+        }
     }
 }

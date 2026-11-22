@@ -46,6 +46,12 @@ const FAMILIES: &[Family] = &[
     ("gpt-oss-120b", 3, Some((0.1, 0.5))),
     ("gpt-oss", 2, Some((0.05, 0.2))),
     // Google
+    ("gemini-4-carbon", 5, Some((2.5, 15.0))),
+    ("gemini-4-neon", 5, Some((2.0, 12.0))),
+    ("gemini-4-argon", 4, Some((0.8, 4.0))),
+    ("gemini-4-hydrogen", 3, Some((0.3, 2.0))),
+    ("gemini-3.5-pro", 5, Some((2.0, 12.0))),
+    ("gemini-3.1-pro", 5, Some((2.0, 12.0))),
     ("gemini-3-pro", 5, Some((2.0, 12.0))),
     ("gemini-2.5-pro", 4, Some((1.25, 10.0))),
     ("flash-lite", 2, Some((0.1, 0.4))),
@@ -153,6 +159,11 @@ mod tests {
         assert_eq!(quality("haiku"), 3);
         assert_eq!(quality("gpt-5.2-codex"), 5);
         assert_eq!(quality("gpt-5-mini"), 3);
+        assert_eq!(quality("gemini-4-carbon"), 5);
+        assert_eq!(quality("gemini-4-neon"), 5);
+        assert_eq!(quality("gemini-4-argon"), 4);
+        assert_eq!(quality("gemini-4-hydrogen"), 3);
+        assert_eq!(quality("gemini-3.5-pro"), 5);
         assert_eq!(quality("default"), 4);
     }
 

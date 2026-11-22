@@ -179,6 +179,10 @@ pub struct RouterSettings {
     /// Codex (ACP). Opt-in for the same reason.
     #[serde(default)]
     pub read_codex_cli_usage: bool,
+    /// Ask the `agy` CLI for its `/usage` quota summary, for Antigravity (ACP). Opt-in for the
+    /// same reason.
+    #[serde(default)]
+    pub read_antigravity_usage: bool,
     /// Retry on the next-best provider when the chosen one is rate limited or out of quota.
     #[serde(default = "default_true")]
     pub failover: bool,
@@ -197,6 +201,7 @@ impl Default for RouterSettings {
             monthly_budget_usd: 0.0,
             read_claude_code_usage: false,
             read_codex_cli_usage: false,
+            read_antigravity_usage: false,
             failover: true,
             wait_for_quota: true,
         }

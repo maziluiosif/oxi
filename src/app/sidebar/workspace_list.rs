@@ -51,7 +51,7 @@ impl OxiApp {
         let folded = !searching_all && (own_folded || parent_folded);
         ui.add_space(1.0);
 
-        const ROW_H: f32 = 26.0;
+        const ROW_H: f32 = 28.0;
         const PLUS_W: f32 = 22.0;
         const GLYPH_W: f32 = 18.0;
         let (rect, _) =
@@ -114,20 +114,21 @@ impl OxiApp {
                     Some((name, host)) if remote => (name, Some(host)),
                     _ => (root_label.as_str(), None),
                 };
-                RichText::new(name)
-                    .size(FS_WORKSPACE)
-                    .color(if remote_status.is_some() {
+                strong_rich(
+                    name,
+                    FS_WORKSPACE,
+                    if remote_status.is_some() {
                         c_text_faint()
                     } else {
                         c_text()
-                    })
-                    .strong()
-                    .append_to(
-                        &mut job,
-                        ui.style(),
-                        egui::FontSelection::Default,
-                        Align::Center,
-                    );
+                    },
+                )
+                .append_to(
+                    &mut job,
+                    ui.style(),
+                    egui::FontSelection::Default,
+                    Align::Center,
+                );
                 if let Some(host) = host {
                     RichText::new(format!("  {host}"))
                         .size(FS_TINY)
@@ -471,7 +472,7 @@ impl OxiApp {
                         let completion_unseen = run_state.is_some_and(|run| run.completion_unseen);
                         let needs_attention = needs_approval || completion_unseen;
                         let title = row_title.clone();
-                        const ROW_INNER_H: f32 = 22.0;
+                        const ROW_INNER_H: f32 = 24.0;
                         const ROW_VMARGIN: f32 = 4.0;
                         let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
                         let (rect, response) =
@@ -523,23 +524,24 @@ impl OxiApp {
                             Color32::TRANSPARENT
                         };
                         ui.painter()
-                            .rect_filled(rect, CornerRadius::same(RADIUS_ROW), fill);
+                            .rect_filled(rect, CornerRadius::same(RADIUS_CHIP), fill);
+                        if selected && !needs_attention {
+                            ui.painter().rect_stroke(
+                                rect,
+                                CornerRadius::same(RADIUS_CHIP),
+                                Stroke::new(1.0, c_border()),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
                         crate::ui::chrome::keyboard_focus_ring(
                             ui,
                             &response,
-                            CornerRadius::same(RADIUS_ROW),
+                            CornerRadius::same(RADIUS_CHIP),
                         );
-                        if selected {
-                            let rail = egui::Rect::from_min_max(
-                                rect.left_top() + egui::vec2(0.0, 8.0),
-                                rect.left_bottom() + egui::vec2(2.0, -8.0),
-                            );
-                            ui.painter().rect_filled(rail, 1.0, c_accent());
-                        }
                         if needs_attention {
                             ui.painter().rect_stroke(
                                 rect,
-                                CornerRadius::same(RADIUS_ROW),
+                                CornerRadius::same(RADIUS_CHIP),
                                 Stroke::new(
                                     1.0,
                                     c_accent().gamma_multiply(0.45 + attention_pulse * 0.55),
@@ -789,16 +791,16 @@ impl OxiApp {
         title: String,
         hide_time: bool,
     ) {
-        const ROW_INNER_H: f32 = 22.0;
+        const ROW_INNER_H: f32 = 24.0;
         const ROW_VMARGIN: f32 = 4.0;
         const BULLET_GAP: f32 = 4.0;
         const SPINNER_GAP: f32 = 4.0;
 
-        let inner = rect.shrink2(egui::vec2(3.0, ROW_VMARGIN));
+        let inner = rect.shrink2(egui::vec2(4.0, ROW_VMARGIN));
         ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_min_width(inner.width());
-            let lead_w = if running { 0.0 } else { 14.0 };
-            let mut time_w: f32 = if running { 40.0 } else { 34.0 };
+            let lead_w = if running { 0.0 } else { 10.0 };
+            let mut time_w: f32 = if running { 40.0 } else { 32.0 };
             let spin_reserve = if running { 14.0 } else { 0.0 };
             let sx = ui.spacing().item_spacing.x;
             // Space is always reserved for the time label so the title never
@@ -820,11 +822,8 @@ impl OxiApp {
             // Gap kept between the title's "…" and the time label.
             const TIME_GAP: f32 = 6.0;
             let time_galley = time_label.map(|s| {
-                ui.painter().layout_no_wrap(
-                    s,
-                    FontId::new(FS_TINY, FontFamily::Monospace),
-                    c_text_muted(),
-                )
+                ui.painter()
+                    .layout_no_wrap(s, FontId::proportional(FS_TINY), c_text_faint())
             });
             // Long labels ("12m 34s" while running, "120d") are wider than the default
             // slot; widen it so the truncated title stops before the label instead of
@@ -910,19 +909,17 @@ impl OxiApp {
                     egui::Layout::left_to_right(Align::Center),
                     |ui| {
                         use eframe::egui::Label;
-                        let title_color = if selected { c_text() } else { c_text_muted() };
+                        let title_text = if selected {
+                            strong_rich(title.as_str(), FS_SMALL, c_text_strong())
+                        } else {
+                            RichText::new(title.as_str())
+                                .size(FS_SMALL)
+                                .color(c_text_muted())
+                        };
                         // `Label::truncate` already provides the complete text on hover.
                         // Adding another tooltip here caused two differently styled tooltip
                         // layers, especially when the hover-only delete action overlapped it.
-                        ui.add(
-                            Label::new(
-                                RichText::new(title.as_str())
-                                    .size(FS_SMALL)
-                                    .color(title_color),
-                            )
-                            .truncate()
-                            .halign(Align::LEFT),
-                        );
+                        ui.add(Label::new(title_text).truncate().halign(Align::LEFT));
                     },
                 );
             });

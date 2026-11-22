@@ -71,10 +71,10 @@ pub(super) fn render_heading(
     it: &mut ParserPeek<'_>,
 ) {
     match level {
-        HeadingLevel::H1 => ui.add_space(8.0),
-        HeadingLevel::H2 => ui.add_space(6.0),
-        HeadingLevel::H3 => ui.add_space(4.0),
-        _ => ui.add_space(2.0),
+        HeadingLevel::H1 => ui.add_space(16.0),
+        HeadingLevel::H2 => ui.add_space(14.0),
+        HeadingLevel::H3 => ui.add_space(10.0),
+        _ => ui.add_space(6.0),
     }
 
     let size = match level {
@@ -107,10 +107,8 @@ pub(super) fn render_heading(
                 job.append(t.as_ref(), 0.0, heading_fmt(bold, italic));
             }
             Event::Code(c) => {
-                // Match the heading's proportional font and size so inline code shares its
-                // baseline; the monospace font's shorter ascent otherwise makes code ride high.
                 let mut f = fmt_code(line_height_for_body_size(size));
-                f.font_id = FontId::proportional(size);
+                f.font_id = FontId::monospace((size - 1.0).max(FS_CODE));
                 job.append(c.as_ref(), 0.0, f);
             }
             Event::SoftBreak => {
@@ -130,22 +128,15 @@ pub(super) fn render_heading(
     }
     selectable_job(ui, job);
     if matches!(level, HeadingLevel::H1 | HeadingLevel::H2) {
-        allocate_full_width_block(ui, wrap_w, |ui| {
-            ui.add_space(2.0);
-            let (rect, _) =
-                ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(rect, 0.0, c_md_code_block_border());
-        });
-        ui.add_space(7.0);
+        ui.add_space(8.0);
     } else {
-        ui.add_space(5.0);
+        ui.add_space(6.0);
     }
 }
 
 pub(super) fn render_paragraph(ui: &mut Ui, wrap_w: f32, it: &mut ParserPeek<'_>) {
     super::inline::render_inline_until(ui, wrap_w, it, InlineEnd::Paragraph, InlineDensity::Normal);
-    ui.add_space(4.0);
+    ui.add_space(8.0);
 }
 
 pub(super) fn render_blockquote(
@@ -267,29 +258,29 @@ pub(super) fn render_fenced_block(
         let frame = Frame::new()
             .fill(c_md_code_block_bg())
             .stroke(Stroke::new(1.0, c_md_code_block_border()))
-            .corner_radius(CornerRadius::same(crate::theme::RADIUS_CHIP))
+            .corner_radius(CornerRadius::same(crate::theme::RADIUS_CARD))
             .inner_margin(Margin::same(0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
 
-                Frame::new()
+                let header = Frame::new()
                     .fill(c_md_code_block_header_bg())
                     .corner_radius(egui::CornerRadius {
-                        nw: crate::theme::RADIUS_CHIP,
-                        ne: crate::theme::RADIUS_CHIP,
+                        nw: crate::theme::RADIUS_CARD,
+                        ne: crate::theme::RADIUS_CARD,
                         sw: 0,
                         se: 0,
                     })
-                    .inner_margin(Margin::symmetric(10, 5))
+                    .inner_margin(Margin::symmetric(14, 7))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.spacing_mut().item_spacing.x = 8.0;
                             ui.label(
                                 RichText::new(lang.as_str())
                                     .size(SZ_TINY)
                                     .color(c_text_muted())
-                                    .family(FontFamily::Monospace),
+                                    .family(FontFamily::Proportional),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 crate::ui::chrome::copy_chip(ui, persist_id.with("copy"), &buf);
@@ -303,16 +294,21 @@ pub(super) fn render_fenced_block(
                             });
                         });
                     });
+                ui.painter().hline(
+                    header.response.rect.x_range(),
+                    header.response.rect.bottom(),
+                    Stroke::new(1.0, c_border_subtle()),
+                );
 
                 Frame::new()
                     .fill(c_md_code_block_bg())
                     .corner_radius(egui::CornerRadius {
                         nw: 0,
                         ne: 0,
-                        sw: crate::theme::RADIUS_CHIP,
-                        se: crate::theme::RADIUS_CHIP,
+                        sw: crate::theme::RADIUS_CARD,
+                        se: crate::theme::RADIUS_CARD,
                     })
-                    .inner_margin(Margin::symmetric(11, 9))
+                    .inner_margin(Margin::symmetric(14, 12))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         let inner = ui.available_width().max(40.0);
@@ -334,5 +330,5 @@ pub(super) fn render_fenced_block(
             clickable_expand_overlay(ui, frame.inner, persist_id);
         }
     });
-    ui.add_space(8.0);
+    ui.add_space(12.0);
 }

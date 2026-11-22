@@ -145,6 +145,7 @@ impl OxiApp {
         let enabled = match kind {
             LlmProviderKind::ClaudeCodeAcp => router.read_claude_code_usage,
             LlmProviderKind::CodexAcp => router.read_codex_cli_usage,
+            LlmProviderKind::AntigravityAcp => router.read_antigravity_usage,
             LlmProviderKind::GptCodex => true,
             _ => return None,
         };
@@ -153,8 +154,7 @@ impl OxiApp {
                 text: "usage off".into(),
                 color: c_text_faint(),
                 lines: vec![(
-                    "Turn on subscription usage in Settings → Router to see the 5h and weekly limits"
-                        .into(),
+                    "Turn on subscription usage in Settings → Router to see usage limits".into(),
                     c_text_faint(),
                 )],
             });
@@ -191,10 +191,11 @@ impl OxiApp {
             .map(|w| format!("{} {:.0}%", w.label, used(w)))
             .collect::<Vec<_>>()
             .join(" · ");
+        let unscoped_any = snap.windows.iter().any(|w| w.model_scope.is_none());
         let fullest = snap
             .windows
             .iter()
-            .filter(|w| w.model_scope.is_none())
+            .filter(|w| !unscoped_any || w.model_scope.is_none())
             .map(used)
             .fold(0.0, f64::max);
         let color = if snap.limit_reached || fullest >= 90.0 {

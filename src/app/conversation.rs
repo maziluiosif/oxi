@@ -214,12 +214,11 @@ impl OxiApp {
         ui.add_space(if compact { 20.0 } else { 44.0 });
         ui.set_max_width(col_w.min(640.0));
         ui.vertical(|ui| {
-            ui.label(
-                RichText::new("What should oxi help with?")
-                    .size(if compact { FS_H2 } else { FS_H1 })
-                    .color(c_text())
-                    .strong(),
-            );
+            ui.label(strong_rich(
+                "What should oxi help with?",
+                if compact { FS_H2 } else { FS_H1 },
+                c_text_strong(),
+            ));
             ui.add_space(5.0);
             let root = &self.active_workspace().root_path;
             let general = crate::app_dirs::is_general_chats_dir(root);
@@ -458,7 +457,7 @@ impl OxiApp {
                     }
                 });
 
-                ui.add_space(16.0);
+                ui.add_space(20.0);
 
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
@@ -721,11 +720,13 @@ impl OxiApp {
                                 && rollback_available;
                             if can_edit {
                                 ui.horizontal(|ui| {
-                                    if crate::ui::chrome::ghost_button_icon(
+                                    if crate::ui::chrome::flat_button_icon(
                                         ui,
                                         ICON_REFRESH,
                                         "Regenerate",
-                                        false,
+                                        FS_TINY,
+                                        egui::vec2(0.0, 24.0),
+                                        c_text_faint(),
                                     )
                                     .on_hover_text(
                                         "Edit the last prompt and run it again. Sending undoes the file changes that response made",
@@ -833,14 +834,14 @@ impl OxiApp {
             (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
         let from_bottom = max_offset - scroll_output.state.offset.y;
         if from_bottom > 80.0 {
-            const BTN: f32 = 30.0;
+            const BTN: f32 = 32.0;
             // Sit the button just above the composer's actual top edge. Using the padded
             // `bottom_overlay_h` (min 88) left it floating well above a short composer;
             // mirror the real composer height (see `render_composer` in sidebar.rs).
             let composer_h = self.conv.composer.measured_full_h.max(80.0);
             let pos = egui::pos2(
                 scroll_output.inner_rect.center().x - BTN * 0.5,
-                scroll_output.inner_rect.bottom() - composer_h - BTN - 8.0,
+                scroll_output.inner_rect.bottom() - composer_h - BTN - 10.0,
             );
             let mut jump = false;
             egui::Area::new(ui.id().with("scroll_to_bottom_btn"))
@@ -851,9 +852,9 @@ impl OxiApp {
                         fill: c_bg_elevated_2(),
                         hover_fill: crate::theme::c_row_hover(),
                         stroke: c_border(),
-                        hover_stroke: c_border(),
+                        hover_stroke: c_text_faint(),
                         rounding: CornerRadius::same((BTN * 0.5) as u8),
-                        glyph: c_text_muted(),
+                        glyph: c_text(),
                     };
                     // Soft shadow so the button reads as floating over whatever content
                     // (tables, code blocks) scrolls underneath it.
@@ -861,15 +862,15 @@ impl OxiApp {
                     ui.painter().add(
                         egui::epaint::Shadow {
                             offset: [0, 2],
-                            blur: 10,
+                            blur: 12,
                             spread: 0,
-                            color: egui::Color32::from_black_alpha(90),
+                            color: egui::Color32::from_black_alpha(110),
                         }
                         .as_shape(shadow_rect, CornerRadius::same((BTN * 0.5) as u8)),
                     );
                     let resp = crate::ui::chrome::icon_button_core(
                         ui,
-                        ICON_ANGLE_DOWN,
+                        ICON_ARROW_DOWN,
                         egui::vec2(BTN, BTN),
                         FS_SMALL,
                         false,
@@ -1198,12 +1199,7 @@ fn suggestion_card(
             FS_SMALL,
             c_accent(),
         ));
-        ui.label(
-            RichText::new(title)
-                .size(FS_SMALL)
-                .color(c_text_strong())
-                .strong(),
-        );
+        ui.label(strong_rich(title, FS_SMALL, c_text_strong()));
     });
     ui.add(
         Label::new(RichText::new(prompt).size(FS_TINY).color(c_text_muted()))

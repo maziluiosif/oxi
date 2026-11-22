@@ -10,10 +10,10 @@ use crate::ui::select_menu::SelectOption;
 
 use super::super::OxiApp;
 
-/// Theme id and font ids for the Zed look (see [`Palette::ZED`]).
-const ZED_THEME_ID: &str = "zed";
-const ZED_UI_FONT: &str = "bundled:ibm_plex_sans";
-const ZED_MONO_FONT: &str = "bundled:lilex";
+/// Theme ids and bundled font pair that ship with a real semibold prose face.
+const PLEX_THEME_IDS: &[&str] = &["antigravity", "zed"];
+const PLEX_UI_FONT: &str = "bundled:ibm_plex_sans";
+const PLEX_MONO_FONT: &str = "bundled:lilex";
 
 impl OxiApp {
     /// Register the current font choice and rebuild egui's font atlas so the change shows
@@ -55,14 +55,19 @@ impl OxiApp {
                 .map(|theme| theme.id.clone())
                 .filter(|id| id != &current)
             {
-                // The Zed theme brings Zed's fonts along, but only over untouched defaults;
-                // leaving it restores the defaults when the fonts are still Zed's pair.
+                // Antigravity and Zed pair with IBM Plex Sans (real semibold) + Lilex when
+                // fonts are untouched; leaving both restores the default pair.
                 let settings = &mut self.conv.settings;
                 let fonts = (settings.ui_font.as_str(), settings.mono_font.as_str());
-                if theme_id == ZED_THEME_ID && fonts == ("default", "default") {
-                    settings.ui_font = ZED_UI_FONT.to_string();
-                    settings.mono_font = ZED_MONO_FONT.to_string();
-                } else if current == ZED_THEME_ID && fonts == (ZED_UI_FONT, ZED_MONO_FONT) {
+                let next_uses_plex = PLEX_THEME_IDS.contains(&theme_id.as_str());
+                let cur_uses_plex = PLEX_THEME_IDS.contains(&current.as_str());
+                if next_uses_plex && fonts == ("default", "default") {
+                    settings.ui_font = PLEX_UI_FONT.to_string();
+                    settings.mono_font = PLEX_MONO_FONT.to_string();
+                } else if cur_uses_plex
+                    && !next_uses_plex
+                    && fonts == (PLEX_UI_FONT, PLEX_MONO_FONT)
+                {
                     settings.ui_font = "default".to_string();
                     settings.mono_font = "default".to_string();
                 }

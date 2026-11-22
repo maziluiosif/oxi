@@ -228,30 +228,25 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
     }
 
     if msg.role == MsgRole::User {
-        // Right-aligned chat bubble (capped width) so user turns read as chat, not a document.
+        // Right-aligned rounded pill bubble (capped width) matching Antigravity's calm dark pill.
         let bubble_w = (col_w * 0.78).max(220.0).min(col_w);
         let response = ui
             .with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                 ui.set_max_width(col_w);
-                // Borderless bubble with a tighter bottom-right corner pointing at its sender.
                 Frame::new()
                     .fill(c_user_bubble())
-                    .corner_radius(CornerRadius {
-                        nw: RADIUS_PANEL,
-                        ne: RADIUS_PANEL,
-                        sw: RADIUS_PANEL,
-                        se: 4,
-                    })
-                    .inner_margin(Margin::symmetric(14, 10))
+                    .stroke(Stroke::new(1.0, c_border()))
+                    .corner_radius(CornerRadius::same(RADIUS_PANEL))
+                    .inner_margin(Margin::symmetric(16, 10))
                     .show(ui, |ui| {
                         ui.set_max_width(bubble_w);
                         if !msg.text.is_empty() {
                             let mut job = egui::text::LayoutJob::default();
                             let mut format = egui::text::TextFormat::simple(
                                 egui::FontId::proportional(FS_BODY),
-                                c_text(),
+                                c_text_strong(),
                             );
-                            format.line_height = Some(FS_BODY * 1.35);
+                            format.line_height = Some(FS_BODY * 1.5);
                             job.append(&msg.text, 0.0, format);
                             job.wrap.max_width = ui.available_width();
                             crate::theme::selectable_text_job(ui, job);
@@ -272,7 +267,7 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
                 &msg.text,
             );
         }
-        ui.add_space(SPACE_LG);
+        ui.add_space(22.0);
         return response;
     }
 
@@ -686,24 +681,27 @@ fn render_activity_summary(
     );
     // A live turn can't be folded, so it gets no hover affordance either.
     let hovered = !streaming && click.hovered();
-    // Only the chevron lights up on hover (matching the Thinking block behavior); the
-    // "Worked..." text stays in its quiet muted tone so the row doesn't shout.
-    let chevron_col = if hovered { c_accent() } else { c_text_faint() };
+    let label_col = if hovered { c_text() } else { c_text_muted() };
+    let chevron_col = if hovered {
+        c_text_muted()
+    } else {
+        c_text_faint()
+    };
 
-    // Paint the chevron + label inside the reserved rect.
+    // Label followed by trailing chevron ("Worked for 9m ›" / "Worked for 20s ⌄").
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 5.0;
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(RichText::new(label).size(FS_SMALL).color(label_col));
             ui.label(
                 RichText::new(if expanded {
-                    ICON_ANGLE_UP
-                } else {
                     ICON_ANGLE_DOWN
+                } else {
+                    ICON_CHEVRON_RIGHT
                 })
-                .font(FontId::new(FS_TINY, icon_font()))
+                .font(FontId::new(FS_TINY - 1.5, icon_font()))
                 .color(chevron_col),
             );
-            ui.label(RichText::new(label).size(FS_SMALL).color(c_text_muted()));
         });
     });
 
@@ -804,6 +802,47 @@ pub fn render_assistant_blocks(
                     text,
                 );
             }
+        }
+    }
+
+    // Quiet action row under a completed assistant answer (real Copy action, no dummy icons).
+    if !streaming {
+        let answer_text: String = blocks[worked_end..]
+            .iter()
+            .filter_map(|b| match b {
+                AssistantBlock::Answer(t) if !t.trim().is_empty() => Some(t.trim()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if !answer_text.is_empty() {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let copy_id = Id::new(("assistant_footer_copy", msg_idx));
+                let copied = crate::ui::chrome::copied_recently(ui.ctx(), copy_id);
+                let icon = if copied { ICON_CHECK } else { ICON_COPY };
+                let resp = crate::ui::chrome::icon_button_core(
+                    ui,
+                    icon,
+                    egui::vec2(24.0, 24.0),
+                    FS_SMALL,
+                    false,
+                    &crate::ui::chrome::IconButtonLook {
+                        fill: egui::Color32::TRANSPARENT,
+                        hover_fill: c_row_hover(),
+                        stroke: egui::Color32::TRANSPARENT,
+                        hover_stroke: egui::Color32::TRANSPARENT,
+                        rounding: CornerRadius::same(RADIUS_ROW),
+                        glyph: if copied { c_success() } else { c_text_faint() },
+                    },
+                )
+                .on_hover_text(if copied { "Copied" } else { "Copy response" });
+                if resp.clicked() {
+                    ui.ctx().copy_text(answer_text);
+                    crate::ui::chrome::mark_copied(ui.ctx(), copy_id);
+                }
+            });
         }
     }
 

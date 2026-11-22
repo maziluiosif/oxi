@@ -245,6 +245,62 @@ impl Palette {
         },
     };
 
+    /// Antigravity: deep obsidian canvas (`#0b0c0e`), subtly lifted dark charcoal chrome
+    /// (`#111215`), crisp hairline borders, cool periwinkle inline-code pills, and high-contrast
+    /// typography with real semibold weight.
+    pub const ANTIGRAVITY: Palette = Palette {
+        dark_base: true,
+        bg_main: rgb(0x0b, 0x0c, 0x0e),
+        bg_sidebar: rgb(0x11, 0x12, 0x15),
+        bg_elevated: rgb(0x14, 0x15, 0x19),
+        bg_elevated_2: rgb(0x1c, 0x1e, 0x24),
+        bg_input: rgb(0x0f, 0x10, 0x13),
+        faint_bg: rgb(0x13, 0x14, 0x18),
+        border: rgb(0x26, 0x29, 0x32),
+        border_subtle: rgb(0x1b, 0x1d, 0x24),
+        accent: rgb(0x7d, 0xa4, 0xf8),
+        text: rgb(0xe1, 0xe4, 0xeb),
+        text_strong: rgb(0xf6, 0xf7, 0xfa),
+        text_muted: rgb(0x8e, 0x93, 0xa0),
+        text_faint: rgb(0x63, 0x68, 0x75),
+        sidebar_section: rgb(0x7c, 0x81, 0x8e),
+        user_bubble: rgb(0x17, 0x19, 0x1f),
+        success: rgb(0x4a, 0xde, 0x80),
+        danger: rgb(0xf0, 0x6a, 0x6a),
+        diff_add_fg: rgb(0x5a, 0xd4, 0x88),
+        diff_add_bg: rgb(0x10, 0x24, 0x1a),
+        diff_del_fg: rgb(0xf0, 0x6a, 0x6a),
+        diff_del_bg: rgb(0x29, 0x14, 0x17),
+        widget_inactive_bg: rgb(0x1a, 0x1c, 0x22),
+        widget_hovered_bg: rgb(0x22, 0x25, 0x2d),
+        widget_active_bg: rgb(0x2a, 0x2e, 0x38),
+        widget_open_bg: rgb(0x20, 0x23, 0x2b),
+        widget_active_border: rgb(0x3b, 0x41, 0x52),
+        selection_bg: rgb(0x24, 0x34, 0x52),
+        selection_stroke: rgb(0x52, 0x78, 0xc6),
+        md_code_bg: rgb(0x19, 0x1d, 0x28),
+        md_code_block_bg: rgb(0x10, 0x11, 0x15),
+        md_code_block_header_bg: rgb(0x15, 0x16, 0x1b),
+        md_code_block_border: rgb(0x22, 0x25, 0x2e),
+        md_quote_accent: rgb(0x7d, 0xa4, 0xf8),
+        md_code_fg: rgb(0x9a, 0xba, 0xf8),
+        syntax: SyntaxPalette {
+            foreground: rgb(0xe1, 0xe4, 0xeb),
+            comment: rgb(0x66, 0x6c, 0x7a),
+            keyword: rgb(0xc4, 0x9b, 0xf8),
+            function: rgb(0xe8, 0xc4, 0x6a),
+            type_name: rgb(0x7d, 0xa4, 0xf8),
+            string: rgb(0x7e, 0xd6, 0x9e),
+            number: rgb(0xf0, 0xa8, 0x75),
+            constant: rgb(0x9a, 0xba, 0xf8),
+            variable: rgb(0xe1, 0xe4, 0xeb),
+            operator: rgb(0x9b, 0xc2, 0xf0),
+            tag: rgb(0xf0, 0x7a, 0x82),
+            attribute: rgb(0xe8, 0xc4, 0x6a),
+            regexp: rgb(0x7e, 0xd6, 0x9e),
+        },
+    };
+
     /// Zed: the dark chrome of Zed's Delta agent app — near-black graphite chat (`#1a1c1f`),
     /// a lifted sidebar (`#212327`), hairline borders, and Zed One Dark's blue accent and
     /// syntax colors. Pairs with the bundled IBM Plex Sans + Lilex fonts.
@@ -583,15 +639,39 @@ pub fn c_thinking_rail() -> Color32 {
 }
 
 /// Selected-row background, app-wide (sidebar rows, settings nav, git panel, …) —
-/// an accent tint rather than a neutral grey, so the active item reads as "accent"
-/// consistently everywhere a row/button has a selected or pressed state.
+/// a clean lifted surface so active items read crisp and calm rather than garishly tinted.
 pub fn c_row_active() -> Color32 {
-    tint_on_panels(c_accent(), 40)
+    let p = active_palette();
+    if p.dark_base {
+        p.bg_elevated_2
+    } else {
+        tint_on_panels(p.accent, 28)
+    }
 }
-/// Hover background, app-wide — the same accent tint dialed down, so hover reads
-/// as a preview of the active-row treatment rather than a mismatched grey.
+/// Hover background, app-wide — a subtle surface lift on dark themes, soft wash on light.
 pub fn c_row_hover() -> Color32 {
-    tint_on_panels(c_accent(), 16)
+    let p = active_palette();
+    if p.dark_base {
+        surface_tint(p.bg_elevated, p.text, 10)
+    } else {
+        tint_on_panels(p.accent, 14)
+    }
+}
+
+/// High-contrast primary send/action circle fill (crisp near-white on dark themes, dark ink on
+/// light themes), giving the composer's primary CTA Antigravity's unmistakable visual weight.
+pub fn c_send_bg() -> Color32 {
+    active_palette().text_strong
+}
+
+/// Icon/foreground color painted inside [`c_send_bg`].
+pub fn c_send_fg() -> Color32 {
+    let p = active_palette();
+    if p.dark_base {
+        p.bg_main
+    } else {
+        Color32::WHITE
+    }
 }
 
 /// Foreground for text/icons drawn on an accent-filled surface (primary buttons, send).
@@ -618,11 +698,11 @@ pub fn c_pill_selected_border() -> Color32 {
     surface_tint(p.border, p.accent, 120)
 }
 
-/// Composer card border while the input has keyboard focus — border nudged toward
-/// the accent so the field reads as "live" without shouting.
+/// Composer card border while the input has keyboard focus — a calm, subtle border lift
+/// so the card reads as active without drawing a loud colored box around the composer.
 pub fn c_composer_focus_border() -> Color32 {
     let p = active_palette();
-    surface_tint(p.border, p.accent, 115)
+    surface_tint(p.border, p.text_muted, 55)
 }
 
 // ── Tool pill palettes (single source of truth for the transcript tool pills + edit blocks) ──
