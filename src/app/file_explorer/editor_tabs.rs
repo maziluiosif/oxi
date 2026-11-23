@@ -63,7 +63,8 @@ impl OxiApp {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if !sidebar_open {
-                        // The macOS traffic lights sit over the window's top-left corner.
+                        // The top-left window controls (traffic lights on macOS + sidebar toggle)
+                        // sit over this corner.
                         ui.add_space(crate::ui::window_chrome::WINDOW_CONTROLS_W);
                     }
                     let back = ui.add_enabled(

@@ -1,18 +1,35 @@
-//! Unified macOS title bar: content extends under the transparent title bar, the traffic
-//! lights float over the sidebar, and empty space along the top edge drags the window.
-//! Other platforms keep native decorations, so every inset here is zero there.
+//! Top window chrome: unified transparent title bar on macOS (traffic lights + drag strip),
+//! and consistent top-corner sidebar / git panel toggles on every platform.
 
 use eframe::egui::{self, Id, Rect, Sense, Ui, ViewportBuilder, ViewportCommand};
 
-/// Height of the band the (transparent) title bar and traffic lights occupy.
-pub const TITLEBAR_H: f32 = if cfg!(target_os = "macos") { 38.0 } else { 0.0 };
+/// Height of the top chrome band (transparent title bar + traffic lights on macOS,
+/// and the matching top-corner toggle band on Windows and Linux).
+pub const TITLEBAR_H: f32 = 38.0;
 
-/// Height of the chat header strip (matches [`TITLEBAR_H`] on macOS so traffic lights,
-/// breadcrumb and top-right toggles share one crisp horizontal band).
-pub const CHAT_HEADER_H: f32 = 38.0;
+/// Height of the chat header strip (matches [`TITLEBAR_H`] so top-corner toggles,
+/// breadcrumb and quick actions share one crisp horizontal band).
+pub const CHAT_HEADER_H: f32 = TITLEBAR_H;
 
-/// Horizontal room the traffic lights need when a column starts at the window's left edge.
-pub const TRAFFIC_LIGHTS_W: f32 = if cfg!(target_os = "macos") { 76.0 } else { 0.0 };
+/// Horizontal room the macOS traffic lights occupy at the window's left edge.
+const MACOS_TRAFFIC_LIGHTS_W: f32 = 76.0;
+
+const TOGGLE_SIZE: f32 = 28.0;
+const RIGHT_TOGGLE_MARGIN: f32 = 8.0;
+
+const fn sidebar_toggle_x(is_macos: bool) -> f32 {
+    if is_macos {
+        MACOS_TRAFFIC_LIGHTS_W + 4.0
+    } else {
+        8.0
+    }
+}
+
+const fn window_controls_width(is_macos: bool) -> f32 {
+    sidebar_toggle_x(is_macos) + TOGGLE_SIZE + 6.0
+}
+
+const SIDEBAR_TOGGLE_X: f32 = sidebar_toggle_x(cfg!(target_os = "macos"));
 
 /// Apply the platform window style to the root viewport.
 pub fn configure_viewport(builder: ViewportBuilder) -> ViewportBuilder {
@@ -27,11 +44,12 @@ pub fn configure_viewport(builder: ViewportBuilder) -> ViewportBuilder {
     }
 }
 
-/// Make empty space along the top edge behave like a title bar: drag moves the window and a
-/// double-click zooms it. Call before laying out anything else so real widgets on top of this
-/// strip keep their clicks (egui gives later widgets hit-test priority).
+/// Make empty space along the top edge behave like a title bar on macOS: drag moves the window
+/// and a double-click zooms it. Call before laying out anything else so real widgets on top of
+/// this strip keep their clicks (egui gives later widgets hit-test priority).
+/// Other platforms keep native window decorations, so this is a no-op there.
 pub fn title_bar_drag_strip(ui: &Ui) {
-    if TITLEBAR_H <= 0.0 {
+    if !cfg!(target_os = "macos") {
         return;
     }
     let content = ui.ctx().content_rect();
@@ -47,15 +65,13 @@ pub fn title_bar_drag_strip(ui: &Ui) {
     }
 }
 
-/// A panel-shaped toggle beside the traffic lights, independent of the sidebar view.
+/// A panel-shaped toggle in the window's top-left corner (beside the traffic lights on macOS),
+/// independent of the sidebar view.
 pub fn sidebar_toggle(ui: &mut Ui, open: bool) -> bool {
-    if TITLEBAR_H <= 0.0 {
-        return false;
-    }
     let origin = ui.ctx().content_rect().min;
     let rect = Rect::from_min_size(
-        origin + egui::vec2(TRAFFIC_LIGHTS_W + 4.0, (TITLEBAR_H - 28.0) * 0.5),
-        egui::vec2(28.0, 28.0),
+        origin + egui::vec2(SIDEBAR_TOGGLE_X, (TITLEBAR_H - TOGGLE_SIZE) * 0.5),
+        egui::vec2(TOGGLE_SIZE, TOGGLE_SIZE),
     );
     let label = if open { "Hide sidebar" } else { "Show sidebar" };
     panel_toggle(
@@ -70,16 +86,13 @@ pub fn sidebar_toggle(ui: &mut Ui, open: bool) -> bool {
 
 /// Mirror of [`sidebar_toggle`] in the window's top-right corner, for the git panel.
 pub fn git_panel_toggle(ui: &mut Ui, open: bool) -> bool {
-    if TITLEBAR_H <= 0.0 {
-        return false;
-    }
     let content = ui.ctx().content_rect();
     let rect = Rect::from_min_size(
         egui::pos2(
-            content.right() - 8.0 - 28.0,
-            content.top() + (TITLEBAR_H - 28.0) * 0.5,
+            content.right() - RIGHT_TOGGLE_MARGIN - TOGGLE_SIZE,
+            content.top() + (TITLEBAR_H - TOGGLE_SIZE) * 0.5,
         ),
-        egui::vec2(28.0, 28.0),
+        egui::vec2(TOGGLE_SIZE, TOGGLE_SIZE),
     );
     let label = if open {
         "Hide git panel"
@@ -180,12 +193,36 @@ fn panel_toggle(
     response.on_hover_text(label).clicked()
 }
 
-/// Space for native controls and the sidebar toggle when editor tabs reach the left edge.
-pub const WINDOW_CONTROLS_W: f32 = if cfg!(target_os = "macos") {
-    114.0
-} else {
-    0.0
-};
+/// Space for native controls (macOS traffic lights) and the sidebar toggle when a top strip
+/// reaches the window's left edge.
+pub const WINDOW_CONTROLS_W: f32 = window_controls_width(cfg!(target_os = "macos"));
 
 /// Room the top-right git panel toggle needs when a strip reaches the window's right edge.
-pub const RIGHT_CONTROLS_W: f32 = if cfg!(target_os = "macos") { 38.0 } else { 0.0 };
+pub const RIGHT_CONTROLS_W: f32 = RIGHT_TOGGLE_MARGIN + TOGGLE_SIZE + 2.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toggle_insets_clear_top_bar_buttons_on_all_platforms() {
+        const {
+            assert!(TOGGLE_SIZE < TITLEBAR_H);
+            assert!(RIGHT_CONTROLS_W > RIGHT_TOGGLE_MARGIN + TOGGLE_SIZE);
+        }
+        assert_eq!(TITLEBAR_H, CHAT_HEADER_H);
+
+        // macOS leaves room for the traffic lights plus the sidebar toggle.
+        assert_eq!(sidebar_toggle_x(true), 80.0);
+        assert_eq!(window_controls_width(true), 114.0);
+        assert!(window_controls_width(true) > sidebar_toggle_x(true) + TOGGLE_SIZE);
+
+        // Windows and Linux have no traffic lights in content_rect, only the sidebar toggle.
+        assert_eq!(sidebar_toggle_x(false), 8.0);
+        assert_eq!(window_controls_width(false), 42.0);
+        assert!(window_controls_width(false) > sidebar_toggle_x(false) + TOGGLE_SIZE);
+
+        // Right-side git panel toggle inset matches across every platform.
+        assert_eq!(RIGHT_CONTROLS_W, 38.0);
+    }
+}
