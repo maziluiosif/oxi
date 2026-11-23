@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.44.0] - 2026-11-23
+
+### Added
+- **UI:** Top-bar toggle buttons for sidebar and Git panel on Windows and Linux
+
+
 ## [1.43.0] - 2026-11-22
 
 ### Added
@@ -1450,7 +1456,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.43.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.44.0...HEAD
+[1.44.0]: https://github.com/maziluiosif/oxi/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/maziluiosif/oxi/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/maziluiosif/oxi/compare/v1.41.0...v1.42.0
 [1.41.0]: https://github.com/maziluiosif/oxi/compare/v1.40.0...v1.41.0
