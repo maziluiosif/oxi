@@ -151,7 +151,7 @@ impl OxiApp {
     }
 
     /// Top breadcrumb bar over the chat column (`workspace / conversation title`) with quick
-    /// toggles for real oxi workspace panels, aligned with the macOS title bar strip.
+    /// toggles for real oxi workspace panels, aligned with the top title bar strip.
     fn render_chat_header(&mut self, ui: &mut Ui) {
         let h = crate::ui::window_chrome::CHAT_HEADER_H;
         let full_w = ui.available_width();

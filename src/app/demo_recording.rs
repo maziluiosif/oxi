@@ -3647,7 +3647,6 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     rec.harness.get_by_label("Other worktrees · 2").click();
     rec.harness.run_steps(3);
     rec.still("other-worktrees-expanded");
-    #[cfg(target_os = "macos")]
     {
         rec.harness.get_by_label("Hide sidebar").click();
         rec.harness.run_steps(3);
