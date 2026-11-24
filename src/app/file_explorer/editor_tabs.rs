@@ -89,13 +89,8 @@ impl OxiApp {
                         ui.add_space(crate::ui::window_chrome::WINDOW_CONTROLS_W);
                     }
                     if !split_rendered {
-                        if editor_chat_pill(
-                            ui,
-                            chat_streaming,
-                            chat_needs_approval,
-                            chat_unseen,
-                        )
-                        .clicked()
+                        if editor_chat_pill(ui, chat_streaming, chat_needs_approval, chat_unseen)
+                            .clicked()
                         {
                             return_to_chat = true;
                         }
@@ -841,8 +836,7 @@ fn editor_chat_pill(
         "Chat"
     };
     let font = FontId::proportional(FS_SMALL);
-    let galley = ui
-        .fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, c_text()));
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, c_text()));
     let indicator_w = 14.0;
     let width = galley.size().x + indicator_w + 18.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
@@ -903,10 +897,7 @@ fn editor_chat_pill(
         );
     }
     ui.painter().galley(
-        egui::pos2(
-            rect.left() + 21.0,
-            rect.center().y - galley.size().y * 0.5,
-        ),
+        egui::pos2(rect.left() + 21.0, rect.center().y - galley.size().y * 0.5),
         galley,
         text_col,
     );
@@ -952,7 +943,8 @@ fn editor_split_chat_button(ui: &mut Ui, active: bool) -> egui::Response {
             icon.min + egui::vec2(1.5, 1.5),
             egui::pos2(icon.center().x, icon.bottom() - 1.5),
         );
-        ui.painter().rect_filled(left_half, 0, c_accent().gamma_multiply(0.45));
+        ui.painter()
+            .rect_filled(left_half, 0, c_accent().gamma_multiply(0.45));
     }
     ui.painter().line_segment(
         [

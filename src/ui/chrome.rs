@@ -1443,8 +1443,11 @@ pub fn settings_nav_row(
         text_color,
     );
     if dirty {
-        ui.painter()
-            .circle_filled(egui::pos2(rect.right() - 12.0, rect.center().y), 3.0, c_accent());
+        ui.painter().circle_filled(
+            egui::pos2(rect.right() - 12.0, rect.center().y),
+            3.0,
+            c_accent(),
+        );
     }
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

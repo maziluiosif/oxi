@@ -176,12 +176,8 @@ impl OxiApp {
                     self.conv.sidebar.history_project.is_none(),
                 ));
                 for root in &projects {
-                    let is_sel = self
-                        .conv
-                        .sidebar
-                        .history_project
-                        .as_deref()
-                        == Some(root.as_str());
+                    let is_sel =
+                        self.conv.sidebar.history_project.as_deref() == Some(root.as_str());
                     opts.push(crate::ui::select_menu::SelectOption::new(
                         workspace_sidebar_label(root),
                         is_sel,

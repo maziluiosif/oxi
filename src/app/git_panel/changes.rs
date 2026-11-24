@@ -65,7 +65,8 @@ impl OxiApp {
                 // cleanly without pushing sync controls off-panel.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 3.0;
-                    let fetch_resp = crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 20.0, false);
+                    let fetch_resp =
+                        crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 20.0, false);
                     if !busy && fetch_resp.on_hover_text("Fetch from remote").clicked() {
                         self.request(GitOp::Fetch);
                     }
@@ -81,7 +82,10 @@ impl OxiApp {
                         !busy,
                     )
                     .on_hover_text(if ahead > 0 {
-                        format!("Push {ahead} commit{} to upstream", if ahead == 1 { "" } else { "s" })
+                        format!(
+                            "Push {ahead} commit{} to upstream",
+                            if ahead == 1 { "" } else { "s" }
+                        )
                     } else {
                         "Sync remote changes safely, then push".to_owned()
                     });
@@ -100,7 +104,10 @@ impl OxiApp {
                         !busy,
                     )
                     .on_hover_text(if behind > 0 {
-                        format!("Pull {behind} commit{} from upstream", if behind == 1 { "" } else { "s" })
+                        format!(
+                            "Pull {behind} commit{} from upstream",
+                            if behind == 1 { "" } else { "s" }
+                        )
                     } else {
                         "Fetch and integrate upstream changes".to_owned()
                     });

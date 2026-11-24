@@ -284,8 +284,7 @@ impl OxiApp {
         let find_open = self.conv.transcript.find.is_some();
         let split_open = self.conv.split.is_some();
         let has_hidden_editor = !self.conv.editor.split_rendered
-            && (self.conv.editor.hidden_active.is_some()
-                || !self.conv.editor.documents.is_empty());
+            && (self.conv.editor.hidden_active.is_some() || !self.conv.editor.documents.is_empty());
 
         let rename_id = egui::Id::new("chat_header_rename_state");
         let active_key = self.active_session_key();
@@ -664,12 +663,8 @@ fn header_split_button(ui: &mut Ui, active: bool) -> egui::Response {
     } else {
         c_text_muted()
     };
-    ui.painter().rect_stroke(
-        icon,
-        2,
-        Stroke::new(1.15, color),
-        egui::StrokeKind::Inside,
-    );
+    ui.painter()
+        .rect_stroke(icon, 2, Stroke::new(1.15, color), egui::StrokeKind::Inside);
     ui.painter().line_segment(
         [
             egui::pos2(icon.center().x, icon.top()),

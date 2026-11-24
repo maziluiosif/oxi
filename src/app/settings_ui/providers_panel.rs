@@ -225,13 +225,8 @@ fn configured_provider_pill(
 ) -> egui::Response {
     use crate::theme::*;
     let font = egui::FontId::proportional(FS_SMALL);
-    let text_col = if selected {
-        c_text_strong()
-    } else {
-        c_text()
-    };
-    let galley = ui
-        .fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, text_col));
+    let text_col = if selected { c_text_strong() } else { c_text() };
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, text_col));
     let size = egui::vec2(galley.size().x + 28.0, 26.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let hovered = resp.hovered() || resp.has_focus();
@@ -254,8 +249,11 @@ fn configured_provider_pill(
         egui::StrokeKind::Inside,
     );
     let dot_col = if active { c_accent() } else { c_success() };
-    ui.painter()
-        .circle_filled(egui::pos2(rect.left() + 10.0, rect.center().y), 3.0, dot_col);
+    ui.painter().circle_filled(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        3.0,
+        dot_col,
+    );
     ui.painter().galley(
         egui::pos2(rect.left() + 18.0, rect.center().y - galley.size().y * 0.5),
         galley,

@@ -196,15 +196,16 @@ impl OxiApp {
                         });
                     });
                     // Mini progress bar
-                    let (bar_rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 5.0),
-                        Sense::hover(),
-                    );
+                    let (bar_rect, _) = ui
+                        .allocate_exact_size(egui::vec2(ui.available_width(), 5.0), Sense::hover());
                     let r = egui::CornerRadius::same(3);
                     ui.painter().rect_filled(bar_rect, r, c_border_subtle());
                     let filled_w = (bar_rect.width() * pct).max(if pct > 0.0 { 4.0 } else { 0.0 });
                     ui.painter().rect_filled(
-                        egui::Rect::from_min_size(bar_rect.min, egui::vec2(filled_w, bar_rect.height())),
+                        egui::Rect::from_min_size(
+                            bar_rect.min,
+                            egui::vec2(filled_w, bar_rect.height()),
+                        ),
                         r,
                         context_indicator_color(pct),
                     );

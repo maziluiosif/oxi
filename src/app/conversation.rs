@@ -741,7 +741,8 @@ impl OxiApp {
                                     find::paint_match(ui, slot, rect);
                                     if std::mem::take(&mut find_reveal) {
                                         // Land below the floating find bar, not under it.
-                                        let clear = rect.with_min_y(rect.top() - find::BAR_CLEARANCE);
+                                        let clear =
+                                            rect.with_min_y(rect.top() - find::BAR_CLEARANCE);
                                         ui.scroll_to_rect(clear, Some(Align::TOP));
                                     }
                                 }

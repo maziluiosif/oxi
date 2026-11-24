@@ -7,7 +7,10 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use eframe::egui::{self, Color32, CornerRadius, Frame, Id, Margin, Order, RichText, Sense, Stroke, TextEdit, Ui, text::CCursor, text::CCursorRange};
+use eframe::egui::{
+    self, Color32, CornerRadius, Frame, Id, Margin, Order, RichText, Sense, Stroke, TextEdit, Ui,
+    text::CCursor, text::CCursorRange,
+};
 
 use crate::agent::tools::resolve_under_cwd;
 use crate::app::file_explorer::fuzzy_path_score;
@@ -486,7 +489,12 @@ fn cached_mention_chips(ctx: &egui::Context, root: &str, input: &str) -> Vec<Men
             continue;
         }
         // Skip emails where `@` is immediately preceded by an alphanumeric char.
-        if at > 0 && input[..at].chars().next_back().is_some_and(|c| !c.is_whitespace()) {
+        if at > 0
+            && input[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| !c.is_whitespace())
+        {
             continue;
         }
         if !seen.insert(token.to_owned()) {
@@ -594,7 +602,11 @@ mod tests {
         );
         assert_eq!(
             active_mention_span(&ctx, id, "verifică @README.md"),
-            Some(("verifică ".len(), "verifică @README.md".len(), "README.md".to_owned()))
+            Some((
+                "verifică ".len(),
+                "verifică @README.md".len(),
+                "README.md".to_owned()
+            ))
         );
     }
 }
