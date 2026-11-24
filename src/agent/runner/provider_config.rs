@@ -101,6 +101,28 @@ pub(crate) fn opencode_go_model_uses_anthropic(model: &str) -> bool {
     m.starts_with("minimax-") || m.starts_with("qwen")
 }
 
+/// Headers OpenCode Go requires on chat requests: a stable per-conversation
+/// `x-opencode-session` (requests without it are rejected with `MissingSessionID`) and a
+/// client-specific User-Agent. See https://opencode.ai/docs/go/#where-can-i-use-it.
+pub(crate) fn opencode_go_headers(session_id: Option<&str>) -> Vec<(String, String)> {
+    use sha2::{Digest, Sha256};
+    let session = match session_id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(key) => Sha256::digest(key.as_bytes())
+            .iter()
+            .take(16)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        None => format!("{:032x}", rand::random::<u128>()),
+    };
+    vec![
+        ("x-opencode-session".to_string(), format!("oxi-{session}")),
+        (
+            "user-agent".to_string(),
+            format!("oxi/{}", env!("CARGO_PKG_VERSION")),
+        ),
+    ]
+}
+
 pub fn openrouter_extra_headers(cfg: &ProviderConfig) -> Vec<(String, String)> {
     let mut h = Vec::new();
     let referer = if cfg.openrouter_http_referer.trim().is_empty() {

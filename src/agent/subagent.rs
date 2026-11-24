@@ -149,6 +149,7 @@ impl SubagentRunner {
                 context_char_budget: self.context_char_budget,
                 tools_chars,
                 steer: None,
+                session_id: None,
             },
             &mut messages,
             &tools,

@@ -120,3 +120,38 @@ async fn router_cancellation_drops_a_pending_request_promptly() {
     .expect("routing cancellation must stay responsive");
     trigger.await.unwrap();
 }
+
+fn session_header(headers: &[(String, String)]) -> &str {
+    headers
+        .iter()
+        .find(|(k, _)| k == "x-opencode-session")
+        .map(|(_, v)| v.as_str())
+        .expect("OpenCode Go requests must carry x-opencode-session")
+}
+
+#[test]
+fn opencode_go_session_is_stable_per_chat_and_hides_the_path() {
+    let chat = "/Users/someone/.oxi/sessions/chat-1.json";
+    let a = opencode_go_headers(Some(chat));
+    let b = opencode_go_headers(Some(chat));
+    let other = opencode_go_headers(Some("/Users/someone/.oxi/sessions/chat-2.json"));
+    assert_eq!(session_header(&a), session_header(&b));
+    assert_ne!(session_header(&a), session_header(&other));
+    assert!(!session_header(&a).contains("someone"));
+    assert!(
+        a.iter()
+            .any(|(k, v)| k == "user-agent" && v.starts_with("oxi/"))
+    );
+}
+
+#[test]
+fn opencode_go_session_falls_back_to_a_fresh_id() {
+    let a = opencode_go_headers(None);
+    let b = opencode_go_headers(Some("  "));
+    assert!(session_header(&a).starts_with("oxi-"));
+    assert_ne!(session_header(&a), session_header(&b));
+    for (k, v) in &a {
+        reqwest::header::HeaderName::from_bytes(k.as_bytes()).unwrap();
+        reqwest::header::HeaderValue::from_str(v).unwrap();
+    }
+}

@@ -140,6 +140,7 @@ async fn run_async(req: CompleteRequest, tx: &Sender<CompleteEvent>) -> Result<S
                 context_char_budget: usize::MAX,
                 tools_chars: 0,
                 steer: None,
+                session_id: None,
             },
             &mut messages,
             &tools,
