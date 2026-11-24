@@ -155,6 +155,7 @@ mod live_tests {
                         context_char_budget: usize::MAX,
                         tools_chars: 0,
                         steer: Some(&inbox),
+                        session_id: None,
                     },
                     &mut messages,
                     &tools,

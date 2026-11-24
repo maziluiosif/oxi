@@ -67,7 +67,7 @@ pub(crate) use provider_config::{
     azure_openai_api_version, configured_azure_openai_key, configured_custom_anthropic_key,
     configured_lmstudio_key, configured_meta_muse_key, configured_ollama_key,
     configured_openai_key, configured_opencode_go_key, configured_openrouter_key,
-    opencode_go_model_uses_anthropic,
+    opencode_go_headers, opencode_go_model_uses_anthropic,
 };
 
 /// Immutable snapshot for one agent run.
@@ -334,6 +334,7 @@ fn spawn_agent_attempt(
                     context_char_budget: context_budget,
                     tools_chars,
                     steer: Some(&steer),
+                    session_id: Some(acp_session_key.as_str()),
                 },
                 &mut messages,
                 &tools,

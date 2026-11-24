@@ -22,7 +22,7 @@ use super::runner::{
     azure_openai_api_version, configured_azure_openai_key, configured_custom_anthropic_key,
     configured_lmstudio_key, configured_meta_muse_key, configured_ollama_key,
     configured_openai_key, configured_opencode_go_key, configured_openrouter_key,
-    opencode_go_model_uses_anthropic, openrouter_extra_headers,
+    opencode_go_headers, opencode_go_model_uses_anthropic, openrouter_extra_headers,
 };
 use super::tools::{
     MAX_TOOL_OUTPUT_CHARS, ToolEnv, ToolOutputCallback, ToolResult, run_tool, run_tool_with_output,
@@ -46,6 +46,8 @@ pub(crate) struct DispatchParams<'a> {
     pub tools_chars: usize,
     /// Messages the user sends into the running turn (see [`super::steer`]).
     pub steer: Option<&'a super::steer::SteerInbox>,
+    /// Stable id of the conversation this loop belongs to
+    pub session_id: Option<&'a str>,
 }
 
 /// HTTP client tuned for streaming: bound connect time and idle time between chunks rather than
@@ -146,6 +148,7 @@ pub(crate) async fn run_provider_loop(
         context_char_budget,
         tools_chars,
         steer,
+        session_id,
     } = p;
     let model = cfg.model_id.clone();
     let local_base = async || match tunnels {
@@ -233,6 +236,7 @@ pub(crate) async fn run_provider_loop(
         LlmProviderKind::OpenCodeGo => {
             let key = configured_opencode_go_key(cfg)?;
             let base = cfg.effective_base_url();
+            let headers = opencode_go_headers(session_id);
             let model = model
                 .strip_prefix("opencode-go/")
                 .unwrap_or(&model)
@@ -242,7 +246,8 @@ pub(crate) async fn run_provider_loop(
                 // https://opencode.ai/zen/go/v1/messages. `run_anthropic_loop`
                 // appends `/v1/messages`, so pass the base without `/v1`.
                 let anthropic_base = base.trim_end_matches("/v1").to_string();
-                run_anthropic_loop(ctx!(&anthropic_base, &model), &key, &[], messages, tools).await
+                run_anthropic_loop(ctx!(&anthropic_base, &model), &key, &headers, messages, tools)
+                    .await
             } else {
                 // OpenCode Go exposes OpenAI-compatible models at
                 // https://opencode.ai/zen/go/v1/chat/completions. `run_chat_loop`
@@ -252,7 +257,7 @@ pub(crate) async fn run_provider_loop(
                 } else {
                     format!("{}/v1", base.trim_end_matches('/'))
                 };
-                run_chat_loop(ctx!(&chat_base, &model), &key, &[], messages, tools).await
+                run_chat_loop(ctx!(&chat_base, &model), &key, &headers, messages, tools).await
             }
         }
         LlmProviderKind::ClaudeCodeAcp
