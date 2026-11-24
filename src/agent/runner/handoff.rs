@@ -48,6 +48,7 @@ pub(super) fn acp_missed_transcript(chat: &[ChatMessage], provider: LlmProviderK
     // A reply another agent finished after `provider` ran out of quota mid-turn: `provider` saw
     // the request but not the rest of the reply.
     let ran_out = format!("{}:", provider.label());
+    let ran_out_legacy = format!("{} (ACP):", provider.label());
     let Some(start) = chat
         .iter()
         .rposition(|m| {
@@ -55,9 +56,9 @@ pub(super) fn acp_missed_transcript(chat: &[ChatMessage], provider: LlmProviderK
                 && m.route.as_deref().is_some_and(|r| {
                     r.provider == provider
                         || r.interrupted_providers.contains(&provider)
-                        || r.failover_from
-                            .as_deref()
-                            .is_some_and(|f| f.starts_with(&ran_out))
+                        || r.failover_from.as_deref().is_some_and(|f| {
+                            f.starts_with(&ran_out) || f.starts_with(&ran_out_legacy)
+                        })
                 })
         })
         .map(|i| match chat[i].route.as_deref() {

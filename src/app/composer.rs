@@ -1427,7 +1427,7 @@ mod layout_tests {
             composer_provider_groups(&[CodexAcp, CursorAcp, Ollama]),
             vec![
                 ("Local / self-hosted", vec![Ollama]),
-                ("External agents (ACP)", vec![CursorAcp, CodexAcp]),
+                ("External agents", vec![CursorAcp, CodexAcp]),
             ]
         );
         assert!(composer_provider_groups(&[]).is_empty());

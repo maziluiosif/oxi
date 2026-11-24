@@ -67,6 +67,12 @@ use client_fs::fs_write_text;
 pub use commands::{AcpSlashCommand, available as available_commands};
 
 mod antigravity;
+#[path = "acp/backend.rs"]
+mod backend;
+#[path = "acp/claude_native.rs"]
+mod claude_native;
+#[path = "acp/codex_native.rs"]
+mod codex_native;
 #[path = "acp/install.rs"]
 mod install;
 
@@ -141,7 +147,74 @@ const PROTOCOL_VERSION: i64 = 1;
 type Pending = Arc<AsyncMutex<HashMap<i64, oneshot::Sender<Result<Value, String>>>>>;
 
 /// The running agents, by oxi session key.
-type Conns = Arc<AsyncMutex<HashMap<String, Conn>>>;
+type Conns = Arc<AsyncMutex<HashMap<String, ManagedConn>>>;
+
+/// A live external agent connection: native Codex (`codex app-server`), native Claude Code
+/// (`claude --output-format stream-json`), or a generic ACP adapter.
+enum ManagedConn {
+    Acp(Conn),
+    Codex(codex_native::CodexConn),
+    Claude(claude_native::ClaudeConn),
+}
+
+#[derive(Clone)]
+enum ManagedHandles {
+    Acp(ConnHandles),
+    Codex(codex_native::CodexHandles),
+    Claude(claude_native::ClaudeHandles),
+}
+
+impl ManagedConn {
+    fn alive(&self) -> bool {
+        match self {
+            Self::Acp(c) => c.alive.load(Ordering::SeqCst),
+            Self::Codex(c) => c.alive.load(Ordering::SeqCst),
+            Self::Claude(c) => c.alive.load(Ordering::SeqCst),
+        }
+    }
+
+    fn alive_flag(&self) -> Arc<AtomicBool> {
+        match self {
+            Self::Acp(c) => c.alive.clone(),
+            Self::Codex(c) => c.alive.clone(),
+            Self::Claude(c) => c.alive.clone(),
+        }
+    }
+
+    fn activity(&self) -> &Arc<reaper::Activity> {
+        match self {
+            Self::Acp(c) => &c.handles.activity,
+            Self::Codex(c) => &c.handles.activity,
+            Self::Claude(c) => &c.handles.activity,
+        }
+    }
+
+    fn busy(&self) -> bool {
+        match self {
+            Self::Acp(c) => c.handles.busy(),
+            Self::Codex(c) => c.handles.busy(),
+            Self::Claude(c) => c.handles.busy(),
+        }
+    }
+
+    fn handles(&self) -> ManagedHandles {
+        match self {
+            Self::Acp(c) => ManagedHandles::Acp(c.handles.clone()),
+            Self::Codex(c) => ManagedHandles::Codex(c.handles.clone()),
+            Self::Claude(c) => ManagedHandles::Claude(c.handles.clone()),
+        }
+    }
+}
+
+impl ManagedHandles {
+    fn available_models(&self) -> Vec<String> {
+        match self {
+            Self::Acp(h) => h.available_models.clone(),
+            Self::Codex(h) => h.available_models(),
+            Self::Claude(h) => h.available_models(),
+        }
+    }
+}
 
 /// The running agents, plus one launch lock per session so a warm-up and the prompt right
 /// behind it share one subprocess instead of each starting their own.
@@ -163,7 +236,7 @@ impl Agents {
 
     /// Stop the session's agent. Its session stays resumable and its options stay shown.
     async fn stop(&self, session_key: &str) {
-        // Dropping the Conn kills the subprocess (kill_on_drop).
+        // Dropping the connection kills the subprocess (kill_on_drop).
         self.conns.lock().await.remove(session_key);
         reaper::mark_stopped(session_key);
     }
@@ -176,8 +249,12 @@ impl Agents {
             .lock()
             .await
             .iter()
-            .filter(|(_, c)| c.alive.load(Ordering::SeqCst) && c.outdated())
-            .map(|(key, _)| key.clone())
+            .filter_map(|(key, conn)| match conn {
+                ManagedConn::Acp(c) if c.alive.load(Ordering::SeqCst) && c.outdated() => {
+                    Some(key.clone())
+                }
+                _ => None,
+            })
             .collect();
         for key in keys {
             // A prompt for this session waits here and then finds the new agent.
@@ -185,18 +262,19 @@ impl Agents {
             let _launching = launch.lock().await;
             let saved = {
                 let map = self.conns.lock().await;
-                map.get(&key)
-                    .filter(|c| c.alive.load(Ordering::SeqCst) && c.outdated())
-                    .map(|c| {
-                        (
+                match map.get(&key) {
+                    Some(ManagedConn::Acp(c)) if c.alive.load(Ordering::SeqCst) && c.outdated() => {
+                        Some((
                             c.command_line.clone(),
                             c.cwd.clone(),
                             c.env.clone(),
                             c.model.clone(),
                             c.effort.clone(),
                             c.mcp_servers.clone(),
-                        )
-                    })
+                        ))
+                    }
+                    _ => None,
+                }
             };
             let Some((command_line, cwd, env, model, effort, mcp_servers)) = saved else {
                 continue;
@@ -219,16 +297,18 @@ impl Agents {
             };
             let mut map = self.conns.lock().await;
             // Stopped meanwhile, or it started work of its own: keep things as they are.
-            let replace = map.get(&key).is_some_and(|old| {
-                old.alive.load(Ordering::SeqCst)
-                    && !old.handles.busy()
-                    && !old.handles.activity.background()
-            });
+            let replace = matches!(
+                map.get(&key),
+                Some(ManagedConn::Acp(old))
+                    if old.alive.load(Ordering::SeqCst)
+                        && !old.handles.busy()
+                        && !old.handles.activity.background()
+            );
             if replace {
                 log::info!("moved the idle ACP agent of {key} to the new adapter");
                 reaper::mark_live(&key, conn.alive.clone(), conn.handles.activity.clone());
                 // Dropping the old Conn kills its subprocess (kill_on_drop).
-                map.insert(key, conn);
+                map.insert(key, ManagedConn::Acp(conn));
             }
         }
     }
@@ -237,36 +317,33 @@ impl Agents {
     /// under one lock: a prompt reusing an agent marks it used under the same lock, so it is
     /// either seen as in use here or relaunched there.
     async fn reap(&self) {
-        let stopped: Vec<(String, Conn)> = {
+        let stopped: Vec<(String, ManagedConn)> = {
             let now = std::time::Instant::now();
             let mut conns = self.conns.lock().await;
             let agents = conns
                 .iter()
-                .filter(|(_, c)| c.alive.load(Ordering::SeqCst))
-                .map(|(key, c)| {
-                    let h = &c.handles;
-                    reaper::Candidate::of(key, &h.activity, h.busy(), now)
-                })
+                .filter(|(_, c)| c.alive())
+                .map(|(key, c)| reaper::Candidate::of(key, c.activity(), c.busy(), now))
                 .collect();
-            let mut stopped: Vec<(String, Conn)> = reaper::victims(agents)
+            let mut stopped: Vec<(String, ManagedConn)> = reaper::victims(agents)
                 .into_iter()
                 .filter_map(|key| conns.remove_entry(&key))
                 .collect();
             // Agents that exited on their own.
             let dead: Vec<String> = conns
                 .iter()
-                .filter(|(_, c)| !c.alive.load(Ordering::SeqCst))
+                .filter(|(_, c)| !c.alive())
                 .map(|(key, _)| key.clone())
                 .collect();
             stopped.extend(dead.into_iter().filter_map(|key| conns.remove_entry(&key)));
             stopped
         };
         for (key, conn) in stopped {
-            if conn.alive.load(Ordering::SeqCst) {
-                log::info!("stopping the idle ACP agent of {key}");
+            if conn.alive() {
+                log::info!("stopping the idle agent of {key}");
             }
             reaper::mark_stopped(&key);
-            // Dropping the Conn kills the subprocess (kill_on_drop).
+            // Dropping the connection kills its subprocess (kill_on_drop).
             drop(conn);
         }
     }
@@ -465,9 +542,27 @@ impl AcpManager {
                 while let Some(cmd) = rx.recv().await {
                     match cmd {
                         AcpCommand::CancelChild { session_key, root, child, task, reply } => {
-                            let handles = agents.conns.lock().await.get(&session_key)
-                                .filter(|c| c.alive.load(Ordering::SeqCst) && c.handles.session_id == root)
-                                .map(|c| c.handles.clone());
+                            let conn = agents.conns.lock().await.get(&session_key)
+                                .and_then(|conn| match conn {
+                                    ManagedConn::Acp(c)
+                                        if c.alive.load(Ordering::SeqCst)
+                                            && c.handles.session_id == root =>
+                                    {
+                                        Some(ManagedHandles::Acp(c.handles.clone()))
+                                    }
+                                    ManagedConn::Claude(c) => Some(ManagedHandles::Claude(c.handles.clone())),
+                                    _ => None,
+                                });
+                            let handles = match conn {
+                                Some(ManagedHandles::Claude(h)) => {
+                                    tokio::spawn(async move {
+                                        let _ = reply.send(h.stop_child(&root, &child, task).await);
+                                    });
+                                    continue;
+                                }
+                                Some(ManagedHandles::Acp(h)) => Some(h),
+                                _ => None,
+                            };
                             tokio::spawn(async move {
                                 let result = match handles {
                                     Some(h) if h.held.can_cancel(&child) => {
@@ -501,7 +596,15 @@ impl AcpManager {
                                 };
                                 let ensured = ensure_conn(&agents, &spec).await;
                                 match ensured {
-                                    Ok(handles) => run_prompt(handles, *req, reply).await,
+                                    Ok(ManagedHandles::Acp(handles)) => {
+                                        run_prompt(handles, *req, reply).await
+                                    }
+                                    Ok(ManagedHandles::Codex(handles)) => {
+                                        codex_native::run_prompt(handles, *req, reply).await
+                                    }
+                                    Ok(ManagedHandles::Claude(handles)) => {
+                                        claude_native::run_prompt(handles, *req, reply).await
+                                    }
                                     Err(e) => {
                                         let _ = reply.send(Err(e));
                                     }
@@ -521,7 +624,7 @@ impl AcpManager {
                                     mcp_servers: &req.mcp_servers,
                                 };
                                 let ensured = ensure_conn(&agents, &spec).await;
-                                let _ = reply.send(ensured.map(|h| h.available_models));
+                                let _ = reply.send(ensured.map(|h| h.available_models()));
                             });
                         }
                         AcpCommand::SetOption { req, reply } => {
@@ -531,13 +634,14 @@ impl AcpManager {
                             });
                         }
                         AcpCommand::Attach { req, reply } => {
-                            let handles = agents
-                                .conns
-                                .lock()
-                                .await
-                                .get(&req.session_key)
-                                .filter(|c| c.alive.load(Ordering::SeqCst))
-                                .map(|c| c.handles.clone());
+                            let handles = agents.conns.lock().await.get(&req.session_key).and_then(
+                                |conn| match conn {
+                                    ManagedConn::Acp(c) if c.alive.load(Ordering::SeqCst) => {
+                                        Some(c.handles.clone())
+                                    }
+                                    _ => None,
+                                },
+                            );
                             match handles {
                                 Some(handles) => {
                                     tokio::spawn(run_attach(handles, req, reply));
@@ -973,38 +1077,66 @@ impl PromptCtx {
 }
 
 /// Return handles for the session's agent, launching + initializing it if there isn't already a
-/// healthy subprocess (or if the launch command changed).
-async fn ensure_conn(agents: &Agents, spec: &LaunchSpec<'_>) -> Result<ConnHandles, String> {
+/// healthy subprocess (or if the launch command / MCP servers changed). Native Codex and Claude
+/// connections update model/effort in place without restarting the subprocess.
+async fn ensure_conn(agents: &Agents, spec: &LaunchSpec<'_>) -> Result<ManagedHandles, String> {
     let mcp_servers = mcp_servers::usable(spec.mcp_servers);
     let launch = agents.launch_lock(spec.session_key);
     let _launching = launch.lock().await;
     let conns = &agents.conns;
-    {
+    let reused: Option<ManagedHandles> = {
         let map = conns.lock().await;
-        if let Some(c) = map.get(spec.session_key)
-            && c.alive.load(Ordering::SeqCst)
-            && c.command_line == spec.command_line
-            && c.model == spec.model
-            && c.effort == spec.effort
-            && c.mcp_servers == mcp_servers
-            && !c.outdated()
-        {
-            // Under the map lock, so a sweep running now sees it in use.
-            c.handles.activity.touch();
-            return Ok(c.handles.clone());
+        match map.get(spec.session_key) {
+            Some(ManagedConn::Acp(c))
+                if c.alive.load(Ordering::SeqCst)
+                    && c.command_line == spec.command_line
+                    && c.model == spec.model
+                    && c.effort == spec.effort
+                    && c.mcp_servers == mcp_servers
+                    && !c.outdated() =>
+            {
+                c.handles.activity.touch();
+                Some(ManagedHandles::Acp(c.handles.clone()))
+            }
+            Some(ManagedConn::Codex(c))
+                if c.alive.load(Ordering::SeqCst)
+                    && c.command_line == spec.command_line
+                    && c.mcp_servers == mcp_servers =>
+            {
+                c.handles.activity.touch();
+                Some(ManagedHandles::Codex(c.handles.clone()))
+            }
+            Some(ManagedConn::Claude(c))
+                if c.alive.load(Ordering::SeqCst)
+                    && c.command_line == spec.command_line
+                    && c.mcp_servers == mcp_servers =>
+            {
+                c.handles.activity.touch();
+                Some(ManagedHandles::Claude(c.handles.clone()))
+            }
+            _ => None,
         }
+    };
+    if let Some(handles) = reused {
+        match &handles {
+            ManagedHandles::Codex(h) => h.sync_model_effort(spec.model, spec.effort),
+            ManagedHandles::Claude(h) => h.sync_model_effort(spec.model, spec.effort).await,
+            ManagedHandles::Acp(_) => {}
+        }
+        return Ok(handles);
     }
-    // A new subprocess (or one whose launch command / model / MCP servers / adapter version
-    // changed): spawn it and
-    // replace any previous entry, whose Conn is dropped here and killed (kill_on_drop). The
-    // agent session itself is resumed, so the conversation carries over.
-    let conn = spawn_conn(spec, mcp_servers).await?;
-    let handles = conn.handles.clone();
-    reaper::mark_live(
-        spec.session_key,
-        conn.alive.clone(),
-        handles.activity.clone(),
-    );
+
+    let conn = match backend::BackendKind::detect(spec.command_line) {
+        backend::BackendKind::CodexNative => {
+            ManagedConn::Codex(codex_native::spawn_conn(spec, mcp_servers).await?)
+        }
+        backend::BackendKind::ClaudeNative => {
+            ManagedConn::Claude(claude_native::spawn_conn(spec, mcp_servers).await?)
+        }
+        backend::BackendKind::Acp => ManagedConn::Acp(spawn_conn(spec, mcp_servers).await?),
+    };
+    let handles = conn.handles();
+    reaper::mark_live(spec.session_key, conn.alive_flag(), conn.activity().clone());
     conns
         .lock()
         .await
@@ -1013,34 +1145,55 @@ async fn ensure_conn(agents: &Agents, spec: &LaunchSpec<'_>) -> Result<ConnHandl
 }
 
 async fn set_option(conns: &Conns, req: AcpSetOption) -> Result<(), String> {
-    let handles = {
+    enum Target {
+        Acp(ConnHandles),
+        Codex(codex_native::CodexHandles),
+        Claude(claude_native::ClaudeHandles),
+    }
+    let target = {
         let mut map = conns.lock().await;
-        let Some(conn) = map
-            .get_mut(&req.session_key)
-            .filter(|c| c.alive.load(Ordering::SeqCst) && c.command_line == req.command_line)
-        else {
-            // A stopped agent takes the value when it is launched again: the composer already
-            // shows it, and the launch restores what the composer shows (see `restore_options`).
-            return Ok(());
-        };
-        if let Some(model) = req.model {
-            conn.model = model;
+        match map.get_mut(&req.session_key) {
+            Some(ManagedConn::Acp(conn))
+                if conn.alive.load(Ordering::SeqCst) && conn.command_line == req.command_line =>
+            {
+                if let Some(model) = req.model.clone() {
+                    conn.model = model;
+                }
+                if let Some(effort) = req.effort.clone() {
+                    conn.effort = effort;
+                }
+                Some(Target::Acp(conn.handles.clone()))
+            }
+            Some(ManagedConn::Codex(conn))
+                if conn.alive.load(Ordering::SeqCst) && conn.command_line == req.command_line =>
+            {
+                Some(Target::Codex(conn.handles.clone()))
+            }
+            Some(ManagedConn::Claude(conn))
+                if conn.alive.load(Ordering::SeqCst) && conn.command_line == req.command_line =>
+            {
+                Some(Target::Claude(conn.handles.clone()))
+            }
+            _ => None,
         }
-        if let Some(effort) = req.effort {
-            conn.effort = effort;
-        }
-        conn.handles.clone()
     };
-    set_user_option(
-        &handles.stdin,
-        &handles.next_id,
-        &handles.pending,
-        &handles.session_id,
-        &handles.modes,
-        &req.config_id,
-        req.value,
-    )
-    .await
+    match target {
+        None => Ok(()),
+        Some(Target::Acp(handles)) => {
+            set_user_option(
+                &handles.stdin,
+                &handles.next_id,
+                &handles.pending,
+                &handles.session_id,
+                &handles.modes,
+                &req.config_id,
+                req.value,
+            )
+            .await
+        }
+        Some(Target::Codex(handles)) => handles.apply_option(&req),
+        Some(Target::Claude(handles)) => handles.apply_option(&req).await,
+    }
 }
 
 fn build_command(command_line: &str) -> Command {
@@ -2236,6 +2389,9 @@ fn build_prompt_blocks(text: &str, images: &[(String, Vec<u8>)], resources: &[Va
     Value::Array(blocks)
 }
 
+#[cfg(test)]
+#[path = "acp/native_tests.rs"]
+mod native_tests;
 #[cfg(test)]
 #[path = "acp/tests.rs"]
 mod tests;

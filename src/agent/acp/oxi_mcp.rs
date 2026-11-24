@@ -21,6 +21,41 @@ pub(super) const SCRATCHPAD_READ: &str = "scratchpad_read";
 pub(super) const SCRATCHPAD: &str = "scratchpad";
 const TOOL_NAMES: [&str; 3] = [TOOL_NAME, SCRATCHPAD_READ, SCRATCHPAD];
 
+pub(super) struct ServerSpec {
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+/// Executable, arguments, and environment pairs needed to launch oxi's stdio MCP server.
+pub(super) fn server_spec(
+    evidence_dir: Option<&std::path::Path>,
+    delegation_dir: Option<&std::path::Path>,
+) -> Option<ServerSpec> {
+    let exe = std::env::current_exe().ok()?;
+    // Test binaries live in `target/<profile>/deps/`; the app binary sits one level up.
+    #[cfg(test)]
+    let exe = exe.parent()?.parent()?.join("oxi");
+    let mut env = Vec::new();
+    if let Some(dir) = evidence_dir {
+        env.push((
+            crate::evidence::DIR_ENV.to_string(),
+            dir.to_string_lossy().into_owned(),
+        ));
+    }
+    if let Some(dir) = delegation_dir {
+        env.push((
+            crate::delegation::DIR_ENV.to_string(),
+            dir.to_string_lossy().into_owned(),
+        ));
+    }
+    Some(ServerSpec {
+        command: exe.to_string_lossy().into_owned(),
+        args: vec![SUBCOMMAND.to_string()],
+        env,
+    })
+}
+
 /// The ACP `McpServer` entry that launches this server from the running oxi binary.
 /// `evidence_dir`: the connection's evidence folder, which turns on the evidence tools.
 /// `delegation_dir`: the chat's delegation mailbox, which turns on the delegation tools.
@@ -28,21 +63,15 @@ pub(super) fn acp_entry(
     evidence_dir: Option<&std::path::Path>,
     delegation_dir: Option<&std::path::Path>,
 ) -> Option<Value> {
-    let exe = std::env::current_exe().ok()?;
-    // Test binaries live in `target/<profile>/deps/`; the app binary sits one level up.
-    #[cfg(test)]
-    let exe = exe.parent()?.parent()?.join("oxi");
-    let env: Vec<Value> = evidence_dir
-        .map(|dir| json!({ "name": crate::evidence::DIR_ENV, "value": dir.to_string_lossy() }))
+    let ServerSpec { command, args, env } = server_spec(evidence_dir, delegation_dir)?;
+    let env: Vec<Value> = env
         .into_iter()
-        .chain(delegation_dir.map(
-            |dir| json!({ "name": crate::delegation::DIR_ENV, "value": dir.to_string_lossy() }),
-        ))
+        .map(|(name, value)| json!({ "name": name, "value": value }))
         .collect();
     Some(json!({
         "name": SERVER_NAME,
-        "command": exe.to_string_lossy(),
-        "args": [SUBCOMMAND],
+        "command": command,
+        "args": args,
         "env": env,
     }))
 }
