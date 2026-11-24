@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.46.0] - 2026-11-24
+
+### Added
+- **Agent:** Run Codex and Claude Code directly on their native CLIs instead of npm adapters.
+- **Agent:** Track background commands across conversation turns and show a waiting indicator with a stop action in the chat.
+- **File Explorer:** Delete folders and all their contents at once; confirmation shows what will be removed.
+- **OpenCode Go:** Send session identifier and oxi User-Agent headers for compatibility with updated OpenCode Go API.
+
+### Changed
+- **Agent:** Per-turn approvals no longer escalate to session scope.
+- **Agent:** Codex steering runs commands in order and Plan mode sends collaboration settings.
+- **Agent:** Claude session import now tolerates malformed lines.
+- **Agent:** Native workflows can be stopped via the stop action.
+- **File Explorer:** Prevent deleting folders with unsaved open files; close tabs only for deleted files.
+
+### Fixed
+- **File Explorer:** Folder deletion now works on Windows and with non-empty directories.
+- **Agent:** Stop interrupts from spawned tasks; requests time out and free their slot.
+- **Agent:** Stall detection now checks all message blocks for in-flight tools and handles async background commands cleanly.
+
+
 ## [1.45.0] - 2026-11-24
 
 ### Added
@@ -1470,7 +1491,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.45.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.46.0...HEAD
+[1.46.0]: https://github.com/maziluiosif/oxi/compare/v1.45.0...v1.46.0
 [1.45.0]: https://github.com/maziluiosif/oxi/compare/v1.44.0...v1.45.0
 [1.44.0]: https://github.com/maziluiosif/oxi/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/maziluiosif/oxi/compare/v1.42.0...v1.43.0
