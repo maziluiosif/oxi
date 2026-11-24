@@ -348,6 +348,17 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         rec.app().conv.settings_page.open = false;
         rec.app().conv.settings_page.original = None;
         rec.harness.run_steps(3);
+        // The status bar context popup with the subscription windows seeded above.
+        let previous = rec.app().conv.settings.active_provider;
+        rec.app().conv.settings.active_provider = LlmProviderKind::ClaudeCodeAcp;
+        rec.app().conv.settings.router.read_claude_code_usage = true;
+        let popup_id = egui::Id::new("status_bar_context_popup");
+        egui::Popup::open_id(&rec.harness.ctx, popup_id);
+        rec.harness.run_steps(3);
+        rec.still("status-context-popup");
+        egui::Popup::close_id(&rec.harness.ctx, popup_id);
+        rec.app().conv.settings.active_provider = previous;
+        rec.harness.run_steps(2);
         // OXI_SETTINGS_REVIEW=1: only the Settings stills above.
         if std::env::var_os("OXI_SETTINGS_REVIEW").is_some() {
             return;

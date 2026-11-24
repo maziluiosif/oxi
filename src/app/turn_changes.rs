@@ -1,20 +1,140 @@
-//! "N files changed" card under an agent turn that changed the workspace: the files with their
-//! line counts, a diff per file (against the snapshot taken before the turn, with per-block
-//! revert), and reverting one file or the whole turn.
+//! "N files changed" card at the bottom of a chat that changed the workspace: one consolidated
+//! summary of every file the chat modified, with net line counts, a diff per file (against the
+//! snapshot taken before the chat touched it), cross-agent review, and reverting one file or all
+//! of the chat's changes.
 //!
-//! The file list is computed when the turn's snapshot is taken and saved with the turn. Turns
-//! saved before that (or by an older oxi) get theirs from a background diff of the snapshots;
-//! nothing here runs git, or asks an SSH host, on the UI thread.
+//! Per-turn snapshots stay on each message (for message-level rewind and persistence), while the
+//! card consolidates them into a single net diff computed off the UI thread; nothing here runs
+//! git, or asks an SSH host, on the UI thread.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui::{self, FontId, RichText, Sense, Ui};
 
 use super::OxiApp;
 use crate::git::{CompareFile, GitOp};
-use crate::model::TurnChanges;
+use crate::model::{ChatMessage, TurnChanges};
+use crate::settings::LlmProviderKind;
 use crate::theme::*;
+
+/// Consolidated workspace changes across all completed turns of a chat (in its active repo).
+#[derive(Clone, Debug)]
+pub(crate) struct ChatChanges {
+    pub repo: String,
+    /// `(before, after)` snapshot pairs in chronological order (non-empty, each `before != after`).
+    pub turns: Vec<(String, String)>,
+    /// Pre-computed file list when there is a single turn that already persisted its `files`.
+    pub single_turn_files: Option<Vec<CompareFile>>,
+    /// Agent that made the latest change in `turns`, when known.
+    pub author: Option<LlmProviderKind>,
+}
+
+impl ChatChanges {
+    #[cfg(test)]
+    pub(crate) fn from_single(changes: &TurnChanges, author: Option<LlmProviderKind>) -> Option<Self> {
+        if changes.before == changes.after {
+            return None;
+        }
+        Some(Self {
+            repo: changes.repo.clone(),
+            turns: vec![(changes.before.clone(), changes.after.clone())],
+            single_turn_files: changes.files.clone(),
+            author,
+        })
+    }
+
+    pub(crate) fn before(&self) -> &str {
+        &self.turns[0].0
+    }
+
+    pub(crate) fn after(&self) -> &str {
+        &self.turns[self.turns.len() - 1].1
+    }
+
+    fn as_turn_changes(&self, files: Option<Vec<CompareFile>>) -> TurnChanges {
+        TurnChanges {
+            repo: self.repo.clone(),
+            before: self.before().to_string(),
+            after: self.after().to_string(),
+            files,
+        }
+    }
+}
+
+/// Collect every completed turn's changes in `messages` into a single consolidated chat summary.
+/// When a chat has multiple sub-turns (e.g. background-task wakeups) or multiple user turns, they
+/// fold into one net card instead of stacking several cards.
+pub(crate) fn collect_chat_changes(messages: &[ChatMessage]) -> Option<ChatChanges> {
+    let entries: Vec<(&TurnChanges, Option<LlmProviderKind>)> = messages
+        .iter()
+        .filter(|m| !m.streaming)
+        .filter_map(|m| {
+            let changes = m.changes.as_deref()?;
+            if changes.before == changes.after {
+                return None;
+            }
+            Some((changes, m.route.as_deref().map(|r| r.provider)))
+        })
+        .collect();
+    let (last, last_author) = *entries.last()?;
+    let repo = last.repo.clone();
+    let matching: Vec<&TurnChanges> = entries
+        .iter()
+        .filter(|(c, _)| c.repo == repo)
+        .map(|(c, _)| *c)
+        .collect();
+    let turns: Vec<(String, String)> = matching
+        .iter()
+        .map(|c| (c.before.clone(), c.after.clone()))
+        .collect();
+    if turns.first().map(|(b, _)| b) == turns.last().map(|(_, a)| a) {
+        return None;
+    }
+    let single_turn_files = (matching.len() == 1)
+        .then(|| matching[0].files.clone())
+        .flatten();
+    Some(ChatChanges {
+        repo,
+        turns,
+        single_turn_files,
+        author: last_author,
+    })
+}
+
+/// Compute the net changed file list for `turns` off the UI thread.
+/// Contiguous snapshot chains (`t0..t1`, `t1..t2`, …) reduce to one `t0..tN` tree diff; when the
+/// user edited files between turns (`t1 != t2_before`), unrelated manual edits are excluded by
+/// intersecting with the paths actually touched by the agent turns.
+fn compute_chat_changed_files(
+    repo: &Path,
+    turns: &[(String, String)],
+) -> Result<Vec<CompareFile>, String> {
+    let Some((first_before, _)) = turns.first() else {
+        return Ok(Vec::new());
+    };
+    let Some((_, last_after)) = turns.last() else {
+        return Ok(Vec::new());
+    };
+    if first_before == last_after {
+        return Ok(Vec::new());
+    }
+    if turns.len() == 1 || turns.windows(2).all(|w| w[0].1 == w[1].0) {
+        return crate::git::checkpoint::changed_files(repo, first_before, last_after);
+    }
+    let mut touched = HashSet::new();
+    for (before, after) in turns {
+        for file in crate::git::checkpoint::changed_files(repo, before, after)? {
+            touched.insert(file.path);
+        }
+    }
+    let net = crate::git::checkpoint::changed_files(repo, first_before, last_after)?;
+    Ok(net
+        .into_iter()
+        .filter(|f| touched.contains(&f.path))
+        .collect())
+}
 
 /// Per-turn view state, keyed by the turn's `before..after` trees.
 #[derive(Default)]
@@ -72,35 +192,57 @@ fn cache_key(changes: &TurnChanges) -> String {
     format!("{}..{}", changes.before, changes.after)
 }
 
+fn chat_cache_key(changes: &ChatChanges) -> String {
+    if changes.turns.len() == 1 {
+        format!("{}..{}", changes.before(), changes.after())
+    } else {
+        let mut out = String::new();
+        for (i, (b, a)) in changes.turns.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(b);
+            out.push_str("..");
+            out.push_str(a);
+        }
+        out
+    }
+}
+
 enum CardAction {
     Toggle,
     OpenDiff(String),
     RevertFile(String),
     RevertAll,
-    Review(crate::settings::LlmProviderKind),
+    Review(LlmProviderKind),
 }
 
 impl OxiApp {
-    /// `author`: the agent whose response made the changes, when known.
+    /// Render a single `TurnChanges` card (kept as a convenience wrapper for tests).
+    #[cfg(test)]
     pub(crate) fn render_turn_changes(
         &mut self,
         ui: &mut Ui,
         changes: &TurnChanges,
-        author: Option<crate::settings::LlmProviderKind>,
+        author: Option<LlmProviderKind>,
     ) {
-        if changes.before == changes.after {
-            // A snapshot pair kept for rewinding a turn that changed nothing.
+        if let Some(chat) = ChatChanges::from_single(changes, author) {
+            self.render_chat_changes(ui, &chat);
+        }
+    }
+
+    /// Render the single consolidated "N files changed" card for the active chat.
+    pub(crate) fn render_chat_changes(&mut self, ui: &mut Ui, changes: &ChatChanges) {
+        if changes.turns.is_empty() || changes.before() == changes.after() {
             return;
         }
-        let key = cache_key(changes);
+        let key = chat_cache_key(changes);
         if !self.conv.transcript.turn_changes.entries.contains_key(&key) {
-            let files = changes.files.clone().map(Ok);
+            let files = changes.single_turn_files.clone().map(Ok);
             if files.is_none() {
                 let repo = self.turn_repo(&changes.repo);
-                let (before, after) = (changes.before.clone(), changes.after.clone());
-                let rx = spawn(ui.ctx(), move || {
-                    crate::git::checkpoint::changed_files(&repo, &before, &after)
-                });
+                let turns = changes.turns.clone();
+                let rx = spawn(ui.ctx(), move || compute_chat_changed_files(&repo, &turns));
                 self.conv.transcript.turn_changes.jobs.push(Job::Load {
                     key: key.clone(),
                     rx,
@@ -130,6 +272,7 @@ impl OxiApp {
         let all_reverted = entry.reverted.contains("*");
         let reverted = entry.reverted.clone();
         let reverting = entry.reverting;
+        let author = changes.author;
         let reviewers = if all_reverted {
             Vec::new()
         } else {
@@ -218,7 +361,7 @@ impl OxiApp {
                         } else if crate::ui::chrome::ghost_button_icon(
                             ui, ICON_UNDO, "Revert", true,
                         )
-                        .on_hover_text("Put back every file this response changed")
+                        .on_hover_text("Put back every file changed in this chat")
                         .clicked()
                         {
                             action = Some(CardAction::RevertAll);
@@ -302,7 +445,7 @@ impl OxiApp {
                     }
                 }
             });
-        // Breathing room before the next turn, like a user bubble leaves after itself.
+        // Breathing room before the composer.
         ui.add_space(12.0);
 
         match action {
@@ -315,7 +458,7 @@ impl OxiApp {
                 let base = format!(
                     "{}{}",
                     crate::git::checkpoint::TURN_BASE_PREFIX,
-                    changes.before
+                    changes.before()
                 );
                 let source = crate::app::file_explorer::DiffSource::Compare {
                     base: base.clone(),
@@ -332,22 +475,23 @@ impl OxiApp {
                 }
             }
             Some(CardAction::RevertFile(path)) => {
-                self.revert_turn_changes(ui.ctx(), changes, &key, Some(path));
+                self.revert_chat_changes(ui.ctx(), changes, &key, Some(path));
             }
-            Some(CardAction::RevertAll) => self.revert_turn_changes(ui.ctx(), changes, &key, None),
+            Some(CardAction::RevertAll) => self.revert_chat_changes(ui.ctx(), changes, &key, None),
             Some(CardAction::Review(reviewer)) => {
-                self.review_turn_changes(changes, author, reviewer)
+                let merged = changes.as_turn_changes(Some(files));
+                self.review_turn_changes(&merged, author, reviewer)
             }
             None => {}
         }
     }
 
-    /// Put back the files of a turn (or one of them) in the background; the card shows the
+    /// Put back the files of a chat (or one of them) in the background; the card shows the
     /// outcome once [`Self::drain_turn_changes`] sees it.
-    fn revert_turn_changes(
+    fn revert_chat_changes(
         &mut self,
         ctx: &egui::Context,
-        changes: &TurnChanges,
+        changes: &ChatChanges,
         key: &str,
         only: Option<String>,
     ) {
@@ -360,10 +504,10 @@ impl OxiApp {
         }
         entry.reverting = true;
         let repo = self.turn_repo(&changes.repo);
-        let (before, after) = (changes.before.clone(), changes.after.clone());
+        let turns = changes.turns.clone();
         let path = only.clone();
         let rx = spawn(ctx, move || {
-            crate::git::checkpoint::restore(&repo, &before, &after, path.as_deref())
+            crate::git::checkpoint::restore_turns(&repo, &turns, path.as_deref())
         });
         self.conv.transcript.turn_changes.jobs.push(Job::Revert {
             key: key.to_string(),
@@ -526,7 +670,7 @@ fn render_file_row(ui: &mut Ui, file: &CompareFile, reverted: bool) -> Option<Ca
                             .sense(Sense::click())
                             .selectable(false),
                     )
-                    .on_hover_text("Show the diff against the files before this response")
+                    .on_hover_text("Show the diff against the files before this chat")
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
                 if row.clicked() && !reverted {
                     action = Some(CardAction::OpenDiff(file.path.clone()));
@@ -596,6 +740,58 @@ mod tests {
         let json =
             serde_json::to_value(app.active_session().messages[0].changes.as_deref()).unwrap();
         assert_eq!(json["files"][0]["path"], "a.txt");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn chat_changes_consolidates_multiple_turns_into_one_net_diff() {
+        crate::secrets::use_mock_store();
+        let root = crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-chat-changes", "d");
+        std::fs::create_dir_all(&root).unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "base\n").unwrap();
+        std::fs::write(root.join("unrelated.txt"), "keep\n").unwrap();
+        let t0 = crate::git::checkpoint::snapshot(&root).unwrap();
+
+        // Turn 1: edits a.txt and creates temp.txt
+        std::fs::write(root.join("a.txt"), "base\nturn1\n").unwrap();
+        std::fs::write(root.join("temp.txt"), "tmp\n").unwrap();
+        let t1 = crate::git::checkpoint::snapshot(&root).unwrap();
+
+        // User edits unrelated.txt between turns
+        std::fs::write(root.join("unrelated.txt"), "manual user edit\n").unwrap();
+        let t2_before = crate::git::checkpoint::snapshot(&root).unwrap();
+
+        // Turn 2: updates a.txt again, adds b.txt, removes temp.txt
+        std::fs::write(root.join("a.txt"), "base\nturn1\nturn2\n").unwrap();
+        std::fs::write(root.join("b.txt"), "new file\n").unwrap();
+        std::fs::remove_file(root.join("temp.txt")).unwrap();
+        let t2_after = crate::git::checkpoint::snapshot(&root).unwrap();
+
+        let mk = |before: &str, after: &str| {
+            let mut m = ChatMessage::streaming_assistant(None);
+            m.blocks.push(AssistantBlock::Answer("ok".into()));
+            m.finish_streaming();
+            m.changes = Some(Box::new(TurnChanges {
+                repo: t0.repo.to_string_lossy().into_owned(),
+                before: before.into(),
+                after: after.into(),
+                files: None,
+            }));
+            m
+        };
+        let messages = vec![mk(&t0.tree, &t1.tree), mk(&t2_before.tree, &t2_after.tree)];
+        let consolidated = collect_chat_changes(&messages).expect("consolidated chat changes");
+        assert_eq!(consolidated.turns.len(), 2);
+        assert_eq!(consolidated.before(), t0.tree);
+        assert_eq!(consolidated.after(), t2_after.tree);
+
+        let files = compute_chat_changed_files(&t0.repo, &consolidated.turns).unwrap();
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        // Net result: a.txt (+2), b.txt (+1); temp.txt cancelled out and unrelated.txt excluded.
+        assert_eq!(paths, vec!["a.txt", "b.txt"]);
+        assert_eq!(files[0].added, 2);
+        assert_eq!(files[1].added, 1);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

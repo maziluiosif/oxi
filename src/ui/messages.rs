@@ -106,8 +106,118 @@ pub(super) fn tool_detail(ui: &egui::Ui) -> crate::settings::ToolDetail {
         .unwrap_or_default()
 }
 
-pub(super) fn block_state_tag(streaming: bool) -> &'static str {
-    if streaming { "live" } else { "done" }
+/// Paint a soft vertical fade strip along the top or bottom edge of a scrollable viewport so
+/// clipped content visibly trails off instead of ending with a hard scissor cut.
+pub(super) fn paint_vertical_fade(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bg: egui::Color32,
+    top: bool,
+) {
+    let fade_h = 18.0_f32.min(rect.height() * 0.35);
+    if fade_h <= 1.0 || rect.width() <= 0.0 {
+        return;
+    }
+    let solid = bg.gamma_multiply(0.92);
+    let clear = egui::Color32::TRANSPARENT;
+    let (y0, y1, c_top, c_bot) = if top {
+        (rect.top(), rect.top() + fade_h, solid, clear)
+    } else {
+        (rect.bottom() - fade_h, rect.bottom(), clear, solid)
+    };
+    let mut mesh = egui::epaint::Mesh::default();
+    let uv = egui::epaint::WHITE_UV;
+    mesh.vertices.push(egui::epaint::Vertex {
+        pos: egui::pos2(rect.left(), y0),
+        uv,
+        color: c_top,
+    });
+    mesh.vertices.push(egui::epaint::Vertex {
+        pos: egui::pos2(rect.right(), y0),
+        uv,
+        color: c_top,
+    });
+    mesh.vertices.push(egui::epaint::Vertex {
+        pos: egui::pos2(rect.right(), y1),
+        uv,
+        color: c_bot,
+    });
+    mesh.vertices.push(egui::epaint::Vertex {
+        pos: egui::pos2(rect.left(), y1),
+        uv,
+        color: c_bot,
+    });
+    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Render `add_contents` inline when it fits within `max_height`, or inside an exact-height
+/// vertical [`egui::ScrollArea`] when it overflows (or when `stick_to_bottom` pins a live tail).
+///
+/// Pre-allocating the exact rect before entering the nested `ScrollArea` prevents egui from
+/// clamping the nested viewport to whatever sliver of `available_rect_before_wrap` remains near
+/// the bottom of the outer transcript `ScrollArea`. Drag-scroll is disabled so click-drag selects
+/// text cleanly, and soft top/bottom fades signal when more content exists out of view.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn show_bounded_scroll_box(
+    ui: &mut Ui,
+    scroll_id: Id,
+    width: f32,
+    content_height: f32,
+    max_height: f32,
+    min_height: f32,
+    fade_bg: egui::Color32,
+    stick_to_bottom: bool,
+    allow_wheel: bool,
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    if !stick_to_bottom && content_height <= max_height + 1.0 {
+        ui.vertical(|ui| {
+            ui.set_width(width);
+            add_contents(ui);
+        });
+        return;
+    }
+
+    let box_h = content_height.clamp(min_height, max_height);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, box_h), egui::Sense::hover());
+    let mut offset_y = 0.0_f32;
+    let mut inner_h = 0.0_f32;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        let scroll_source = if allow_wheel {
+            egui::containers::scroll_area::ScrollSource {
+                drag: egui::containers::scroll_area::DragScroll::Never,
+                ..Default::default()
+            }
+        } else {
+            egui::containers::scroll_area::ScrollSource::NONE
+        };
+        let bar_vis = if allow_wheel {
+            egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded
+        } else {
+            egui::scroll_area::ScrollBarVisibility::AlwaysHidden
+        };
+        let output = egui::ScrollArea::vertical()
+            .id_salt(scroll_id)
+            .auto_shrink([false, false])
+            .max_height(max_height)
+            .min_scrolled_height(min_height)
+            .scroll_bar_visibility(bar_vis)
+            .stick_to_bottom(stick_to_bottom)
+            .scroll_source(scroll_source)
+            .show(ui, |ui| {
+                ui.set_width(width);
+                add_contents(ui);
+            });
+        offset_y = output.state.offset.y;
+        inner_h = output.content_size.y;
+    });
+    if offset_y > 1.5 {
+        paint_vertical_fade(ui.painter(), rect, fade_bg, true);
+    }
+    if offset_y + rect.height() < inner_h - 1.5 {
+        paint_vertical_fade(ui.painter(), rect, fade_bg, false);
+    }
 }
 
 /// Write/edit-like tools render as full detail blocks, not explore-cluster rows.

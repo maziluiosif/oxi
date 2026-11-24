@@ -665,17 +665,6 @@ impl OxiApp {
                                 let unit_id = ui.id().with(key);
                                 let find_slot =
                                     is_find_target.then(|| ui.painter().add(egui::Shape::Noop));
-                                let turn_changes: Vec<(
-                                    crate::model::TurnChanges,
-                                    Option<crate::settings::LlmProviderKind>,
-                                )> = messages[start..end]
-                                    .iter()
-                                    .filter(|m| !m.streaming)
-                                    .filter_map(|m| {
-                                        let changes = m.changes.as_deref()?.clone();
-                                        Some((changes, m.route.as_deref().map(|r| r.provider)))
-                                    })
-                                    .collect();
                                 let evidence: Vec<crate::evidence::EvidenceReport> = messages
                                     [start..end]
                                     .iter()
@@ -709,16 +698,6 @@ impl OxiApp {
                                         );
                                     }
                                 });
-                                if !turn_changes.is_empty() {
-                                    ui.scope_builder(
-                                        egui::UiBuilder::new().id(unit_id.with("changes")),
-                                        |ui| {
-                                            for (changes, author) in &turn_changes {
-                                                self.render_turn_changes(ui, changes, *author);
-                                            }
-                                        },
-                                    );
-                                }
                                 if !evidence.is_empty() {
                                     ui.scope_builder(
                                         egui::UiBuilder::new().id(unit_id.with("evidence")),
@@ -811,6 +790,14 @@ impl OxiApp {
                                 self.render_stall_notice(ui, quiet);
                             } else if !self.active_waiting_response() && !bg_tools.is_empty() {
                                 self.render_background_wait_notice(ui, &bg_tools);
+                            }
+                            if let Some(chat_changes) = super::turn_changes::collect_chat_changes(
+                                &self.conv.workspaces[wi].sessions[si].messages,
+                            ) {
+                                ui.scope_builder(
+                                    egui::UiBuilder::new().id(ui.id().with("chat_changes")),
+                                    |ui| self.render_chat_changes(ui, &chat_changes),
+                                );
                             }
                         }
                     });

@@ -17,8 +17,9 @@ const QUOTA_POLL_SECS: f64 = 30.0;
 
 impl OxiApp {
     pub(crate) fn render_chat_status(&mut self, ui: &mut egui::Ui) {
-        self.render_context_status(ui);
-        if let Some(quota) = self.subscription_status(ui.ctx()) {
+        let quota = self.subscription_status(ui.ctx());
+        self.render_context_status(ui, quota.as_ref());
+        if let Some(quota) = quota {
             status_sep(ui);
             let is_off = quota.usage_disabled;
             let response = ui
@@ -96,7 +97,7 @@ impl OxiApp {
 
     /// A small ring and `used / window`; clicking opens a popover with details and one-click
     /// `/compact`.
-    fn render_context_status(&mut self, ui: &mut egui::Ui) {
+    fn render_context_status(&mut self, ui: &mut egui::Ui, quota: Option<&QuotaStatus>) {
         let (used_tokens, max_tokens) = self.active_context_tokens();
         let pct = if max_tokens == 0 {
             0.0
@@ -176,39 +177,12 @@ impl OxiApp {
             .gap(6.0)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                ui.set_min_width(220.0);
+                ui.set_min_width(180.0);
+                ui.set_max_width(220.0);
                 ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("Context window")
-                                .size(FS_SMALL)
-                                .color(c_text_strong())
-                                .strong(),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                RichText::new(format!("{:.0}%", pct * 100.0))
-                                    .size(FS_TINY)
-                                    .color(context_indicator_color(pct))
-                                    .strong(),
-                            );
-                        });
-                    });
-                    // Mini progress bar
-                    let (bar_rect, _) = ui
-                        .allocate_exact_size(egui::vec2(ui.available_width(), 5.0), Sense::hover());
-                    let r = egui::CornerRadius::same(3);
-                    ui.painter().rect_filled(bar_rect, r, c_border_subtle());
-                    let filled_w = (bar_rect.width() * pct).max(if pct > 0.0 { 4.0 } else { 0.0 });
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_size(
-                            bar_rect.min,
-                            egui::vec2(filled_w, bar_rect.height()),
-                        ),
-                        r,
-                        context_indicator_color(pct),
-                    );
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    popup_heading(ui, "Context", Some((pct, format!("{:.0}%", pct * 100.0))));
+                    mini_bar(ui, pct, context_indicator_color(pct));
                     ui.label(
                         RichText::new(format!("{text} tokens"))
                             .size(FS_TINY)
@@ -217,6 +191,63 @@ impl OxiApp {
                     if let Some(cost) = &cost_line {
                         ui.label(RichText::new(cost).size(FS_TINY).color(c_text_muted()));
                     }
+                    if let Some(quota) = quota {
+                        ui.add_space(4.0);
+                        popup_heading(ui, "Usage limits", None);
+                        if quota.rows.is_empty() {
+                            for (line, color) in &quota.lines {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(line).size(FS_TINY).color(*color),
+                                    )
+                                    .wrap(),
+                                );
+                            }
+                        } else {
+                            for row in &quota.rows {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(&row.label)
+                                            .size(FS_TINY)
+                                            .color(c_text_muted()),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                RichText::new(format!("{:.0}%", row.pct))
+                                                    .size(FS_TINY)
+                                                    .color(row.color)
+                                                    .strong(),
+                                            );
+                                            if let Some(reset) = &row.resets_in {
+                                                ui.label(
+                                                    RichText::new(format!("resets in {reset}"))
+                                                        .size(FS_TINY)
+                                                        .color(c_text_faint()),
+                                                );
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.add_space(-2.0);
+                                mini_bar(ui, (row.pct / 100.0) as f32, row.color);
+                                ui.add_space(2.0);
+                            }
+                            if let Some(extra) = &quota.extra {
+                                ui.label(RichText::new(extra).size(FS_TINY).color(c_text_faint()));
+                            }
+                            if let Some(err) = &quota.error {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(err).size(FS_TINY).color(c_error_fg()),
+                                    )
+                                    .wrap(),
+                                );
+                            }
+                        }
+                    }
+                    ui.add_space(2.0);
                     ui.separator();
                     let label = if compacting {
                         "Compacting…"
@@ -284,6 +315,9 @@ impl OxiApp {
                 text: "usage off".into(),
                 color: c_text_faint(),
                 usage_disabled: true,
+                rows: Vec::new(),
+                extra: None,
+                error: None,
                 lines: vec![(
                     "Turn on subscription usage in Settings → Router to see usage limits".into(),
                     c_text_faint(),
@@ -309,6 +343,9 @@ impl OxiApp {
                 text: "usage…".into(),
                 color: c_text_faint(),
                 usage_disabled: false,
+                rows: Vec::new(),
+                extra: None,
+                error: None,
                 lines: vec![("Reading subscription usage…".into(), c_text_faint())],
             });
         };
@@ -352,7 +389,40 @@ impl OxiApp {
         if let Some(err) = &snap.error {
             lines.push((format!("Usage: {err}"), c_error_fg()));
         }
+        let rows = snap
+            .windows
+            .iter()
+            .map(|w| {
+                let pct = used(w).clamp(0.0, 100.0);
+                let color = if (snap.limit_reached && w.model_scope.is_none()) || pct >= 90.0 {
+                    c_error_fg()
+                } else if pct >= 75.0 {
+                    c_warning_fg()
+                } else {
+                    c_accent()
+                };
+                QuotaRow {
+                    label: w.label.clone(),
+                    pct,
+                    resets_in: w
+                        .resets_at
+                        .filter(|&r| r > now)
+                        .map(|r| crate::router::decide::short_duration(r - now)),
+                    color,
+                }
+            })
+            .collect();
+        let mut extra = Vec::new();
+        if let Some(plan) = &snap.plan {
+            extra.push(format!("Plan: {plan}"));
+        }
+        if let Some(c) = snap.credits_left {
+            extra.push(format!("${c:.2} credits left"));
+        }
         Some(QuotaStatus {
+            rows,
+            extra: (!extra.is_empty()).then(|| extra.join(" · ")),
+            error: snap.error.as_ref().map(|e| format!("Usage: {e}")),
             text: if text.is_empty() {
                 "usage ?".into()
             } else {
@@ -386,6 +456,59 @@ struct QuotaStatus {
     usage_disabled: bool,
     /// Hover: one line per window with its reset time, then the last probe error.
     lines: Vec<(String, Color32)>,
+    /// Context popup: one bar per window. Empty while usage is off or not read yet; the popup
+    /// shows `lines` then.
+    rows: Vec<QuotaRow>,
+    /// Plan and remaining credits, when the provider reports them.
+    extra: Option<String>,
+    error: Option<String>,
+}
+
+struct QuotaRow {
+    label: String,
+    /// 0–100, already zeroed when the window has reset.
+    pct: f64,
+    resets_in: Option<String>,
+    color: Color32,
+}
+
+/// Popup section title with an optional right-aligned, colored figure.
+fn popup_heading(ui: &mut egui::Ui, title: &str, figure: Option<(f32, String)>) {
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(title)
+                .size(FS_TINY)
+                .color(c_text_strong())
+                .strong(),
+        );
+        if let Some((pct, figure)) = figure {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(figure)
+                        .size(FS_TINY)
+                        .color(context_indicator_color(pct))
+                        .strong(),
+                );
+            });
+        }
+    });
+}
+
+/// A thin full-width progress bar.
+fn mini_bar(ui: &mut egui::Ui, frac: f32, color: Color32) {
+    let frac = frac.clamp(0.0, 1.0);
+    let (bar_rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 4.0), Sense::hover());
+    let r = egui::CornerRadius::same(2);
+    ui.painter().rect_filled(bar_rect, r, c_border_subtle());
+    if frac > 0.0 {
+        let w = (bar_rect.width() * frac).max(3.0);
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(bar_rect.min, egui::vec2(w, bar_rect.height())),
+            r,
+            color,
+        );
+    }
 }
 
 fn status_sep(ui: &mut egui::Ui) {

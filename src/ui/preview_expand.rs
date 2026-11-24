@@ -49,27 +49,6 @@ pub fn toggle_expanded(ui: &Ui, persist_id: Id) {
 }
 
 pub fn clickable_expand_overlay(ui: &mut Ui, rect: Rect, persist_id: Id) {
-    clickable_expand_overlay_impl(ui, rect, persist_id, true, false);
-}
-
-/// [`clickable_expand_overlay`] for a panel whose unset state is `default` (see [`is_expanded_or`]).
-pub fn clickable_expand_overlay_or(ui: &mut Ui, rect: Rect, persist_id: Id, default: bool) {
-    clickable_expand_overlay_impl(ui, rect, persist_id, true, default);
-}
-
-/// Like [`clickable_expand_overlay`] but without the hover border — for frameless panels
-/// (thinking blocks) where a stroked rectangle would read heavier than the content itself.
-pub fn clickable_expand_overlay_quiet(ui: &mut Ui, rect: Rect, persist_id: Id) {
-    clickable_expand_overlay_impl(ui, rect, persist_id, false, false);
-}
-
-fn clickable_expand_overlay_impl(
-    ui: &mut Ui,
-    rect: Rect,
-    persist_id: Id,
-    hover_border: bool,
-    default: bool,
-) {
     let id = persist_id.with("preview_click");
     // Keep the overlay hover-only so wheel events reach the transcript. Determine containment
     // directly from the pointer, though: when expanded, selectable child labels can own hover and
@@ -80,17 +59,15 @@ fn clickable_expand_overlay_impl(
         .input(|i| i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
     if pointer_inside {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-        if hover_border {
-            ui.painter().rect_stroke(
-                rect,
-                CornerRadius::same(crate::theme::RADIUS_CHIP),
-                Stroke::new(1.0, crate::theme::c_border()),
-                egui::StrokeKind::Middle,
-            );
-        }
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(crate::theme::RADIUS_CHIP),
+            Stroke::new(1.0, crate::theme::c_border()),
+            egui::StrokeKind::Middle,
+        );
     }
     if pointer_inside && ui.ctx().input(|i| i.pointer.primary_clicked()) {
-        set_expanded(ui, persist_id, !is_expanded_or(ui, persist_id, default));
+        set_expanded(ui, persist_id, !is_expanded_or(ui, persist_id, false));
     }
 }
 

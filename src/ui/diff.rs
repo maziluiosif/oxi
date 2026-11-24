@@ -72,14 +72,9 @@ pub fn diff_layout_job(text: &str, wrap_width: f32) -> LayoutJob {
     job
 }
 
-/// Show a diff inside the transcript, choosing the layout that fits: aligned old/new columns
-/// when the change replaces lines and the widest line fits in half the width, otherwise a single
-/// unified column (pure additions, pure deletions, or long lines that would be clipped in a split).
-pub fn show_chat_diff(ui: &mut Ui, text: &str, max_rows: Option<usize>, id: Id, selectable: bool) {
-    let rows = split_chat_diff_rows(text);
-    if rows.is_empty() {
-        return;
-    }
+/// Whether `show_chat_diff` will lay out `rows` side-by-side (`true`) or unified (`false`),
+/// alongside the line-number gutter digit count.
+fn chat_diff_layout_mode(ui: &Ui, rows: &[ChatDiffRow], available_width: f32) -> (bool, usize) {
     let has = |kind: fn(ChatDiffLineKind) -> bool| {
         rows.iter().any(|r| kind(r.left_kind) || kind(r.right_kind))
     };
@@ -99,9 +94,39 @@ pub fn show_chat_diff(ui: &mut Ui, text: &str, max_rows: Option<usize>, id: Id, 
         .to_string()
         .len();
     let char_w = ui.fonts_mut(|f| f.glyph_width(&FontId::monospace(FS_CODE), '0'));
-    let half = (ui.available_width() - SPLIT_GAP) / 2.0;
+    let half = (available_width - SPLIT_GAP) / 2.0;
     let fits = (widest + digits + 3) as f32 * char_w <= half;
-    if replaces && fits {
+    (replaces && fits, digits)
+}
+
+/// Natural rendered height of [`show_chat_diff`] (with `max_rows = None`) at `available_width`.
+/// Used by bounded scrollable diff panels to avoid nesting a vertical `ScrollArea` when the
+/// diff already fits comfortably inside the height cap.
+pub fn chat_diff_natural_height(ui: &Ui, text: &str, available_width: f32) -> f32 {
+    let rows = split_chat_diff_rows(text);
+    if rows.is_empty() {
+        return 0.0;
+    }
+    let (use_split, _) = chat_diff_layout_mode(ui, &rows, available_width);
+    let count = if use_split {
+        rows.len()
+    } else {
+        unified_rows(&rows).len()
+    };
+    let row_h = ui.fonts_mut(|f| f.row_height(&FontId::monospace(FS_CODE)));
+    count as f32 * row_h + 4.0
+}
+
+/// Show a diff inside the transcript, choosing the layout that fits: aligned old/new columns
+/// when the change replaces lines and the widest line fits in half the width, otherwise a single
+/// unified column (pure additions, pure deletions, or long lines that would be clipped in a split).
+pub fn show_chat_diff(ui: &mut Ui, text: &str, max_rows: Option<usize>, id: Id, selectable: bool) {
+    let rows = split_chat_diff_rows(text);
+    if rows.is_empty() {
+        return;
+    }
+    let (use_split, digits) = chat_diff_layout_mode(ui, &rows, ui.available_width());
+    if use_split {
         show_split_rows(ui, limit_split_rows(rows, max_rows), id, selectable);
     } else {
         show_unified_rows(ui, &unified_rows(&rows), max_rows, digits, id, selectable);
@@ -234,6 +259,10 @@ fn show_unified_rows(
     egui::ScrollArea::horizontal()
         .id_salt(id.with("unified"))
         .auto_shrink([false, true])
+        .scroll_source(egui::containers::scroll_area::ScrollSource {
+            drag: egui::containers::scroll_area::DragScroll::Never,
+            ..Default::default()
+        })
         .show(ui, |ui| {
             let backgrounds = ui.painter().add(Shape::Noop);
             let text_top = ui.cursor().top();
@@ -301,6 +330,10 @@ fn show_split_rows(ui: &mut Ui, rows: Vec<ChatDiffRow>, id: Id, selectable: bool
             egui::ScrollArea::horizontal()
                 .id_salt(id.with(left))
                 .auto_shrink([false, true])
+                .scroll_source(egui::containers::scroll_area::ScrollSource {
+                    drag: egui::containers::scroll_area::DragScroll::Never,
+                    ..Default::default()
+                })
                 .show(column, |ui| {
                     let backgrounds = ui.painter().add(Shape::Noop);
                     let text_top = ui.cursor().top();

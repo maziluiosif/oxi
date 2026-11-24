@@ -209,7 +209,7 @@ pub(crate) fn review_followup(messages: &[ChatMessage], start: usize) -> Option<
         .find(|m| {
             m.changes
                 .as_deref()
-                .is_some_and(|c| c.before == before && c.after == after)
+                .is_some_and(|c| c.after == after || (c.before == before && c.after == after))
         })?
         .route
         .as_deref()?
@@ -280,5 +280,19 @@ mod tests {
         let mut silent = messages;
         silent[5] = reply(LlmProviderKind::CodexAcp, "  ");
         assert!(review_followup(&silent, 5).is_none());
+
+        // Consolidated multi-turn review ("t0..t2") still resolves the author from the turn
+        // whose `after` snapshot matches "t2".
+        let multi = vec![
+            ChatMessage::user("first", &[]),
+            turn(LlmProviderKind::ClaudeCodeAcp, "t0", "t1"),
+            ChatMessage::user("second", &[]),
+            turn(LlmProviderKind::ClaudeCodeAcp, "t1", "t2"),
+            review_request("t0", "t2"),
+            reply(LlmProviderKind::CodexAcp, "Looks good overall."),
+        ];
+        let f = review_followup(&multi, 5).unwrap();
+        assert_eq!(f.author, LlmProviderKind::ClaudeCodeAcp);
+        assert_eq!(f.reviewer, LlmProviderKind::CodexAcp);
     }
 }
