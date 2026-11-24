@@ -37,11 +37,17 @@ const MAX_PAGES: usize = 5;
 
 /// The agent's sessions in `req.cwd`, newest first, without the ones an oxi chat already uses.
 pub async fn list_sessions(req: &AcpImport) -> Result<Vec<ExternalSession>, String> {
-    let (conn, key) = launch(req).await?;
-    let result = list_with(&conn.handles, req).await;
-    drop(conn);
-    super::config_options::forget(&key);
-    result
+    match super::backend::BackendKind::detect(&req.command_line) {
+        super::backend::BackendKind::CodexNative => super::codex_native::list_sessions(req).await,
+        super::backend::BackendKind::ClaudeNative => super::claude_native::list_sessions(req).await,
+        super::backend::BackendKind::Acp => {
+            let (conn, key) = launch(req).await?;
+            let result = list_with(&conn.handles, req).await;
+            drop(conn);
+            super::config_options::forget(&key);
+            result
+        }
+    }
 }
 
 async fn list_with(h: &ConnHandles, req: &AcpImport) -> Result<Vec<ExternalSession>, String> {
@@ -99,11 +105,21 @@ fn parse_sessions(page: &Value, known: &HashSet<String>) -> Vec<ExternalSession>
 
 /// Replay `session_id` into chat messages.
 pub async fn load_session(req: &AcpImport, session_id: &str) -> Result<Vec<ChatMessage>, String> {
-    let (conn, key) = launch(req).await?;
-    let result = load_with(&conn.handles, req, session_id).await;
-    drop(conn);
-    super::config_options::forget(&key);
-    result
+    match super::backend::BackendKind::detect(&req.command_line) {
+        super::backend::BackendKind::CodexNative => {
+            super::codex_native::load_session(req, session_id).await
+        }
+        super::backend::BackendKind::ClaudeNative => {
+            super::claude_native::load_session(req, session_id).await
+        }
+        super::backend::BackendKind::Acp => {
+            let (conn, key) = launch(req).await?;
+            let result = load_with(&conn.handles, req, session_id).await;
+            drop(conn);
+            super::config_options::forget(&key);
+            result
+        }
+    }
 }
 
 async fn load_with(
@@ -233,7 +249,7 @@ fn transcript(updates: &[Value]) -> Vec<ChatMessage> {
 
 /// What the user typed, without what oxi put in front of it when it sent the message (a
 /// session that started in oxi and was deleted there).
-fn without_oxi_preamble(text: &str) -> &str {
+pub(super) fn without_oxi_preamble(text: &str) -> &str {
     let mut text = text.trim_start();
     for tag in ["conversation_history", "conversation_update"] {
         if text.starts_with(&format!("<{tag}>"))

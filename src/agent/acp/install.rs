@@ -187,6 +187,27 @@ pub(super) async fn is_ready(command_line: &str) -> bool {
     if super::antigravity::is_default(command_line) {
         return super::antigravity::is_ready().await;
     }
+    match super::backend::BackendKind::detect(command_line) {
+        super::backend::BackendKind::ClaudeNative => {
+            let words = super::backend::split_shell_words(command_line);
+            let prog = words.first().map(String::as_str).unwrap_or("claude");
+            return super::backend::resolve_cli_binary(
+                prog,
+                &[".local/bin", ".claude/local"],
+                bundled_claude_cli(),
+            )
+            .await
+            .is_some();
+        }
+        super::backend::BackendKind::CodexNative => {
+            let words = super::backend::split_shell_words(command_line);
+            let prog = words.first().map(String::as_str).unwrap_or("codex");
+            return super::backend::resolve_cli_binary(prog, &[".local/bin", ".codex/bin"], None)
+                .await
+                .is_some();
+        }
+        super::backend::BackendKind::Acp => {}
+    }
     if let Some(adapter) = adapter_for(command_line) {
         return adapter.installed_bin().is_some();
     }
