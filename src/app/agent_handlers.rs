@@ -262,8 +262,39 @@ impl OxiApp {
                         );
                     }
                 }
-                if let Some(message) = self.last_assistant_mut(key) {
-                    crate::model::apply_tool_update(&mut message.blocks, *update);
+                let session = self.session_mut_by_key(key);
+                let last_idx = session
+                    .messages
+                    .iter()
+                    .rposition(|m| m.role == crate::model::MsgRole::Assistant);
+                let existing_idx = (!update.tool_call_id.is_empty())
+                    .then(|| {
+                        session.messages.iter().rposition(|m| {
+                            m.role == crate::model::MsgRole::Assistant
+                                && m.blocks.iter().any(|b| {
+                                    matches!(
+                                        b,
+                                        crate::model::AssistantBlock::Tool { tool_call_id, .. }
+                                            if *tool_call_id == update.tool_call_id
+                                    )
+                                })
+                        })
+                    })
+                    .flatten();
+                match (existing_idx, last_idx) {
+                    (Some(idx), Some(last)) if idx != last => {
+                        crate::model::merge_tool_update(&mut session.messages[idx].blocks, *update);
+                    }
+                    (Some(idx), _) => {
+                        crate::model::apply_tool_update(&mut session.messages[idx].blocks, *update);
+                    }
+                    (None, Some(last)) => {
+                        crate::model::apply_tool_update(
+                            &mut session.messages[last].blocks,
+                            *update,
+                        );
+                    }
+                    (None, None) => {}
                 }
                 if finished {
                     self.conv.explorer.cache.invalidate();
@@ -421,12 +452,15 @@ impl OxiApp {
                 }
                 self.close_turn_bookkeeping(key);
                 self.finish_assistant_stream(key);
-                self.run_state_mut(key).completion_unseen = completion_unseen;
+                let waiting_bg = succeeded && self.session_has_acp_background_tools(key);
+                self.run_state_mut(key).completion_unseen = completion_unseen && !waiting_bg;
                 if succeeded {
                     self.send_next_queued(key);
                 }
-                // A queued follow-up keeps the chat busy; notify once the queue is drained.
+                // A queued follow-up or a background command keeps the chat working; notify once
+                // the agent is actually done.
                 if let Some(attention) = attention
+                    && !waiting_bg
                     && !self.run_state(key).is_some_and(|r| r.waiting_response)
                 {
                     self.notify_attention(ctx, key, attention);

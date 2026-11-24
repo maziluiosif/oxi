@@ -433,26 +433,51 @@ impl OxiApp {
         &mut self.conv.workspaces[self.conv.active_workspace]
     }
 
+    /// Finite background commands still running inside `key`'s live ACP subprocess (e.g. an
+    /// Antigravity `run_command` that crossed `WaitMsBeforeAsync` and outlived `end_turn`).
+    pub(crate) fn session_acp_background_tools(
+        &self,
+        key: SessionKey,
+    ) -> Vec<crate::agent::acp::BackgroundTool> {
+        if self.is_remote_key(key) {
+            return Vec::new();
+        }
+        crate::agent::acp::background_tools(&self.acp_session_key(key))
+    }
+
+    pub(crate) fn session_has_acp_background_tools(&self, key: SessionKey) -> bool {
+        !self.is_remote_key(key)
+            && crate::agent::acp::has_background_tools(&self.acp_session_key(key))
+    }
+
     /// Ground truth for "model still running" on a session row (`workspace_idx`, session index in that workspace):
-    /// a streaming reply, or subagents and workflows still working after the turn.
+    /// a streaming reply, subagents/workflows still working, or an ACP background command still running.
     pub(crate) fn session_row_is_running(&self, workspace_idx: usize, session_idx: usize) -> bool {
-        self.conv
+        let Some(session) = self
+            .conv
             .workspaces
             .get(workspace_idx)
             .and_then(|w| w.sessions.get(session_idx))
-            .is_some_and(|s| {
-                s.delegated.working()
-                    || s.messages
-                        .last()
-                        .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
+        else {
+            return false;
+        };
+        session.delegated.working()
+            || session
+                .messages
+                .last()
+                .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
+            || self.session_has_acp_background_tools(SessionKey {
+                workspace_idx,
+                session_idx,
             })
     }
 
-    /// Some chat's agent is running a turn (or compacting it), or its subagents and workflows
-    /// keep working after the turn ended. A chat stopped on an approval prompt does not count:
-    /// it waits for the user, and sleeping does not lose anything.
+    /// Some chat's agent is running a turn (or compacting it), waiting on a background command,
+    /// or its subagents and workflows keep working after the turn ended. A chat stopped on an
+    /// approval prompt does not count: it waits for the user, and sleeping does not lose anything.
     pub(crate) fn agent_is_working(&self) -> bool {
         self.conv.compaction.is_some()
+            || crate::agent::acp::any_background_tools()
             || self.flow.sessions.values().any(|run| {
                 (run.waiting_response || run.agent_rx.is_some()) && run.pending_approval.is_none()
             })

@@ -35,13 +35,15 @@ pub(super) fn quiet_for(
 }
 
 fn tool_in_flight(reply: &ChatMessage) -> bool {
-    matches!(
-        reply.blocks.last(),
-        Some(AssistantBlock::Tool { is_error, metadata, .. })
-            if metadata.as_ref().map_or(is_error.is_none(), |m| {
-                matches!(m.status, ToolStatus::Pending | ToolStatus::InProgress)
-            })
-    )
+    reply.blocks.iter().any(|block| {
+        matches!(
+            block,
+            AssistantBlock::Tool { is_error, metadata, .. }
+                if metadata.as_ref().map_or(is_error.is_none(), |m| {
+                    matches!(m.status, ToolStatus::Pending | ToolStatus::InProgress)
+                })
+        )
+    })
 }
 
 impl OxiApp {
@@ -105,6 +107,62 @@ impl OxiApp {
                 },
                 false,
             );
+        }
+    }
+
+    /// Shown below the transcript when an ACP agent ended its turn while still waiting on one or
+    /// more background commands (e.g. Antigravity `run_command` past `WaitMsBeforeAsync`).
+    pub(super) fn render_background_wait_notice(
+        &mut self,
+        ui: &mut Ui,
+        tools: &[crate::agent::acp::BackgroundTool],
+    ) {
+        let Some(first) = tools.first() else {
+            return;
+        };
+        let elapsed = format_stream_elapsed(first.started_at.elapsed());
+        let heading = if tools.len() == 1 {
+            format!("Waiting for background command ({elapsed})")
+        } else {
+            format!(
+                "Waiting for {} background commands ({elapsed})",
+                tools.len()
+            )
+        };
+        let detail = if tools.len() == 1 {
+            first.label.clone()
+        } else {
+            let names: Vec<&str> = tools
+                .iter()
+                .map(|t| t.label.as_str())
+                .filter(|s| !s.is_empty())
+                .take(2)
+                .collect();
+            names.join(", ")
+        };
+        let mut stop = false;
+        ui.add_space(SPACE_SM);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = SPACE_MD;
+            animated_status_label(ui, &heading, FS_SMALL);
+            if !detail.is_empty() {
+                ui.label(
+                    RichText::new(format!("· {detail}"))
+                        .size(FS_SMALL)
+                        .color(c_text_faint()),
+                );
+            }
+            stop = quiet_action(ui, "Stop")
+                .on_hover_text(
+                    "Stop the agent subprocess and its background command (the session stays resumable)",
+                )
+                .clicked();
+        });
+        ui.add_space(SPACE_SM);
+        if stop {
+            let key = self.active_session_key();
+            let acp_key = self.acp_session_key(key);
+            self.acp.stop(&acp_key);
         }
     }
 }
@@ -184,6 +242,16 @@ mod tests {
         assert!(
             quiet_for(start, start + QUIET, Some(&finished)).is_some(),
             "a finished tool no longer explains the silence"
+        );
+
+        let with_note = reply(vec![
+            running_bash(),
+            AssistantBlock::Answer("Waiting for CI…".into()),
+        ]);
+        assert_eq!(
+            quiet_for(start, start + QUIET * 2, Some(&with_note)),
+            None,
+            "a progress note after an in-flight tool still gets the tool quiet limit"
         );
     }
 }

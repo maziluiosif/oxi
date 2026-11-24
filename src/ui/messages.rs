@@ -743,12 +743,36 @@ fn render_activity_summary(
             .iter()
             .filter(|b| matches!(b, AssistantBlock::Tool { .. }))
             .count();
-        if tool_n == 0 {
+        let bg_n = blocks[..worked_end]
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b,
+                    AssistantBlock::Tool {
+                        tool_call_id,
+                        metadata: Some(meta),
+                        ..
+                    } if !tool_call_id.is_empty()
+                        && matches!(
+                            meta.status,
+                            crate::model::ToolStatus::Pending
+                                | crate::model::ToolStatus::InProgress
+                        )
+                        && is_background_tool(ui.ctx(), tool_call_id)
+                )
+            })
+            .count();
+        let summary = if tool_n == 0 {
             base
         } else if tool_n == 1 {
             format!("{base} · 1 tool")
         } else {
             format!("{base} · {tool_n} tools")
+        };
+        if bg_n > 0 {
+            format!("{summary} · {bg_n} running")
+        } else {
+            summary
         }
     };
 
@@ -1175,6 +1199,31 @@ pub fn set_turn_busy(ctx: &eframe::egui::Context, busy: bool) {
 fn turn_busy(ctx: &eframe::egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(turn_busy_id()))
         .unwrap_or(false)
+}
+
+fn background_tools_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("oxi_acp_background_tools")
+}
+
+/// Set once per conversation frame with tool call ids still running in the active ACP subprocess
+/// after `end_turn`, so their pills and summaries stay visibly running.
+pub fn set_background_tools(
+    ctx: &eframe::egui::Context,
+    tool_ids: std::collections::HashSet<String>,
+) {
+    ctx.data_mut(|d| {
+        d.insert_temp(background_tools_id(), std::sync::Arc::new(tool_ids));
+    });
+}
+
+pub(super) fn is_background_tool(ctx: &eframe::egui::Context, tool_call_id: &str) -> bool {
+    if tool_call_id.is_empty() {
+        return false;
+    }
+    ctx.data(|d| {
+        d.get_temp::<std::sync::Arc<std::collections::HashSet<String>>>(background_tools_id())
+            .is_some_and(|ids| ids.contains(tool_call_id))
+    })
 }
 
 fn fork_message_id() -> eframe::egui::Id {

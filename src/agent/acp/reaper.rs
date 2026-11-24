@@ -16,6 +16,15 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+/// A non-daemon command/tool that was still running when its ACP turn ended cleanly (e.g. an
+/// Antigravity `run_command` that crossed `WaitMsBeforeAsync` and moved to a background task).
+#[derive(Clone, Debug)]
+pub struct BackgroundTool {
+    pub tool_call_id: String,
+    pub label: String,
+    pub started_at: Instant,
+}
+
 /// Idle time after which an agent is stopped; `0` never stops one for being idle.
 static IDLE_SECS: AtomicU64 = AtomicU64::new(15 * 60);
 /// Most agents kept running at once; `0` is no limit.
@@ -59,6 +68,8 @@ fn policy() -> (Option<Duration>, Option<usize>) {
 pub(super) struct Activity {
     last: Mutex<Instant>,
     background: AtomicBool,
+    /// Non-daemon commands that were still running when a turn ended cleanly.
+    background_tools: Mutex<Vec<BackgroundTool>>,
 }
 
 impl Activity {
@@ -66,6 +77,7 @@ impl Activity {
         Self {
             last: Mutex::new(Instant::now()),
             background: AtomicBool::new(false),
+            background_tools: Mutex::new(Vec::new()),
         }
     }
 
@@ -79,18 +91,125 @@ impl Activity {
 
     /// Whether the agent started work that keeps running after its turns.
     pub(super) fn background(&self) -> bool {
-        self.background.load(Ordering::Relaxed)
+        self.background.load(Ordering::Relaxed) || self.has_background_tools()
     }
 
-    /// Record a message from the agent: it is in use, and it may have started background work.
-    pub(super) fn note(&self, msg: &Value) {
-        self.touch();
-        if msg["method"].as_str() == Some("session/update")
-            && starts_background(&msg["params"]["update"])
-        {
-            self.background.store(true, Ordering::Relaxed);
+    /// Whether any finite background commands from an earlier turn are still running.
+    pub(super) fn has_background_tools(&self) -> bool {
+        let mut tools = self
+            .background_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        tools.retain(|t| t.started_at.elapsed() < BACKGROUND_GRACE);
+        !tools.is_empty()
+    }
+
+    /// Snapshot active background commands, oldest first.
+    pub(super) fn snapshot_background_tools(&self) -> Vec<BackgroundTool> {
+        let mut tools = self
+            .background_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        tools.retain(|t| t.started_at.elapsed() < BACKGROUND_GRACE);
+        tools.clone()
+    }
+
+    /// Record finite commands that were still running when a turn ended cleanly.
+    pub(super) fn add_background_tools(&self, incoming: Vec<BackgroundTool>) {
+        if incoming.is_empty() {
+            return;
+        }
+        self.background.store(true, Ordering::Relaxed);
+        let mut tools = self
+            .background_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for tool in incoming {
+            if let Some(existing) = tools
+                .iter_mut()
+                .find(|t| t.tool_call_id == tool.tool_call_id)
+            {
+                if existing.label.is_empty() && !tool.label.is_empty() {
+                    existing.label = tool.label;
+                }
+            } else {
+                tools.push(tool);
+            }
         }
     }
+
+    /// Record a message from the agent: it is in use, and it may have started or finished
+    /// background work. Returns `true` when a tracked background command finished.
+    pub(super) fn note(&self, msg: &Value) -> bool {
+        self.touch();
+        if msg["method"].as_str() != Some("session/update") {
+            return false;
+        }
+        let update = &msg["params"]["update"];
+        if starts_background(update) {
+            self.background.store(true, Ordering::Relaxed);
+        }
+        if matches!(
+            update["sessionUpdate"].as_str(),
+            Some("tool_call" | "tool_call_update")
+        ) && let Some(id) = update["toolCallId"].as_str().filter(|id| !id.is_empty())
+        {
+            let mut tools = self
+                .background_tools
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some(pos) = tools.iter().position(|t| t.tool_call_id == id) {
+                if matches!(
+                    update["status"].as_str(),
+                    Some("completed" | "failed" | "cancelled")
+                ) {
+                    tools.remove(pos);
+                    return true;
+                }
+                if tools[pos].label.is_empty()
+                    && let Some(title) = update["title"].as_str().filter(|s| !s.trim().is_empty())
+                {
+                    tools[pos].label = title.trim().to_owned();
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Whether `name` is a standing/delegated background tool (timers, monitors, subagents, workflows).
+pub(super) fn is_standing_background_tool(name: &str) -> bool {
+    BACKGROUND_TOOLS.contains(&name)
+}
+
+/// Whether a tool call is a finite command that can transition into a background task mid-turn
+/// (e.g. Antigravity `run_command` with `WaitMsBeforeAsync`), as opposed to a daemon or standing
+/// timer.
+pub(super) fn is_async_backgroundable(update: &Value) -> bool {
+    if !matches!(
+        update["sessionUpdate"].as_str(),
+        Some("tool_call" | "tool_call_update")
+    ) {
+        return false;
+    }
+    let input = match &update["rawInput"] {
+        Value::Null => &update["args"],
+        input => input,
+    };
+    if input["IsDaemon"].as_bool() == Some(true) {
+        return false;
+    }
+    let tool_name = update["_meta"]["claudeCode"]["toolName"]
+        .as_str()
+        .or_else(|| update["name"].as_str());
+    if tool_name.is_some_and(is_standing_background_tool) {
+        return false;
+    }
+    input.get("WaitMsBeforeAsync").is_some_and(|v| !v.is_null())
+        || input
+            .get("NotificationTimeoutSeconds")
+            .is_some_and(|v| !v.is_null())
+        || input["run_in_background"].as_bool() == Some(true)
 }
 
 /// Whether a tool call starts work that keeps running after the turn.
@@ -108,7 +227,7 @@ pub(super) fn starts_background(update: &Value) -> bool {
         || update["_meta"]["claudeCode"]["toolName"]
             .as_str()
             .or_else(|| update["name"].as_str())
-            .is_some_and(|name| BACKGROUND_TOOLS.contains(&name)))
+            .is_some_and(is_standing_background_tool))
 }
 
 /// One running agent as the sweep sees it.
@@ -175,14 +294,16 @@ fn victims_with(
     out
 }
 
-/// Agents currently running, by oxi session key, with their liveness flag.
-static LIVE: Mutex<Option<HashMap<String, Arc<AtomicBool>>>> = Mutex::new(None);
+type LiveEntry = (Arc<AtomicBool>, Arc<Activity>);
 
-pub(super) fn mark_live(key: &str, alive: Arc<AtomicBool>) {
+/// Agents currently running, by oxi session key, with their liveness flag and activity tracker.
+static LIVE: Mutex<Option<HashMap<String, LiveEntry>>> = Mutex::new(None);
+
+pub(super) fn mark_live(key: &str, alive: Arc<AtomicBool>, activity: Arc<Activity>) {
     LIVE.lock()
         .unwrap_or_else(|e| e.into_inner())
         .get_or_insert_with(HashMap::new)
-        .insert(key.to_owned(), alive);
+        .insert(key.to_owned(), (alive, activity));
 }
 
 pub(super) fn is_current(key: &str, alive: &Arc<AtomicBool>) -> bool {
@@ -190,7 +311,7 @@ pub(super) fn is_current(key: &str, alive: &Arc<AtomicBool>) -> bool {
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .and_then(|m| m.get(key))
-        .is_none_or(|current| Arc::ptr_eq(current, alive))
+        .is_none_or(|current| Arc::ptr_eq(&current.0, alive))
 }
 
 pub(super) fn mark_stopped(key: &str) {
@@ -205,7 +326,49 @@ pub fn is_live(session_key: &str) -> bool {
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .and_then(|map| map.get(session_key))
-        .is_some_and(|alive| alive.load(Ordering::SeqCst))
+        .is_some_and(|(alive, _)| alive.load(Ordering::SeqCst))
+}
+
+/// Finite background commands still running in `session_key`'s live ACP subprocess.
+pub fn background_tools(session_key: &str) -> Vec<BackgroundTool> {
+    let activity = LIVE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|map| map.get(session_key))
+        .filter(|(alive, _)| alive.load(Ordering::SeqCst))
+        .map(|(_, activity)| activity.clone());
+    activity
+        .map(|a| a.snapshot_background_tools())
+        .unwrap_or_default()
+}
+
+/// Whether `session_key`'s live ACP subprocess is waiting on a finite background command.
+pub fn has_background_tools(session_key: &str) -> bool {
+    let activity = LIVE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|map| map.get(session_key))
+        .filter(|(alive, _)| alive.load(Ordering::SeqCst))
+        .map(|(_, activity)| activity.clone());
+    activity.is_some_and(|a| a.has_background_tools())
+}
+
+/// Whether any live ACP subprocess is waiting on a finite background command.
+pub fn any_background_tools() -> bool {
+    let activities: Vec<Arc<Activity>> = LIVE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|map| {
+            map.values()
+                .filter(|(alive, _)| alive.load(Ordering::SeqCst))
+                .map(|(_, activity)| activity.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    activities.into_iter().any(|a| a.has_background_tools())
 }
 
 /// How many agents are running.
@@ -215,7 +378,7 @@ pub fn live_count() -> usize {
         .as_ref()
         .map_or(0, |map| {
             map.values()
-                .filter(|alive| alive.load(Ordering::SeqCst))
+                .filter(|(alive, _)| alive.load(Ordering::SeqCst))
                 .count()
         })
 }
@@ -302,5 +465,73 @@ mod tests {
             "args": {"CommandLine": "npm run dev", "IsDaemon": true}}),
         ));
         assert!(activity.background.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn tracks_and_clears_finite_background_commands() {
+        let update = |u: Value| json!({"method": "session/update", "params": {"update": u}});
+        let activity = Arc::new(Activity::new());
+        let alive = Arc::new(AtomicBool::new(true));
+        let key = format!("bg-tool-test-{}", rand::random::<u64>());
+        mark_live(&key, alive.clone(), activity.clone());
+
+        assert!(!has_background_tools(&key));
+        assert!(!activity.background());
+
+        activity.add_background_tools(vec![BackgroundTool {
+            tool_call_id: "call_1".into(),
+            label: "Watch CI checks".into(),
+            started_at: Instant::now(),
+        }]);
+        assert!(has_background_tools(&key));
+        assert!(activity.background());
+        assert_eq!(background_tools(&key).len(), 1);
+        assert_eq!(background_tools(&key)[0].label, "Watch CI checks");
+
+        // Intermediate progress update keeps the command active.
+        assert!(!activity.note(&update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call_1",
+            "status": "in_progress"
+        }))));
+        assert!(has_background_tools(&key));
+
+        // Terminal update clears it and signals wakeup.
+        assert!(activity.note(&update(json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call_1",
+            "status": "completed"
+        }))));
+        assert!(!has_background_tools(&key));
+
+        // Disconnecting hides any leftover background tools immediately.
+        activity.add_background_tools(vec![BackgroundTool {
+            tool_call_id: "call_2".into(),
+            label: "cargo test".into(),
+            started_at: Instant::now(),
+        }]);
+        assert!(has_background_tools(&key));
+        alive.store(false, Ordering::SeqCst);
+        assert!(!has_background_tools(&key));
+        mark_stopped(&key);
+    }
+
+    #[test]
+    fn distinguishes_async_commands_from_daemons_and_foreground_tools() {
+        assert!(is_async_backgroundable(&json!({
+            "sessionUpdate": "tool_call",
+            "name": "run_command",
+            "args": {"CommandLine": "gh pr checks --watch", "WaitMsBeforeAsync": 5000}
+        })));
+        assert!(!is_async_backgroundable(&json!({
+            "sessionUpdate": "tool_call",
+            "name": "run_command",
+            "args": {"CommandLine": "npm run dev", "IsDaemon": true, "WaitMsBeforeAsync": 5000}
+        })));
+        assert!(!is_async_backgroundable(&json!({
+            "sessionUpdate": "tool_call",
+            "name": "read_file",
+            "args": {"Path": "/repo/src/lib.rs"}
+        })));
     }
 }

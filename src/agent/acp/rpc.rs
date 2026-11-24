@@ -117,8 +117,10 @@ pub(super) async fn read_loop(
         }
         // Waiting for a terminal must not block session updates or later kill requests.
         let request: Option<Value> = serde_json::from_str(&line).ok();
-        if let Some(msg) = &request {
-            activity.note(msg);
+        if let Some(msg) = &request
+            && activity.note(msg)
+        {
+            super::autonomous::wake();
         }
         if let Some(request) = request.filter(|v| {
             v["method"]

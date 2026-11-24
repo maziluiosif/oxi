@@ -131,7 +131,10 @@ impl eframe::App for OxiApp {
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming)
             })
         });
-        if self.any_waiting_response() || any_assistant_streaming || self.conv.voice_ui.transcribing
+        if self.any_waiting_response()
+            || any_assistant_streaming
+            || crate::agent::acp::any_background_tools()
+            || self.conv.voice_ui.transcribing
         {
             // Agent events repaint on arrival; this only drives the "working" animations.
             let interval = if ctx.input(|i| i.focused) {

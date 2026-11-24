@@ -35,7 +35,8 @@ impl OxiApp {
         let split_with_chat = self.conv.editor.split_with_chat;
         let editor_touches_left = !sidebar_open && !split_rendered;
         let active_key = self.active_session_key();
-        let chat_streaming = self.active_waiting_response();
+        let chat_streaming =
+            self.active_waiting_response() || self.session_has_acp_background_tools(active_key);
         let chat_needs_approval = self
             .run_state(active_key)
             .is_some_and(|r| r.pending_approval.is_some());

@@ -104,7 +104,10 @@ use permissions::{PermReq, handle_permission};
 
 #[path = "acp/reaper.rs"]
 mod reaper;
-pub use reaper::{is_live, live_count, set_policy as set_reap_policy};
+pub use reaper::{
+    BackgroundTool, any_background_tools, background_tools, has_background_tools, is_live,
+    live_count, set_policy as set_reap_policy,
+};
 
 #[path = "acp/rpc.rs"]
 mod rpc;
@@ -223,7 +226,7 @@ impl Agents {
             });
             if replace {
                 log::info!("moved the idle ACP agent of {key} to the new adapter");
-                reaper::mark_live(&key, conn.alive.clone());
+                reaper::mark_live(&key, conn.alive.clone(), conn.handles.activity.clone());
                 // Dropping the old Conn kills its subprocess (kill_on_drop).
                 map.insert(key, conn);
             }
@@ -751,6 +754,10 @@ struct AttachCycle {
     in_flight_tools: std::collections::HashSet<String>,
     /// Tools that keep running after the turn (daemons, timers): never waited for.
     background_tools: std::collections::HashSet<String>,
+    /// Finite commands that can transition to a background task mid-turn (`WaitMsBeforeAsync`).
+    /// When the model subsequently writes an answer and emits `usage_update`, the command has
+    /// already been backgrounded so the cycle can settle into background-wait state.
+    async_tools: std::collections::HashSet<String>,
 }
 
 impl AttachCycle {
@@ -761,6 +768,7 @@ impl AttachCycle {
             settled_at: None,
             in_flight_tools: std::collections::HashSet::new(),
             background_tools: std::collections::HashSet::new(),
+            async_tools: std::collections::HashSet::new(),
         }
     }
 
@@ -782,6 +790,9 @@ impl AttachCycle {
                 if let Some(id) = update["toolCallId"].as_str().filter(|id| !id.is_empty()) {
                     if reaper::starts_background(update) {
                         self.background_tools.insert(id.to_owned());
+                    }
+                    if reaper::is_async_backgroundable(update) {
+                        self.async_tools.insert(id.to_owned());
                     }
                     if self.background_tools.contains(id) {
                         self.in_flight_tools.remove(id);
@@ -805,8 +816,14 @@ impl AttachCycle {
                 if autonomous::ends_cycle(update) {
                     return true;
                 }
-                // Text that comes while a tool still runs is a progress note, not the answer.
-                if self.answered && self.in_flight_tools.is_empty() {
+                // Text that comes while a foreground tool still runs is a progress note, not the
+                // answer. Async-capable commands (e.g. `run_command` with `WaitMsBeforeAsync`)
+                // only let the model generate a closing answer once moved to a background task.
+                let only_async_waiting = self
+                    .in_flight_tools
+                    .iter()
+                    .all(|id| self.async_tools.contains(id));
+                if self.answered && only_async_waiting {
                     self.settled_at = Some(std::time::Instant::now());
                 }
             }
@@ -983,7 +1000,11 @@ async fn ensure_conn(agents: &Agents, spec: &LaunchSpec<'_>) -> Result<ConnHandl
     // agent session itself is resumed, so the conversation carries over.
     let conn = spawn_conn(spec, mcp_servers).await?;
     let handles = conn.handles.clone();
-    reaper::mark_live(spec.session_key, conn.alive.clone());
+    reaper::mark_live(
+        spec.session_key,
+        conn.alive.clone(),
+        handles.activity.clone(),
+    );
     conns
         .lock()
         .await
@@ -1872,7 +1893,20 @@ async fn run_prompt(
         }
         break result;
     };
-    *handles.prompt_ctx.lock().await = None;
+    {
+        let mut slot = handles.prompt_ctx.lock().await;
+        let clean_end = result
+            .as_ref()
+            .is_ok_and(|res| res["stopReason"].as_str() == Some("end_turn"))
+            && !cancel.load(Ordering::SeqCst)
+            && handles.alive.load(Ordering::SeqCst);
+        if clean_end && let Some(ctx) = slot.as_ref() {
+            handles
+                .activity
+                .add_background_tools(ctx.updates.unfinished_background_tools());
+        }
+        *slot = None;
+    }
     handles.activity.touch();
     if slash_command {
         handles
@@ -2069,7 +2103,18 @@ async fn run_attach(
             }
         }
     }
-    *handles.prompt_ctx.lock().await = None;
+    {
+        let mut slot = handles.prompt_ctx.lock().await;
+        if !cancel.load(Ordering::SeqCst)
+            && handles.alive.load(Ordering::SeqCst)
+            && let Some(ctx) = slot.as_ref()
+        {
+            handles
+                .activity
+                .add_background_tools(ctx.updates.unfinished_background_tools());
+        }
+        *slot = None;
+    }
     handles.activity.touch();
     let _ = reply.send(Ok(()));
 }

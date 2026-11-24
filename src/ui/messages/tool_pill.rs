@@ -113,14 +113,15 @@ pub(super) fn render_tool_pill(
     // calls genuinely run side by side and each reports its own end.
     let is_bash = name.eq_ignore_ascii_case("bash");
     let is_task = name == "task";
-    let tool_in_flight = streaming
+    let in_bg = !tool_call_id.is_empty() && super::is_background_tool(ui.ctx(), tool_call_id);
+    let tool_in_flight = (streaming || in_bg)
         && metadata.as_ref().map_or(is_error.is_none(), |m| {
             matches!(
                 m.status,
                 crate::model::ToolStatus::Pending | crate::model::ToolStatus::InProgress
             )
         });
-    let running = tool_in_flight && (is_last_in_run || is_task);
+    let running = tool_in_flight && (is_last_in_run || is_task || in_bg);
 
     let pill_bg = if has_error {
         crate::theme::c_tool_error_bg()

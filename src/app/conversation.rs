@@ -492,8 +492,13 @@ impl OxiApp {
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming));
 
         let stall = self.active_stall();
+        let active_key = self.active_session_key();
+        let bg_tools = self.session_acp_background_tools(active_key);
+        let bg_tool_ids: std::collections::HashSet<String> =
+            bg_tools.iter().map(|t| t.tool_call_id.clone()).collect();
         crate::ui::messages::set_turn_stalled(ui.ctx(), stall.is_some());
         crate::ui::messages::set_turn_busy(ui.ctx(), self.active_waiting_response());
+        crate::ui::messages::set_background_tools(ui.ctx(), bg_tool_ids);
         let mut painted_scroll_offset = 0.0;
         let mut find_count = 0;
         let scroll_output = ScrollArea::vertical()
@@ -804,6 +809,8 @@ impl OxiApp {
                             }
                             if let Some(quiet) = stall {
                                 self.render_stall_notice(ui, quiet);
+                            } else if !self.active_waiting_response() && !bg_tools.is_empty() {
+                                self.render_background_wait_notice(ui, &bg_tools);
                             }
                         }
                     });

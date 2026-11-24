@@ -1995,4 +1995,210 @@ fn attach_cycle_settles_only_when_no_foreground_tool_runs() {
     cycle.note(&text);
     cycle.note(&usage);
     assert!(cycle.settled_at.is_some());
+
+    // An async-capable command (WaitMsBeforeAsync) still in_progress when the model answers +
+    // emits usage_update has already moved to a background task, so the attached turn settles
+    // into background-wait state cleanly.
+    let (end, _rx) = oneshot::channel();
+    let mut cycle = AttachCycle::new(end);
+    cycle.note(
+        &json!({"sessionUpdate": "tool_call", "toolCallId": "bg1", "status": "in_progress",
+        "name": "run_command", "kind": "execute",
+        "args": {"CommandLine": "gh pr checks --watch", "WaitMsBeforeAsync": 5000}}),
+    );
+    cycle.note(&text);
+    cycle.note(&usage);
+    assert!(cycle.settled_at.is_some());
+}
+
+/// Mimics Antigravity starting a long `run_command` that stays `in_progress` across `end_turn`
+/// and completes later on a reactive wakeup.
+const ANTIGRAVITY_BACKGROUND_CMD_AGENT: &str = r#"
+import json, sys, threading, time
+def send(v):
+    print(json.dumps(dict(jsonrpc='2.0', **v)), flush=True)
+def update(u):
+    send(dict(method='session/update', params=dict(sessionId='agy-bg', update=u)))
+def wakeup():
+    time.sleep(0.35)
+    update(dict(sessionUpdate='tool_call_update', toolCallId='bg-watch',
+                status='completed', rawOutput='all checks passed'))
+    update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='MERGED')))
+    update(dict(sessionUpdate='usage_update', used=1200, size=1048576))
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    if method == 'initialize':
+        send(dict(id=m['id'], result=dict(protocolVersion=1, agentInfo=dict(name='Antigravity ACP Server'), agentCapabilities={})))
+    elif method == 'session/new':
+        send(dict(id=m['id'], result=dict(sessionId='agy-bg')))
+    elif method == 'session/prompt':
+        update(dict(sessionUpdate='tool_call', toolCallId='bg-watch', name='run_command',
+                    kind='execute', status='in_progress', title='gh pr checks 334 --watch',
+                    args=dict(CommandLine='gh pr checks 334 --watch', WaitMsBeforeAsync=5000,
+                              toolSummary='Watch CI checks for PR #334')))
+        update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='WAITING_CI')))
+        update(dict(sessionUpdate='usage_update', used=900, size=1048576))
+        send(dict(id=m['id'], result=dict(stopReason='end_turn')))
+        threading.Thread(target=wakeup, daemon=True).start()
+    elif 'id' in m:
+        send(dict(id=m['id'], result={}))
+"#;
+
+#[test]
+fn antigravity_background_command_is_tracked_across_end_turn_until_wakeup_completes_it() {
+    let dir = std::env::temp_dir().join(format!("oxi-acp-agy-bg-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("agent.py");
+    std::fs::write(&script, ANTIGRAVITY_BACKGROUND_CMD_AGENT).unwrap();
+    let session_key = format!("agy-bg-{}", rand::random::<u64>());
+    let mgr = AcpManager::spawn();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let (ev_tx, ev_rx) = channel::<AgentEvent>();
+    let (_appr_tx, appr_rx) = channel::<ApprovalDecision>();
+    let prompt = AcpPrompt {
+        session_key: session_key.clone(),
+        cwd: dir.clone(),
+        command_line: format!(
+            "{} {}",
+            crate::agent::test_python_executable().display(),
+            script.display()
+        ),
+        env: Vec::new(),
+        model: String::new(),
+        effort: String::new(),
+        mcp_servers: Vec::new(),
+        text: "watch ci".into(),
+        history: String::new(),
+        missed: String::new(),
+        archive: Vec::new(),
+        images: Vec::new(),
+        resources: Vec::new(),
+        event_tx: ev_tx,
+        approval_rx: appr_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+        evidence_policy: Default::default(),
+        evidence_base: None,
+        steer: None,
+    };
+    rt.block_on(mgr.prompt(prompt)).unwrap();
+    assert_eq!(texts(&ev_rx), "WAITING_CI");
+
+    // Immediately after end_turn, the unfinished command is tracked as an active background tool.
+    let bg = background_tools(&session_key);
+    assert_eq!(bg.len(), 1);
+    assert_eq!(bg[0].tool_call_id, "bg-watch");
+    assert_eq!(bg[0].label, "Watch CI checks for PR #334");
+
+    // Wait for the wakeup and verify the completion update clears the tracked background tool.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !pending_autonomous().contains(&session_key) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "wakeup did not arrive"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        background_tools(&session_key).is_empty(),
+        "completed background command should be cleared"
+    );
+
+    let (ev_tx, ev_rx) = channel::<AgentEvent>();
+    let (_appr_tx, appr_rx) = channel::<ApprovalDecision>();
+    let attach = AcpAttach {
+        session_key: session_key.clone(),
+        cwd: dir.clone(),
+        event_tx: ev_tx,
+        approval_rx: appr_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+    };
+    rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), mgr.attach(attach))
+            .await
+            .expect("attached wakeup did not settle")
+    })
+    .unwrap();
+    assert_eq!(texts(&ev_rx), "MERGED");
+    mgr.close(&session_key);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cross_turn_tool_update_preserves_original_command_metadata() {
+    use crate::model::{
+        AssistantBlock, ToolMetadata, ToolStatus, ToolUpdate, apply_tool_update, merge_tool_update,
+    };
+    let mut blocks = Vec::new();
+    apply_tool_update(
+        &mut blocks,
+        ToolUpdate {
+            tool_call_id: "bg-1".into(),
+            name: "bash".into(),
+            args: Some(json!({"CommandLine": "gh pr checks 334 --watch"})),
+            output: String::new(),
+            diff: None,
+            output_truncated: false,
+            metadata: ToolMetadata {
+                title: "gh pr checks 334 --watch".into(),
+                kind: "execute".into(),
+                name: Some("run_command".into()),
+                locations: Vec::new(),
+                status: ToolStatus::InProgress,
+            },
+        },
+    );
+    // Bare completion update from a later attached turn omits title/kind/name/args.
+    merge_tool_update(
+        &mut blocks,
+        ToolUpdate {
+            tool_call_id: "bg-1".into(),
+            name: "tool".into(),
+            args: None,
+            output: "all checks passed".into(),
+            diff: None,
+            output_truncated: false,
+            metadata: ToolMetadata {
+                title: String::new(),
+                kind: String::new(),
+                name: None,
+                locations: Vec::new(),
+                status: ToolStatus::Completed,
+            },
+        },
+    );
+    assert_eq!(blocks.len(), 1);
+    let AssistantBlock::Tool {
+        name,
+        args_summary,
+        output,
+        is_error,
+        metadata: Some(meta),
+        ..
+    } = &blocks[0]
+    else {
+        panic!("expected merged tool block");
+    };
+    assert_eq!(name, "bash");
+    assert!(
+        args_summary
+            .as_deref()
+            .unwrap()
+            .contains("gh pr checks 334")
+    );
+    assert_eq!(output, "all checks passed");
+    assert_eq!(*is_error, Some(false));
+    assert_eq!(meta.title, "gh pr checks 334 --watch");
+    assert_eq!(meta.kind, "execute");
+    assert_eq!(meta.name.as_deref(), Some("run_command"));
+    assert_eq!(meta.status, ToolStatus::Completed);
 }
