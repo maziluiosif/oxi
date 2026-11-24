@@ -146,8 +146,7 @@ pub(super) fn render_blockquote(
     src: &str,
     quote_idx: usize,
 ) {
-    // Room kept free on the right of the first line for the copy chip.
-    const COPY_CHIP_W: f32 = 64.0;
+    const COPY_CHIP_W: f32 = 76.0;
     let copy_id = ui.id().with("md_quote").with(quote_idx);
     allocate_full_width_block(ui, wrap_w, |ui| {
         let frame = Frame::new()
@@ -165,7 +164,9 @@ pub(super) fn render_blockquote(
                     ui.add_space(10.0);
                     ui.vertical(|ui| {
                         ui.add_space(8.0);
-                        let inner_w = (full_w - 24.0 - COPY_CHIP_W).max(32.0);
+                        // Give the quote text the full interior width; the copy chip floats on
+                        // hover with an opaque pill backdrop instead of cramping every line.
+                        let inner_w = (full_w - 26.0).max(32.0);
                         ui.set_width(inner_w);
                         while let Some(ev) = it.next() {
                             match ev {
@@ -204,18 +205,30 @@ pub(super) fn render_blockquote(
             .rect_filled(bar, CornerRadius::same(2), c_md_quote_accent());
         let chip_rect = egui::Rect::from_min_size(
             egui::pos2(rect.right() - COPY_CHIP_W - 6.0, rect.top() + 6.0),
-            vec2(COPY_CHIP_W, 18.0),
+            vec2(COPY_CHIP_W, 22.0),
         );
-        ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(chip_rect)
-                .layout(Layout::right_to_left(Align::Center)),
-            |ui| {
-                crate::ui::chrome::copy_chip_lazy(ui, copy_id, || {
-                    super::blockquote_source(src, quote_idx)
-                });
-            },
-        );
+        let show_chip = ui.rect_contains_pointer(rect)
+            || ui.rect_contains_pointer(chip_rect)
+            || crate::ui::chrome::copied_recently(ui.ctx(), copy_id);
+        if show_chip {
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(chip_rect)
+                    .layout(Layout::right_to_left(Align::Center)),
+                |ui| {
+                    Frame::new()
+                        .fill(c_bg_elevated())
+                        .stroke(Stroke::new(1.0, c_border_subtle()))
+                        .corner_radius(CornerRadius::same(RADIUS_ROW))
+                        .inner_margin(Margin::symmetric(2, 1))
+                        .show(ui, |ui| {
+                            crate::ui::chrome::copy_chip_lazy(ui, copy_id, || {
+                                super::blockquote_source(src, quote_idx)
+                            });
+                        });
+                },
+            );
+        }
     });
     ui.add_space(7.0);
 }

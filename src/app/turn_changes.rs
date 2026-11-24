@@ -176,13 +176,13 @@ impl OxiApp {
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
                     ui.label(
                         RichText::new(format!("+{added}"))
-                            .font(FontId::proportional(FS_SMALL))
-                            .color(c_success()),
+                            .font(FontId::monospace(FS_TINY))
+                            .color(c_diff_add_fg()),
                     );
                     ui.label(
                         RichText::new(format!("-{deleted}"))
-                            .font(FontId::proportional(FS_SMALL))
-                            .color(c_danger()),
+                            .font(FontId::monospace(FS_TINY))
+                            .color(c_diff_del_fg()),
                     );
                     let chevron = if expanded {
                         ICON_ANGLE_DOWN
@@ -204,6 +204,7 @@ impl OxiApp {
                         action = Some(CardAction::Toggle);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let has_reviewer = !reviewers.is_empty();
                         if all_reverted || reverting {
                             ui.label(
                                 RichText::new(if reverting {
@@ -222,8 +223,43 @@ impl OxiApp {
                         {
                             action = Some(CardAction::RevertAll);
                         }
+                        if has_reviewer && !all_reverted && !reverting {
+                            let (sep_rect, _) =
+                                ui.allocate_exact_size(egui::vec2(5.0, 14.0), Sense::hover());
+                            ui.painter().vline(
+                                sep_rect.center().x,
+                                sep_rect.y_range(),
+                                egui::Stroke::new(1.0, c_border_subtle()),
+                            );
+                        }
                         if let Some(&reviewer) = reviewers.first() {
                             let label = crate::app::composer::composer_provider_label;
+                            if reviewers.len() > 1 {
+                                let picker_id = ui.id().with(("review_agent_picker", &key));
+                                let picker_btn = crate::ui::chrome::ghost_button_icon_enabled(
+                                    ui,
+                                    ICON_ANGLE_DOWN,
+                                    "",
+                                    false,
+                                    !busy,
+                                )
+                                .on_hover_text("Choose another agent to review these changes");
+                                egui::Popup::from_toggle_button_response(&picker_btn)
+                                    .id(picker_id)
+                                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                                    .show(|ui| {
+                                        ui.set_min_width(150.0);
+                                        for &other in &reviewers {
+                                            if ui
+                                                .button(format!("Review with {}", label(other)))
+                                                .clicked()
+                                            {
+                                                action = Some(CardAction::Review(other));
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                            }
                             let button = crate::ui::chrome::ghost_button_icon_enabled(
                                 ui,
                                 ICON_SEARCH,
@@ -231,10 +267,11 @@ impl OxiApp {
                                 false,
                                 !busy,
                             )
-                            .on_hover_text(
-                                "Ask another agent to review these changes in this chat \
-                                 (right-click to pick the agent)",
-                            );
+                            .on_hover_text(if reviewers.len() > 1 {
+                                "Ask another agent to review these changes (click ▾ to choose another)"
+                            } else {
+                                "Ask another agent to review these changes in this chat"
+                            });
                             if button.clicked() {
                                 action = Some(CardAction::Review(reviewer));
                             }
@@ -407,9 +444,9 @@ fn render_loading_card(ui: &mut Ui) {
     egui::Frame::new()
         .fill(c_bg_elevated())
         .stroke(egui::Stroke::new(1.0, c_border()))
-        .corner_radius(crate::theme::RADIUS_PANEL)
+        .corner_radius(crate::theme::RADIUS_CARD)
         .inner_margin(egui::Margin {
-            left: 12,
+            left: 14,
             right: CARD_INSET as i8,
             top: CARD_INSET as i8,
             bottom: CARD_INSET as i8,

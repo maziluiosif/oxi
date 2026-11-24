@@ -102,11 +102,31 @@ impl OxiApp {
         if pa.elicitation.is_some() {
             return self.render_elicitation_card(ui, pa);
         }
+        let kb_ready = self.approval_keys_free(ui.ctx());
+        let (enter_approve, esc_deny) = if kb_ready {
+            ui.input_mut(|i| {
+                let none = egui::Modifiers::NONE;
+                (
+                    i.consume_key(none, egui::Key::Enter),
+                    i.consume_key(none, egui::Key::Escape),
+                )
+            })
+        } else {
+            (false, false)
+        };
+        if enter_approve {
+            self.respond_to_approval(ApprovalDecision::Approve);
+            return;
+        }
+        if esc_deny {
+            self.respond_to_approval(ApprovalDecision::Deny);
+            return;
+        }
         Frame::new()
             .fill(crate::theme::c_info_bg())
             .stroke(Stroke::new(1.0, c_accent()))
-            .corner_radius(CornerRadius::same(RADIUS_BUTTON))
-            .inner_margin(Margin::symmetric(10, 8))
+            .corner_radius(CornerRadius::same(RADIUS_CARD))
+            .inner_margin(Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -122,19 +142,35 @@ impl OxiApp {
                             .color(c_text_strong())
                             .strong(),
                     );
+                    // Only while the keys really answer the card (not while typing in the
+                    // composer, or with a menu or modal up).
+                    if kb_ready {
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(
+                                RichText::new("Enter allow · Esc deny")
+                                    .size(FS_TINY)
+                                    .color(c_text_faint()),
+                            );
+                        });
+                    }
                 });
                 if !pa.summary.is_empty() {
                     ui.add_space(6.0);
+                    let display_summary = if pa.name == "bash" && !pa.summary.starts_with("$ ") {
+                        format!("$ {}", pa.summary)
+                    } else {
+                        pa.summary.clone()
+                    };
                     Frame::new()
                         .fill(c_bg_input())
                         .stroke(Stroke::new(1.0, c_border_subtle()))
                         .corner_radius(CornerRadius::same(RADIUS_CHIP))
-                        .inner_margin(Margin::symmetric(8, 6))
+                        .inner_margin(Margin::symmetric(10, 7))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.add(
                                 Label::new(
-                                    RichText::new(&pa.summary)
+                                    RichText::new(&display_summary)
                                         .size(FS_SMALL)
                                         .color(c_text())
                                         .monospace(),
@@ -145,10 +181,10 @@ impl OxiApp {
                         });
                 }
                 ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                     if crate::ui::chrome::primary_button(ui, "Allow")
-                        .on_hover_text("Run this call")
+                        .on_hover_text("Run this call (Enter)")
                         .clicked()
                     {
                         self.respond_to_approval(ApprovalDecision::Approve);
@@ -198,7 +234,7 @@ impl OxiApp {
                         self.respond_to_approval(ApprovalDecision::AllowTool(pa.name.clone()));
                     }
                     if crate::ui::chrome::ghost_button(ui, "Deny", true)
-                        .on_hover_text("Skip this call; the agent is told it was denied")
+                        .on_hover_text("Skip this call; the agent is told it was denied (Esc)")
                         .clicked()
                     {
                         self.respond_to_approval(ApprovalDecision::Deny);
@@ -208,10 +244,40 @@ impl OxiApp {
         ui.add_space(4.0);
     }
 
-    pub(crate) fn render_empty_state(&mut self, ui: &mut Ui) {
+    /// Enter / Escape answer the approval card only when nothing else would take them: no
+    /// focused field, popup, dropdown, modal, find bar, file picker or context menu. The card
+    /// is drawn before those overlays in a frame, so it would otherwise steal their keys.
+    fn approval_keys_free(&self, ctx: &egui::Context) -> bool {
+        !ctx.egui_wants_keyboard_input()
+            && !self.confirm_prompt_open()
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.memory(|m| m.top_modal_layer()).is_none()
+            && !crate::ui::chrome::modal_shown_recently(ctx)
+            && !self.conv.editor.file_picker_open
+            && !self.conv.editor.find_open
+            && self.conv.transcript.find.is_none()
+            && self.conv.transcript.message_menu.is_none()
+            && self.conv.comment_draft.is_none()
+    }
+
+    pub(crate) fn render_empty_state(&mut self, ui: &mut Ui, usable_h: f32) {
         let col_w = content_wrap_width(ui);
         let compact = col_w < 560.0;
-        ui.add_space(if compact { 20.0 } else { 44.0 });
+        let root = self.active_workspace().root_path.clone();
+        let general = crate::app_dirs::is_general_chats_dir(&root);
+        let estimated_h = if general {
+            90.0
+        } else if compact {
+            240.0
+        } else {
+            280.0
+        };
+        // Position the greeting gently centered in the open canvas above the floating composer.
+        let top_space = ((usable_h - estimated_h) * 0.38).clamp(
+            if compact { 16.0 } else { 28.0 },
+            if compact { 72.0 } else { 150.0 },
+        );
+        ui.add_space(top_space);
         ui.set_max_width(col_w.min(640.0));
         ui.vertical(|ui| {
             ui.label(strong_rich(
@@ -220,14 +286,19 @@ impl OxiApp {
                 c_text_strong(),
             ));
             ui.add_space(5.0);
-            let root = &self.active_workspace().root_path;
-            let general = crate::app_dirs::is_general_chats_dir(root);
             let subtitle = if general {
                 "A general chat, not about any project. Files it writes land in ~/oxi-general."
                     .to_string()
             } else {
-                let workspace = workspace_sidebar_label(root);
-                format!("Ask anything about {workspace}, or start from one of these.")
+                let workspace = workspace_sidebar_label(&root);
+                if self.conv.git.repo && !self.conv.git.branch.is_empty() {
+                    format!(
+                        "Ask anything about {workspace} ({}), or start from one of these.",
+                        self.conv.git.branch
+                    )
+                } else {
+                    format!("Ask anything about {workspace}, or start from one of these.")
+                }
             };
             ui.label(RichText::new(subtitle).size(FS_BODY).color(c_text_muted()));
             ui.add_space(if compact { 12.0 } else { 18.0 });
@@ -422,6 +493,7 @@ impl OxiApp {
 
         let stall = self.active_stall();
         crate::ui::messages::set_turn_stalled(ui.ctx(), stall.is_some());
+        crate::ui::messages::set_turn_busy(ui.ctx(), self.active_waiting_response());
         let mut painted_scroll_offset = 0.0;
         let mut find_count = 0;
         let scroll_output = ScrollArea::vertical()
@@ -472,7 +544,8 @@ impl OxiApp {
                         );
                         let message_count = self.conv.workspaces[wi].sessions[si].messages.len();
                         if message_count == 0 {
-                            self.render_empty_state(ui);
+                            let usable_h = (transcript_h - bottom_overlay_h - 20.0).max(0.0);
+                            self.render_empty_state(ui, usable_h);
                         } else {
                             // The whole history is walked every frame, but only units near the
                             // viewport are actually rendered; the rest advance the cursor by
@@ -700,43 +773,36 @@ impl OxiApp {
                                     },
                                 );
                             }
+                            if let Some((fork_start, fork_end)) =
+                                crate::ui::messages::take_fork_message(ui.ctx())
+                            {
+                                self.fork_active_chat(fork_start, fork_end, false);
+                                crate::ui::chrome::show_toast(ui.ctx(), "Forked chat");
+                            }
+                            if let Some(act) =
+                                crate::ui::messages::take_user_message_action(ui.ctx())
+                            {
+                                match act {
+                                    crate::ui::messages::UserMessageAction::Fork(idx) => {
+                                        self.fork_active_chat(idx, idx + 1, true);
+                                        crate::ui::chrome::show_toast(ui.ctx(), "Forked chat");
+                                    }
+                                    crate::ui::messages::UserMessageAction::Rewind(index) => {
+                                        self.request_confirm(super::state::ConfirmAction::Rewind {
+                                            wi,
+                                            si,
+                                            index,
+                                            restore_files: false,
+                                        });
+                                    }
+                                }
+                            }
                             // The match was laid out (it is never culled), so its reveal is done.
                             if let Some(find) = self.conv.transcript.find.as_mut() {
                                 find.reveal = find_reveal && find_target.is_none();
                             }
                             if let Some(quiet) = stall {
                                 self.render_stall_notice(ui, quiet);
-                            }
-                            let rollback_available = self
-                                .last_turn_rollback(self.active_session_key())
-                                .is_ok();
-                            let can_edit = !self.active_waiting_response()
-                                && !self.compaction_active_for(self.active_session_key())
-                                && self.conv.workspaces[wi].sessions[si]
-                                    .messages
-                                    .last()
-                                    .is_some_and(|m| m.role == MsgRole::Assistant)
-                                && self.conv.composer.editing_last_prompt.is_none()
-                                && rollback_available;
-                            if can_edit {
-                                ui.horizontal(|ui| {
-                                    if crate::ui::chrome::flat_button_icon(
-                                        ui,
-                                        ICON_REFRESH,
-                                        "Regenerate",
-                                        FS_TINY,
-                                        egui::vec2(0.0, 24.0),
-                                        c_text_faint(),
-                                    )
-                                    .on_hover_text(
-                                        "Edit the last prompt and run it again. Sending undoes the file changes that response made",
-                                    )
-                                    .clicked()
-                                    {
-                                        self.begin_edit_last_prompt();
-                                    }
-                                });
-                                ui.add_space(8.0);
                             }
                         }
                     });
@@ -833,53 +899,118 @@ impl OxiApp {
         let max_offset =
             (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
         let from_bottom = max_offset - scroll_output.state.offset.y;
+        // A blocked agent (approval or question card at the tail) turns the plain arrow into an
+        // accent pill that says why: otherwise a user scrolled up never learns the run is waiting.
+        let waiting_label = self.active_run_state().and_then(|run| {
+            run.pending_approval.as_ref().map(|p| {
+                if p.elicitation.is_some() {
+                    "Question waiting"
+                } else {
+                    "Approval needed"
+                }
+            })
+        });
         if from_bottom > 80.0 {
             const BTN: f32 = 32.0;
             // Sit the button just above the composer's actual top edge. Using the padded
             // `bottom_overlay_h` (min 88) left it floating well above a short composer;
             // mirror the real composer height (see `render_composer` in sidebar.rs).
             let composer_h = self.conv.composer.measured_full_h.max(80.0);
-            let pos = egui::pos2(
-                scroll_output.inner_rect.center().x - BTN * 0.5,
-                scroll_output.inner_rect.bottom() - composer_h - BTN - 10.0,
-            );
+            let bottom_y = scroll_output.inner_rect.bottom() - composer_h - 10.0;
+            let center_x = scroll_output.inner_rect.center().x;
             let mut jump = false;
-            egui::Area::new(ui.id().with("scroll_to_bottom_btn"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(pos)
-                .show(ui.ctx(), |ui| {
-                    let look = crate::ui::chrome::IconButtonLook {
-                        fill: c_bg_elevated_2(),
-                        hover_fill: crate::theme::c_row_hover(),
-                        stroke: c_border(),
-                        hover_stroke: c_text_faint(),
-                        rounding: CornerRadius::same((BTN * 0.5) as u8),
-                        glyph: c_text(),
-                    };
-                    // Soft shadow so the button reads as floating over whatever content
-                    // (tables, code blocks) scrolls underneath it.
-                    let shadow_rect = egui::Rect::from_min_size(pos, egui::vec2(BTN, BTN));
-                    ui.painter().add(
-                        egui::epaint::Shadow {
-                            offset: [0, 2],
-                            blur: 12,
-                            spread: 0,
-                            color: egui::Color32::from_black_alpha(110),
-                        }
-                        .as_shape(shadow_rect, CornerRadius::same((BTN * 0.5) as u8)),
-                    );
-                    let resp = crate::ui::chrome::icon_button_core(
-                        ui,
-                        ICON_ARROW_DOWN,
-                        egui::vec2(BTN, BTN),
-                        FS_SMALL,
-                        false,
-                        &look,
-                    )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("Jump to latest");
-                    jump = resp.clicked();
-                });
+            if let Some(label) = waiting_label {
+                let galley = ui.painter().layout_no_wrap(
+                    label.to_owned(),
+                    egui::FontId::proportional(FS_SMALL),
+                    c_on_accent(),
+                );
+                let size = egui::vec2(galley.size().x + 14.0 + 12.0 + 6.0 + 12.0, BTN - 4.0);
+                let pos = egui::pos2(center_x - size.x * 0.5, bottom_y - size.y);
+                egui::Area::new(ui.id().with("scroll_to_bottom_btn"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(pos)
+                    .show(ui.ctx(), |ui| {
+                        let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+                        let rounding = CornerRadius::same((size.y * 0.5) as u8);
+                        ui.painter().add(
+                            egui::epaint::Shadow {
+                                offset: [0, 2],
+                                blur: 12,
+                                spread: 0,
+                                color: egui::Color32::from_black_alpha(110),
+                            }
+                            .as_shape(rect, rounding),
+                        );
+                        let fill = if resp.hovered() {
+                            c_accent().gamma_multiply(0.85)
+                        } else {
+                            c_accent()
+                        };
+                        ui.painter().rect_filled(rect, rounding, fill);
+                        let icon_pos = egui::pos2(rect.left() + 12.0 + 7.0, rect.center().y);
+                        ui.painter().text(
+                            icon_pos,
+                            egui::Align2::CENTER_CENTER,
+                            ICON_ARROW_DOWN,
+                            egui::FontId::new(FS_SMALL, crate::theme::icon_font()),
+                            c_on_accent(),
+                        );
+                        ui.painter().galley(
+                            egui::pos2(
+                                rect.left() + 12.0 + 14.0 + 6.0,
+                                rect.center().y - galley.size().y * 0.5,
+                            ),
+                            galley,
+                            c_on_accent(),
+                        );
+                        let resp = resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("The agent is waiting for you. Jump to it");
+                        resp.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
+                        });
+                        jump = resp.clicked();
+                    });
+            } else {
+                let pos = egui::pos2(center_x - BTN * 0.5, bottom_y - BTN);
+                egui::Area::new(ui.id().with("scroll_to_bottom_btn"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(pos)
+                    .show(ui.ctx(), |ui| {
+                        let look = crate::ui::chrome::IconButtonLook {
+                            fill: c_bg_elevated_2(),
+                            hover_fill: crate::theme::c_row_hover(),
+                            stroke: c_border(),
+                            hover_stroke: c_text_faint(),
+                            rounding: CornerRadius::same((BTN * 0.5) as u8),
+                            glyph: c_text(),
+                        };
+                        // Soft shadow so the button reads as floating over whatever content
+                        // (tables, code blocks) scrolls underneath it.
+                        let shadow_rect = egui::Rect::from_min_size(pos, egui::vec2(BTN, BTN));
+                        ui.painter().add(
+                            egui::epaint::Shadow {
+                                offset: [0, 2],
+                                blur: 12,
+                                spread: 0,
+                                color: egui::Color32::from_black_alpha(110),
+                            }
+                            .as_shape(shadow_rect, CornerRadius::same((BTN * 0.5) as u8)),
+                        );
+                        let resp = crate::ui::chrome::icon_button_core(
+                            ui,
+                            ICON_ARROW_DOWN,
+                            egui::vec2(BTN, BTN),
+                            FS_SMALL,
+                            false,
+                            &look,
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("Jump to latest");
+                        jump = resp.clicked();
+                    });
+            }
             if jump {
                 self.conv.transcript.scroll_to_bottom_once = true;
                 ui.ctx().request_repaint();
@@ -1135,6 +1266,7 @@ fn dismissible_error(
                             .clicked()
                             {
                                 ui.ctx().copy_text(format!("{title}: {detail}"));
+                                crate::ui::chrome::show_toast(ui.ctx(), "Copied error");
                             }
                         });
                     });

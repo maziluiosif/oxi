@@ -348,6 +348,50 @@ impl OxiApp {
         }
     }
 
+    /// Ensure the active workspace's file list is populated (starting a background walk once if
+    /// needed) and return `(relative_paths, still_loading)` for the composer's `@` mention menu.
+    pub(crate) fn workspace_files_for_mentions(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> (Vec<String>, bool) {
+        let root = self.active_workspace().root_path.clone();
+        let cache = &mut self.conv.editor.file_picker_cache;
+        if cache.root != root {
+            *cache = PickerCache {
+                root: root.clone(),
+                generation: cache.generation + 1,
+                ..Default::default()
+            };
+        }
+        if !cache.loaded && cache.walk.is_none() {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let repaint_ctx = ctx.clone();
+            let walk_root = root.clone();
+            let spawned = std::thread::Builder::new()
+                .name("oxi-mention-walk".into())
+                .spawn(move || {
+                    let _ = sender.send(walk_workspace_files(Path::new(&walk_root)));
+                    repaint_ctx.request_repaint();
+                });
+            if spawned.is_ok() {
+                cache.walk = Some(receiver);
+            }
+        }
+        let loading = self.poll_file_picker_walk();
+        if loading {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+        }
+        let files = self
+            .conv
+            .editor
+            .file_picker_cache
+            .files
+            .iter()
+            .map(|f| f.display.clone())
+            .collect();
+        (files, loading)
+    }
+
     /// Rows for the current query, best first; reused until the query or its inputs change.
     fn cached_picker_entries(&mut self, root: &Path, query: &str) -> Arc<Vec<PickerEntry>> {
         // A few dozen commands, ordered by recent use, or the chats: cheap, and not worth a

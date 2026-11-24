@@ -10,7 +10,7 @@ const ALWAYS_SKIPPED_DIRS: &[&str] = &[".git"];
 
 /// Sublime-style fuzzy score. Filename hits, consecutive characters, word/path boundaries and
 /// earlier matches rank higher; long gaps and deep paths rank lower.
-pub(super) fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
+pub(crate) fn fuzzy_path_score(path: &str, query: &str) -> Option<i64> {
     if query.is_empty() {
         let depth = path.bytes().filter(|byte| *byte == b'/').count() as i64;
         return Some(-depth * 20 - path.len() as i64);

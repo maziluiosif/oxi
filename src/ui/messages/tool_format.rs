@@ -345,8 +345,14 @@ fn tool_target(name: &str, args_summary: Option<&String>) -> Option<String> {
             .filter(|s| !s.is_empty())
     };
     let target = match name {
-        "read" => short_path(str_arg("path").or_else(|| str_arg("filePath"))?, 2),
-        "bash" => command_preview(str_arg("command")?, 80),
+        "read" => short_path(
+            str_arg("path")
+                .or_else(|| str_arg("Path"))
+                .or_else(|| str_arg("file_path"))
+                .or_else(|| str_arg("filePath"))?,
+            2,
+        ),
+        "bash" => command_preview(str_arg("command").or_else(|| str_arg("CommandLine"))?, 80),
         "grep" | "codebase_search" => {
             let pattern = str_arg("pattern").or_else(|| str_arg("query"))?;
             match str_arg("path") {
@@ -412,9 +418,11 @@ pub(super) fn tool_icon(name: &str) -> &'static str {
 fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
     let raw = args_summary?;
     let v = serde_json::from_str::<serde_json::Value>(raw).ok()?;
-    // path / filePath for read/write/edit/find
+    // path / Path / file_path / filePath for read/write/edit/find
     if let Some(p) = v
         .get("path")
+        .or_else(|| v.get("Path"))
+        .or_else(|| v.get("file_path"))
         .or_else(|| v.get("filePath"))
         .and_then(|x| x.as_str())
     {
@@ -434,8 +442,12 @@ fn tool_short_arg(name: &str, args_summary: Option<&String>) -> Option<String> {
             _ => short,
         });
     }
-    // command for bash
-    if let Some(cmd) = v.get("command").and_then(|x| x.as_str()) {
+    // command / CommandLine for bash
+    if let Some(cmd) = v
+        .get("command")
+        .or_else(|| v.get("CommandLine"))
+        .and_then(|x| x.as_str())
+    {
         let tok: String = cmd.split_whitespace().take(6).collect::<Vec<_>>().join(" ");
         let mut s: String = tok.chars().take(60).collect();
         if tok.chars().count() > 60 {
@@ -515,6 +527,14 @@ mod tests {
         assert_eq!(
             summary("bash", r#"{"command":"cargo test"}"#, "ok\nok"),
             "Ran | cargo test · 2 lines"
+        );
+        assert_eq!(
+            summary("bash", r#"{"CommandLine":"cargo test --lib"}"#, "ok"),
+            "Ran | cargo test --lib · 1 line"
+        );
+        assert_eq!(
+            summary("read", r#"{"Path":"/repo/src/main.rs"}"#, ""),
+            "Read | …/src/main.rs"
         );
         assert_eq!(
             summary("mcp_github_search", r#"{"q":"oxi"}"#, ""),

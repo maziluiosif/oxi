@@ -1370,8 +1370,15 @@ pub fn flat_button_icon(
 }
 
 /// Settings-page sidebar nav row, drawn like a chat row in the chat sidebar: accent tint and
-/// rail when selected, a hover tint otherwise, muted label until selected.
-pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) -> Response {
+/// rail when selected, a hover tint otherwise, muted label until selected. Shows a subtle
+/// accent dot on the right when `dirty` is true.
+pub fn settings_nav_row(
+    ui: &mut Ui,
+    icon: &str,
+    label: &str,
+    selected: bool,
+    dirty: bool,
+) -> Response {
     let row_w = ui.available_width();
     let h = 30.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(row_w, h), Sense::click());
@@ -1418,6 +1425,7 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
             c_text_faint()
         },
     );
+    let right_reserve = if dirty { 54.0 } else { 40.0 };
     let mut job = egui::text::LayoutJob::simple_singleline(
         label.to_owned(),
         if selected {
@@ -1427,13 +1435,17 @@ pub fn settings_nav_row(ui: &mut Ui, icon: &str, label: &str, selected: bool) ->
         },
         text_color,
     );
-    job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - 40.0).max(0.0));
+    job.wrap = egui::text::TextWrapping::truncate_at_width((rect.width() - right_reserve).max(0.0));
     let galley = ui.painter().layout_job(job);
     ui.painter().galley(
         egui::pos2(rect.left() + 34.0, rect.center().y - galley.size().y * 0.5),
         galley,
         text_color,
     );
+    if dirty {
+        ui.painter()
+            .circle_filled(egui::pos2(rect.right() - 12.0, rect.center().y), 3.0, c_accent());
+    }
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -1450,4 +1462,118 @@ pub fn sidebar_caption(ui: &mut Ui, text: &str) {
         FontId::proportional(FS_TINY),
         c_text_faint(),
     );
+}
+
+/// Global transient toast state shown bottom-right above the status bar, visible from any view
+/// (chat, editor, diff, settings).
+#[derive(Clone)]
+struct ToastState {
+    message: String,
+    is_error: bool,
+    at: f64,
+}
+
+fn toast_id() -> egui::Id {
+    egui::Id::new("oxi_global_toast")
+}
+
+/// Show a brief confirmation toast (e.g. "Copied", "Settings saved", "Committed").
+pub fn show_toast(ctx: &egui::Context, message: impl Into<String>) {
+    let at = ctx.input(|i| i.time);
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            toast_id(),
+            ToastState {
+                message: message.into(),
+                is_error: false,
+                at,
+            },
+        );
+    });
+    ctx.request_repaint();
+}
+
+/// Show a brief error/warning toast visible across views.
+pub fn show_error_toast(ctx: &egui::Context, message: impl Into<String>) {
+    let at = ctx.input(|i| i.time);
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            toast_id(),
+            ToastState {
+                message: message.into(),
+                is_error: true,
+                at,
+            },
+        );
+    });
+    ctx.request_repaint();
+}
+
+/// Render the active global toast, if any, fading out smoothly near expiration.
+pub fn render_toast(ctx: &egui::Context) {
+    const DURATION_S: f64 = 2.4;
+    const FADE_S: f64 = 0.45;
+    let Some(toast) = ctx.data(|d| d.get_temp::<ToastState>(toast_id())) else {
+        return;
+    };
+    let elapsed = ctx.input(|i| i.time) - toast.at;
+    if elapsed >= DURATION_S {
+        ctx.data_mut(|d| d.remove::<ToastState>(toast_id()));
+        return;
+    }
+    let alpha = if elapsed > DURATION_S - FADE_S {
+        ((DURATION_S - elapsed) / FADE_S).clamp(0.0, 1.0) as f32
+    } else {
+        1.0
+    };
+    egui::Area::new(egui::Id::new("oxi_global_toast_area"))
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -34.0))
+        .show(ctx, |ui| {
+            let bg = c_bg_elevated().gamma_multiply(alpha);
+            let border = if toast.is_error {
+                c_error_fg().gamma_multiply(0.5 * alpha)
+            } else {
+                c_border().gamma_multiply(alpha)
+            };
+            let icon_col = if toast.is_error {
+                c_warning_fg().gamma_multiply(alpha)
+            } else {
+                c_success().gamma_multiply(alpha)
+            };
+            let text_col = c_text_strong().gamma_multiply(alpha);
+            Frame::new()
+                .fill(bg)
+                .stroke(Stroke::new(1.0, border))
+                .corner_radius(CornerRadius::same(RADIUS_BUTTON))
+                .shadow(egui::epaint::Shadow {
+                    offset: [0, 3],
+                    blur: 14,
+                    spread: 0,
+                    color: Color32::from_black_alpha((90.0 * alpha) as u8),
+                })
+                .inner_margin(Margin::symmetric(11, 7))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.label(icon_glyph_rich(
+                            if toast.is_error {
+                                ICON_WARNING
+                            } else {
+                                ICON_CHECK_CIRCLE
+                            },
+                            FS_SMALL,
+                            icon_col,
+                        ));
+                        ui.label(RichText::new(&toast.message).size(FS_SMALL).color(text_col));
+                    });
+                });
+        });
+    let next = if elapsed > DURATION_S - FADE_S {
+        std::time::Duration::from_millis(16)
+    } else {
+        std::time::Duration::from_millis(120)
+    };
+    ctx.request_repaint_after(next);
 }

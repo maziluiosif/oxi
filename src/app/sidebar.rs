@@ -109,6 +109,7 @@ impl OxiApp {
         ui.add_space(SPACE_MD);
 
         // "Projects" section header with right-aligned workspace actions (Antigravity-style).
+        let narrow_sidebar = ui.available_width() < 195.0;
         ui.horizontal(|ui| {
             ui.set_height(22.0);
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -129,20 +130,63 @@ impl OxiApp {
                 {
                     self.open_workspace_folder();
                 }
-                if crate::ui::chrome::icon_button_plain(ui, ICON_SERVER, 22.0, false)
-                    .on_hover_text(
-                        "Connect to a remote host: open a folder on another machine over SSH; \
-                         its oxi server runs the agents there.",
-                    )
-                    .clicked()
-                {
-                    self.open_remote_dialog();
-                }
-                if crate::ui::chrome::icon_button_plain(ui, ICON_GLOBE, 22.0, false)
-                    .on_hover_text("New general chat: not about any project, run in ~/oxi-general")
-                    .clicked()
-                {
-                    self.new_general_chat();
+                if narrow_sidebar {
+                    let more_id = ui.id().with("sidebar_projects_more");
+                    let open = egui::Popup::is_id_open(ui.ctx(), more_id);
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+                    let resp = resp
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("More workspace actions");
+                    if open || resp.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(RADIUS_ROW),
+                            if open { c_row_active() } else { c_row_hover() },
+                        );
+                    }
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "···",
+                        FontId::proportional(FS_TINY),
+                        if open || resp.hovered() {
+                            c_accent()
+                        } else {
+                            c_text_muted()
+                        },
+                    );
+                    egui::Popup::from_toggle_button_response(&resp)
+                        .id(more_id)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .show(|ui| {
+                            if ui.button("Connect to remote host (SSH)…").clicked() {
+                                self.open_remote_dialog();
+                                ui.close();
+                            }
+                            if ui.button("New general chat").clicked() {
+                                self.new_general_chat();
+                                ui.close();
+                            }
+                        });
+                } else {
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_SERVER, 22.0, false)
+                        .on_hover_text(
+                            "Connect to a remote host: open a folder on another machine over SSH; \
+                             its oxi server runs the agents there.",
+                        )
+                        .clicked()
+                    {
+                        self.open_remote_dialog();
+                    }
+                    if crate::ui::chrome::icon_button_plain(ui, ICON_GLOBE, 22.0, false)
+                        .on_hover_text(
+                            "New general chat: not about any project, run in ~/oxi-general",
+                        )
+                        .clicked()
+                    {
+                        self.new_general_chat();
+                    }
                 }
             });
         });
@@ -287,11 +331,15 @@ impl OxiApp {
             return false;
         }
         ui.add_space(4.0);
-        ui.label(
-            RichText::new(format!("Running · {}", chats.len()))
-                .size(FS_TINY)
-                .color(c_text_muted()),
-        );
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("Running · {}", chats.len()))
+                    .size(FS_TINY)
+                    .color(c_sidebar_section()),
+            );
+        });
+        ui.add_space(2.0);
         let mut open = None;
         for &(wi, si, approval) in &chats {
             let title = sidebar_session_title_display(&self.conv.workspaces[wi].sessions[si].title);
@@ -300,17 +348,43 @@ impl OxiApp {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let selected = wi == active && si == self.conv.workspaces[wi].active;
-            let response = ui
-                .horizontal(|ui| {
+            const RUNNING_ROW_H: f32 = 28.0;
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), RUNNING_ROW_H),
+                Sense::click(),
+            );
+            let hovered = ui.rect_contains_pointer(rect) || response.has_focus();
+            if hovered {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let fill = if selected {
+                c_row_active()
+            } else if hovered {
+                c_row_hover()
+            } else {
+                Color32::TRANSPARENT
+            };
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(RADIUS_CHIP), fill);
+            if selected {
+                ui.painter().rect_stroke(
+                    rect,
+                    CornerRadius::same(RADIUS_CHIP),
+                    Stroke::new(1.0, c_border()),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_CHIP));
+            let inner = rect.shrink2(egui::vec2(8.0, 2.0));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+                ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.add_space(4.0);
                     if approval {
                         ui.label(
                             RichText::new(ICON_WARNING)
                                 .font(FontId::new(FS_TINY, icon_font()))
                                 .color(c_accent()),
-                        )
-                        .on_hover_text("Waiting for your approval");
+                        );
                     } else {
                         small_spinner(ui);
                     }
@@ -326,21 +400,21 @@ impl OxiApp {
                                     }),
                                 )
                                 .truncate()
-                                .sense(Sense::click()),
-                            )
-                        })
-                        .inner
-                    })
-                    .inner
-                })
-                .inner
-                .on_hover_text(format!("{title} — {place}"));
-            if response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if response.clicked() {
+                                .selectable(false),
+                            );
+                        });
+                    });
+                });
+            });
+            let hover_text = if approval {
+                format!("{title} — {place}\nWaiting for your approval")
+            } else {
+                format!("{title} — {place}")
+            };
+            if response.on_hover_text(hover_text).clicked() {
                 open = Some((wi, si));
             }
+            ui.add_space(2.0);
         }
         ui.add_space(6.0);
         if let Some((wi, si)) = open {

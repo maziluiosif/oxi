@@ -95,8 +95,21 @@ pub enum ModalOutcome {
     Cancelled,
 }
 
+fn modal_pass_id() -> egui::Id {
+    egui::Id::new("oxi_modal_backdrop_pass")
+}
+
+/// Whether a [`modal_backdrop`] was drawn this pass or the one before. Widgets drawn under the
+/// modals (they run first in a frame) use it to leave Enter / Escape to an open modal.
+pub fn modal_shown_recently(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(modal_pass_id()))
+        .is_some_and(|pass| pass + 1 >= ctx.cumulative_pass_nr())
+}
+
 /// Dimmed full-window backdrop behind a modal. Clicking it counts as dismissing.
 pub fn modal_backdrop(ctx: &egui::Context, id: &str) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(modal_pass_id(), pass));
     let screen = ctx.content_rect();
     let mut clicked = false;
     egui::Area::new(egui::Id::new(id))

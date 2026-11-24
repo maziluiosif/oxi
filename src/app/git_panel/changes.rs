@@ -53,33 +53,59 @@ impl OxiApp {
             });
         });
 
-        // Branch + ahead/behind line
+        // Compact branch + inline Pull/Push/Fetch row (reclaims vertical height for file list).
         if self.conv.git.repo {
-            ui.add_space(2.0);
+            ui.add_space(3.0);
             let branch = self.conv.git.branch.clone();
             let (ahead, behind) = (self.conv.git.ahead, self.conv.git.behind);
+            let busy = self.conv.git.busy;
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                // Counts are laid out first from the right edge, so a long branch name
-                // truncates into the space left instead of pushing them out of the panel.
+                // Sync buttons laid out first from the right edge so long branch names truncate
+                // cleanly without pushing sync controls off-panel.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if behind > 0 {
-                        ui.label(
-                            RichText::new(format!("↓{behind}"))
-                                .size(FS_TINY)
-                                .color(c_warning_fg())
-                                .monospace(),
-                        )
-                        .on_hover_text("Commits behind upstream");
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    let fetch_resp = crate::ui::chrome::icon_button_plain(ui, ICON_REFRESH, 20.0, false);
+                    if !busy && fetch_resp.on_hover_text("Fetch from remote").clicked() {
+                        self.request(GitOp::Fetch);
                     }
-                    if ahead > 0 {
-                        ui.label(
-                            RichText::new(format!("↑{ahead}"))
-                                .size(FS_TINY)
-                                .color(c_success())
-                                .monospace(),
-                        )
-                        .on_hover_text("Commits ahead of upstream");
+                    let push_label = if ahead > 0 {
+                        format!("{ahead}")
+                    } else {
+                        String::new()
+                    };
+                    let push_resp = crate::ui::chrome::mini_button_icon_enabled(
+                        ui,
+                        ICON_UPLOAD,
+                        &push_label,
+                        !busy,
+                    )
+                    .on_hover_text(if ahead > 0 {
+                        format!("Push {ahead} commit{} to upstream", if ahead == 1 { "" } else { "s" })
+                    } else {
+                        "Sync remote changes safely, then push".to_owned()
+                    });
+                    if push_resp.clicked() {
+                        self.request(GitOp::Push);
+                    }
+                    let pull_label = if behind > 0 {
+                        format!("{behind}")
+                    } else {
+                        String::new()
+                    };
+                    let pull_resp = crate::ui::chrome::mini_button_icon_enabled(
+                        ui,
+                        ICON_DOWNLOAD,
+                        &pull_label,
+                        !busy,
+                    )
+                    .on_hover_text(if behind > 0 {
+                        format!("Pull {behind} commit{} from upstream", if behind == 1 { "" } else { "s" })
+                    } else {
+                        "Fetch and integrate upstream changes".to_owned()
+                    });
+                    if pull_resp.clicked() {
+                        self.request(GitOp::Pull);
                     }
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.label(
@@ -99,35 +125,6 @@ impl OxiApp {
                         .on_hover_text(&branch);
                     });
                 });
-            });
-            ui.add_space(4.0);
-            // Disabled while the worker is busy so an impatient double-click can't
-            // queue the same network operation twice.
-            let busy = self.conv.git.busy;
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                for (icon, label, hover, op) in [
-                    (
-                        ICON_DOWNLOAD,
-                        "Pull",
-                        "Fetch and integrate upstream changes",
-                        GitOp::Pull,
-                    ),
-                    (
-                        ICON_UPLOAD,
-                        "Push",
-                        "Sync remote changes safely, then push",
-                        GitOp::Push,
-                    ),
-                    (ICON_REFRESH, "Fetch", "Fetch", GitOp::Fetch),
-                ] {
-                    let resp = crate::ui::chrome::mini_button_icon_enabled(ui, icon, label, !busy);
-                    if busy {
-                        resp.on_hover_text("Git operation in progress…");
-                    } else if resp.on_hover_text(hover).clicked() {
-                        self.request(op);
-                    }
-                }
             });
         }
     }
@@ -165,42 +162,53 @@ impl OxiApp {
 
     pub(super) fn render_git_changes(&mut self, ui: &mut Ui) {
         // Commit composer
-        ui.label(
-            RichText::new("Message")
-                .size(FS_TINY)
-                .color(c_text_muted())
-                .strong(),
-        );
-        ui.add_space(2.0);
-        crate::ui::chrome::settings_text_area(
+        let commit_hint = if cfg!(target_os = "macos") {
+            "Commit message… (⌘Enter to commit)"
+        } else {
+            "Commit message… (Ctrl+Enter to commit)"
+        };
+        let commit_edit = crate::ui::chrome::settings_text_area(
             ui,
             &mut self.conv.git_ui.commit_message,
-            "Commit message…",
+            commit_hint,
             3,
         );
         ui.add_space(4.0);
 
         let gen_active = self.commit_gen_active();
         let staged_empty = self.conv.git.staged.is_empty();
+        let unstaged_empty = self.conv.git.unstaged.is_empty();
+        let stage_all_on_commit = staged_empty && !unstaged_empty;
         let msg_empty = self.conv.git_ui.commit_message.trim().is_empty();
+        let can_commit = (!staged_empty || !unstaged_empty) && !msg_empty;
+        let cmd_enter = commit_edit.has_focus()
+            && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
+        let mut do_commit = cmd_enter && can_commit;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+            let commit_label = if stage_all_on_commit {
+                "Stage all & Commit"
+            } else {
+                "Commit"
+            };
             let commit_resp = ui
                 .add_enabled(
-                    !staged_empty && !msg_empty,
-                    crate::ui::chrome::primary_button_icon_widget(ICON_CHECK, "Commit"),
+                    can_commit,
+                    crate::ui::chrome::primary_button_icon_widget(ICON_CHECK, commit_label),
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text("Commit staged changes")
-                .on_disabled_hover_text(if staged_empty {
-                    "Stage some changes first"
+                .on_hover_text(if stage_all_on_commit {
+                    "Stage all unstaged files and commit (Cmd/Ctrl+Enter)"
+                } else {
+                    "Commit staged changes (Cmd/Ctrl+Enter)"
+                })
+                .on_disabled_hover_text(if staged_empty && unstaged_empty {
+                    "No changes to commit"
                 } else {
                     "Write or generate a commit message"
                 });
             if commit_resp.clicked() {
-                let msg = self.conv.git_ui.commit_message.clone();
-                self.request(GitOp::Commit(msg));
-                self.conv.git_ui.commit_message.clear();
+                do_commit = true;
             }
             let (gen_icon, gen_label) = if gen_active {
                 ("", "Generating…")
@@ -225,6 +233,24 @@ impl OxiApp {
                 self.request(GitOp::CollectCommitDiff);
             }
         });
+        if do_commit {
+            if stage_all_on_commit {
+                let paths: Vec<String> = self
+                    .conv
+                    .git
+                    .unstaged
+                    .iter()
+                    .map(|e| e.path.clone())
+                    .collect();
+                if !paths.is_empty() {
+                    self.request(GitOp::Stage(paths));
+                }
+            }
+            let msg = self.conv.git_ui.commit_message.trim().to_owned();
+            self.request(GitOp::Commit(msg));
+            self.conv.git_ui.commit_message.clear();
+            crate::ui::chrome::show_toast(ui.ctx(), "Committed changes");
+        }
 
         if let Some(err) = self.conv.git_ui.commit_gen_error.clone() {
             ui.add_space(4.0);

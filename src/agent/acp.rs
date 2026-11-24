@@ -738,6 +738,84 @@ impl Conn {
     }
 }
 
+/// Tracks completion of an attached autonomous turn (see [`run_attach`]).
+///
+/// Claude Code tags its closing `usage_update` with `_meta._claude/origin`. Other agents (such as
+/// Antigravity on reactive wakeups after a background command or timer) emit an untagged
+/// `usage_update` at the end of each model generation — immediately before any tool call, or as
+/// the final event of the turn when the model answered without calling more tools.
+struct AttachCycle {
+    end: oneshot::Sender<()>,
+    answered: bool,
+    settled_at: Option<std::time::Instant>,
+    in_flight_tools: std::collections::HashSet<String>,
+    /// Tools that keep running after the turn (daemons, timers): never waited for.
+    background_tools: std::collections::HashSet<String>,
+}
+
+impl AttachCycle {
+    fn new(end: oneshot::Sender<()>) -> Self {
+        Self {
+            end,
+            answered: false,
+            settled_at: None,
+            in_flight_tools: std::collections::HashSet::new(),
+            background_tools: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Observe one root-session update. Returns `true` when the update explicitly closes the cycle.
+    fn note(&mut self, update: &Value) -> bool {
+        let kind = update["sessionUpdate"].as_str().unwrap_or("");
+        match kind {
+            "agent_message_chunk" => {
+                self.answered = true;
+                self.settled_at = None;
+            }
+            "agent_thought_chunk" | "plan" | "session_message" => {
+                self.answered = false;
+                self.settled_at = None;
+            }
+            "tool_call" | "tool_call_update" => {
+                self.answered = false;
+                self.settled_at = None;
+                if let Some(id) = update["toolCallId"].as_str().filter(|id| !id.is_empty()) {
+                    if reaper::starts_background(update) {
+                        self.background_tools.insert(id.to_owned());
+                    }
+                    if self.background_tools.contains(id) {
+                        self.in_flight_tools.remove(id);
+                        return false;
+                    }
+                    match update["status"].as_str() {
+                        Some("completed" | "failed" | "cancelled") => {
+                            self.in_flight_tools.remove(id);
+                        }
+                        Some("pending" | "in_progress") => {
+                            self.in_flight_tools.insert(id.to_owned());
+                        }
+                        None if kind == "tool_call" => {
+                            self.in_flight_tools.insert(id.to_owned());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "usage_update" => {
+                if autonomous::ends_cycle(update) {
+                    return true;
+                }
+                // Text that comes while a tool still runs is a progress note, not the answer.
+                if self.answered && self.in_flight_tools.is_empty() {
+                    self.settled_at = Some(std::time::Instant::now());
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+}
+
 /// The event/approval context for the in-flight prompt, shared with the reader task so it can
 /// route notifications and forward permission requests.
 struct PromptCtx {
@@ -749,7 +827,7 @@ struct PromptCtx {
     event_tx: StdSender<AgentEvent>,
     perm_tx: mpsc::UnboundedSender<PermReq>,
     /// For a turn attached to a cycle the agent started itself: fired when that cycle ends.
-    cycle_end: Option<oneshot::Sender<()>>,
+    cycle_end: Option<AttachCycle>,
     last_update: std::time::Instant,
     /// While a session is loaded for import: where its replayed updates go, untranslated.
     replay: Option<StdSender<Value>>,
@@ -767,6 +845,10 @@ impl PromptCtx {
         })
     }
     fn emit_permission_tool(&mut self, params: &Value) {
+        self.last_update = std::time::Instant::now();
+        if let Some(attach) = &mut self.cycle_end {
+            attach.settled_at = None;
+        }
         // An elicitation is no tool call of its own.
         if params["toolCall"].is_null() {
             return;
@@ -825,6 +907,10 @@ impl PromptCtx {
                 }))
         {
             self.last_update = std::time::Instant::now();
+            // A subagent still reporting keeps an attached turn open.
+            if let Some(attach) = &mut self.cycle_end {
+                attach.settled_at = None;
+            }
             let _ = self.event_tx.send(AgentEvent::Delegated {
                 root: self.session_id.clone(),
                 params: params.clone(),
@@ -857,10 +943,13 @@ impl PromptCtx {
             } else {
                 self.updates.emit_update(&params["update"], &self.event_tx);
             }
-            if autonomous::ends_cycle(&params["update"])
-                && let Some(end) = self.cycle_end.take()
+            if self
+                .cycle_end
+                .as_mut()
+                .is_some_and(|attach| attach.note(&params["update"]))
+                && let Some(attach) = self.cycle_end.take()
             {
-                let _ = end.send(());
+                let _ = attach.end.send(());
             }
         }
     }
@@ -1700,12 +1789,13 @@ async fn run_prompt(
         )
         .await;
         if let Err(e) = send {
+            handles.pending.lock().await.remove(&id);
             *handles.prompt_ctx.lock().await = None;
             let _ = reply.send(Err(e));
             return;
         }
 
-        let mut cancel_sent = false;
+        let mut cancel_sent_at: Option<std::time::Instant> = None;
         let result: Result<Value, String> = loop {
             tokio::select! {
                 biased;
@@ -1730,13 +1820,19 @@ async fn run_prompt(
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_millis(150)) => {
-                    if !cancel_sent && cancel.load(Ordering::SeqCst) {
-                        cancel_sent = true;
+                    if let Some(sent_at) = cancel_sent_at {
+                        if sent_at.elapsed() >= CANCEL_WAIT_LIMIT {
+                            handles.pending.lock().await.remove(&id);
+                            handles.alive.store(false, Ordering::SeqCst);
+                            break Err("ACP agent did not respond to cancellation".to_string());
+                        }
+                    } else if cancel.load(Ordering::SeqCst) {
+                        cancel_sent_at = Some(std::time::Instant::now());
                         let _ = write_line(
                             &handles.stdin,
                             &json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId": handles.session_id}}),
                         ).await;
-                    } else if !cancel_sent && let Some(inbox) = steer.as_ref() {
+                    } else if let Some(inbox) = steer.as_ref() {
                         for text in inbox.take() {
                             steer_turn(&handles, &text, &event_tx).await;
                         }
@@ -1852,9 +1948,20 @@ fn stop_notice(stop_reason: &str) -> Option<&'static str> {
     }
 }
 
-/// An attached turn that hears nothing for this long is taken as over, in case the agent never
-/// reports the end of its cycle (adapters other than Claude Code's).
+/// How long `run_prompt` waits for a `session/prompt` reply after sending `session/cancel`.
+/// Past this, the wedged connection is retired so `turn_lock` cannot deadlock future turns.
+const CANCEL_WAIT_LIMIT: Duration = Duration::from_secs(15);
+
+/// An attached turn with an in-flight tool that hears nothing for this long is taken as over.
 const ATTACH_QUIET_LIMIT: Duration = Duration::from_secs(10 * 60);
+
+/// An attached turn with no tools in flight that hears nothing for this long (e.g. a late stray
+/// `tool_call_update` with no follow-up wakeup) is taken as over instead of spinning for 10 min.
+const ATTACH_IDLE_QUIET_LIMIT: Duration = Duration::from_secs(120);
+
+/// How long an attached turn waits after an untagged `usage_update` following assistant text
+/// before treating the autonomous cycle as finished (a follow-up `tool_call` arrives within ms).
+const ATTACH_USAGE_SETTLE: Duration = Duration::from_millis(2500);
 
 async fn run_attach(
     handles: ConnHandles,
@@ -1887,7 +1994,7 @@ async fn run_attach(
             children: handles.held.children.clone(),
             event_tx: event_tx.clone(),
             perm_tx,
-            cycle_end: Some(end_tx),
+            cycle_end: Some(AttachCycle::new(end_tx)),
             last_update: std::time::Instant::now(),
             replay: None,
         });
@@ -1922,6 +2029,12 @@ async fn run_attach(
                             pr,
                         )
                         .await;
+                        if let Some(ctx) = handles.prompt_ctx.lock().await.as_mut() {
+                            ctx.last_update = std::time::Instant::now();
+                            if let Some(attach) = &mut ctx.cycle_end {
+                                attach.settled_at = None;
+                            }
+                        }
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_millis(150)) => {
@@ -1932,13 +2045,24 @@ async fn run_attach(
                         ).await;
                         break;
                     }
-                    let quiet = handles
+                    let done = handles
                         .prompt_ctx
                         .lock()
                         .await
                         .as_ref()
-                        .is_none_or(|ctx| ctx.last_update.elapsed() > ATTACH_QUIET_LIMIT);
-                    if quiet || !handles.alive.load(Ordering::SeqCst) {
+                        .is_none_or(|ctx| {
+                            let settled = ctx
+                                .cycle_end
+                                .as_ref()
+                                .and_then(|a| a.settled_at)
+                                .is_some_and(|at| at.elapsed() >= ATTACH_USAGE_SETTLE);
+                            let quiet_limit = match &ctx.cycle_end {
+                                Some(a) if a.in_flight_tools.is_empty() => ATTACH_IDLE_QUIET_LIMIT,
+                                _ => ATTACH_QUIET_LIMIT,
+                            };
+                            settled || ctx.last_update.elapsed() > quiet_limit
+                        });
+                    if done || !handles.alive.load(Ordering::SeqCst) {
                         break;
                     }
                 }

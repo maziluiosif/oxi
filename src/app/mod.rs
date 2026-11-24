@@ -480,10 +480,10 @@ impl OxiApp {
     /// A file editor, diff, Settings, or an unfocused app all count as the chat being out of focus.
     pub(crate) fn active_chat_is_visible(&self, ctx: &egui::Context) -> bool {
         let app_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
-        app_focused
-            && !self.conv.settings_page.open
-            && self.conv.editor.active_document().is_none()
-            && !(self.conv.diff_view.open && self.conv.git.diff.is_some())
+        let editor_covering = !self.conv.editor.split_rendered
+            && (self.conv.editor.active_document().is_some()
+                || (self.conv.diff_view.open && self.conv.git.diff.is_some()));
+        app_focused && !self.conv.settings_page.open && !editor_covering
     }
 
     pub(crate) fn active_session_mut(&mut self) -> &mut Session {

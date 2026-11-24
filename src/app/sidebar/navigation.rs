@@ -153,6 +153,7 @@ impl OxiApp {
 
     pub(super) fn render_sidebar_history_filters(&mut self, ui: &mut Ui) {
         ui.label(RichText::new("History").size(FS_SMALL).strong());
+        ui.add_space(4.0);
         let projects: Vec<_> = sidebar_workspace_order(&self.conv.workspaces)
             .into_iter()
             .filter(|(_, parent)| parent.is_none())
@@ -165,36 +166,65 @@ impl OxiApp {
             .as_deref()
             .map(workspace_sidebar_label)
             .unwrap_or_else(|| "All projects".into());
-        egui::ComboBox::from_id_salt("history_project")
-            .selected_text(selected)
-            .width((ui.available_width() - 8.0).max(48.0))
-            .truncate()
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.conv.sidebar.history_project, None, "All projects");
-                for root in projects {
-                    let label = workspace_sidebar_label(&root);
-                    ui.selectable_value(&mut self.conv.sidebar.history_project, Some(root), label);
+        let menu_w = ui.available_width().max(80.0);
+        let picked = crate::ui::select_menu::SelectMenu::new("sidebar_history_project", &selected)
+            .framed(menu_w)
+            .show(ui, || {
+                let mut opts = Vec::with_capacity(projects.len() + 1);
+                opts.push(crate::ui::select_menu::SelectOption::new(
+                    "All projects",
+                    self.conv.sidebar.history_project.is_none(),
+                ));
+                for root in &projects {
+                    let is_sel = self
+                        .conv
+                        .sidebar
+                        .history_project
+                        .as_deref()
+                        == Some(root.as_str());
+                    opts.push(crate::ui::select_menu::SelectOption::new(
+                        workspace_sidebar_label(root),
+                        is_sel,
+                    ));
                 }
+                opts
             });
-        let selected = match self.conv.sidebar.history_days {
-            Some(1) => "Today",
-            Some(7) => "Last 7 days",
-            Some(30) => "Last 30 days",
-            _ => "All time",
-        };
-        egui::ComboBox::from_id_salt("history_period")
-            .selected_text(selected)
-            .width((ui.available_width() - 8.0).max(48.0))
-            .show_ui(ui, |ui| {
-                for (days, label) in [
-                    (None, "All time"),
-                    (Some(1), "Today"),
-                    (Some(7), "Last 7 days"),
-                    (Some(30), "Last 30 days"),
-                ] {
-                    ui.selectable_value(&mut self.conv.sidebar.history_days, days, label);
+        if let Some(idx) = picked {
+            self.conv.sidebar.history_project = if idx == 0 {
+                None
+            } else {
+                projects.get(idx - 1).cloned()
+            };
+        }
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+            for (days, label) in [
+                (None, "All"),
+                (Some(1), "Today"),
+                (Some(7), "7d"),
+                (Some(30), "30d"),
+            ] {
+                let active = self.conv.sidebar.history_days == days;
+                let (bg, border, fg) = if active {
+                    (c_pill_selected_bg(), c_pill_selected_border(), c_accent())
+                } else {
+                    (c_bg_input(), c_border_subtle(), c_text_muted())
+                };
+                let btn = egui::Button::new(RichText::new(label).size(FS_TINY).color(fg))
+                    .fill(bg)
+                    .stroke(Stroke::new(1.0, border))
+                    .corner_radius(CornerRadius::same(RADIUS_CHIP))
+                    .min_size(egui::vec2(0.0, 22.0));
+                if ui
+                    .add(btn)
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    self.conv.sidebar.history_days = days;
                 }
-            });
+            }
+        });
         ui.add_space(SPACE_SM);
     }
 }

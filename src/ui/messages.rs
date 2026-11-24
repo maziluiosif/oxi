@@ -267,7 +267,98 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
                 &msg.text,
             );
         }
-        ui.add_space(22.0);
+        // Quiet, always-visible action row under the user bubble (matches the assistant footer,
+        // with zero layout shift on hover).
+        let busy = turn_busy(ui.ctx());
+        let plain_text = crate::app::mentions::strip_mention_context(&msg.text).to_owned();
+        ui.add_space(3.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.set_max_width(col_w);
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let rewind_resp = ui
+                .add_enabled_ui(!busy, |ui| {
+                    crate::ui::chrome::icon_button_core(
+                        ui,
+                        ICON_UNDO,
+                        egui::vec2(22.0, 22.0),
+                        FS_TINY,
+                        false,
+                        &crate::ui::chrome::IconButtonLook {
+                            fill: egui::Color32::TRANSPARENT,
+                            hover_fill: c_row_hover(),
+                            stroke: egui::Color32::TRANSPARENT,
+                            hover_stroke: egui::Color32::TRANSPARENT,
+                            rounding: CornerRadius::same(RADIUS_ROW),
+                            glyph: if busy {
+                                c_text_faint().gamma_multiply(0.5)
+                            } else {
+                                c_text_faint()
+                            },
+                        },
+                    )
+                })
+                .inner
+                .on_hover_text("Rewind chat to before this message…")
+                .on_disabled_hover_text("Wait for the response to finish");
+            if !busy && rewind_resp.clicked() {
+                request_user_message_action(ui.ctx(), UserMessageAction::Rewind(msg_idx));
+            }
+            let fork_resp = ui
+                .add_enabled_ui(!busy, |ui| {
+                    crate::ui::chrome::icon_button_core(
+                        ui,
+                        ICON_BRANCH,
+                        egui::vec2(22.0, 22.0),
+                        FS_TINY,
+                        false,
+                        &crate::ui::chrome::IconButtonLook {
+                            fill: egui::Color32::TRANSPARENT,
+                            hover_fill: c_row_hover(),
+                            stroke: egui::Color32::TRANSPARENT,
+                            hover_stroke: egui::Color32::TRANSPARENT,
+                            rounding: CornerRadius::same(RADIUS_ROW),
+                            glyph: if busy {
+                                c_text_faint().gamma_multiply(0.5)
+                            } else {
+                                c_text_faint()
+                            },
+                        },
+                    )
+                })
+                .inner
+                .on_hover_text("Edit in a fork")
+                .on_disabled_hover_text("Wait for the response to finish");
+            if !busy && fork_resp.clicked() {
+                request_user_message_action(ui.ctx(), UserMessageAction::Fork(msg_idx));
+            }
+            if !plain_text.is_empty() {
+                let copy_id = Id::new(("user_footer_copy", msg_idx));
+                let copied = crate::ui::chrome::copied_recently(ui.ctx(), copy_id);
+                let icon = if copied { ICON_CHECK } else { ICON_COPY };
+                let copy_resp = crate::ui::chrome::icon_button_core(
+                    ui,
+                    icon,
+                    egui::vec2(22.0, 22.0),
+                    FS_TINY,
+                    false,
+                    &crate::ui::chrome::IconButtonLook {
+                        fill: egui::Color32::TRANSPARENT,
+                        hover_fill: c_row_hover(),
+                        stroke: egui::Color32::TRANSPARENT,
+                        hover_stroke: egui::Color32::TRANSPARENT,
+                        rounding: CornerRadius::same(RADIUS_ROW),
+                        glyph: if copied { c_success() } else { c_text_faint() },
+                    },
+                )
+                .on_hover_text(if copied { "Copied" } else { "Copy message" });
+                if copy_resp.clicked() {
+                    ui.ctx().copy_text(plain_text);
+                    crate::ui::chrome::mark_copied(ui.ctx(), copy_id);
+                    crate::ui::chrome::show_toast(ui.ctx(), "Copied message");
+                }
+            }
+        });
+        ui.add_space(10.0);
         return response;
     }
 
@@ -396,7 +487,15 @@ pub fn render_assistant_message_run(
             Some(route) => render_route_note(ui, route),
             None => {}
         }
-        render_assistant_blocks(ui, msg_idx, &blocks, streaming, started_at, worked_duration);
+        render_assistant_blocks(
+            ui,
+            msg_idx,
+            msg_idx + messages.len(),
+            &blocks,
+            streaming,
+            started_at,
+            worked_duration,
+        );
     });
     ui.add_space(SPACE_LG);
 }
@@ -721,6 +820,7 @@ fn render_activity_summary(
 pub fn render_assistant_blocks(
     ui: &mut Ui,
     msg_idx: usize,
+    run_end: usize,
     blocks: &[AssistantBlock],
     streaming: bool,
     started_at: Option<std::time::Instant>,
@@ -805,7 +905,8 @@ pub fn render_assistant_blocks(
         }
     }
 
-    // Quiet action row under a completed assistant answer (real Copy action, no dummy icons).
+    // Quiet action row under a completed assistant answer (above the changed-files summary):
+    // Copy response and Fork chat from here.
     if !streaming {
         let answer_text: String = blocks[worked_end..]
             .iter()
@@ -815,10 +916,11 @@ pub fn render_assistant_blocks(
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        if !answer_text.is_empty() {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
+        let busy = turn_busy(ui.ctx());
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if !answer_text.is_empty() {
                 let copy_id = Id::new(("assistant_footer_copy", msg_idx));
                 let copied = crate::ui::chrome::copied_recently(ui.ctx(), copy_id);
                 let icon = if copied { ICON_CHECK } else { ICON_COPY };
@@ -841,9 +943,38 @@ pub fn render_assistant_blocks(
                 if resp.clicked() {
                     ui.ctx().copy_text(answer_text);
                     crate::ui::chrome::mark_copied(ui.ctx(), copy_id);
+                    crate::ui::chrome::show_toast(ui.ctx(), "Copied response");
                 }
-            });
-        }
+            }
+            let fork_resp = ui
+                .add_enabled_ui(!busy, |ui| {
+                    crate::ui::chrome::icon_button_core(
+                        ui,
+                        ICON_BRANCH,
+                        egui::vec2(24.0, 24.0),
+                        FS_SMALL,
+                        false,
+                        &crate::ui::chrome::IconButtonLook {
+                            fill: egui::Color32::TRANSPARENT,
+                            hover_fill: c_row_hover(),
+                            stroke: egui::Color32::TRANSPARENT,
+                            hover_stroke: egui::Color32::TRANSPARENT,
+                            rounding: CornerRadius::same(RADIUS_ROW),
+                            glyph: if busy {
+                                c_text_faint().gamma_multiply(0.5)
+                            } else {
+                                c_text_faint()
+                            },
+                        },
+                    )
+                })
+                .inner
+                .on_hover_text("Fork chat from here")
+                .on_disabled_hover_text("Wait for the response to finish");
+            if !busy && fork_resp.clicked() {
+                request_fork_message(ui.ctx(), msg_idx, run_end);
+            }
+        });
     }
 
     // Text can be interim commentary, especially with ACP: only Finished ends the turn.
@@ -1015,6 +1146,74 @@ pub(crate) fn request_terminal_command(ctx: &eframe::egui::Context, command: &st
 /// The command a transcript widget asked to open in the terminal, if any.
 pub(crate) fn take_terminal_command(ctx: &eframe::egui::Context) -> Option<String> {
     ctx.data_mut(|d| d.remove_temp::<String>(terminal_command_id()))
+}
+
+fn tool_output_path_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("oxi_open_tool_output_path")
+}
+
+/// Ask the app to open a truncated tool's full output file.
+pub(crate) fn request_open_tool_output(ctx: &eframe::egui::Context, path: &str) {
+    ctx.data_mut(|d| d.insert_temp(tool_output_path_id(), path.to_owned()));
+}
+
+/// The truncated tool output path a transcript widget asked to inspect, if any.
+pub(crate) fn take_open_tool_output(ctx: &eframe::egui::Context) -> Option<String> {
+    ctx.data_mut(|d| d.remove_temp::<String>(tool_output_path_id()))
+}
+
+fn turn_busy_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("oxi_turn_busy")
+}
+
+/// Publish whether the active chat is currently busy so message action bars disable Fork while
+/// streaming.
+pub fn set_turn_busy(ctx: &eframe::egui::Context, busy: bool) {
+    ctx.data_mut(|d| d.insert_temp(turn_busy_id(), busy));
+}
+
+fn turn_busy(ctx: &eframe::egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(turn_busy_id()))
+        .unwrap_or(false)
+}
+
+fn fork_message_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("oxi_fork_message_request")
+}
+
+fn request_fork_message(ctx: &eframe::egui::Context, start: usize, end: usize) {
+    ctx.data_mut(|d| d.insert_temp(fork_message_id(), (start, end)));
+}
+
+/// Assistant message run `(start, end)` the user asked to fork from its footer action row.
+pub(crate) fn take_fork_message(ctx: &eframe::egui::Context) -> Option<(usize, usize)> {
+    ctx.data_mut(|d| d.remove_temp::<(usize, usize)>(fork_message_id()))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum UserMessageAction {
+    Fork(usize),
+    Rewind(usize),
+}
+
+fn user_message_action_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("oxi_user_message_action")
+}
+
+fn request_user_message_action(ctx: &eframe::egui::Context, action: UserMessageAction) {
+    ctx.data_mut(|d| d.insert_temp(user_message_action_id(), action));
+}
+
+/// User message action triggered from the quiet row below a user bubble, if any.
+pub(crate) fn take_user_message_action(ctx: &eframe::egui::Context) -> Option<UserMessageAction> {
+    ctx.data_mut(|d| {
+        let id = user_message_action_id();
+        let action = d.get_temp::<UserMessageAction>(id);
+        if action.is_some() {
+            d.remove::<UserMessageAction>(id);
+        }
+        action
+    })
 }
 
 #[cfg(test)]

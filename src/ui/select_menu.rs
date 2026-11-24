@@ -15,6 +15,7 @@ use eframe::egui::{
 use crate::theme::*;
 
 const ROW_H: f32 = 28.0;
+const ROW_DETAIL_H: f32 = 42.0;
 const HEADER_H: f32 = 24.0;
 const LIST_MAX_H: f32 = 360.0;
 /// At least this many rows stay visible, even when the window is short.
@@ -23,6 +24,14 @@ const POPUP_MAX_W: f32 = 380.0;
 /// Lists this short are scanned at a glance; a search field would only get in the way.
 const SEARCH_MIN_OPTIONS: usize = 4;
 const CHEVRON_W: f32 = 14.0;
+
+fn row_height(option: &SelectOption) -> f32 {
+    if option.detail.is_empty() {
+        ROW_H
+    } else {
+        ROW_DETAIL_H
+    }
+}
 
 /// One choice in a [`SelectMenu`].
 #[derive(Clone, Debug, Default)]
@@ -178,13 +187,7 @@ impl<'a> SelectMenu<'a> {
             ])
             .gap(4.0)
             .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
-            .frame(
-                Frame::new()
-                    .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(CornerRadius::same(RADIUS_CARD))
-                    .inner_margin(Margin::same(4)),
-            )
+            .frame(popup_frame().inner_margin(Margin::same(4)))
             .show(|ui| {
                 ui.set_width(width);
                 picked = list(ui, &options, popup_id, room, self.empty_text);
@@ -200,18 +203,140 @@ fn popup_width(ui: &Ui, options: &[SelectOption], min_w: f32) -> f32 {
     let widest = options
         .iter()
         .map(|o| {
-            ui.painter()
+            let label_w = ui
+                .painter()
                 .layout_no_wrap(
                     o.label.clone(),
                     egui::FontId::proportional(FS_BODY),
                     c_text(),
                 )
                 .size()
-                .x
+                .x;
+            if o.detail.is_empty() {
+                label_w
+            } else {
+                let detail_w = ui
+                    .painter()
+                    .layout_no_wrap(
+                        o.detail.clone(),
+                        egui::FontId::proportional(FS_TINY),
+                        c_text_faint(),
+                    )
+                    .size()
+                    .x
+                    .min(280.0);
+                label_w.max(detail_w)
+            }
         })
         .fold(0.0, f32::max);
     // Row padding on both sides plus the check mark column.
     (widest + 2.0 * 10.0 + 28.0).clamp(min_w, POPUP_MAX_W)
+}
+
+/// Id of the list a [`SelectMenu`] built with `id_salt` opens, for [`overflow_menu`].
+pub fn popup_id(id_salt: impl std::hash::Hash + std::fmt::Debug) -> Id {
+    Id::new(("select_menu", id_salt)).with("popup")
+}
+
+/// A `···` button `width` wide that opens a small menu holding controls that did not fit,
+/// typically [`SelectMenu`]s. `child_popups` are the ids of the lists those controls open (see
+/// [`popup_id`]).
+///
+/// egui keeps one memory-backed popup open per viewport, so this menu holds its own open flag:
+/// a dropdown opened inside it would otherwise evict it, and vanish with it. A click inside
+/// such a dropdown also counts as inside this menu.
+pub fn overflow_menu(
+    ui: &mut Ui,
+    id: Id,
+    width: f32,
+    hover: &str,
+    child_popups: &[Id],
+    add_contents: impl FnOnce(&mut Ui),
+) {
+    let mut open = ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let click_in_child = ui
+        .ctx()
+        .input(|i| i.pointer.interact_pos())
+        .and_then(|pos| ui.ctx().layer_id_at(pos))
+        .is_some_and(|layer| child_popups.contains(&layer.id));
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(width, ui.spacing().interact_size.y),
+        Sense::click(),
+    );
+    let resp = resp
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(hover);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, hover));
+    if resp.clicked() {
+        open = !open;
+    }
+    let radius = CornerRadius::same(RADIUS_BUTTON);
+    if open || resp.hovered() || resp.has_focus() {
+        ui.painter().rect_filled(
+            rect,
+            radius,
+            if open { c_row_active() } else { c_row_hover() },
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "···",
+        egui::FontId::proportional(FS_SMALL),
+        if open || resp.hovered() {
+            c_text_strong()
+        } else {
+            c_text_muted()
+        },
+    );
+    crate::ui::chrome::keyboard_focus_ring(ui, &resp, radius);
+    let was_open = open;
+    let shown = egui::Popup::from_response(&resp)
+        .id(id.with("popup"))
+        .open_bool(&mut open)
+        .align(RectAlign::TOP_START)
+        .align_alternatives(&[RectAlign::BOTTOM_START, RectAlign::TOP_END])
+        .gap(4.0)
+        .close_behavior(PopupCloseBehavior::IgnoreClicks)
+        .frame(popup_frame().inner_margin(Margin::symmetric(8, 6)))
+        .show(|ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                add_contents(ui);
+            });
+        });
+    if let Some(shown) = shown
+        && was_open
+        && !resp.clicked()
+        && !click_in_child
+        && shown.response.clicked_elsewhere()
+    {
+        open = false;
+    }
+    if !open {
+        for &child in child_popups {
+            egui::Popup::close_id(ui.ctx(), child);
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, open));
+}
+
+/// The elevated, shadowed frame every dropdown list uses.
+fn popup_frame() -> Frame {
+    Frame::new()
+        .fill(c_bg_elevated())
+        .stroke(Stroke::new(1.0, c_border()))
+        .corner_radius(CornerRadius::same(RADIUS_CARD))
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 6],
+            blur: 18,
+            spread: 0,
+            color: if active_palette().dark_base {
+                Color32::from_black_alpha(115)
+            } else {
+                Color32::from_black_alpha(28)
+            },
+        })
 }
 
 fn list(
@@ -252,7 +377,12 @@ fn list(
             group.is_some() && (*n == 0 || options[matches[n - 1]].group != *group)
         })
         .count();
-    let content_h = (matches.len().max(1)) as f32 * ROW_H + groups as f32 * HEADER_H;
+    let rows_h: f32 = if matches.is_empty() {
+        ROW_H
+    } else {
+        matches.iter().map(|&i| row_height(&options[i])).sum()
+    };
+    let content_h = rows_h + groups as f32 * HEADER_H;
     let list_h = content_h
         .min(LIST_MAX_H)
         .min((room - search_h - 16.0).max(MIN_ROWS * ROW_H));
@@ -419,8 +549,8 @@ fn group_header(ui: &mut Ui, label: &str) {
 }
 
 fn option_row(ui: &mut Ui, option: &SelectOption, highlighted: bool) -> Response {
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::click());
+    let h = row_height(option);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     resp.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -435,18 +565,36 @@ fn option_row(ui: &mut Ui, option: &SelectOption, highlighted: bool) -> Response
         painter.rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
     }
     let check_w = 24.0;
+    let text_w = (rect.width() - 20.0 - check_w).max(0.0);
     let mut job = egui::text::LayoutJob::single_section(
         option.label.clone(),
         egui::TextFormat::simple(egui::FontId::proportional(FS_BODY), c_text()),
     );
-    job.wrap =
-        egui::text::TextWrapping::truncate_at_width((rect.width() - 20.0 - check_w).max(0.0));
+    job.wrap = egui::text::TextWrapping::truncate_at_width(text_w);
     let galley = painter.layout_job(job);
-    painter.galley(
-        egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y * 0.5),
-        galley,
-        c_text(),
-    );
+    if option.detail.is_empty() {
+        painter.galley(
+            egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y * 0.5),
+            galley,
+            c_text(),
+        );
+    } else {
+        let mut detail_job = egui::text::LayoutJob::single_section(
+            option.detail.clone(),
+            egui::TextFormat::simple(egui::FontId::proportional(FS_TINY), c_text_faint()),
+        );
+        detail_job.wrap = egui::text::TextWrapping::truncate_at_width(text_w);
+        let detail_galley = painter.layout_job(detail_job);
+        let total_h = galley.size().y + 1.0 + detail_galley.size().y;
+        let top_y = rect.center().y - total_h * 0.5;
+        let label_h = galley.size().y;
+        painter.galley(egui::pos2(rect.left() + 10.0, top_y), galley, c_text());
+        painter.galley(
+            egui::pos2(rect.left() + 10.0, top_y + label_h + 1.0),
+            detail_galley,
+            c_text_faint(),
+        );
+    }
     if option.selected {
         painter.text(
             egui::pos2(rect.right() - 12.0, rect.center().y),
@@ -670,5 +818,74 @@ mod tests {
         assert_eq!(filter(&options, "everyday"), [1]);
         assert_eq!(filter(&options, "openai"), [2]);
         assert!(filter(&options, "haiku").is_empty());
+    }
+
+    #[test]
+    fn row_height_grows_only_for_options_with_detail() {
+        let plain = SelectOption::new("Opus", false);
+        let detailed = SelectOption::new("Balanced", false).detail("Mix of speed and quality");
+        assert_eq!(row_height(&plain), ROW_H);
+        assert_eq!(row_height(&detailed), ROW_DETAIL_H);
+        assert!(row_height(&detailed) > row_height(&plain));
+    }
+
+    #[test]
+    fn dropdown_inside_overflow_menu_opens_and_picks() {
+        use egui_kittest::kittest::Queryable;
+
+        let mut setup = false;
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 360.0))
+            .build_ui_state(
+                |ui, picked: &mut Option<usize>| {
+                    if !setup {
+                        crate::theme::apply_theme(ui.ctx(), "dark");
+                        setup = true;
+                        return;
+                    }
+                    ui.add_space(300.0);
+                    overflow_menu(
+                        ui,
+                        Id::new("overflow"),
+                        26.0,
+                        "More options",
+                        &[popup_id("effort")],
+                        |ui| {
+                            if let Some(index) = SelectMenu::new("effort", "Low").show(ui, || {
+                                vec![
+                                    SelectOption::new("Low", true),
+                                    SelectOption::new("High", false),
+                                ]
+                            }) {
+                                *picked = Some(index);
+                            }
+                        },
+                    );
+                },
+                None,
+            );
+        harness.run();
+        harness.get_by_label("More options").click();
+        harness.run();
+        harness.get_by_label("Low").click();
+        harness.run();
+        // The overflow menu survives the dropdown opening inside it.
+        harness.get_by_label("High").click();
+        harness.run();
+        assert_eq!(*harness.state(), Some(1));
+        // Still open after the pick; a click on empty space closes it.
+        assert!(harness.query_by_label("Low").is_some());
+        let outside = egui::pos2(400.0, 20.0);
+        harness.hover_at(outside);
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: outside,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        harness.run();
+        assert!(harness.query_by_label("Low").is_none());
     }
 }

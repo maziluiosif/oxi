@@ -80,6 +80,70 @@ impl OxiApp {
             .is_some_and(|original| original != &self.conv.settings)
     }
 
+    fn settings_tab_dirty(&self, tab: SettingsTab) -> bool {
+        let Some(orig) = self.conv.settings_page.original.as_ref() else {
+            return false;
+        };
+        let cur = &self.conv.settings;
+        match tab {
+            SettingsTab::Appearance => {
+                cur.theme_id != orig.theme_id
+                    || cur.ui_density != orig.ui_density
+                    || cur.tool_detail != orig.tool_detail
+                    || cur.ui_font != orig.ui_font
+                    || cur.mono_font != orig.mono_font
+                    || cur.chat_column_max_width != orig.chat_column_max_width
+                    || cur.notify_in_background != orig.notify_in_background
+                    || cur.keep_awake_while_working != orig.keep_awake_while_working
+                    || cur.steer_follow_ups != orig.steer_follow_ups
+                    || cur.auto_title_chats != orig.auto_title_chats
+                    || cur.auto_update != orig.auto_update
+                    || cur.activity_log_enabled != orig.activity_log_enabled
+            }
+            SettingsTab::Editor => {
+                cur.editor != orig.editor || cur.windows_terminal != orig.windows_terminal
+            }
+            SettingsTab::Voice => cur.dictation != orig.dictation,
+            SettingsTab::Providers => {
+                cur.active_provider != orig.active_provider
+                    || cur.providers != orig.providers
+                    || cur.local_hf != orig.local_hf
+                    || cur.router != orig.router
+                    || cur.context_window_default != orig.context_window_default
+            }
+            SettingsTab::Agent => {
+                cur.tools_enabled != orig.tools_enabled
+                    || cur.web_search_backend != orig.web_search_backend
+                    || cur.searxng_url != orig.searxng_url
+                    || cur.require_write_edit_approval != orig.require_write_edit_approval
+                    || cur.require_bash_approval != orig.require_bash_approval
+                    || cur.bash_allowlist != orig.bash_allowlist
+                    || cur.workspace_tool_allowlist != orig.workspace_tool_allowlist
+                    || cur.max_tool_rounds != orig.max_tool_rounds
+                    || cur.bash_timeout_cap_secs != orig.bash_timeout_cap_secs
+                    || cur.mcp_servers != orig.mcp_servers
+                    || cur.computer_use != orig.computer_use
+            }
+            SettingsTab::Prompts => {
+                cur.system_prompt != orig.system_prompt
+                    || cur.include_agents_md != orig.include_agents_md
+                    || cur.include_oxi_rules != orig.include_oxi_rules
+                    || cur.commit_msg_provider != orig.commit_msg_provider
+                    || cur.commit_msg_model_id != orig.commit_msg_model_id
+                    || cur.commit_msg_system_prompt != orig.commit_msg_system_prompt
+            }
+            SettingsTab::GitHub => {
+                cur.git_author_name != orig.git_author_name
+                    || cur.git_author_email != orig.git_author_email
+                    || cur.github_username != orig.github_username
+                    || cur.github_token != orig.github_token
+                    || cur.git_use_system_cli != orig.git_use_system_cli
+                    || cur.git_executable != orig.git_executable
+            }
+            SettingsTab::Server | SettingsTab::About => false,
+        }
+    }
+
     fn continue_after_settings_exit(&mut self, action: SettingsExitAction) {
         match action {
             SettingsExitAction::NewChat => self.new_chat(),
@@ -430,6 +494,9 @@ impl OxiApp {
                     .clicked()
                 {
                     self.save_settings_page();
+                    if self.conv.settings_page.save_error.is_none() {
+                        crate::ui::chrome::show_toast(ui.ctx(), "Settings saved");
+                    }
                 }
                 if dirty
                     && ghost_button(ui, "Discard", false)
@@ -556,7 +623,8 @@ impl OxiApp {
             }
             for (tab, icon, label) in group.items {
                 let selected = self.conv.settings_page.tab == *tab;
-                let response = settings_nav_row(ui, icon, label, selected);
+                let dirty = self.settings_tab_dirty(*tab);
+                let response = settings_nav_row(ui, icon, label, selected, dirty);
                 if response.clicked() {
                     self.conv.settings_page.tab = *tab;
                 }

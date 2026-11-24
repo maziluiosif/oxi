@@ -1775,3 +1775,224 @@ fn questions_reach_the_user_whatever_the_approval_settings_and_logins_can_be_wit
     assert!(text.contains(r#"login={"action": "cancel"};"#), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn antigravity_permissions_support_command_line_and_mcp_names() {
+    let run_cmd = json!({
+        "name": "run_command",
+        "kind": "execute",
+        "title": "cargo test --lib",
+        "rawInput": {"CommandLine": "cargo test --lib", "WaitMsBeforeAsync": 5000}
+    });
+    let (name, args) = permission_name_args(&run_cmd);
+    assert_eq!(name, "bash");
+    let summary = crate::agent::approval_summary(&name, &args);
+    assert_eq!(summary, "cargo test --lib");
+    assert_eq!(
+        crate::agent::suggest_bash_allow_prefix(&summary).as_deref(),
+        Some("cargo test")
+    );
+    assert!(
+        crate::agent::approval::bash_command_arg(args.as_ref().unwrap()).is_some_and(|c| {
+            crate::agent::approval::bash_command_allowlisted(c, &["cargo test".into()])
+        })
+    );
+
+    let edit_file = json!({
+        "name": "edit_file",
+        "kind": "edit",
+        "rawInput": {"Path": "/repo/src/lib.rs"}
+    });
+    let (edit_name, edit_args) = permission_name_args(&edit_file);
+    assert_eq!(edit_name, "edit");
+    assert_eq!(
+        crate::agent::approval_summary(&edit_name, &edit_args),
+        "/repo/src/lib.rs"
+    );
+
+    // Antigravity MCP tools have a human-friendly title ("Run mcp_foo_bar") alongside the stable
+    // `name` ("mcp_foo_bar"); permissions must key on `name`.
+    let custom_mcp = json!({
+        "name": "mcp_github_create_issue",
+        "kind": "other",
+        "title": "Run mcp_github_create_issue",
+        "args": {"title": "Bug"}
+    });
+    let (mcp_name, mcp_args) = permission_name_args(&custom_mcp);
+    assert_eq!(mcp_name, "mcp_github_create_issue");
+    assert_eq!(mcp_args.unwrap()["title"], "Bug");
+
+    // Antigravity spells oxi's delegation status and computer-use tools with single underscores.
+    let task_status = json!({
+        "name": "mcp_oxi_task_status",
+        "kind": "other",
+        "title": "Run mcp_oxi_task_status",
+        "rawInput": {"task_id": "t1"}
+    });
+    assert_eq!(permission_name_args(&task_status).0, "task_status");
+    let desktop = json!({
+        "name": "mcp_agent-desktop_desktop_snapshot",
+        "kind": "other",
+        "title": "Run mcp_agent-desktop_desktop_snapshot"
+    });
+    assert!(crate::computer_use::is_acp_tool(&desktop));
+}
+
+/// Mimics Antigravity (`agy acp`) reactive wakeup: finishes the prompted turn, then autonomously
+/// reports a background command completing, thinks, emits an untagged `usage_update` followed
+/// immediately by another tool call, and finally replies with text + an untagged `usage_update`.
+const ANTIGRAVITY_WAKEUP_AGENT: &str = r#"
+import json, sys, threading, time
+def send(v):
+    print(json.dumps(dict(jsonrpc='2.0', **v)), flush=True)
+def update(u):
+    send(dict(method='session/update', params=dict(sessionId='agy-session', update=u)))
+def wakeup():
+    time.sleep(0.15)
+    update(dict(sessionUpdate='tool_call_update', toolCallId='bg1', name='run_command',
+                kind='execute', status='completed', title='sleep 1'))
+    time.sleep(0.1)
+    update(dict(sessionUpdate='agent_thought_chunk', content=dict(type='text', text='checking')))
+    update(dict(sessionUpdate='usage_update', used=1000, size=1048576))
+    time.sleep(0.02)
+    update(dict(sessionUpdate='tool_call', toolCallId='step2', name='run_command',
+                kind='execute', status='in_progress', title='echo ok'))
+    time.sleep(0.1)
+    update(dict(sessionUpdate='tool_call_update', toolCallId='step2', name='run_command',
+                kind='execute', status='completed', title='echo ok'))
+    time.sleep(0.1)
+    update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='ALL_DONE')))
+    update(dict(sessionUpdate='usage_update', used=1100, size=1048576))
+for line in sys.stdin:
+    m = json.loads(line)
+    method = m.get('method')
+    if method == 'initialize':
+        send(dict(id=m['id'], result=dict(protocolVersion=1, agentInfo=dict(name='Antigravity ACP Server'), agentCapabilities={})))
+    elif method == 'session/new':
+        send(dict(id=m['id'], result=dict(sessionId='agy-session')))
+    elif method == 'session/prompt':
+        update(dict(sessionUpdate='agent_message_chunk', content=dict(type='text', text='WAITING')))
+        update(dict(sessionUpdate='usage_update', used=900, size=1048576))
+        send(dict(id=m['id'], result=dict(stopReason='end_turn')))
+        threading.Thread(target=wakeup, daemon=True).start()
+    elif 'id' in m:
+        send(dict(id=m['id'], result={}))
+"#;
+
+#[test]
+fn antigravity_autonomous_turn_ends_after_untagged_usage_update() {
+    let dir = std::env::temp_dir().join(format!("oxi-acp-agy-wakeup-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("agent.py");
+    std::fs::write(&script, ANTIGRAVITY_WAKEUP_AGENT).unwrap();
+    let session_key = format!("agy-wakeup-{}", rand::random::<u64>());
+    let mgr = AcpManager::spawn();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let (ev_tx, ev_rx) = channel::<AgentEvent>();
+    let (_appr_tx, appr_rx) = channel::<ApprovalDecision>();
+    let prompt = AcpPrompt {
+        session_key: session_key.clone(),
+        cwd: dir.clone(),
+        command_line: format!(
+            "{} {}",
+            crate::agent::test_python_executable().display(),
+            script.display()
+        ),
+        env: Vec::new(),
+        model: String::new(),
+        effort: String::new(),
+        mcp_servers: Vec::new(),
+        text: "run bg".into(),
+        history: String::new(),
+        missed: String::new(),
+        archive: Vec::new(),
+        images: Vec::new(),
+        resources: Vec::new(),
+        event_tx: ev_tx,
+        approval_rx: appr_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+        evidence_policy: Default::default(),
+        evidence_base: None,
+        steer: None,
+    };
+    rt.block_on(mgr.prompt(prompt)).unwrap();
+    assert_eq!(texts(&ev_rx), "WAITING");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !pending_autonomous().contains(&session_key) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Antigravity reactive wakeup was not announced"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let (ev_tx, ev_rx) = channel::<AgentEvent>();
+    let (_appr_tx, appr_rx) = channel::<ApprovalDecision>();
+    let attach = AcpAttach {
+        session_key: session_key.clone(),
+        cwd: dir.clone(),
+        event_tx: ev_tx,
+        approval_rx: appr_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+    };
+    // Must complete shortly after the final untagged `usage_update`, without prematurely ending
+    // on the mid-turn `usage_update` or waiting for the 10-minute quiet limit.
+    rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), mgr.attach(attach))
+            .await
+            .expect("Antigravity attached turn hung instead of ending after final usage_update")
+    })
+    .unwrap();
+    assert_eq!(texts(&ev_rx), "ALL_DONE");
+    assert!(!pending_autonomous().contains(&session_key));
+    mgr.close(&session_key);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn attach_cycle_settles_only_when_no_foreground_tool_runs() {
+    let (end, _rx) = oneshot::channel();
+    let mut cycle = AttachCycle::new(end);
+    let text =
+        json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "…"}});
+    let usage = json!({"sessionUpdate": "usage_update", "used": 10, "size": 100});
+
+    // Text while a tool still runs is a progress note: no settling.
+    cycle.note(&json!({"sessionUpdate": "tool_call", "toolCallId": "t1", "status": "in_progress"}));
+    cycle.note(&text);
+    cycle.note(&usage);
+    assert!(cycle.settled_at.is_none());
+
+    // Once it completes, the closing text + usage settle the cycle.
+    cycle.note(
+        &json!({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"}),
+    );
+    cycle.note(&text);
+    cycle.note(&usage);
+    assert!(cycle.settled_at.is_some());
+
+    // A daemon outlives the turn, so it is never waited for, even on later bare updates.
+    let (end, _rx) = oneshot::channel();
+    let mut cycle = AttachCycle::new(end);
+    cycle.note(
+        &json!({"sessionUpdate": "tool_call", "toolCallId": "d1", "status": "in_progress",
+        "name": "run_command", "args": {"CommandLine": "npm run dev", "IsDaemon": true}}),
+    );
+    cycle.note(
+        &json!({"sessionUpdate": "tool_call_update", "toolCallId": "d1", "status": "in_progress"}),
+    );
+    assert!(cycle.in_flight_tools.is_empty());
+    cycle.note(&text);
+    cycle.note(&usage);
+    assert!(cycle.settled_at.is_some());
+}

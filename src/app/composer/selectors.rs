@@ -21,11 +21,43 @@ const EFFORT_W: f32 = 72.0;
 const AGENT_OPTION_W: f32 = 110.0;
 const GAP: f32 = 6.0;
 
+/// Size caps for the composer's selectors: roomy when the bar has space, compact otherwise.
+#[derive(Clone, Copy)]
+struct SelectorCaps {
+    provider_w: f32,
+    model_w: f32,
+    model_chars: usize,
+}
+
+impl SelectorCaps {
+    const ROOMY: Self = Self {
+        provider_w: 160.0,
+        model_w: 240.0,
+        model_chars: 64,
+    };
+    const COMPACT: Self = Self {
+        provider_w: 104.0,
+        model_w: 130.0,
+        model_chars: 18,
+    };
+}
+
 enum ComposerSelector {
     Agent(usize),
     Model,
     Effort,
     Router,
+}
+
+/// The id of the dropdown list `control` opens.
+fn selector_popup_id(control: &ComposerSelector, options: &[AcpConfigOption]) -> eframe::egui::Id {
+    use crate::ui::select_menu::popup_id;
+    match control {
+        ComposerSelector::Agent(index) => popup_id(("agent_option", &options[*index].id)),
+        ComposerSelector::Model => popup_id("model"),
+        ComposerSelector::Effort => popup_id("effort"),
+        ComposerSelector::Router => popup_id("router_strategy"),
+    }
 }
 
 /// Where a failed agent-option change leaves its error for the UI thread.
@@ -137,13 +169,127 @@ impl OxiApp {
             return;
         }
         let options = self.active_agent_options().unwrap_or_default();
+        // Roomy caps first: a wide composer shows "OpenRouter" and the full model name. Only
+        // when those don't fit do the compact caps (and then the overflow menu) kick in.
+        let provider_label = composer_provider_label(self.conv.settings.active_provider);
+        let roomy = SelectorCaps::ROOMY;
+        let mut caps = SelectorCaps::COMPACT;
+        let mut controls = self.selector_controls(ui, &options, roomy);
+        let roomy_provider_w =
+            crate::ui::select_menu::select_button_width(ui, provider_label, roomy.provider_w);
+        if controls
+            .iter()
+            .map(|(_, width, _)| width + GAP)
+            .sum::<f32>()
+            + roomy_provider_w
+            <= budget
+        {
+            caps = roomy;
+        } else {
+            controls = self.selector_controls(ui, &options, caps);
+        }
+        // Remove secondary options one by one into an overflow popup. The provider is the last
+        // selector left; its label truncates within the remaining width instead of wrapping.
+        const OVERFLOW_W: f32 = 26.0;
+        let provider_min = budget.min(48.0);
+        let mut hidden_controls = Vec::new();
+        while controls
+            .iter()
+            .map(|(_, width, _)| width + GAP)
+            .sum::<f32>()
+            + if hidden_controls.is_empty() {
+                0.0
+            } else {
+                OVERFLOW_W + GAP
+            }
+            + provider_min
+            > budget
+        {
+            let Some(index) = controls
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (_, _, priority))| *priority)
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            let (hidden, width, _) = controls.remove(index);
+            hidden_controls.push((hidden, width));
+        }
+        let overflow_reserve = if hidden_controls.is_empty() {
+            0.0
+        } else {
+            OVERFLOW_W + GAP
+        };
+        let provider_width = (budget
+            - controls
+                .iter()
+                .map(|(_, width, _)| width + GAP)
+                .sum::<f32>()
+            - overflow_reserve)
+            .clamp(36.0, caps.provider_w);
+        self.render_provider_selector(ui, provider_width);
+        for (control, width, _) in controls {
+            match control {
+                ComposerSelector::Agent(index) => {
+                    self.render_agent_options(ui, std::slice::from_ref(&options[index]), width)
+                }
+                ComposerSelector::Model => {
+                    self.render_model_list_selector(ui, width, caps.model_chars)
+                }
+                ComposerSelector::Effort => self.render_effort_selector(ui, false),
+                ComposerSelector::Router => self.render_router_strategy_selector(ui, width),
+            }
+        }
+        if hidden_controls.is_empty() {
+            return;
+        }
+        let child_popups: Vec<eframe::egui::Id> = hidden_controls
+            .iter()
+            .map(|(control, _)| selector_popup_id(control, &options))
+            .collect();
+        crate::ui::select_menu::overflow_menu(
+            ui,
+            ui.id().with("composer_selectors_overflow"),
+            OVERFLOW_W,
+            "More model & agent options",
+            &child_popups,
+            |ui| {
+                for (control, width) in hidden_controls.into_iter().rev() {
+                    match control {
+                        ComposerSelector::Agent(index) => self.render_agent_options(
+                            ui,
+                            std::slice::from_ref(&options[index]),
+                            width.max(120.0),
+                        ),
+                        ComposerSelector::Model => {
+                            self.render_model_list_selector(ui, width.max(140.0), 22)
+                        }
+                        ComposerSelector::Effort => self.render_effort_selector(ui, false),
+                        ComposerSelector::Router => {
+                            self.render_router_strategy_selector(ui, width.max(140.0))
+                        }
+                    }
+                }
+            },
+        );
+    }
+
+    /// Every selector the composer would show, with its width under `caps` and its priority
+    /// (lower is hidden into the overflow menu first).
+    fn selector_controls(
+        &self,
+        ui: &Ui,
+        options: &[AcpConfigOption],
+        caps: SelectorCaps,
+    ) -> Vec<(ComposerSelector, f32, u8)> {
         let mut controls = Vec::new();
         for (index, option) in options.iter().enumerate() {
             let width = match &option.kind {
                 AcpConfigKind::Select { .. } => crate::ui::select_menu::select_button_width(
                     ui,
                     &agent_option_label(option, self.plan_mode_on()),
-                    agent_option_width(option, 130.0),
+                    agent_option_width(option, caps.model_w),
                 ),
                 AcpConfigKind::Boolean(_) => {
                     ui.painter()
@@ -175,8 +321,11 @@ impl OxiApp {
             controls.push((ComposerSelector::Router, 130.0, 3));
         } else {
             if !options.iter().any(AcpConfigOption::is_model) {
-                let label = short_model_label(&self.conv.settings.active_config().model_id, 18);
-                let width = crate::ui::select_menu::select_button_width(ui, &label, 130.0);
+                let label = short_model_label(
+                    &self.conv.settings.active_config().model_id,
+                    caps.model_chars,
+                );
+                let width = crate::ui::select_menu::select_button_width(ui, &label, caps.model_w);
                 controls.push((ComposerSelector::Model, width, 3));
             }
             if self.active_provider_supports_effort()
@@ -185,54 +334,7 @@ impl OxiApp {
                 controls.push((ComposerSelector::Effort, EFFORT_W, 1));
             }
         }
-        // Remove secondary options one by one. The provider is the last selector left;
-        // its label truncates within the remaining width instead of wrapping the row.
-        let provider_min = budget.min(48.0);
-        while controls
-            .iter()
-            .map(|(_, width, _)| width + GAP)
-            .sum::<f32>()
-            + provider_min
-            > budget
-        {
-            let Some(index) = controls
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, (_, _, priority))| *priority)
-                .map(|(index, _)| index)
-            else {
-                break;
-            };
-            let (hidden, _, _) = controls.remove(index);
-            let popup = match hidden {
-                ComposerSelector::Agent(index) => {
-                    eframe::egui::Id::new(("select_menu", ("agent_option", &options[index].id)))
-                }
-                ComposerSelector::Model => eframe::egui::Id::new(("select_menu", "model")),
-                ComposerSelector::Effort => eframe::egui::Id::new(("select_menu", "effort")),
-                ComposerSelector::Router => {
-                    eframe::egui::Id::new(("select_menu", "router_strategy"))
-                }
-            };
-            eframe::egui::Popup::close_id(ui.ctx(), popup.with("popup"));
-        }
-        let provider_width = (budget
-            - controls
-                .iter()
-                .map(|(_, width, _)| width + GAP)
-                .sum::<f32>())
-        .min(104.0);
-        self.render_provider_selector(ui, provider_width);
-        for (control, width, _) in controls {
-            match control {
-                ComposerSelector::Agent(index) => {
-                    self.render_agent_options(ui, std::slice::from_ref(&options[index]), width)
-                }
-                ComposerSelector::Model => self.render_model_list_selector(ui, width, 18),
-                ComposerSelector::Effort => self.render_effort_selector(ui, false),
-                ComposerSelector::Router => self.render_router_strategy_selector(ui, width),
-            }
-        }
+        controls
     }
 
     fn render_provider_selector(&mut self, ui: &mut Ui, width: f32) {
