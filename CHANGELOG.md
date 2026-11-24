@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.47.0] - 2026-11-24
+
+### Added
+- **Agent:** Background tasks now persist across conversation turns and report their final status when complete.
+- **Agent:** Attach to Claude agent sessions to reconnect and monitor ongoing work in progress.
+
+
 ## [1.46.0] - 2026-11-24
 
 ### Added
@@ -1491,7 +1498,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.46.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.47.0...HEAD
+[1.47.0]: https://github.com/maziluiosif/oxi/compare/v1.46.0...v1.47.0
 [1.46.0]: https://github.com/maziluiosif/oxi/compare/v1.45.0...v1.46.0
 [1.45.0]: https://github.com/maziluiosif/oxi/compare/v1.44.0...v1.45.0
 [1.44.0]: https://github.com/maziluiosif/oxi/compare/v1.43.0...v1.44.0
