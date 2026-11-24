@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.45.0] - 2026-11-24
+
+### Added
+- **Composer:** @mention fuzzy autocomplete popup and removable validation chips for better message crafting.
+- **Chat:** Pinned status pill showing current model and side-by-side Chat + Editor split mode in the editor tab bar.
+- **Actions:** Unified Copy and Fork action row under assistant replies, and static action row under user messages.
+- **Status bar:** Clickable context usage display with compact popover and clickable subscription quota.
+- **Chat header:** Inline title rename and quick actions.
+- **Sidebar:** Enhanced history filters with SelectMenu and period pills, 'Show N older chats' link, and hover-only worktree actions.
+- **Git panel:** Compact header with inline sync buttons, Cmd/Ctrl+Enter to commit, Stage all & Commit, and split-button agent picker.
+- **Settings:** Quick strip showing configured providers and dirty indicators on navigation tabs.
+- **Feedback:** Global floating toast notifications and clickable truncated tool output paths.
+
+
 ## [1.44.0] - 2026-11-23
 
 ### Added
@@ -1456,7 +1470,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.44.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.45.0...HEAD
+[1.45.0]: https://github.com/maziluiosif/oxi/compare/v1.44.0...v1.45.0
 [1.44.0]: https://github.com/maziluiosif/oxi/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/maziluiosif/oxi/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/maziluiosif/oxi/compare/v1.41.0...v1.42.0
