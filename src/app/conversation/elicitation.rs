@@ -132,12 +132,7 @@ fn field_ui(ui: &mut Ui, field: &mut Field) {
         } else {
             field.title.clone()
         };
-        ui.label(
-            RichText::new(title)
-                .size(FS_SMALL)
-                .color(c_text_strong())
-                .strong(),
-        );
+        ui.label(strong_rich(title, FS_SMALL, c_text_strong()));
     }
     if !field.description.is_empty() {
         ui.add(
@@ -196,14 +191,9 @@ impl OxiApp {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.add(
-                    Label::new(
-                        RichText::new(&form.message)
-                            .size(FS_BODY)
-                            .color(c_text_strong())
-                            .strong(),
-                    )
-                    .wrap()
-                    .selectable(true),
+                    Label::new(strong_rich(&form.message, FS_BODY, c_text_strong()))
+                        .wrap()
+                        .selectable(true),
                 );
                 ui.add_space(6.0);
                 match &mut form.kind {

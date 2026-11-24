@@ -25,11 +25,11 @@ use super::composer_helpers::estimate_message_chars;
 use super::{OxiApp, SessionKey};
 
 /// Diameter of the round send button.
-const SEND_DIAM: f32 = 32.0;
+const SEND_DIAM: f32 = 28.0;
 /// Diameter of the round attach (`+`) button.
-const ATTACH_DIAM: f32 = 28.0;
+const ATTACH_DIAM: f32 = CONTROL_HEIGHT;
 /// Diameter of the round mic (dictation) button.
-const MIC_DIAM: f32 = 28.0;
+const MIC_DIAM: f32 = CONTROL_HEIGHT;
 const COMPOSER_FRAME_MARGIN: f32 = SPACE_MD;
 const COMPOSER_GAP: f32 = SPACE_SM;
 const COMPOSER_CONTROLS_GAP: f32 = 6.0;
@@ -1427,7 +1427,7 @@ mod layout_tests {
             composer_provider_groups(&[CodexAcp, CursorAcp, Ollama]),
             vec![
                 ("Local / self-hosted", vec![Ollama]),
-                ("External agents (ACP)", vec![CursorAcp, CodexAcp]),
+                ("External agents", vec![CursorAcp, CodexAcp]),
             ]
         );
         assert!(composer_provider_groups(&[]).is_empty());

@@ -417,6 +417,45 @@ fn close_all_tabs_closes_clean_tabs_and_asks_before_dropping_edits() {
 }
 
 #[test]
+fn unsaved_prompt_blocks_enter_from_activating_a_background_button() {
+    use eframe::egui;
+
+    crate::secrets::use_mock_store();
+    let app = crate::app::OxiApp::new();
+    let mut theme_ready = false;
+    let mut focus_background = true;
+    let mut harness = egui_kittest::Harness::builder().build_ui_state(
+        |ui, (app, background_clicked)| {
+            if !theme_ready {
+                crate::theme::apply_theme(ui.ctx(), "dark");
+                theme_ready = true;
+                return;
+            }
+            let button = ui.button("Background action");
+            if focus_background {
+                button.request_focus();
+                focus_background = false;
+            }
+            *background_clicked |= button.clicked();
+            app.render_editor_prompt(ui.ctx());
+        },
+        (app, false),
+    );
+    harness.run_steps(2);
+    assert!(harness.ctx.memory(|m| m.focused()).is_some());
+    harness.state_mut().0.conv.editor.prompt = Some(super::super::state::EditorPrompt::CloseAll);
+    harness.run_steps(3);
+    harness.key_press(egui::Key::Enter);
+    harness.run_steps(2);
+    assert!(!harness.state().1);
+    assert!(harness.state().0.conv.editor.prompt.is_some());
+
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(2);
+    assert!(harness.state().0.conv.editor.prompt.is_none());
+}
+
+#[test]
 fn scratchpad_copy_is_named_after_its_first_line() {
     use super::documents::scratchpad_file_name;
     assert_eq!(
@@ -426,4 +465,137 @@ fn scratchpad_copy_is_named_after_its_first_line() {
     assert_eq!(scratchpad_file_name("Ședință joi"), "ședință-joi.md");
     assert_eq!(scratchpad_file_name("  \n --- \n"), "scratchpad.md");
     assert_eq!(scratchpad_file_name(""), "scratchpad.md");
+}
+
+/// A new folder under the temp dir, resolved the way opened documents store their paths.
+fn temp_folder(label: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "{label}-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::canonicalize(root).unwrap()
+}
+
+#[test]
+fn deleting_a_folder_removes_its_contents_unless_a_file_inside_is_unsaved() {
+    use super::super::state::FileOperation;
+    crate::secrets::use_mock_store();
+    let root = temp_folder("oxi-delete-folder");
+    let folder = root.join("folder");
+    std::fs::create_dir_all(folder.join("nested")).unwrap();
+    std::fs::write(folder.join("nested/file.txt"), "original").unwrap();
+
+    let mut app = crate::app::OxiApp::new();
+    app.conv.editor.documents = vec![document(folder.join("nested/file.txt"))];
+    app.conv.editor.active = Some(0);
+    app.apply_file_operation(FileOperation::DeleteFolder(folder.clone()));
+    assert!(folder.join("nested/file.txt").exists());
+    assert!(app.conv.editor.error.is_some());
+
+    app.conv.editor.documents = vec![clean_document(folder.join("nested/file.txt"))];
+    app.conv.explorer.expanded.insert(folder.join("nested"));
+    app.apply_file_operation(FileOperation::DeleteFolder(folder.clone()));
+    assert!(!folder.exists());
+    assert!(app.conv.editor.error.is_none());
+    assert!(app.conv.editor.documents.is_empty());
+    assert!(app.conv.explorer.expanded.is_empty());
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn deleting_a_folder_keeps_the_same_tabs_selected() {
+    use super::super::state::FileOperation;
+    crate::secrets::use_mock_store();
+    let root = temp_folder("oxi-delete-tabs");
+    let folder = root.join("x");
+    std::fs::create_dir_all(&folder).unwrap();
+
+    let mut app = crate::app::OxiApp::new();
+    app.conv.editor.documents = ["a.md", "x/one.md", "x/two.md", "c.md", "d.md"]
+        .into_iter()
+        .map(|name| clean_document(root.join(name)))
+        .collect();
+    app.conv.editor.active = Some(3);
+    app.conv.editor.hidden_active = Some(4);
+    app.conv.editor.markdown_preview_active = true;
+    app.apply_file_operation(FileOperation::DeleteFolder(folder));
+
+    let editor = &app.conv.editor;
+    let name = |index: Option<usize>| editor.documents[index.unwrap()].path.clone();
+    assert_eq!(editor.documents.len(), 3);
+    assert_eq!(name(editor.active), root.join("c.md"));
+    assert_eq!(name(editor.hidden_active), root.join("d.md"));
+    assert!(editor.markdown_preview_active);
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn deleting_a_folder_through_a_symlinked_parent_still_protects_unsaved_files() {
+    use super::super::state::FileOperation;
+    crate::secrets::use_mock_store();
+    let root = temp_folder("oxi-delete-symlink");
+    std::fs::create_dir_all(root.join("real/x")).unwrap();
+    std::fs::write(root.join("real/x/file.md"), "original").unwrap();
+    std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+    let listed = root.join("link/x");
+
+    let mut app = crate::app::OxiApp::new();
+    app.conv.editor.documents = vec![document(root.join("real/x/file.md"))];
+    app.conv.editor.active = Some(0);
+    app.apply_file_operation(FileOperation::DeleteFolder(listed.clone()));
+    assert!(root.join("real/x/file.md").exists());
+    assert!(app.conv.editor.error.is_some());
+
+    app.conv.editor.documents = vec![clean_document(root.join("real/x/file.md"))];
+    app.apply_file_operation(FileOperation::DeleteFolder(listed));
+    assert!(!root.join("real/x").exists());
+    assert!(app.conv.editor.documents.is_empty());
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_partly_deleted_folder_closes_only_the_tabs_whose_files_are_gone() {
+    use super::super::state::FileOperation;
+    use std::os::unix::fs::PermissionsExt;
+    crate::secrets::use_mock_store();
+    let root = temp_folder("oxi-delete-partial");
+    // `c.md` can be unlinked, but `deep` can't be removed from the read-only `ro`.
+    let ro = root.join("x/ro");
+    std::fs::create_dir_all(ro.join("deep")).unwrap();
+    std::fs::write(ro.join("deep/c.md"), "original").unwrap();
+    std::fs::write(root.join("outside.md"), "original").unwrap();
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let mut app = crate::app::OxiApp::new();
+    app.conv.editor.documents = vec![
+        clean_document(ro.join("deep/c.md")),
+        clean_document(root.join("outside.md")),
+    ];
+    app.conv.editor.active = Some(1);
+    app.apply_file_operation(FileOperation::DeleteFolder(root.join("x")));
+    let failed = app.conv.editor.error.is_some();
+
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Root ignores the read-only folder, so the whole delete succeeds and there's nothing to see.
+    if failed {
+        assert!(!ro.join("deep/c.md").exists());
+        assert!(ro.join("deep").exists());
+        let open: Vec<_> = app
+            .conv
+            .editor
+            .documents
+            .iter()
+            .map(|d| d.path.clone())
+            .collect();
+        assert_eq!(open, vec![root.join("outside.md")]);
+        assert_eq!(app.conv.editor.active, Some(0));
+    }
+    std::fs::remove_dir_all(&root).unwrap();
 }

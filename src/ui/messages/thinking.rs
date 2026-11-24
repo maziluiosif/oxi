@@ -1,26 +1,30 @@
 //! Rendering for assistant "thinking"/reasoning blocks: the per-group wall-clock timer,
-//! the frameless accent-rail text panel, and the live/done caption row.
+//! a compact collapsible caption row (with a 1-line snippet when folded), a brief live-streaming
+//! peek while active, and a bounded scrollable accent-rail body when expanded.
 
 use std::time::{Duration, Instant};
 
-use eframe::egui::scroll_area::ScrollBarVisibility;
 use eframe::egui::text::{LayoutJob, LayoutSection, TextFormat, TextWrapping};
-use eframe::egui::{self, Frame, Id, Margin, RichText, ScrollArea, Stroke, Ui};
+use eframe::egui::{self, CornerRadius, Frame, Id, Margin, RichText, Stroke, Ui};
 
 use crate::model::AssistantBlock;
 use crate::theme::*;
-use crate::ui::preview_expand::{
-    clickable_expand_overlay_quiet, expand_persist_id, is_expanded, set_expanded,
-};
+use crate::ui::preview_expand::{expand_persist_id, is_expanded, is_expanded_or, set_expanded};
 
-use super::{block_state_tag, selectable_layout_job};
+use super::{selectable_layout_job, show_bounded_scroll_box};
 
-/// Max visual rows the *thinking* bubble shows while collapsed (live tail or done-folded
-/// preview). Larger than the tool/code preview cap because reasoning reads as a side note
-/// and benefits from more context per glance.
-const THINKING_PREVIEW_LINES: usize = 15;
+/// Max visual rows shown in the live-streaming tail peek so active reasoning stays calm and
+/// compact instead of taking over the viewport.
+const THINKING_LIVE_PREVIEW_LINES: usize = 4;
 
-/// Stable id (independent of the live/done tag) for a thinking group's wall-clock timer,
+/// Height cap (in logical points) for an expanded completed thinking block; longer reasoning
+/// scrolls smoothly inside this viewport instead of pushing the whole transcript off screen.
+const THINKING_MAX_SCROLL_HEIGHT: f32 = 220.0;
+
+/// Fixed height of the clickable thinking header row.
+const THINKING_HEADER_H: f32 = 22.0;
+
+/// Stable id (independent of the live/done state) for a thinking group's wall-clock timer,
 /// so the start instant recorded while live can be read back after the group goes done.
 fn thinking_timer_id(msg_idx: usize, salt: usize) -> Id {
     Id::new(("thinking_timer", msg_idx, salt))
@@ -97,35 +101,76 @@ fn thinking_wrapped_job(text: String, wrap_width: f32) -> LayoutJob {
     }
 }
 
-/// Number of *visual* rows the thinking text occupies once wrapped at `wrap_width` (counting
-/// both explicit newlines and soft-wraps). The thinking block folds based on this instead of
-/// `str::lines().count()`: a single very long paragraph wraps onto many rows, so counting only
-/// logical lines would let the panel grow past the preview limit and then snap back to the
-/// truncated view the moment enough newlines arrive — a visible flicker while streaming.
-fn thinking_visual_row_count(ui: &Ui, text: &str, wrap_width: f32) -> usize {
+/// Single-line plain-text preview shown inline on a folded thinking row so the user can scan
+/// what the model considered without expanding every block.
+fn thinking_snippet(text: &str, from_tail: bool) -> String {
+    let picked = if from_tail {
+        text.lines().rev().find(|l| !l.trim().is_empty())
+    } else {
+        text.lines().find(|l| !l.trim().is_empty())
+    };
+    let Some(line) = picked else {
+        return String::new();
+    };
+    let cleaned = line
+        .trim()
+        .trim_start_matches(['#', '>', '-', '*', ' '])
+        .replace("**", "")
+        .replace('`', "");
+    let mut out = String::new();
+    let mut count = 0usize;
+    for word in cleaned.split_whitespace() {
+        if count > 0 {
+            if count + 1 >= 140 {
+                break;
+            }
+            out.push(' ');
+            count += 1;
+        }
+        for ch in word.chars() {
+            if count >= 140 {
+                break;
+            }
+            out.push(ch);
+            count += 1;
+        }
+        if count >= 140 {
+            break;
+        }
+    }
+    out
+}
+
+/// Estimated natural height of `text` wrapped at `wrap_width`. Avoids full galley layout when
+/// the text is clearly longer than `max_h`.
+fn thinking_body_height(ui: &Ui, text: &str, wrap_width: f32, max_h: f32, line_h: f32) -> f32 {
     if text.is_empty() {
-        return 0;
+        return line_h;
+    }
+    let max_lines_guess = (max_h / line_h).ceil() as usize + 6;
+    if text.len() > 2400 || text.lines().count() > max_lines_guess {
+        return max_h + line_h * 2.0;
     }
     ui.fonts_mut(|fonts| {
         fonts
             .layout_job(thinking_wrapped_job(text.to_string(), wrap_width))
-            .rows
-            .len()
+            .size()
+            .y
     })
+    .max(line_h)
 }
 
-/// Frameless thinking body: no card, just a thin accent rail on the left and airy
-/// proportional text. Collapse/expand behavior matches the monospace panels; while
-/// live-streaming the collapsed view is pinned to the tail (newest reasoning).
-fn render_thinking_text_panel(
-    ui: &mut Ui,
-    max_preview_lines: usize,
-    persist_id: Id,
-    tail_scroll_id: Id,
-    content_overflows: bool,
-    text: &str,
-    tail: bool,
-) {
+/// Frameless thinking body: no card, just a thin accent rail on the left and airy proportional
+/// text inside a height-capped scrollable viewport. While `live`, stays pinned to the newest
+/// reasoning lines with a soft top fade; once done and unfolded, scrolls smoothly with wheel
+/// events and lets the user select text freely without accidental collapse.
+fn render_thinking_body(ui: &mut Ui, scroll_id: Id, text: &str, live: bool) {
+    let line_h = FS_SMALL * 1.45;
+    let max_h = if live {
+        THINKING_LIVE_PREVIEW_LINES as f32 * line_h
+    } else {
+        THINKING_MAX_SCROLL_HEIGHT
+    };
     let frame = Frame::new()
         .inner_margin(Margin {
             left: 12,
@@ -134,70 +179,22 @@ fn render_thinking_text_panel(
             bottom: 2,
         })
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
             let inner = ui.available_width().max(40.0);
-            let expanded = is_expanded(ui, persist_id);
-            let allow_select = !content_overflows || expanded;
-
-            // While the model is actively streaming reasoning (`tail`), keep the whole body
-            // inside a fixed-height, bottom-stuck scroll window — even before it crosses the
-            // preview limit. This avoids the flicker where the block would grow past the cap
-            // (~2x) while wrapping settled and then snap back to the truncated view. Wheel
-            // scrolling is disabled so events still reach the outer transcript ScrollArea.
-            if tail || (content_overflows && !expanded) {
-                let line_h = FS_SMALL * 1.45;
-                let max_h = max_preview_lines as f32 * line_h;
-                // Size the box to the actual content (1 row while there's only one line),
-                // capped at `max_preview_lines` — grows as reasoning streams in instead of
-                // reserving the full N-line height up front.
-                let rows = thinking_visual_row_count(ui, text, inner)
-                    .max(1)
-                    .min(max_preview_lines);
-                let box_h = rows as f32 * line_h;
-                // `ScrollArea::max_height` only *caps* the size — internally it still clamps
-                // to `ui.available_rect_before_wrap()`, which shrinks (often to near-zero) the
-                // deeper a widget sits inside a long scrolled transcript, since the outer
-                // transcript ScrollArea's content `max_rect` is fixed to the viewport height,
-                // not infinite. Without an explicit reservation the tail box silently collapses
-                // to whatever sliver of layout budget is left instead of the requested N lines.
-                // Pre-allocating an exact-size rect (same trick as the activity-summary row
-                // above) gives the nested ScrollArea a fresh, unshrunk budget to clamp against.
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), box_h),
-                    egui::Sense::hover(),
-                );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                    ScrollArea::vertical()
-                        .id_salt(tail_scroll_id)
-                        .auto_shrink([false, false])
-                        .max_height(max_h)
-                        // egui defaults `min_scrolled_height` to 64.0 (~3.5 rows at this font
-                        // size) for any scroll-enabled axis, which floors the box well above
-                        // our 1-row minimum. Match it to a single row so it can start as small
-                        // as the content actually is.
-                        .min_scrolled_height(line_h)
-                        .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
-                        .stick_to_bottom(true)
-                        .scroll_source(egui::containers::scroll_area::ScrollSource::NONE)
-                        .show(ui, |ui| {
-                            selectable_layout_job(
-                                ui,
-                                thinking_wrapped_job(text.to_string(), inner),
-                                allow_select,
-                            );
-                        });
-                });
-                return;
-            }
-
-            // Done (not streaming). A short body (under the preview limit) renders inline,
-            // and so does an *unfolded* overflowing one — expanding a thinking block reveals
-            // the FULL reasoning, not a capped scroll window. A folded overflowing one keeps
-            // the tail window above, at the same height it had while live.
-            selectable_layout_job(
+            ui.set_width(inner);
+            let content_h = thinking_body_height(ui, text, inner, max_h, line_h);
+            show_bounded_scroll_box(
                 ui,
-                thinking_wrapped_job(text.to_string(), inner),
-                allow_select,
+                scroll_id,
+                inner,
+                content_h,
+                max_h,
+                line_h,
+                c_bg_main(),
+                live,
+                !live,
+                |ui| {
+                    selectable_layout_job(ui, thinking_wrapped_job(text.to_string(), inner), !live);
+                },
             );
         });
     let r = frame.response.rect;
@@ -206,15 +203,13 @@ fn render_thinking_text_panel(
         (r.top() + 2.0)..=(r.bottom() - 2.0),
         Stroke::new(2.0, c_thinking_rail()),
     );
-    if content_overflows {
-        clickable_expand_overlay_quiet(ui, r, persist_id);
-    }
 }
 
-/// One thinking group inside the expanded activity list: a caption row ("Thinking for…" while
-/// live, "Thought for…" once done) above the reasoning body. The caption row and the folded body
-/// keep the same height across the live→done transition, so the transcript does not reflow (and
-/// visibly jump under stick-to-bottom) every time reasoning hands over to a tool call.
+/// One thinking group inside the activity list:
+/// - While actively streaming (`live`), shows a compact 4-line live peek (collapsible on click).
+/// - Once finished (`!live`), collapses automatically to a sleek 1-line row
+///   (`› Thought for Xs · <first-line snippet>`) so reasoning doesn't eat vertical space.
+/// - One click unfolds the full reasoning inside a height-bounded scrollable rail panel.
 pub(super) fn render_thinking_group_block(
     ui: &mut Ui,
     msg_idx: usize,
@@ -224,107 +219,141 @@ pub(super) fn render_thinking_group_block(
 ) {
     let bubble_w = content_wrap_width(ui);
     ui.set_width(bubble_w);
-    // Fold based on *visual* rows (after wrapping), not logical `\n` line count: a long
-    // paragraph without newlines still wraps onto many rows and must trigger the truncated
-    // preview at the same threshold the body would otherwise reach, instead of overshooting
-    // the limit and snapping back once enough newlines stream in (flicker).
-    let inner_w = (bubble_w - 16.0).max(40.0);
-    let overflow = thinking_visual_row_count(ui, &combined, inner_w) > THINKING_PREVIEW_LINES;
+
+    // Separate live vs done persistence keys so active reasoning can show a brief live peek
+    // while streaming and then settle cleanly into a compact folded row once finished.
     let persist_id = expand_persist_id(Id::new((
         msg_idx,
         salt,
-        "thinking_body",
-        block_state_tag(live),
+        if live {
+            "thinking_live_open"
+        } else {
+            "thinking_done_open"
+        },
     )));
-    // Keep one expansion snapshot for the entire frame. In particular, do not toggle the state
-    // from the caption and then read it again below: inserting/removing the full thinking body in
-    // the click frame invalidates the rest of the transcript's geometry mid-frame and makes every
-    // block below it flicker. Tool pills follow the same deferred-layout pattern.
-    let expanded = is_expanded(ui, persist_id);
+    // Keep one expansion snapshot for the entire frame so clicking never invalidates layout
+    // mid-frame.
+    let expanded = if live {
+        is_expanded_or(ui, persist_id, true)
+    } else {
+        is_expanded(ui, persist_id)
+    };
 
-    // Per-group wall-clock timer (ms/s/min). While live it ticks from the first frame we
-    // saw the group streaming; once thinking ends it freezes once into "Thought for Xs".
-    // The caption id (`persist_id`) switches with the live/done tag, so the expand state
-    // resets to folded at the live→done transition.
     let elapsed = thinking_elapsed(ui, msg_idx, salt, &combined, live);
 
-    // Reserve the caption row up front at a fixed height (like the activity-summary row) so the
-    // live label and the done caption occupy exactly the same space, and hover can tint the
-    // chevron before it is painted.
-    const CAPTION_H: f32 = 18.0;
+    // Allocate the clickable header row up front (hover-only sense so wheel events always pass
+    // through to the outer transcript ScrollArea).
     let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), CAPTION_H),
+        egui::vec2(bubble_w, THINKING_HEADER_H),
         egui::Sense::hover(),
     );
-    // Short reasoning is shown whole below, so only an overflowing done block can unfold.
-    let foldable = !live && overflow;
-    let hovered = foldable && {
-        let click = ui.interact(rect, persist_id.with("caption"), egui::Sense::click());
-        if click.clicked() {
+    let hovered = ui
+        .ctx()
+        .input(|i| i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
+        if ui.ctx().input(|i| i.pointer.primary_clicked()) {
             set_expanded(ui, persist_id, !expanded);
         }
-        if click.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        click.hovered()
-    };
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+    }
+
+    let inner_rect = rect.shrink2(egui::vec2(5.0, 0.0));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inner_rect), |ui| {
         ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
+            ui.spacing_mut().item_spacing.x = 5.0;
+            // Fixed-width chevron slot keeps the caption horizontally anchored when toggling.
+            ui.add_sized(
+                egui::vec2(10.0, THINKING_HEADER_H),
+                egui::Label::new(
+                    RichText::new(if expanded {
+                        ICON_ANGLE_DOWN
+                    } else {
+                        ICON_CHEVRON_RIGHT
+                    })
+                    .font(egui::FontId::new(FS_TINY - 1.5, icon_font()))
+                    .color(if hovered { c_accent() } else { c_text_faint() }),
+                )
+                .selectable(false),
+            );
+
             if live {
                 animated_status_label(ui, "Thinking", FS_TINY);
                 if let Some(d) = elapsed {
-                    ui.label(
-                        RichText::new(format!("for {}", format_stream_elapsed(d)))
-                            .size(FS_TINY)
-                            .color(c_text_muted()),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("for {}", format_stream_elapsed(d)))
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
+                        )
+                        .selectable(false),
                     );
                 }
-                return;
-            }
-            // Sub-second reasoning reads as "Thought for 0s"; drop the duration like an untracked
-            // one (same rule as the "Worked for" row).
-            let caption = match elapsed {
-                Some(d) if d.as_secs() > 0 => format!("Thought for {}", format_stream_elapsed(d)),
-                _ => "Thought".to_string(),
-            };
-            ui.add(
-                egui::Label::new(RichText::new(caption).size(FS_TINY).color(c_text_faint()))
-                    .selectable(false),
-            );
-            if foldable {
+            } else {
+                // Sub-second reasoning reads as "Thought for 0s"; drop the duration like an
+                // untracked one (same rule as the "Worked for" row).
+                let caption = match elapsed {
+                    Some(d) if d.as_secs() > 0 => {
+                        format!("Thought for {}", format_stream_elapsed(d))
+                    }
+                    _ => "Thought".to_string(),
+                };
                 ui.add(
-                    egui::Label::new(
-                        RichText::new(if expanded {
-                            ICON_ANGLE_UP
-                        } else {
-                            ICON_ANGLE_DOWN
-                        })
-                        .font(egui::FontId::new(FS_TINY, icon_font()))
-                        .color(if hovered {
-                            c_accent()
-                        } else {
-                            c_text_faint()
-                        }),
-                    )
+                    egui::Label::new(RichText::new(caption).size(FS_TINY).color(if hovered {
+                        c_text_muted()
+                    } else {
+                        c_text_faint()
+                    }))
                     .selectable(false),
                 );
             }
+
+            if !expanded && ui.available_width() > 48.0 {
+                let snippet = thinking_snippet(&combined, live);
+                if !snippet.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("·")
+                                .size(FS_TINY)
+                                .color(c_text_faint().gamma_multiply(0.6)),
+                        )
+                        .selectable(false),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(snippet)
+                                .size(FS_TINY)
+                                .color(c_text_faint().gamma_multiply(0.85)),
+                        )
+                        .truncate()
+                        .selectable(false),
+                    );
+                }
+            }
         });
     });
-    ui.add_space(4.0);
-    render_thinking_text_panel(
-        ui,
-        THINKING_PREVIEW_LINES,
-        persist_id,
-        // Independent of the live/done tag so the window keeps its bottom-stuck offset when
-        // thinking ends instead of restarting at the top for a frame.
-        Id::new((msg_idx, salt, "thinking_tail")),
-        overflow,
-        combined.as_str(),
-        live,
-    );
-    ui.add_space(8.0);
+
+    if expanded {
+        ui.add_space(2.0);
+        render_thinking_body(
+            ui,
+            Id::new((
+                msg_idx,
+                salt,
+                if live {
+                    "thinking_tail"
+                } else {
+                    "thinking_scroll"
+                },
+            )),
+            combined.as_str(),
+            live,
+        );
+        ui.add_space(6.0);
+    } else {
+        ui.add_space(2.0);
+    }
 }
 
 pub(super) fn thinking_group_is_live(
@@ -337,4 +366,16 @@ pub(super) fn thinking_group_is_live(
             AssistantBlock::Answer(text) => text.trim().is_empty(),
             _ => false,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::thinking_snippet;
+
+    #[test]
+    fn thinking_snippet_picks_first_or_last_clean_line() {
+        let text = "\n## **Checking** `retry.rs`\nSecond line of thought\nLast insight here\n";
+        assert_eq!(thinking_snippet(text, false), "Checking retry.rs");
+        assert_eq!(thinking_snippet(text, true), "Last insight here");
+    }
 }

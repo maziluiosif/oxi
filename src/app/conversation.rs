@@ -136,12 +136,11 @@ impl OxiApp {
                         FS_SMALL,
                         c_accent(),
                     ));
-                    ui.label(
-                        RichText::new(approval_question(&pa.name))
-                            .size(FS_SMALL)
-                            .color(c_text_strong())
-                            .strong(),
-                    );
+                    ui.label(strong_rich(
+                        approval_question(&pa.name),
+                        FS_SMALL,
+                        c_text_strong(),
+                    ));
                     // Only while the keys really answer the card (not while typing in the
                     // composer, or with a menu or modal up).
                     if kb_ready {
@@ -321,12 +320,11 @@ impl OxiApp {
                                 FS_SMALL,
                                 crate::theme::c_warning_fg(),
                             ));
-                            ui.label(
-                                RichText::new(format!("{} needs an API key", provider.label()))
-                                    .size(FS_SMALL)
-                                    .color(c_text_strong())
-                                    .strong(),
-                            );
+                            ui.label(strong_rich(
+                                format!("{} needs an API key", provider.label()),
+                                FS_SMALL,
+                                c_text_strong(),
+                            ));
                         });
                         ui.add_space(2.0);
                         ui.label(
@@ -355,12 +353,7 @@ impl OxiApp {
             if general {
                 return;
             }
-            ui.label(
-                RichText::new("Try one of these")
-                    .size(FS_TINY)
-                    .color(c_text_faint())
-                    .strong(),
-            );
+            ui.label(strong_rich("Try one of these", FS_TINY, c_text_faint()));
             ui.add_space(8.0);
             let prompts = [
                 (
@@ -492,8 +485,13 @@ impl OxiApp {
                     .is_some_and(|m| m.role == MsgRole::Assistant && m.streaming));
 
         let stall = self.active_stall();
+        let active_key = self.active_session_key();
+        let bg_tools = self.session_acp_background_tools(active_key);
+        let bg_tool_ids: std::collections::HashSet<String> =
+            bg_tools.iter().map(|t| t.tool_call_id.clone()).collect();
         crate::ui::messages::set_turn_stalled(ui.ctx(), stall.is_some());
         crate::ui::messages::set_turn_busy(ui.ctx(), self.active_waiting_response());
+        crate::ui::messages::set_background_tools(ui.ctx(), bg_tool_ids);
         let mut painted_scroll_offset = 0.0;
         let mut find_count = 0;
         let scroll_output = ScrollArea::vertical()
@@ -660,17 +658,6 @@ impl OxiApp {
                                 let unit_id = ui.id().with(key);
                                 let find_slot =
                                     is_find_target.then(|| ui.painter().add(egui::Shape::Noop));
-                                let turn_changes: Vec<(
-                                    crate::model::TurnChanges,
-                                    Option<crate::settings::LlmProviderKind>,
-                                )> = messages[start..end]
-                                    .iter()
-                                    .filter(|m| !m.streaming)
-                                    .filter_map(|m| {
-                                        let changes = m.changes.as_deref()?.clone();
-                                        Some((changes, m.route.as_deref().map(|r| r.provider)))
-                                    })
-                                    .collect();
                                 let evidence: Vec<crate::evidence::EvidenceReport> = messages
                                     [start..end]
                                     .iter()
@@ -704,16 +691,6 @@ impl OxiApp {
                                         );
                                     }
                                 });
-                                if !turn_changes.is_empty() {
-                                    ui.scope_builder(
-                                        egui::UiBuilder::new().id(unit_id.with("changes")),
-                                        |ui| {
-                                            for (changes, author) in &turn_changes {
-                                                self.render_turn_changes(ui, changes, *author);
-                                            }
-                                        },
-                                    );
-                                }
                                 if !evidence.is_empty() {
                                     ui.scope_builder(
                                         egui::UiBuilder::new().id(unit_id.with("evidence")),
@@ -804,6 +781,16 @@ impl OxiApp {
                             }
                             if let Some(quiet) = stall {
                                 self.render_stall_notice(ui, quiet);
+                            } else if !self.active_waiting_response() && !bg_tools.is_empty() {
+                                self.render_background_wait_notice(ui, &bg_tools);
+                            }
+                            if let Some(chat_changes) = super::turn_changes::collect_chat_changes(
+                                &self.conv.workspaces[wi].sessions[si].messages,
+                            ) {
+                                ui.scope_builder(
+                                    egui::UiBuilder::new().id(ui.id().with("chat_changes")),
+                                    |ui| self.render_chat_changes(ui, &chat_changes),
+                                );
                             }
                         }
                     });
@@ -1189,12 +1176,7 @@ fn dismissible_error(
                         action = Some(ErrorAction::Dismiss);
                     }
                     ui.with_layout(egui::Layout::top_down(Align::Min), |ui| {
-                        ui.label(
-                            RichText::new(title)
-                                .size(FS_SMALL)
-                                .color(c_text_strong())
-                                .strong(),
-                        );
+                        ui.label(strong_rich(title, FS_SMALL, c_text_strong()));
                         ui.add(
                             Label::new(RichText::new(detail).size(FS_SMALL).color(c_text()))
                                 .wrap()

@@ -509,71 +509,80 @@ impl OxiApp {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                Frame::new()
-                    .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(RADIUS_CHIP)
-                    .inner_margin(Margin::same(16))
-                    .show(ui, |ui| {
-                        ui.set_width(440.0_f32.min(ctx.content_rect().width() - 48.0));
-                        ui.label(
-                            RichText::new("Work tree setup")
-                                .size(FS_BODY)
-                                .color(c_text())
-                                .strong(),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(format!(
-                                "Runs with the shell in every new work tree of {} before its \
-                                 agent starts, e.g. installing dependencies. \
-                                 $OXI_MAIN_CHECKOUT is this checkout and $OXI_WORKTREE_PATH \
-                                 the new folder. Empty: no setup.",
-                                crate::theme::workspace_sidebar_label(&root)
-                            ))
-                            .size(FS_SMALL)
-                            .color(c_text_muted()),
-                        );
-                        ui.add_space(8.0);
-                        ui.add(
-                            egui::TextEdit::multiline(&mut draft)
-                                .font(egui::FontId::monospace(FS_SMALL))
-                                .desired_rows(6)
-                                .desired_width(f32::INFINITY)
-                                .hint_text("npm ci\ncp \"$OXI_MAIN_CHECKOUT/.env\" ."),
-                        );
-                        ui.add_space(14.0);
-                        let row = egui::vec2(ui.available_width(), 28.0);
-                        ui.allocate_ui_with_layout(
-                            row,
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if crate::ui::chrome::ghost_button(ui, "Save", false).clicked() {
-                                    save = true;
-                                }
-                                if crate::ui::chrome::ghost_button(ui, "Cancel", false)
-                                    .on_hover_text("Esc")
-                                    .clicked()
-                                {
-                                    done = true;
-                                }
-                            },
-                        );
-                    });
+                crate::ui::chrome::modal_frame(ui).show(ui, |ui| {
+                    ui.set_width(440.0_f32.min(ctx.content_rect().width() - 48.0));
+                    crate::ui::chrome::modal_title(ui, "Work tree setup");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Runs with the shell in every new work tree of {} before its \
+                             agent starts, e.g. installing dependencies. \
+                             $OXI_MAIN_CHECKOUT is this checkout and $OXI_WORKTREE_PATH \
+                             the new folder. Empty: no setup.",
+                            crate::theme::workspace_sidebar_label(&root)
+                        ))
+                        .size(FS_SMALL)
+                        .color(c_text_muted()),
+                    );
+                    ui.add_space(8.0);
+                    crate::ui::chrome::settings_text_area_mono(
+                        ui,
+                        &mut draft,
+                        "npm ci\ncp \"$OXI_MAIN_CHECKOUT/.env\" .",
+                        6,
+                    );
+                    ui.add_space(14.0);
+                    let row = egui::vec2(ui.available_width(), 28.0);
+                    ui.allocate_ui_with_layout(
+                        row,
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if crate::ui::chrome::primary_button(ui, "Save").clicked() {
+                                save = true;
+                            }
+                            if crate::ui::chrome::ghost_button(ui, "Cancel", false)
+                                .on_hover_text("Esc")
+                                .clicked()
+                            {
+                                done = true;
+                            }
+                        },
+                    );
+                });
             });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             done = true;
         }
-        if save {
-            let scripts = &mut self.conv.settings.worktree_setup_scripts;
-            if draft.trim().is_empty() {
-                scripts.remove(&root);
-            } else {
-                scripts.insert(root, draft);
-            }
-            self.save_settings_quietly();
-        } else if !done {
+        if done {
+            return;
+        }
+        if !save {
             self.conv.setup_script_editor = Some((root, draft));
+            return;
+        }
+
+        let scripts = &mut self.conv.settings.worktree_setup_scripts;
+        let previous = if draft.trim().is_empty() {
+            scripts.remove(&root)
+        } else {
+            scripts.insert(root.clone(), draft.clone())
+        };
+        self.remember_acp_workspace_preferences();
+        match self.conv.settings.save() {
+            Ok(()) => crate::ui::chrome::show_toast(ctx, "Work tree setup saved"),
+            Err(error) => {
+                let scripts = &mut self.conv.settings.worktree_setup_scripts;
+                if let Some(previous) = previous {
+                    scripts.insert(root.clone(), previous);
+                } else {
+                    scripts.remove(&root);
+                }
+                self.conv.setup_script_editor = Some((root, draft));
+                crate::ui::chrome::show_error_toast(
+                    ctx,
+                    format!("Could not save work tree setup: {error}"),
+                );
+            }
         }
     }
 }

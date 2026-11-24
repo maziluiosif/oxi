@@ -150,6 +150,14 @@ impl Held {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(id.into(), u["canStop"].as_bool() == Some(true));
+        } else if kind == "async_task_progress"
+            && let (Some(id), Some(can_stop)) = (u["asyncTaskId"].as_str(), u["canStop"].as_bool())
+        {
+            // Native Claude workflows are only ever seen through progress snapshots.
+            self.controls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.into(), can_stop);
         }
         kind.starts_with("async_task_")
             || kind == "subagent_state_update"

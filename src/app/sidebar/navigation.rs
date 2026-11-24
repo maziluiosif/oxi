@@ -152,7 +152,7 @@ impl OxiApp {
     }
 
     pub(super) fn render_sidebar_history_filters(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new("History").size(FS_SMALL).strong());
+        ui.label(strong_rich("History", FS_SMALL, c_text_strong()));
         ui.add_space(4.0);
         let projects: Vec<_> = sidebar_workspace_order(&self.conv.workspaces)
             .into_iter()
@@ -211,7 +211,7 @@ impl OxiApp {
                     .fill(bg)
                     .stroke(Stroke::new(1.0, border))
                     .corner_radius(CornerRadius::same(RADIUS_CHIP))
-                    .min_size(egui::vec2(0.0, 22.0));
+                    .min_size(egui::vec2(0.0, COMPACT_HEIGHT));
                 if ui
                     .add(btn)
                     .on_hover_cursor(egui::CursorIcon::PointingHand)

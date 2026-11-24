@@ -121,9 +121,7 @@ fn keeps_tool_results_and_names_the_agent() {
     );
     let chat = vec![chat_msg(MsgRole::User, "run tests", vec![]), reply];
     let t = acp_history_transcript(&chat);
-    assert!(t.contains(
-        "Assistant (Codex (ACP) · m): [tool bash: cargo test] failed\ntest a ... FAILED"
-    ));
+    assert!(t.contains("Assistant (Codex · m): [tool bash: cargo test] failed\ntest a ... FAILED"));
 }
 
 #[test]
@@ -189,7 +187,7 @@ fn missed_turns_start_after_the_agents_own_last_answer() {
     let t = acp_missed_transcript(&chat, LlmProviderKind::ClaudeCodeAcp);
     assert_eq!(
         t,
-        "[#3] User: review it\n\n[#4] Assistant (Codex (ACP) · m): found a bug"
+        "[#3] User: review it\n\n[#4] Assistant (Codex · m): found a bug"
     );
     assert!(acp_missed_transcript(&chat, LlmProviderKind::CodexAcp).is_empty());
     assert!(acp_missed_transcript(&chat, LlmProviderKind::CursorAcp).is_empty());

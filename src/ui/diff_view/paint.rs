@@ -872,12 +872,11 @@ pub(super) fn paint_commit(ui: &mut Ui, rect: Rect, commit: &CommitInfo) {
     child.spacing_mut().item_spacing.y = 4.0;
     let mut lines = commit.message.lines();
     child.add(
-        egui::Label::new(
-            egui::RichText::new(lines.next().unwrap_or_default())
-                .size(FS_BODY)
-                .strong()
-                .color(c_text_strong()),
-        )
+        egui::Label::new(strong_rich(
+            lines.next().unwrap_or_default(),
+            FS_BODY,
+            c_text_strong(),
+        ))
         .selectable(true),
     );
     let body = lines.collect::<Vec<_>>().join("\n");

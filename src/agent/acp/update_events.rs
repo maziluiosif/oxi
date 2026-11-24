@@ -33,6 +33,8 @@ struct ToolAccumulator {
     terminal: String,
     /// The plan of an `ExitPlanMode`-style call was already shown as text.
     plan_emitted: bool,
+    /// First time this tool call was observed in this turn.
+    started_at: Option<std::time::Instant>,
 }
 
 impl UpdateState {
@@ -125,6 +127,9 @@ impl UpdateState {
             return;
         };
         let tool = self.tools.entry(id.to_owned()).or_default();
+        if tool.started_at.is_none() {
+            tool.started_at = Some(std::time::Instant::now());
+        }
         // Optional/null fields do not erase earlier values. Collections replace, never append.
         for key in [
             "title",
@@ -269,6 +274,64 @@ impl UpdateState {
         }
     }
 
+    /// Non-daemon commands that were still running when a turn ended cleanly (e.g. an Antigravity
+    /// `run_command` that crossed `WaitMsBeforeAsync` and moved to a background task).
+    pub(super) fn unfinished_background_tools(&self) -> Vec<super::reaper::BackgroundTool> {
+        let mut out: Vec<super::reaper::BackgroundTool> = self
+            .tools
+            .iter()
+            .filter_map(|(id, tool)| {
+                let field = |key| tool.fields.get(key).and_then(Value::as_str).unwrap_or("");
+                if matches!(field("status"), "completed" | "failed" | "cancelled") {
+                    return None;
+                }
+                let input = tool.fields.get("rawInput").unwrap_or(&Value::Null);
+                if input["IsDaemon"].as_bool() == Some(true) {
+                    return None;
+                }
+                let name = field("name");
+                if super::reaper::is_standing_background_tool(name) {
+                    return None;
+                }
+                let kind = field("kind");
+                let is_async_command = kind == "execute"
+                    || name == "run_command"
+                    || input.get("WaitMsBeforeAsync").is_some_and(|v| !v.is_null())
+                    || input
+                        .get("NotificationTimeoutSeconds")
+                        .is_some_and(|v| !v.is_null())
+                    || input["run_in_background"].as_bool() == Some(true);
+                if !is_async_command {
+                    return None;
+                }
+                let raw_label = input
+                    .get("toolSummary")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| {
+                        let t = field("title");
+                        (!t.trim().is_empty()).then_some(t)
+                    })
+                    .or_else(|| {
+                        input
+                            .get("CommandLine")
+                            .or_else(|| input.get("command"))
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.trim().is_empty())
+                    })
+                    .unwrap_or(name);
+                let label = single_line_summary(raw_label, 80);
+                Some(super::reaper::BackgroundTool {
+                    tool_call_id: id.clone(),
+                    label,
+                    started_at: tool.started_at.unwrap_or_else(std::time::Instant::now),
+                })
+            })
+            .collect();
+        out.sort_by_key(|t| t.started_at);
+        out
+    }
+
     /// Mirror the agent's task list (an ACP `plan`, or a call to oxi's `todo_write` MCP tool;
     /// either carries the whole list) as a `todo_write` call, so it drives the same checklist
     /// as oxi's own agent.
@@ -305,6 +368,30 @@ impl UpdateState {
                 status: ToolStatus::Completed,
             },
         })));
+    }
+}
+
+/// Collapse whitespace/newlines into a single bounded display line.
+fn single_line_summary(text: &str, max_chars: usize) -> String {
+    let mut collapsed = String::new();
+    for word in text.split_whitespace() {
+        if !collapsed.is_empty() {
+            collapsed.push(' ');
+        }
+        collapsed.push_str(word);
+        if collapsed.chars().count() > max_chars {
+            break;
+        }
+    }
+    if collapsed.chars().count() > max_chars {
+        let mut out: String = collapsed
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect();
+        out.push('…');
+        out
+    } else {
+        collapsed
     }
 }
 

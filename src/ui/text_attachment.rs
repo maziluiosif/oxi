@@ -83,10 +83,12 @@ pub fn show(ctx: &egui::Context, scope: Id, pending: &mut Vec<UserAttachment>) {
     egui::Window::new(&preview.name)
         .id(id)
         .open(&mut open)
+        .collapsible(false)
         .default_width(640.0)
         .default_height(420.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
                 save = crate::ui::chrome::primary_button(
                     ui,
                     if preview.draft_scope.is_some() {
@@ -97,43 +99,61 @@ pub fn show(ctx: &egui::Context, scope: Id, pending: &mut Vec<UserAttachment>) {
                 )
                 .clicked();
                 cancel = crate::ui::chrome::ghost_button(ui, "Cancel", false).clicked();
-                if crate::ui::chrome::ghost_button(ui, "Copy full text", false).clicked() {
+                if crate::ui::chrome::ghost_button_icon(
+                    ui,
+                    crate::theme::ICON_COPY,
+                    "Copy full text",
+                    false,
+                )
+                .clicked()
+                {
                     ctx.copy_text(preview.text.clone());
+                    crate::ui::chrome::show_toast(ctx, "Copied");
                 }
             });
             if let Some(notice) = &preview.notice {
-                ui.label(notice);
+                ui.add_space(6.0);
+                crate::ui::chrome::alert_banner(ui, notice, true);
             }
-            ScrollArea::vertical()
-                .max_height(ui.available_height().max(120.0))
+            ui.add_space(6.0);
+            egui::Frame::new()
+                .fill(crate::theme::c_bg_input())
+                .stroke(egui::Stroke::new(1.0, crate::theme::c_border_subtle()))
+                .corner_radius(crate::theme::RADIUS_BUTTON)
+                .inner_margin(egui::Margin::symmetric(8, 6))
                 .show(ui, |ui| {
-                    let slot = ui.painter().add(egui::Shape::Noop);
-                    let output = ui.scope(|ui| {
-                        ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
-                        ui.visuals_mut().selection.stroke.color = crate::theme::c_text();
-                        egui::TextEdit::multiline(&mut preview.text)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(16)
-                            .show(ui)
-                    });
-                    let output = output.inner;
-                    if let Some(range) = output.cursor_range
-                        && !range.is_empty()
-                    {
-                        let rects = crate::ui::text_selection::galley_selection_rects(
-                            &output.galley,
-                            output.galley_pos,
-                            range,
-                        );
-                        ui.painter().set(
-                            slot,
-                            crate::ui::text_selection::selection_shape(
-                                &rects,
-                                crate::theme::editor_selection_fill(),
-                            ),
-                        );
-                    }
+                    ScrollArea::vertical()
+                        .max_height(ui.available_height().max(120.0))
+                        .show(ui, |ui| {
+                            let slot = ui.painter().add(egui::Shape::Noop);
+                            let output = ui.scope(|ui| {
+                                ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
+                                ui.visuals_mut().selection.stroke.color = crate::theme::c_text();
+                                egui::TextEdit::multiline(&mut preview.text)
+                                    .frame(egui::Frame::NONE)
+                                    .font(egui::FontId::monospace(crate::theme::FS_SMALL))
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(16)
+                                    .show(ui)
+                            });
+                            let output = output.inner;
+                            if let Some(range) = output.cursor_range
+                                && !range.is_empty()
+                            {
+                                let rects = crate::ui::text_selection::galley_selection_rects(
+                                    &output.galley,
+                                    output.galley_pos,
+                                    range,
+                                );
+                                ui.painter().set(
+                                    slot,
+                                    crate::ui::text_selection::selection_shape(
+                                        &rects,
+                                        crate::theme::editor_selection_fill(),
+                                    ),
+                                );
+                            }
+                        });
                 });
         });
     if save {

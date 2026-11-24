@@ -51,7 +51,7 @@ impl OxiApp {
         let folded = !searching_all && (own_folded || parent_folded);
         ui.add_space(1.0);
 
-        const ROW_H: f32 = 28.0;
+        const ROW_H: f32 = SIDEBAR_ROW_H;
         const PLUS_W: f32 = 22.0;
         const GLYPH_W: f32 = 18.0;
         let (rect, _) =
@@ -394,16 +394,19 @@ impl OxiApp {
                 }
             }
             if !other.is_empty() && !folded {
-                egui::CollapsingHeader::new(format!("Other worktrees · {}", other.len()))
-                    .id_salt(("other_worktrees", wi))
-                    .show(ui, |ui| {
-                        for child in other {
-                            if !sidebar_changed {
-                                sidebar_changed =
-                                    self.render_sidebar_worktree_child(ui, child, wi, q);
-                            }
+                let open = crate::ui::chrome::disclosure_row(
+                    ui,
+                    ui.id().with(("other_worktrees", wi)),
+                    &format!("Other worktrees · {}", other.len()),
+                    false,
+                );
+                if open {
+                    for child in other {
+                        if !sidebar_changed {
+                            sidebar_changed = self.render_sidebar_worktree_child(ui, child, wi, q);
                         }
-                    });
+                    }
+                }
             }
             return sidebar_changed;
         }
@@ -478,8 +481,8 @@ impl OxiApp {
                         let completion_unseen = run_state.is_some_and(|run| run.completion_unseen);
                         let needs_attention = needs_approval || completion_unseen;
                         let title = row_title.clone();
-                        const ROW_INNER_H: f32 = 24.0;
-                        const ROW_VMARGIN: f32 = 4.0;
+                        const ROW_INNER_H: f32 = 22.0;
+                        const ROW_VMARGIN: f32 = 2.0;
                         let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
                         let (rect, response) =
                             ui.allocate_exact_size(egui::vec2(row_w, row_outer_h), Sense::click());
@@ -529,25 +532,21 @@ impl OxiApp {
                         } else {
                             Color32::TRANSPARENT
                         };
-                        ui.painter()
-                            .rect_filled(rect, CornerRadius::same(RADIUS_CHIP), fill);
+                        let radius = CornerRadius::same(RADIUS_ROW);
+                        ui.painter().rect_filled(rect, radius, fill);
                         if selected && !needs_attention {
                             ui.painter().rect_stroke(
                                 rect,
-                                CornerRadius::same(RADIUS_CHIP),
+                                radius,
                                 Stroke::new(1.0, c_border()),
                                 egui::StrokeKind::Inside,
                             );
                         }
-                        crate::ui::chrome::keyboard_focus_ring(
-                            ui,
-                            &response,
-                            CornerRadius::same(RADIUS_CHIP),
-                        );
+                        crate::ui::chrome::keyboard_focus_ring(ui, &response, radius);
                         if needs_attention {
                             ui.painter().rect_stroke(
                                 rect,
-                                CornerRadius::same(RADIUS_CHIP),
+                                radius,
                                 Stroke::new(
                                     1.0,
                                     c_accent().gamma_multiply(0.45 + attention_pulse * 0.55),
@@ -831,8 +830,8 @@ impl OxiApp {
         title: String,
         hide_time: bool,
     ) {
-        const ROW_INNER_H: f32 = 24.0;
-        const ROW_VMARGIN: f32 = 4.0;
+        const ROW_INNER_H: f32 = 22.0;
+        const ROW_VMARGIN: f32 = 2.0;
         const BULLET_GAP: f32 = 4.0;
         const SPINNER_GAP: f32 = 4.0;
 
@@ -993,10 +992,24 @@ impl OxiApp {
 /// Inline rename field for a sidebar chat row. `Some(true)` commits on Enter,
 /// `Some(false)` cancels on Escape or when focus moves elsewhere.
 fn session_rename_field(ui: &mut Ui, rect: egui::Rect, draft: &mut String) -> Option<bool> {
-    let edit = egui::TextEdit::singleline(draft)
-        .font(egui::TextStyle::Small)
-        .desired_width(rect.width() - 8.0);
-    let resp = ui.put(rect, edit);
+    let resp = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            egui::Frame::new()
+                .fill(c_bg_input())
+                .stroke(Stroke::new(1.0, c_composer_focus_border()))
+                .corner_radius(RADIUS_ROW)
+                .inner_margin(egui::Margin::symmetric(6, 2))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(draft)
+                            .frame(egui::Frame::NONE)
+                            .font(FontId::proportional(FS_SMALL))
+                            .desired_width((rect.width() - 14.0).max(24.0)),
+                    )
+                })
+                .inner
+        })
+        .inner;
     // Focus only until the field holds it: re-requesting every frame undoes the
     // TextEdit's own surrender on Enter, so `lost_focus` never fired and Enter
     // could not commit.

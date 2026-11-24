@@ -252,12 +252,7 @@ impl OxiApp {
         let mut picked = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(
-                RichText::new("Base")
-                    .size(FS_TINY)
-                    .color(c_text_muted())
-                    .strong(),
-            );
+            ui.label(strong_rich("Base", FS_TINY, c_text_muted()));
             let refresh_w = 22.0 + ui.spacing().item_spacing.x;
             // The same dropdown as the composer and Settings (searchable, which helps in a
             // repository with many branches).

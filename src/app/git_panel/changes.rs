@@ -15,19 +15,14 @@ use super::GitTab;
 impl OxiApp {
     pub(super) fn render_git_header(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
+            ui.set_height(SIDEBAR_HEADER_H);
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.label(
                 RichText::new(ICON_GIT)
-                    .font(FontId::new(FS_H3, icon_font()))
-                    .color(c_accent())
-                    .strong(),
+                    .font(FontId::new(FS_SMALL, icon_font()))
+                    .color(c_accent()),
             );
-            ui.label(
-                RichText::new("Source Control")
-                    .size(FS_H3)
-                    .color(c_text())
-                    .strong(),
-            );
+            ui.label(strong_rich("Source Control", FS_SMALL, c_text_strong()));
             if self.conv.git.busy {
                 crate::theme::spinner(ui, 12.0, c_text_muted());
                 let op = self
@@ -341,9 +336,14 @@ impl OxiApp {
                     self.request(GitOp::Unstage(paths));
                 }
             } else {
-                if crate::ui::chrome::icon_button_inline(ui, ICON_TRASH, FS_TINY, c_text_faint())
-                    .on_hover_text("Discard all changes")
-                    .clicked()
+                if crate::ui::chrome::icon_button_inline_danger(
+                    ui,
+                    ICON_TRASH,
+                    FS_TINY,
+                    c_text_faint(),
+                )
+                .on_hover_text("Discard all changes")
+                .clicked()
                 {
                     self.request_confirm(crate::app::state::ConfirmAction::GitDiscard {
                         paths: entries.iter().map(|e| e.path.clone()).collect(),
@@ -359,13 +359,8 @@ impl OxiApp {
             }
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.add(
-                    egui::Label::new(
-                        RichText::new(title.to_uppercase())
-                            .size(FS_TINY)
-                            .color(c_text_faint())
-                            .strong(),
-                    )
-                    .truncate(),
+                    egui::Label::new(strong_rich(title.to_uppercase(), FS_TINY, c_text_faint()))
+                        .truncate(),
                 );
             });
         });
@@ -381,7 +376,8 @@ impl OxiApp {
     ) {
         let full_w = ui.available_width();
         let mut open_file = false;
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 22.0), Sense::click());
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(full_w, SIDEBAR_ROW_H), Sense::click());
         let hovered = response.hovered();
         // Pure geometric hover test — `Ui::rect_contains_pointer` also checks layer
         // and clip, which the nested child layouts below fail even with the pointer
@@ -520,7 +516,7 @@ impl OxiApp {
                         }
                         if !staged
                             && row_hot
-                            && crate::ui::chrome::icon_button_inline(
+                            && crate::ui::chrome::icon_button_inline_danger(
                                 ui,
                                 ICON_TRASH,
                                 FS_TINY,

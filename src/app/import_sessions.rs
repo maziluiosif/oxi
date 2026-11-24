@@ -256,122 +256,111 @@ impl OxiApp {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(c_bg_elevated())
-                    .stroke(egui::Stroke::new(1.0, c_border()))
-                    .corner_radius(RADIUS_CHIP)
-                    .inner_margin(egui::Margin::same(16))
-                    .show(ui, |ui| {
-                        ui.set_width(520.0_f32.min(ctx.content_rect().width() - 64.0));
-                        ui.label(
-                            RichText::new("Import agent session")
-                                .size(FS_BODY)
-                                .color(c_text())
-                                .strong(),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(format!(
-                                "Sessions an agent ran in {workspace} outside oxi. The imported \
+                crate::ui::chrome::modal_frame(ui).show(ui, |ui| {
+                    ui.set_width(520.0_f32.min(ctx.content_rect().width() - 64.0));
+                    crate::ui::chrome::modal_title(ui, "Import agent session");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Sessions an agent ran in {workspace} outside oxi. The imported \
                                  chat continues the agent's own session."
-                            ))
-                            .size(FS_SMALL)
-                            .color(c_text_muted()),
-                        );
-                        ui.add_space(10.0);
-                        ui.add_enabled_ui(!busy, |ui| {
-                            let agents: Vec<LlmProviderKind> = LlmProviderKind::ALL
-                                .into_iter()
-                                .filter(|k| k.is_acp())
-                                .collect();
-                            let picked = crate::ui::select_menu::SelectMenu::new(
-                                "import_session_agent",
-                                provider.label(),
-                            )
-                            .framed(220.0)
-                            .show(ui, || {
-                                agents
-                                    .iter()
-                                    .map(|kind| {
-                                        crate::ui::select_menu::SelectOption::new(
-                                            kind.label(),
-                                            *kind == provider,
-                                        )
-                                    })
-                                    .collect()
-                            });
-                            if let Some(kind) = picked.and_then(|i| agents.get(i)) {
-                                provider = *kind;
-                            }
+                        ))
+                        .size(FS_SMALL)
+                        .color(c_text_muted()),
+                    );
+                    ui.add_space(10.0);
+                    ui.add_enabled_ui(!busy, |ui| {
+                        let agents: Vec<LlmProviderKind> = LlmProviderKind::ALL
+                            .into_iter()
+                            .filter(|k| k.is_acp())
+                            .collect();
+                        let picked = crate::ui::select_menu::SelectMenu::new(
+                            "import_session_agent",
+                            provider.label(),
+                        )
+                        .framed(220.0)
+                        .show(ui, || {
+                            agents
+                                .iter()
+                                .map(|kind| {
+                                    crate::ui::select_menu::SelectOption::new(
+                                        kind.label(),
+                                        *kind == provider,
+                                    )
+                                })
+                                .collect()
                         });
-                        ui.add_space(8.0);
-                        let note = |ui: &mut egui::Ui, text: &str| {
-                            ui.label(RichText::new(text).size(FS_SMALL).color(c_text_muted()));
-                        };
-                        match &dialog.state {
-                            ImportState::Listing(_) => {
-                                ui.horizontal(|ui| {
-                                    small_spinner(ui);
-                                    note(ui, "Asking the agent for its sessions…");
-                                });
-                            }
-                            ImportState::Importing(_) => {
-                                ui.horizontal(|ui| {
-                                    small_spinner(ui);
-                                    note(ui, "Loading the session…");
-                                });
-                            }
-                            ImportState::Ready(_, _) => {
-                                note(
-                                    ui,
-                                    "Save the open files before switching to the imported \
-                                     session's workspace.",
-                                );
-                                ui.add_space(6.0);
-                                finish_ready =
-                                    crate::ui::chrome::primary_button(ui, "Finish import")
-                                        .clicked();
-                            }
-                            ImportState::Failed(error) => {
-                                ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
-                                ui.add_space(6.0);
-                                retry = crate::ui::chrome::ghost_button(ui, "Try again", false)
-                                    .clicked();
-                            }
-                            ImportState::Listed(sessions) if sessions.is_empty() => {
-                                note(
-                                    ui,
-                                    "No sessions to import: none were found, or oxi already has \
-                                     them all.",
-                                );
-                            }
-                            ImportState::Listed(sessions) => {
-                                egui::ScrollArea::vertical()
-                                    .max_height(320.0)
-                                    .show(ui, |ui| {
-                                        for session in sessions {
-                                            if session_row(ui, session) {
-                                                import = Some(session.session_id.clone());
-                                            }
-                                        }
-                                    });
-                            }
+                        if let Some(kind) = picked.and_then(|i| agents.get(i)) {
+                            provider = *kind;
                         }
-                        ui.add_space(12.0);
-                        let row = egui::vec2(ui.available_width(), 28.0);
-                        ui.allocate_ui_with_layout(
-                            row,
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if crate::ui::chrome::ghost_button(ui, "Close", false)
-                                    .on_hover_text("Esc")
-                                    .clicked()
-                                {
-                                    open = false;
-                                }
-                            },
-                        );
                     });
+                    ui.add_space(8.0);
+                    let note = |ui: &mut egui::Ui, text: &str| {
+                        ui.label(RichText::new(text).size(FS_SMALL).color(c_text_muted()));
+                    };
+                    match &dialog.state {
+                        ImportState::Listing(_) => {
+                            ui.horizontal(|ui| {
+                                small_spinner(ui);
+                                note(ui, "Asking the agent for its sessions…");
+                            });
+                        }
+                        ImportState::Importing(_) => {
+                            ui.horizontal(|ui| {
+                                small_spinner(ui);
+                                note(ui, "Loading the session…");
+                            });
+                        }
+                        ImportState::Ready(_, _) => {
+                            note(
+                                ui,
+                                "Save the open files before switching to the imported \
+                                     session's workspace.",
+                            );
+                            ui.add_space(6.0);
+                            finish_ready =
+                                crate::ui::chrome::primary_button(ui, "Finish import").clicked();
+                        }
+                        ImportState::Failed(error) => {
+                            ui.label(RichText::new(error).size(FS_SMALL).color(c_error_fg()));
+                            ui.add_space(6.0);
+                            retry =
+                                crate::ui::chrome::ghost_button(ui, "Try again", false).clicked();
+                        }
+                        ImportState::Listed(sessions) if sessions.is_empty() => {
+                            note(
+                                ui,
+                                "No sessions to import: none were found, or oxi already has \
+                                     them all.",
+                            );
+                        }
+                        ImportState::Listed(sessions) => {
+                            egui::ScrollArea::vertical()
+                                .max_height(320.0)
+                                .show(ui, |ui| {
+                                    for session in sessions {
+                                        if session_row(ui, session) {
+                                            import = Some(session.session_id.clone());
+                                        }
+                                    }
+                                });
+                        }
+                    }
+                    ui.add_space(12.0);
+                    let row = egui::vec2(ui.available_width(), 28.0);
+                    ui.allocate_ui_with_layout(
+                        row,
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if crate::ui::chrome::ghost_button(ui, "Close", false)
+                                .on_hover_text("Esc")
+                                .clicked()
+                            {
+                                open = false;
+                            }
+                        },
+                    );
+                });
             });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !list_open {
             open = false;

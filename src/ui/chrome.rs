@@ -39,7 +39,7 @@ pub fn sidebar_text_field(ui: &mut Ui, text: &mut String, hint: &str) -> Respons
             },
         ))
         .corner_radius(RADIUS_CHIP)
-        .inner_margin(Margin::symmetric(8, 4))
+        .inner_margin(Margin::symmetric(8, 3))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -139,6 +139,26 @@ fn settings_text_field_opts(
 
 /// Framed multiline settings editor (system prompts, etc.).
 pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usize) -> Response {
+    settings_text_area_opts(ui, text, hint, rows, FontId::proportional(FS_SMALL))
+}
+
+/// Monospace variant of [`settings_text_area`] (shell scripts, pasted text, etc.).
+pub fn settings_text_area_mono(
+    ui: &mut Ui,
+    text: &mut String,
+    hint: &str,
+    rows: usize,
+) -> Response {
+    settings_text_area_opts(ui, text, hint, rows, FontId::monospace(FS_SMALL))
+}
+
+fn settings_text_area_opts(
+    ui: &mut Ui,
+    text: &mut String,
+    hint: &str,
+    rows: usize,
+    font: FontId,
+) -> Response {
     let frame = Frame::new()
         .fill(c_bg_input())
         .stroke(Stroke::new(1.0, c_border_subtle()))
@@ -148,13 +168,59 @@ pub fn settings_text_area(ui: &mut Ui, text: &mut String, hint: &str, rows: usiz
             ui.add(
                 TextEdit::multiline(text)
                     .frame(egui::Frame::NONE)
-                    .font(FontId::proportional(FS_SMALL))
+                    .font(font)
                     .desired_width(f32::INFINITY)
                     .desired_rows(rows)
                     .hint_text(hint),
             )
         });
     finish_text_field(ui, frame, RADIUS_BUTTON)
+}
+
+/// Framed single-line input with an explicit id and optional right-side inset (for overlaid
+/// match counters or inline rename controls) — keeps every inline/floating input visually
+/// aligned with [`settings_text_field`] and [`sidebar_text_field`].
+pub fn framed_singleline_input(
+    ui: &mut Ui,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    margin_right: i8,
+) -> (egui::Rect, Response) {
+    let focused = ui.ctx().memory(|m| m.has_focus(id));
+    let frame = Frame::new()
+        .fill(c_bg_input())
+        .stroke(Stroke::new(
+            1.0,
+            if focused {
+                c_composer_focus_border()
+            } else {
+                c_border_subtle()
+            },
+        ))
+        .corner_radius(RADIUS_BUTTON)
+        .inner_margin(Margin {
+            left: 8,
+            right: margin_right.max(8),
+            top: 4,
+            bottom: 4,
+        })
+        .show(ui, |ui| {
+            let inner_w = (width - 8.0 - margin_right.max(8) as f32).max(24.0);
+            ui.add(
+                TextEdit::singleline(text)
+                    .id(id)
+                    .frame(egui::Frame::NONE)
+                    .margin(Margin::symmetric(1, 0))
+                    .font(FontId::proportional(FS_SMALL))
+                    .desired_width(inner_w)
+                    .hint_text(hint),
+            )
+        });
+    let rect = frame.response.rect;
+    let resp = finish_text_field(ui, frame, RADIUS_BUTTON);
+    (rect, resp)
 }
 
 /// Primary section title inside a panel.
@@ -902,6 +968,27 @@ pub fn icon_button_framed(ui: &mut Ui, icon: &str, size: egui::Vec2, active: boo
 /// Borderless, transparent square icon button for tight chrome strips (sidebar hide,
 /// top-row toggles). Hover uses `c_row_hover` plus the accent glyph; no frame.
 pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> Response {
+    icon_button_plain_enabled(ui, icon, height, active, true)
+}
+
+/// [`icon_button_plain`] with an explicit enabled state; when disabled the glyph dims to
+/// `c_text_faint` and stops sensing clicks/hover visuals.
+pub fn icon_button_plain_enabled(
+    ui: &mut Ui,
+    icon: &str,
+    height: f32,
+    active: bool,
+    enabled: bool,
+) -> Response {
+    if !enabled {
+        let size = egui::vec2(height, height);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, false, icon_accessible_label(icon))
+        });
+        paint_icon_glyph(ui.painter(), rect.center(), icon, FS_SMALL, c_text_faint());
+        return response;
+    }
     icon_button_core(
         ui,
         icon,
@@ -923,11 +1010,105 @@ pub fn icon_button_plain(ui: &mut Ui, icon: &str, height: f32, active: bool) -> 
     )
 }
 
+/// Shared dual-pane split icon button for top toolbars (chat header and editor tab strip).
+/// Matches [`icon_button_plain`]'s rounding, hover surface, accent ink, and focus ring.
+pub fn split_pane_button(ui: &mut Ui, label: &str, active: bool, fill_left: bool) -> Response {
+    let size = egui::vec2(26.0, 26.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label)
+    });
+    let hovered = ui.is_enabled() && (resp.hovered() || resp.has_focus());
+    let radius = CornerRadius::same(RADIUS_CHIP);
+    if active {
+        ui.painter().rect_filled(rect, radius, c_row_active());
+    } else if hovered {
+        ui.painter().rect_filled(rect, radius, c_row_hover());
+    }
+    let icon = rect.shrink2(egui::vec2(6.5, 7.5));
+    let color = if active || hovered {
+        c_accent()
+    } else {
+        c_sidebar_section()
+    };
+    ui.painter()
+        .rect_stroke(icon, 2, Stroke::new(1.15, color), egui::StrokeKind::Inside);
+    if active && fill_left {
+        let left_half = egui::Rect::from_min_max(
+            icon.min + egui::vec2(1.5, 1.5),
+            egui::pos2(icon.center().x, icon.bottom() - 1.5),
+        );
+        ui.painter()
+            .rect_filled(left_half, 0, c_accent().gamma_multiply(0.35));
+    }
+    ui.painter().line_segment(
+        [
+            egui::pos2(icon.center().x, icon.top()),
+            egui::pos2(icon.center().x, icon.bottom()),
+        ],
+        Stroke::new(1.0, color),
+    );
+    keyboard_focus_ring(ui, &resp, radius);
+    if ui.is_enabled() && resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// Subtle hover pill and keyboard focus ring for clickable status-bar items so text chips
+/// share the same interactive feedback as the neighboring status-bar icon buttons.
+/// `bg_slot` should be reserved via `ui.painter().add(egui::Shape::Noop)` before laying out
+/// the label so the pill paints cleanly behind the text.
+pub fn paint_status_bar_hover(
+    ui: &Ui,
+    bg_slot: egui::layers::ShapeIdx,
+    rect: egui::Rect,
+    response: &Response,
+    active: bool,
+) {
+    let pill = rect.expand2(egui::vec2(5.0, 1.0));
+    let radius = CornerRadius::same(RADIUS_ROW);
+    let hovered = ui.is_enabled() && (response.hovered() || response.has_focus());
+    if active {
+        ui.painter().set(
+            bg_slot,
+            egui::Shape::rect_filled(pill, radius, c_row_active()),
+        );
+    } else if hovered {
+        ui.painter().set(
+            bg_slot,
+            egui::Shape::rect_filled(pill, radius, c_row_hover()),
+        );
+    }
+    keyboard_focus_ring(ui, response, radius);
+}
+
 /// Tiny frameless icon button for list rows (18px square on 22px rows). Hand-allocated
 /// because a plain `Button` inherits the global `button_padding`/`interact_size` and
 /// inflates well past the row; the hover fill uses `c_row_active` so it still reads on
 /// top of an already-hovered row.
 pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color32) -> Response {
+    icon_button_inline_opts(ui, icon, glyph_size, color, false)
+}
+
+/// Destructive variant of [`icon_button_inline`]: hovers with danger ink and a soft danger wash
+/// so every row-level trash/discard action across the app shares one clear visual signal.
+pub fn icon_button_inline_danger(
+    ui: &mut Ui,
+    icon: &str,
+    glyph_size: f32,
+    color: Color32,
+) -> Response {
+    icon_button_inline_opts(ui, icon, glyph_size, color, true)
+}
+
+fn icon_button_inline_opts(
+    ui: &mut Ui,
+    icon: &str,
+    glyph_size: f32,
+    color: Color32,
+    danger: bool,
+) -> Response {
     const SIDE: f32 = 18.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(SIDE, SIDE), Sense::click());
     resp.widget_info(|| {
@@ -938,22 +1119,77 @@ pub fn icon_button_inline(ui: &mut Ui, icon: &str, glyph_size: f32, color: Color
         )
     });
     let hovered = ui.is_enabled() && (resp.hovered() || resp.has_focus());
-    keyboard_focus_ring(ui, &resp, CornerRadius::same(RADIUS_ROW));
+    let radius = CornerRadius::same(RADIUS_ROW);
     if hovered {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(4), c_row_active());
+        ui.painter().rect_filled(
+            rect,
+            radius,
+            if danger { c_error_bg() } else { c_row_active() },
+        );
     }
+    keyboard_focus_ring(ui, &resp, radius);
     paint_icon_glyph(
         ui.painter(),
         rect.center(),
         icon,
         glyph_size,
-        if hovered { c_accent() } else { color },
+        if hovered {
+            if danger { c_danger() } else { c_accent() }
+        } else {
+            color
+        },
     );
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     resp
+}
+
+/// Compact disclosure row with a chevron icon, hover highlight, and keyboard focus ring —
+/// replaces bare `egui::CollapsingHeader` so collapsible regions match the rest of the app.
+pub fn disclosure_row(ui: &mut Ui, id: egui::Id, title: &str, default_open: bool) -> bool {
+    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(id, || default_open));
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::CollapsingHeader,
+            ui.is_enabled(),
+            open,
+            title,
+        )
+    });
+    let hovered = ui.is_enabled() && (response.hovered() || response.has_focus());
+    let radius = CornerRadius::same(RADIUS_ROW);
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_filled(rect, radius, c_row_hover());
+    }
+    keyboard_focus_ring(ui, &response, radius);
+    let ink = if hovered { c_text() } else { c_text_muted() };
+    ui.painter().text(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        if open {
+            ICON_ANGLE_DOWN
+        } else {
+            ICON_CHEVRON_RIGHT
+        },
+        FontId::new(FS_TINY - 1.5, icon_font()),
+        ink,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 20.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title,
+        FontId::proportional(FS_SMALL),
+        ink,
+    );
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|d| d.insert_persisted(id, open));
+    }
+    open
 }
 
 /// Small pill-style status badge: `running` / `done` / `failed`. Uses the shared semantic badge
@@ -968,13 +1204,18 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
         FontId::proportional(text_size),
         Color32::PLACEHOLDER,
     );
-    let pad = egui::vec2(14.0, 6.0);
-    let size = egui::vec2(
-        galley.rect.width() + pad.x * 2.0,
-        galley.rect.height() + pad.y * 2.0,
-    );
+    let pad_x = 10.0;
+    let size = egui::vec2(galley.rect.width() + pad_x * 2.0, CONTROL_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = response.hovered();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
+    let hovered = response.hovered() || response.has_focus();
     let (fill, stroke, text_color) = if selected {
         (
             c_pill_selected_bg(),
@@ -994,8 +1235,9 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> bool {
     ui.painter().rect_filled(rect, r, fill);
     ui.painter()
         .rect_stroke(rect, r, stroke, egui::StrokeKind::Middle);
+    keyboard_focus_ring(ui, &response, r);
     let text_pos = egui::pos2(
-        rect.left() + pad.x,
+        rect.left() + pad_x,
         rect.center().y - galley.rect.height() * 0.5,
     );
     ui.painter().galley(text_pos, galley, text_color);
@@ -1110,7 +1352,7 @@ pub fn primary_button_widget(label: &str) -> egui::Button<'_> {
         .fill(c_accent())
         .stroke(Stroke::NONE)
         .corner_radius(RADIUS_BUTTON)
-        .min_size(egui::vec2(64.0, 28.0))
+        .min_size(egui::vec2(60.0, CONTROL_HEIGHT))
 }
 pub fn primary_button(ui: &mut Ui, label: &str) -> Response {
     ui.add(primary_button_widget(label))
@@ -1124,7 +1366,7 @@ pub fn primary_button_icon_widget<'a>(icon: &'a str, label: &'a str) -> egui::Bu
         .fill(c_accent())
         .stroke(Stroke::NONE)
         .corner_radius(RADIUS_BUTTON)
-        .min_size(egui::vec2(64.0, 28.0))
+        .min_size(egui::vec2(60.0, CONTROL_HEIGHT))
 }
 
 /// Neutral secondary button — used for Sign out, Delete, etc. (with `danger` color swap).
@@ -1138,7 +1380,7 @@ pub fn ghost_button_widget(label: &str, danger: bool) -> egui::Button<'_> {
         .fill(c_bg_elevated_2())
         .stroke(Stroke::new(1.0, c_border_subtle()))
         .corner_radius(RADIUS_BUTTON)
-        .min_size(egui::vec2(64.0, 28.0))
+        .min_size(egui::vec2(60.0, CONTROL_HEIGHT))
 }
 pub fn ghost_button(ui: &mut Ui, label: &str, danger: bool) -> Response {
     ui.add(ghost_button_widget(label, danger))
@@ -1265,7 +1507,7 @@ pub fn ghost_button_icon_enabled(
         icon,
         label,
         FS_SMALL,
-        egui::vec2(0.0, 26.0),
+        egui::vec2(0.0, CONTROL_HEIGHT),
         &IconButtonLook {
             fill: c_bg_elevated_2(),
             hover_fill: c_row_hover(),
@@ -1280,16 +1522,16 @@ pub fn ghost_button_icon_enabled(
     )
 }
 
-/// Compact chip-style button for tight toolbar rows (git Pull/Push/Fetch, etc.) — shares the
-/// ghost-button border palette but renders at `FS_TINY` on `c_bg_elevated` with button rounding,
-/// so the small action chips share one language across the app. Leading icon glyph variant.
+/// Compact chip-style button for tight toolbar rows (git Pull/Push/Fetch, card headers, etc.) —
+/// shares the ghost-button border palette at `FS_TINY` and [`COMPACT_HEIGHT`], so small action
+/// chips share one uniform scale across the app.
 pub fn mini_button_icon_enabled(ui: &mut Ui, icon: &str, label: &str, enabled: bool) -> Response {
     icon_text_button_core(
         ui,
         icon,
         label,
         FS_TINY,
-        egui::vec2(0.0, 24.0),
+        egui::vec2(0.0, COMPACT_HEIGHT),
         &IconButtonLook {
             fill: c_bg_elevated(),
             hover_fill: c_row_hover(),
@@ -1300,6 +1542,29 @@ pub fn mini_button_icon_enabled(ui: &mut Ui, icon: &str, label: &str, enabled: b
         },
         c_text_muted(),
         c_accent(),
+        enabled,
+    )
+}
+
+/// Destructive variant of [`mini_button_icon_enabled`] (e.g. Revert in the Changed files bar).
+pub fn mini_button_icon_danger(ui: &mut Ui, icon: &str, label: &str, enabled: bool) -> Response {
+    let danger = crate::theme::c_danger();
+    icon_text_button_core(
+        ui,
+        icon,
+        label,
+        FS_TINY,
+        egui::vec2(0.0, COMPACT_HEIGHT),
+        &IconButtonLook {
+            fill: c_bg_elevated(),
+            hover_fill: c_error_bg(),
+            stroke: c_border_subtle(),
+            hover_stroke: c_error_stroke(),
+            rounding: CornerRadius::same(RADIUS_BUTTON),
+            glyph: danger,
+        },
+        danger,
+        danger,
         enabled,
     )
 }
@@ -1318,7 +1583,7 @@ pub fn mini_button_accent(ui: &mut Ui, label: &str) -> Response {
         "",
         label,
         FS_TINY,
-        egui::vec2(0.0, 24.0),
+        egui::vec2(0.0, COMPACT_HEIGHT),
         &IconButtonLook {
             fill: c_bg_elevated(),
             hover_fill: c_row_hover(),
@@ -1380,7 +1645,7 @@ pub fn settings_nav_row(
     dirty: bool,
 ) -> Response {
     let row_w = ui.available_width();
-    let h = 30.0;
+    let h = CONTROL_HEIGHT;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(row_w, h), Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -1398,17 +1663,17 @@ pub fn settings_nav_row(
     } else {
         Color32::TRANSPARENT
     };
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(RADIUS_CHIP), fill);
+    let radius = CornerRadius::same(RADIUS_ROW);
+    ui.painter().rect_filled(rect, radius, fill);
     if selected {
         ui.painter().rect_stroke(
             rect,
-            CornerRadius::same(RADIUS_CHIP),
+            radius,
             Stroke::new(1.0, c_border()),
             egui::StrokeKind::Inside,
         );
     }
-    keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_CHIP));
+    keyboard_focus_ring(ui, &response, radius);
     let text_color = if selected {
         c_text_strong()
     } else {

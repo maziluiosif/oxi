@@ -1234,19 +1234,9 @@ impl OxiApp {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(c_bg_elevated())
-                    .stroke(egui::Stroke::new(1.0, c_border()))
-                    .corner_radius(RADIUS_CHIP)
-                    .inner_margin(egui::Margin::same(16))
-                    .show(ui, |ui| {
-                        ui.set_width(460.0);
-                        ui.label(
-                            egui::RichText::new("Connect to a remote host")
-                                .size(FS_BODY)
-                                .color(c_text())
-                                .strong(),
-                        );
+                crate::ui::chrome::modal_frame(ui).show(ui, |ui| {
+                    ui.set_width(460.0);
+                    crate::ui::chrome::modal_title(ui, "Connect to a remote host");
                         ui.add_space(4.0);
                         ui.label(
                             egui::RichText::new(

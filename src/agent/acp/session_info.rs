@@ -30,39 +30,50 @@ fn with<R>(f: impl FnOnce(&mut HashMap<String, Info>) -> R) -> R {
     f(info.get_or_insert_with(HashMap::new))
 }
 
+/// Record a session title reported directly by a native client. Returns `true` if non-empty.
+pub(super) fn note_title(session_key: &str, title: &str) -> bool {
+    let title = title.trim();
+    if title.is_empty() {
+        return false;
+    }
+    with(|info| {
+        info.entry(session_key.to_owned()).or_default().title = Some(title.to_owned());
+    });
+    true
+}
+
+/// Record cumulative session cost reported directly by a native client.
+pub(super) fn note_cost(session_key: &str, session_id: &str, amount: f64, currency: &str) {
+    if !amount.is_finite() || amount < 0.0 {
+        return;
+    }
+    let currency = if currency.is_empty() { "USD" } else { currency }.to_owned();
+    with(|info| {
+        let costs = &mut info.entry(session_key.to_owned()).or_default().costs;
+        let entry = costs.entry(session_id.to_owned()).or_default();
+        if amount < entry.last || entry.currency != currency {
+            entry.earlier += entry.last;
+        }
+        entry.currency = currency;
+        entry.last = amount;
+    });
+}
+
 /// Record what `update` (a `session/update` of agent session `session_id`) says about the
 /// session. Returns whether it was a title, which the UI is woken for.
 pub(super) fn note(session_key: &str, session_id: &str, update: &Value) -> bool {
     match update["sessionUpdate"].as_str() {
         Some("session_info_update") => {
-            let Some(title) = update["title"]
-                .as_str()
-                .map(str::trim)
-                .filter(|t| !t.is_empty())
-            else {
+            let Some(title) = update["title"].as_str() else {
                 return false;
             };
-            with(|info| {
-                info.entry(session_key.to_owned()).or_default().title = Some(title.to_owned())
-            });
-            true
+            note_title(session_key, title)
         }
         Some("usage_update") => {
             let cost = &update["cost"];
-            if let Some(amount) = cost["amount"]
-                .as_f64()
-                .filter(|a| a.is_finite() && *a >= 0.0)
-            {
-                let currency = cost["currency"].as_str().unwrap_or("USD").to_owned();
-                with(|info| {
-                    let costs = &mut info.entry(session_key.to_owned()).or_default().costs;
-                    let entry = costs.entry(session_id.to_owned()).or_default();
-                    if amount < entry.last || entry.currency != currency {
-                        entry.earlier += entry.last;
-                    }
-                    entry.currency = currency;
-                    entry.last = amount;
-                });
+            if let Some(amount) = cost["amount"].as_f64() {
+                let currency = cost["currency"].as_str().unwrap_or("USD");
+                note_cost(session_key, session_id, amount, currency);
             }
             false
         }

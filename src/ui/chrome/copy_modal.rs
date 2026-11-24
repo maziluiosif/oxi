@@ -125,6 +125,22 @@ pub fn modal_backdrop(ctx: &egui::Context, id: &str) -> bool {
     clicked
 }
 
+/// Shared surface frame for centered modal dialogs: elevated fill, crisp border, card rounding,
+/// popup shadow, and generous inner padding.
+pub fn modal_frame(ui: &Ui) -> Frame {
+    Frame::new()
+        .fill(c_bg_elevated())
+        .stroke(Stroke::new(1.0, c_border()))
+        .corner_radius(RADIUS_CARD)
+        .shadow(ui.visuals().popup_shadow)
+        .inner_margin(Margin::same(16))
+}
+
+/// Consistent bold title for modal dialogs.
+pub fn modal_title(ui: &mut Ui, title: &str) {
+    ui.label(strong_rich(title, FS_BODY, c_text_strong()));
+}
+
 /// Shared confirmation modal for destructive actions. `extra` adds content (a checkbox, details)
 /// between the text and the buttons. While `confirm_enabled` is false the confirm button is
 /// disabled and Enter does nothing.
@@ -148,50 +164,45 @@ pub fn confirm_modal(
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
-            Frame::new()
-                .fill(c_bg_elevated())
-                .stroke(Stroke::new(1.0, c_border()))
-                .corner_radius(RADIUS_CHIP)
-                .inner_margin(Margin::same(16))
-                .show(ui, |ui| {
-                    ui.set_width(MODAL_W);
-                    ui.label(RichText::new(title).size(FS_BODY).color(c_text()).strong());
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(body).size(FS_SMALL).color(c_text_muted()));
-                    if let Some(note) = note {
-                        ui.add_space(2.0);
-                        ui.label(
-                            RichText::new(note)
-                                .size(FS_TINY)
-                                .color(crate::theme::c_error_fg()),
-                        );
+            modal_frame(ui).show(ui, |ui| {
+                ui.set_width(MODAL_W);
+                modal_title(ui, title);
+                ui.add_space(4.0);
+                ui.label(RichText::new(body).size(FS_SMALL).color(c_text_muted()));
+                if let Some(note) = note {
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(note)
+                            .size(FS_TINY)
+                            .color(crate::theme::c_error_fg()),
+                    );
+                }
+                extra(ui);
+                ui.add_space(14.0);
+                // A fixed-height row: a right-to-left layout would otherwise take the height
+                // the area had last frame, and a shorter dialog after a taller one (the
+                // same area) would keep a gap above its buttons.
+                let row = egui::vec2(ui.available_width(), 28.0);
+                ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            confirm_enabled,
+                            super::ghost_button_widget(confirm_label, true),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("Enter")
+                        .clicked()
+                    {
+                        outcome = ModalOutcome::Confirmed;
                     }
-                    extra(ui);
-                    ui.add_space(14.0);
-                    // A fixed-height row: a right-to-left layout would otherwise take the height
-                    // the area had last frame, and a shorter dialog after a taller one (the
-                    // same area) would keep a gap above its buttons.
-                    let row = egui::vec2(ui.available_width(), 28.0);
-                    ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .add_enabled(
-                                confirm_enabled,
-                                super::ghost_button_widget(confirm_label, true),
-                            )
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .on_hover_text("Enter")
-                            .clicked()
-                        {
-                            outcome = ModalOutcome::Confirmed;
-                        }
-                        if ghost_button(ui, "Cancel", false)
-                            .on_hover_text("Esc")
-                            .clicked()
-                        {
-                            outcome = ModalOutcome::Cancelled;
-                        }
-                    });
+                    if ghost_button(ui, "Cancel", false)
+                        .on_hover_text("Esc")
+                        .clicked()
+                    {
+                        outcome = ModalOutcome::Cancelled;
+                    }
                 });
+            });
         });
 
     if outcome == ModalOutcome::Open {

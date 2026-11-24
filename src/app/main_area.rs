@@ -36,10 +36,10 @@ impl OxiApp {
                 Frame::new()
                     .fill(c_bg_sidebar())
                     .inner_margin(Margin {
-                        left: 10,
-                        right: 10,
+                        left: 8,
+                        right: 8,
                         top: 8 + crate::ui::window_chrome::TITLEBAR_H as i8,
-                        bottom: 10,
+                        bottom: 8,
                     })
                     .show(&mut sidebar_ui, |ui| {
                         ui.set_min_width(ui.max_rect().width());
@@ -169,32 +169,18 @@ impl OxiApp {
                                 .layout(egui::Layout::top_down(egui::Align::Min)),
                         );
                         right_ui.shrink_clip_rect(right_rect);
-                        Frame::new()
-                            .fill(c_bg_main())
-                            .inner_margin(Margin {
-                                left: 0,
-                                right: CHAT_VIEW_MARGIN_RIGHT as i8,
-                                top: 0,
-                                bottom: 0,
-                            })
-                            .show(&mut right_ui, |ui| {
-                                self.render_text_editor(ui);
-                            });
+                        Frame::new().fill(c_bg_main()).show(&mut right_ui, |ui| {
+                            self.render_text_editor(ui);
+                        });
                         drop(right_ui);
                         ui.advance_cursor_after_rect(right_rect);
                     });
                 } else if editor_open {
-                    Frame::new()
-                        .fill(c_bg_main())
-                        .inner_margin(Margin {
-                            left: 0,
-                            right: CHAT_VIEW_MARGIN_RIGHT as i8,
-                            top: 0,
-                            bottom: 0,
-                        })
-                        .show(ui, |ui| {
-                            self.render_text_editor(ui);
-                        });
+                    // No right margin: the editor's scrollbar sits on the pane's edge, like
+                    // Sublime's, instead of leaving an empty strip after it.
+                    Frame::new().fill(c_bg_main()).show(ui, |ui| {
+                        self.render_text_editor(ui);
+                    });
                 } else {
                     Frame::new()
                         .fill(c_bg_main())
@@ -319,13 +305,22 @@ impl OxiApp {
                     toggle_find = true;
                 }
                 if !self.conv.editor.split_rendered
-                    && header_split_button(ui, split_open)
-                        .on_hover_text(if split_open {
+                    && crate::ui::chrome::split_pane_button(
+                        ui,
+                        if split_open {
                             "Close split chat"
                         } else {
-                            "New chat side by side (compare two agents)"
-                        })
-                        .clicked()
+                            "New chat side by side"
+                        },
+                        split_open,
+                        false,
+                    )
+                    .on_hover_text(if split_open {
+                        "Close split chat"
+                    } else {
+                        "New chat side by side (compare two agents)"
+                    })
+                    .clicked()
                 {
                     toggle_split = true;
                 }
@@ -371,12 +366,13 @@ impl OxiApp {
                     );
                     if let Some((_, ref mut draft)) = renaming {
                         let field_id = egui::Id::new("chat_header_rename_input");
-                        let edit = ui.add(
-                            egui::TextEdit::singleline(draft)
-                                .id(field_id)
-                                .font(egui::FontId::proportional(FS_SMALL))
-                                .desired_width((ui.available_width() - 8.0).clamp(80.0, 260.0))
-                                .margin(Margin::symmetric(6, 2)),
+                        let (_, edit) = crate::ui::chrome::framed_singleline_input(
+                            ui,
+                            field_id,
+                            draft,
+                            "",
+                            (ui.available_width() - 8.0).clamp(80.0, 260.0),
+                            8,
                         );
                         if !edit.has_focus() && !edit.lost_focus() {
                             edit.request_focus();
@@ -641,61 +637,30 @@ pub(super) fn paint_composer_scrim(ui: &mut Ui, rect: egui::Rect) {
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
-/// Compact dual-pane split icon button for the chat header.
-fn header_split_button(ui: &mut Ui, active: bool) -> egui::Response {
-    let size = egui::vec2(26.0, 26.0);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = resp.hovered() || resp.has_focus();
-    if hovered {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    let radius = egui::CornerRadius::same(RADIUS_ROW);
-    if active {
-        ui.painter().rect_filled(rect, radius, c_row_active());
-    } else if hovered {
-        ui.painter().rect_filled(rect, radius, c_row_hover());
-    }
-    let icon = rect.shrink2(egui::vec2(6.5, 7.5));
-    let color = if active {
-        c_accent()
-    } else if hovered {
-        c_text_strong()
-    } else {
-        c_text_muted()
-    };
-    ui.painter()
-        .rect_stroke(icon, 2, Stroke::new(1.15, color), egui::StrokeKind::Inside);
-    ui.painter().line_segment(
-        [
-            egui::pos2(icon.center().x, icon.top()),
-            egui::pos2(icon.center().x, icon.bottom()),
-        ],
-        Stroke::new(1.0, color),
-    );
-    resp
-}
-
-/// Compact `>_` / command-palette icon button for the chat header.
+/// Compact command-palette icon button for the chat header, matching `icon_button_plain`.
 fn header_palette_button(ui: &mut Ui) -> egui::Response {
     let size = egui::vec2(26.0, 26.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = resp.hovered() || resp.has_focus();
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Command palette")
+    });
+    let hovered = ui.is_enabled() && (resp.hovered() || resp.has_focus());
+    let radius = egui::CornerRadius::same(RADIUS_CHIP);
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(RADIUS_ROW), c_row_hover());
+        ui.painter().rect_filled(rect, radius, c_row_hover());
     }
     let color = if hovered {
-        c_text_strong()
+        c_accent()
     } else {
-        c_text_muted()
+        c_sidebar_section()
     };
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        "⌘",
-        egui::FontId::proportional(FS_SMALL),
-        color,
-    );
+    let glyph = if cfg!(target_os = "macos") {
+        "\u{f0633}"
+    } else {
+        ICON_TERMINAL
+    };
+    crate::ui::chrome::paint_icon_glyph(ui.painter(), rect.center(), glyph, FS_SMALL, color);
+    crate::ui::chrome::keyboard_focus_ring(ui, &resp, radius);
     resp
 }

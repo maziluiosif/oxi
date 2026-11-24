@@ -158,17 +158,19 @@ impl OxiApp {
                             if self.conv.git.behind > 0 {
                                 label.push_str(&format!(" \u{2193}{}", self.conv.git.behind));
                             }
-                            if ui
+                            let bg_slot = ui.painter().add(egui::Shape::Noop);
+                            let branch_resp = ui
                                 .add(
-                                    egui::Label::new(
-                                        egui::RichText::new(label).size(FS_TINY).color(
-                                            if branches_on {
-                                                c_accent()
-                                            } else {
-                                                c_text_muted()
-                                            },
-                                        ),
-                                    )
+                                    egui::Label::new(crate::ui::chrome::icon_label_job(
+                                        ICON_BRANCH,
+                                        &label,
+                                        FS_TINY,
+                                        if branches_on {
+                                            c_accent()
+                                        } else {
+                                            c_text_muted()
+                                        },
+                                    ))
                                     .sense(egui::Sense::click()),
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -176,9 +178,15 @@ impl OxiApp {
                                     "Hide git panel"
                                 } else {
                                     "Open git branches"
-                                })
-                                .clicked()
-                            {
+                                });
+                            crate::ui::chrome::paint_status_bar_hover(
+                                ui,
+                                bg_slot,
+                                branch_resp.rect,
+                                &branch_resp,
+                                branches_on,
+                            );
+                            if branch_resp.clicked() {
                                 self.request_settings_exit(
                                     crate::app::state::SettingsExitAction::ToggleGitBranches,
                                 );
@@ -220,6 +228,7 @@ impl OxiApp {
                 None => return,
             },
         };
+        let bg_slot = ui.painter().add(egui::Shape::Noop);
         let response = ui
             .add(
                 egui::Label::new(egui::RichText::new(label).size(FS_TINY).color(if accent {
@@ -231,6 +240,7 @@ impl OxiApp {
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(hover);
+        crate::ui::chrome::paint_status_bar_hover(ui, bg_slot, response.rect, &response, false);
         if response.clicked() {
             if matches!(self.conv.update.install, UpdateInstall::Ready { .. }) {
                 self.restart_to_update(ui.ctx());

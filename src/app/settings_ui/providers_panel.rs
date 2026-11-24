@@ -227,8 +227,16 @@ fn configured_provider_pill(
     let font = egui::FontId::proportional(FS_SMALL);
     let text_col = if selected { c_text_strong() } else { c_text() };
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, text_col));
-    let size = egui::vec2(galley.size().x + 28.0, 26.0);
+    let size = egui::vec2(galley.size().x + 28.0, CONTROL_HEIGHT);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
     let hovered = resp.hovered() || resp.has_focus();
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -248,6 +256,7 @@ fn configured_provider_pill(
         egui::Stroke::new(1.0, border),
         egui::StrokeKind::Inside,
     );
+    crate::ui::chrome::keyboard_focus_ring(ui, &resp, radius);
     let dot_col = if active { c_accent() } else { c_success() };
     ui.painter().circle_filled(
         egui::pos2(rect.left() + 10.0, rect.center().y),

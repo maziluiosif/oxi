@@ -151,38 +151,57 @@ impl OxiApp {
         let mut save = false;
         let mut discard = false;
         let mut cancel = false;
-        let modal = egui::Modal::new(egui::Id::new("editor_unsaved_prompt")).show(ctx, |ui| {
-            ui.set_width(460.0_f32.min(ctx.content_rect().width() - 48.0));
-            ui.label(RichText::new(title).size(FS_H2).strong());
-            ui.add_space(8.0);
-            ui.label(description);
-            if matches!(prompt, EditorPrompt::Exit | EditorPrompt::CloseAll) {
-                egui::ScrollArea::vertical()
-                    .max_height(140.0)
-                    .show(ui, |ui| {
-                        for document in self.conv.editor.documents.iter().filter(|d| d.is_dirty()) {
-                            ui.label(
-                                RichText::new(document.path.display().to_string()).size(FS_SMALL),
-                            );
+        let modal = egui::Modal::new(egui::Id::new("editor_unsaved_prompt"))
+            .frame(egui::Frame::NONE)
+            .backdrop_color(c_modal_backdrop())
+            .show(ctx, |ui| {
+                crate::ui::chrome::modal_frame(ui).show(ui, |ui| {
+                    ui.set_width(460.0_f32.min(ctx.content_rect().width() - 48.0));
+                    crate::ui::chrome::modal_title(ui, title);
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(description)
+                            .size(FS_SMALL)
+                            .color(c_text_muted()),
+                    );
+                    if matches!(prompt, EditorPrompt::Exit | EditorPrompt::CloseAll) {
+                        ui.add_space(6.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(140.0)
+                            .show(ui, |ui| {
+                                for document in
+                                    self.conv.editor.documents.iter().filter(|d| d.is_dirty())
+                                {
+                                    ui.label(
+                                        RichText::new(document.path.display().to_string())
+                                            .size(FS_SMALL)
+                                            .color(c_text()),
+                                    );
+                                }
+                                if matches!(prompt, EditorPrompt::Exit) && self.settings_dirty() {
+                                    ui.label(
+                                        RichText::new("Settings").size(FS_SMALL).color(c_text()),
+                                    );
+                                }
+                            });
+                    }
+                    if let Some(error) = &self.conv.editor.error {
+                        ui.add_space(8.0);
+                        crate::ui::chrome::alert_banner(ui, error, true);
+                    }
+                    ui.add_space(14.0);
+                    let row = egui::vec2(ui.available_width(), 28.0);
+                    ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                        save = primary_button(ui, primary).clicked();
+                        if let Some(label) = destructive {
+                            discard = ghost_button(ui, label, true).clicked();
                         }
-                        if matches!(prompt, EditorPrompt::Exit) && self.settings_dirty() {
-                            ui.label("Settings");
-                        }
+                        cancel = ghost_button(ui, "Cancel", false)
+                            .on_hover_text("Esc")
+                            .clicked();
                     });
-            }
-            if let Some(error) = &self.conv.editor.error {
-                ui.add_space(8.0);
-                ui.label(RichText::new(error).color(c_error_fg()));
-            }
-            ui.add_space(16.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                save = primary_button(ui, primary).clicked();
-                if let Some(label) = destructive {
-                    discard = ghost_button(ui, label, true).clicked();
-                }
-                cancel = ghost_button(ui, "Cancel", false).clicked();
+                });
             });
-        });
         // Enter is intentionally left to the focused button; it never silently discards edits.
         if cancel || modal.should_close() {
             if matches!(prompt, EditorPrompt::Exit) {

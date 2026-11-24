@@ -41,6 +41,7 @@ pub fn serve(params: &Value) -> Result<Value, String> {
     match params["kind"].as_str().unwrap_or_default() {
         "op" => answer(super::handle_op(cwd, arg(params, "op")?)),
         "view" => answer(super::view_diff(cwd, arg(params, "op")?)),
+        "branch_status" => answer(super::branch_status(cwd)),
         "apply_block" => answer(super::hunk::apply_block(cwd, &arg(params, "edit")?)),
         "diff_texts" => answer(super::hunk::diff_texts(
             cwd,

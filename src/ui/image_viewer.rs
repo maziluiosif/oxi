@@ -47,14 +47,15 @@ pub fn show(ctx: &egui::Context) {
     sz *= scale;
 
     let mut close = false;
+    let radius = CornerRadius::same(crate::theme::RADIUS_CARD);
     let modal = egui::Modal::new(state_id())
-        .frame(Frame::new().corner_radius(CornerRadius::same(6)))
+        .frame(Frame::new().corner_radius(radius))
         .backdrop_color(Color32::from_black_alpha(200))
         .show(ctx, |ui| {
             let resp = ui
                 .add(
                     Image::new((tex.id(), sz))
-                        .corner_radius(CornerRadius::same(6))
+                        .corner_radius(radius)
                         .sense(Sense::click()),
                 )
                 .on_hover_cursor(egui::CursorIcon::ZoomOut);

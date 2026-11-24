@@ -82,3 +82,68 @@ pub fn apply_tool_update(blocks: &mut Vec<AssistantBlock>, update: ToolUpdate) {
         blocks.push(block);
     }
 }
+
+/// Merge a follow-up update arriving in a later turn (e.g. a background command completing during
+/// an autonomous wakeup whose `UpdateState` did not see the original `tool_call`), preserving
+/// existing non-empty fields that the bare update omitted.
+pub fn merge_tool_update(blocks: &mut Vec<AssistantBlock>, update: ToolUpdate) {
+    if update.tool_call_id.is_empty() {
+        return;
+    }
+    let is_error = match update.metadata.status {
+        ToolStatus::Completed => Some(false),
+        ToolStatus::Failed => Some(true),
+        _ => None,
+    };
+    let position = blocks.iter().position(|block| {
+        matches!(block, AssistantBlock::Tool { tool_call_id, .. } if *tool_call_id == update.tool_call_id)
+    });
+    if let Some(position) = position
+        && let AssistantBlock::Tool {
+            name: prev_name,
+            args_summary: prev_args,
+            output: prev_output,
+            diff: prev_diff,
+            is_error: prev_err,
+            output_truncated: prev_trunc,
+            metadata: prev_meta,
+            ..
+        } = &mut blocks[position]
+    {
+        let incoming_name_generic = update.name == "tool"
+            && update.metadata.kind.is_empty()
+            && update.metadata.name.is_none();
+        let mut meta = update.metadata;
+        if let Some(old) = prev_meta.as_deref() {
+            if meta.title.is_empty() {
+                meta.title = old.title.clone();
+            }
+            if meta.kind.is_empty() {
+                meta.kind = old.kind.clone();
+            }
+            if meta.name.is_none() {
+                meta.name = old.name.clone();
+            }
+            if meta.locations.is_empty() {
+                meta.locations = old.locations.clone();
+            }
+        }
+        if !incoming_name_generic || prev_name.is_empty() {
+            *prev_name = update.name;
+        }
+        if let Some(args) = update.args {
+            *prev_args = Some(args.to_string());
+        }
+        if !update.output.is_empty() {
+            *prev_output = update.output;
+            *prev_trunc = update.output_truncated;
+        }
+        if update.diff.is_some() {
+            *prev_diff = update.diff;
+        }
+        *prev_err = is_error;
+        *prev_meta = Some(Box::new(meta));
+        return;
+    }
+    apply_tool_update(blocks, update);
+}

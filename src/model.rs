@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 
 pub mod delegated;
 mod tool;
-pub use tool::{ToolLocation, ToolMetadata, ToolStatus, ToolUpdate, apply_tool_update};
+pub use tool::{
+    ToolLocation, ToolMetadata, ToolStatus, ToolUpdate, apply_tool_update, merge_tool_update,
+};
 
 use crate::settings::{AppSettings, LlmProviderKind, ProviderConfig};
 
@@ -221,12 +223,24 @@ impl ChatMessage {
     /// Marks the message as done streaming and freezes [`ChatMessage::worked_duration`]
     /// from [`ChatMessage::started_at`] (a no-op if already frozen).
     pub fn finish_streaming(&mut self) {
+        self.finish_streaming_preserving_tools(&std::collections::HashSet::new());
+    }
+
+    /// Like [`Self::finish_streaming`], but keeps tool calls in `active_tool_ids` in their
+    /// running state (e.g. an ACP background command that outlived `end_turn` and will report
+    /// completion in a later autonomous wakeup).
+    pub fn finish_streaming_preserving_tools(
+        &mut self,
+        active_tool_ids: &std::collections::HashSet<String>,
+    ) {
         self.streaming = false;
         for block in &mut self.blocks {
             if let AssistantBlock::Tool {
+                tool_call_id,
                 metadata: Some(meta),
                 ..
             } = block
+                && !active_tool_ids.contains(tool_call_id)
             {
                 meta.interrupt_if_unfinished();
             }

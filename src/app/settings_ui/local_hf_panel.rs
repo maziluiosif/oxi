@@ -137,16 +137,15 @@ impl OxiApp {
                 self.conv.local_models.downloaded.clone()
             };
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(if is_remote {
+                ui.label(strong_rich(
+                    if is_remote {
                         "Models on the host"
                     } else {
                         "Your models"
-                    })
-                    .size(FS_SMALL)
-                    .color(c_text())
-                    .strong(),
-                );
+                    },
+                    FS_SMALL,
+                    c_text_strong(),
+                ));
                 if is_remote {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let loading = self.conv.local_models.remote_list_loading;
@@ -182,10 +181,8 @@ impl OxiApp {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::Label::new(
-                                    RichText::new(&m.id).size(FS_SMALL).color(c_text()).strong(),
-                                )
-                                .truncate(),
+                                egui::Label::new(strong_rich(&m.id, FS_SMALL, c_text_strong()))
+                                    .truncate(),
                             );
                             if running {
                                 ui.add_space(6.0);
@@ -267,12 +264,11 @@ impl OxiApp {
 
     /// Search HuggingFace; picking a result lists its GGUF files right under it.
     fn render_hf_search(&mut self, ui: &mut Ui, is_remote: bool) {
-        ui.label(
-            RichText::new("Add a model from HuggingFace")
-                .size(FS_SMALL)
-                .color(c_text())
-                .strong(),
-        );
+        ui.label(strong_rich(
+            "Add a model from HuggingFace",
+            FS_SMALL,
+            c_text_strong(),
+        ));
         ui.add_space(6.0);
         let mut search = false;
         ui.horizontal(|ui| {
@@ -340,10 +336,7 @@ impl OxiApp {
             let row = model_row(ui, |ui| {
                 ui.vertical(|ui| {
                     ui.add(
-                        egui::Label::new(
-                            RichText::new(&repo).size(FS_SMALL).color(c_text()).strong(),
-                        )
-                        .truncate(),
+                        egui::Label::new(strong_rich(&repo, FS_SMALL, c_text_strong())).truncate(),
                     );
                     if downloads.is_some() || likes.is_some() {
                         ui.horizontal(|ui| {
@@ -466,95 +459,100 @@ impl OxiApp {
 
     fn render_hf_advanced(&mut self, ui: &mut Ui, kind: LlmProviderKind) {
         let is_remote = kind == LlmProviderKind::RemoteHf;
-        egui::CollapsingHeader::new(
-            RichText::new("Advanced")
-                .size(FS_SMALL)
-                .color(c_text_muted())
-                .strong(),
-        )
-        .id_salt(("hf_advanced", kind.slug()))
-        .default_open(false)
-        .show(ui, |ui| {
-            card_frame().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 16.0;
-                    ui.vertical(|ui| {
-                        field_label_first(ui, "Port");
-                        let configured = if is_remote {
-                            self.conv
-                                .settings
-                                .provider(kind)
-                                .ssh_config()
-                                .map(|cfg| cfg.remote_runtime_port)
-                                .unwrap_or_else(|| kind.default_remote_runtime_port())
-                        } else {
-                            self.conv.local_models.runtime_port
-                        };
-                        let mut port = configured.to_string();
-                        let hint = if is_remote { "18081" } else { "18080" };
-                        if settings_text_field_width(ui, &mut port, hint, 90.0).changed()
-                            && let Ok(p) = port.parse::<u16>()
-                        {
-                            if is_remote {
-                                if let ComputeLocation::RemoteSsh(cfg) =
-                                    &mut self.conv.settings.provider_mut(kind).location
+        ui.push_id(("hf_advanced", kind.slug()), |ui| {
+            crate::ui::chrome::settings_disclosure(
+                ui,
+                "Advanced",
+                &[
+                    "Port",
+                    "Context (tokens)",
+                    "GPU layers",
+                    "llama-server path",
+                    "API key",
+                ],
+                |ui| {
+                    card_frame().show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 16.0;
+                            ui.vertical(|ui| {
+                                field_label_first(ui, "Port");
+                                let configured = if is_remote {
+                                    self.conv
+                                        .settings
+                                        .provider(kind)
+                                        .ssh_config()
+                                        .map(|cfg| cfg.remote_runtime_port)
+                                        .unwrap_or_else(|| kind.default_remote_runtime_port())
+                                } else {
+                                    self.conv.local_models.runtime_port
+                                };
+                                let mut port = configured.to_string();
+                                let hint = if is_remote { "18081" } else { "18080" };
+                                if settings_text_field_width(ui, &mut port, hint, 90.0).changed()
+                                    && let Ok(p) = port.parse::<u16>()
                                 {
-                                    cfg.remote_runtime_port = p;
-                                    self.conv.local_models.remote_list_for = None;
+                                    if is_remote {
+                                        if let ComputeLocation::RemoteSsh(cfg) =
+                                            &mut self.conv.settings.provider_mut(kind).location
+                                        {
+                                            cfg.remote_runtime_port = p;
+                                            self.conv.local_models.remote_list_for = None;
+                                        }
+                                    } else {
+                                        self.conv.local_models.runtime_port = p;
+                                        self.conv.settings.local_hf.runtime_port = p;
+                                    }
                                 }
-                            } else {
-                                self.conv.local_models.runtime_port = p;
-                                self.conv.settings.local_hf.runtime_port = p;
-                            }
+                            });
+                            ui.vertical(|ui| {
+                                field_label_first(ui, "Context (tokens)");
+                                let mut ctx = self.conv.local_models.context_size.to_string();
+                                if settings_text_field_width(ui, &mut ctx, "8192", 100.0).changed()
+                                    && let Ok(n) = ctx.parse::<usize>()
+                                {
+                                    let n = n.max(512);
+                                    self.conv.local_models.context_size = n;
+                                    self.conv.settings.local_hf.context_size = n;
+                                    // One number for both sides: the server's context and what oxi
+                                    // budgets the conversation against.
+                                    for hf in [LlmProviderKind::LocalHf, LlmProviderKind::RemoteHf] {
+                                        self.conv.settings.provider_mut(hf).context_window = Some(n);
+                                    }
+                                }
+                            });
+                            ui.vertical(|ui| {
+                                field_label_first(ui, "GPU layers");
+                                let mut ngl = self.conv.local_models.gpu_layers.to_string();
+                                if settings_text_field_width(ui, &mut ngl, "-1", 80.0).changed()
+                                    && let Ok(n) = ngl.parse::<i32>()
+                                {
+                                    self.conv.local_models.gpu_layers = n;
+                                    self.conv.settings.local_hf.gpu_layers = n;
+                                }
+                            });
+                        });
+                        field_hint(
+                            ui,
+                            "Changes apply the next time a model starts. GPU layers -1 offloads every layer when supported.",
+                        );
+                        if !is_remote {
+                            field_label(ui, "llama-server path");
+                            settings_text_field(
+                                ui,
+                                &mut self.conv.local_models.runtime_path,
+                                "Empty uses the installed runtime, then PATH",
+                            );
                         }
+                        field_label(ui, "API key");
+                        settings_password_field(
+                            ui,
+                            &mut self.conv.settings.provider_mut(kind).api_key,
+                            "Only if your llama-server was started with --api-key",
+                        );
                     });
-                    ui.vertical(|ui| {
-                        field_label_first(ui, "Context (tokens)");
-                        let mut ctx = self.conv.local_models.context_size.to_string();
-                        if settings_text_field_width(ui, &mut ctx, "8192", 100.0).changed()
-                            && let Ok(n) = ctx.parse::<usize>()
-                        {
-                            let n = n.max(512);
-                            self.conv.local_models.context_size = n;
-                            self.conv.settings.local_hf.context_size = n;
-                            // One number for both sides: the server's context and what oxi
-                            // budgets the conversation against.
-                            for hf in [LlmProviderKind::LocalHf, LlmProviderKind::RemoteHf] {
-                                self.conv.settings.provider_mut(hf).context_window = Some(n);
-                            }
-                        }
-                    });
-                    ui.vertical(|ui| {
-                        field_label_first(ui, "GPU layers");
-                        let mut ngl = self.conv.local_models.gpu_layers.to_string();
-                        if settings_text_field_width(ui, &mut ngl, "-1", 80.0).changed()
-                            && let Ok(n) = ngl.parse::<i32>()
-                        {
-                            self.conv.local_models.gpu_layers = n;
-                            self.conv.settings.local_hf.gpu_layers = n;
-                        }
-                    });
-                });
-                field_hint(
-                    ui,
-                    "Changes apply the next time a model starts. GPU layers -1 offloads every layer when supported.",
-                );
-                if !is_remote {
-                    field_label(ui, "llama-server path");
-                    settings_text_field(
-                        ui,
-                        &mut self.conv.local_models.runtime_path,
-                        "Empty uses the installed runtime, then PATH",
-                    );
-                }
-                field_label(ui, "API key");
-                settings_password_field(
-                    ui,
-                    &mut self.conv.settings.provider_mut(kind).api_key,
-                    "Only if your llama-server was started with --api-key",
-                );
-            });
+                },
+            );
         });
     }
 }
@@ -597,12 +595,7 @@ fn step_header(ui: &mut Ui, step: usize, title: &str, done: Option<&str>) {
                 c_text_muted(),
             );
         }
-        ui.label(
-            RichText::new(title)
-                .size(FS_BODY)
-                .color(c_text_strong())
-                .strong(),
-        );
+        ui.label(strong_rich(title, FS_BODY, c_text_strong()));
         if let Some(done) = done {
             ui.label(RichText::new(done).size(FS_TINY).color(c_success()));
         }

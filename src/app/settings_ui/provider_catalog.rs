@@ -28,7 +28,7 @@ pub(in crate::app) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
         ],
     ),
     (
-        "External agents (ACP)",
+        "External agents",
         &[
             LlmProviderKind::ClaudeCodeAcp,
             LlmProviderKind::CursorAcp,
@@ -64,13 +64,13 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         LlmProviderKind::OpenCodeGo => "OpenCode Go subscription endpoint.",
         LlmProviderKind::MetaMuse => "Meta Model API (Muse Wonder, Muse Spark), pay-as-you-go key.",
         LlmProviderKind::ClaudeCodeAcp => {
-            "Drive Claude Code as an external agent over the Agent Client Protocol."
+            "Drive the official Claude Code CLI (`claude`) directly over its native stream-json protocol."
         }
         LlmProviderKind::CursorAcp => {
             "Drive the installed Cursor CLI through its built-in Agent Client Protocol server."
         }
         LlmProviderKind::CodexAcp => {
-            "Drive Codex CLI through the official Agent Client Protocol adapter."
+            "Drive the official OpenAI Codex CLI directly over `codex app-server`."
         }
         LlmProviderKind::MuseCodeAcp => {
             "Drive Meta's Muse Code CLI (your Muse Code subscription) through the community muse-acp adapter."

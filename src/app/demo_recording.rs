@@ -348,6 +348,17 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         rec.app().conv.settings_page.open = false;
         rec.app().conv.settings_page.original = None;
         rec.harness.run_steps(3);
+        // The status bar context popup with the subscription windows seeded above.
+        let previous = rec.app().conv.settings.active_provider;
+        rec.app().conv.settings.active_provider = LlmProviderKind::ClaudeCodeAcp;
+        rec.app().conv.settings.router.read_claude_code_usage = true;
+        let popup_id = egui::Id::new(crate::app::chat_status::CONTEXT_CARD_ID);
+        egui::Popup::open_id(&rec.harness.ctx, popup_id);
+        rec.harness.run_steps(3);
+        rec.still("status-context-popup");
+        egui::Popup::close_id(&rec.harness.ctx, popup_id);
+        rec.app().conv.settings.active_provider = previous;
+        rec.harness.run_steps(2);
         // OXI_SETTINGS_REVIEW=1: only the Settings stills above.
         if std::env::var_os("OXI_SETTINGS_REVIEW").is_some() {
             return;
@@ -709,6 +720,17 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         rec.harness.run_steps(4);
         rec.still("editor-prefs");
         rec.app().conv.settings.editor = crate::settings::EditorSettings::default();
+        rec.harness.run_steps(2);
+        // Chat beside the editor, git panel open and closed.
+        rec.app().conv.editor.split_with_chat = true;
+        rec.harness.run_steps(4);
+        rec.still("editor-split-chat");
+        let git_was_open = rec.app().conv.git_ui.open;
+        rec.app().conv.git_ui.open = false;
+        rec.harness.run_steps(4);
+        rec.still("editor-split-chat-wide");
+        rec.app().conv.git_ui.open = git_was_open;
+        rec.app().conv.editor.split_with_chat = false;
         rec.harness.run_steps(2);
         rec.check_sublime_keys();
         // Scroll past end: the last line can reach the top of the view.
@@ -1268,7 +1290,7 @@ fn review_dialogs(rec: &mut Recorder<'_>) {
         rec.harness.run_steps(4);
         rec.still(&format!("dialog-import-{theme}"));
         // The agent list opens above the dialog, and picking from it leaves the dialog open.
-        let pos = rec.label_center("Claude Code (ACP)").expect("agent picker");
+        let pos = rec.label_center("Claude Code").expect("agent picker");
         rec.harness.event(Event::PointerMoved(pos));
         for pressed in [true, false] {
             rec.harness.event(Event::PointerButton {

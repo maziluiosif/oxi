@@ -284,21 +284,22 @@ impl OxiApp {
                 Frame::new()
                     .fill(c_bg_elevated())
                     .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(RADIUS_CHIP)
+                    .corner_radius(RADIUS_CARD)
+                    .shadow(ui.visuals().popup_shadow)
                     .inner_margin(Margin::same(12))
                     .show(ui, |ui| {
                         ui.set_width(width);
-                        ui.label(
-                            RichText::new(format!("Comment on {}", draft.target.location()))
-                                .size(FS_SMALL)
-                                .color(c_text()),
-                        );
+                        ui.label(strong_rich(
+                            format!("Comment on {}", draft.target.location()),
+                            FS_SMALL,
+                            c_text_strong(),
+                        ));
                         ui.add_space(6.0);
-                        let edit = ui.add(
-                            egui::TextEdit::multiline(&mut draft.text)
-                                .desired_rows(3)
-                                .desired_width(f32::INFINITY)
-                                .hint_text("What should the agent change here?"),
+                        let edit = crate::ui::chrome::settings_text_area(
+                            ui,
+                            &mut draft.text,
+                            "What should the agent change here?",
+                            3,
                         );
                         if !edit.has_focus() && draft.text.is_empty() {
                             edit.request_focus();

@@ -209,10 +209,16 @@ impl OxiApp {
         if chats.is_empty() {
             return;
         }
-        let agents = chats.iter().filter(|c| !c.task).count();
+        // Workflows alone (no agent under them yet) count themselves, as in the sidebar;
+        // otherwise the pill read "Agents · 0".
+        let agents = match chats.iter().filter(|c| !c.task).count() {
+            0 => chats.len(),
+            n => n,
+        };
+        let only_workflows = chats.iter().all(|c| c.task);
         let active = chats
             .iter()
-            .filter(|c| !c.task && c.running() && c.live)
+            .filter(|c| (!c.task || only_workflows) && c.running() && c.live)
             .count();
         column(ui, |ui| {
             ui.horizontal(|ui| {
@@ -436,15 +442,16 @@ impl OxiApp {
         column(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                back = ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new("← Chat").size(FS_SMALL).color(c_text_muted()),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text("Back to parent conversation")
-                    .clicked();
+                back = crate::ui::chrome::flat_button_icon(
+                    ui,
+                    ICON_CHEVRON_LEFT,
+                    "Chat",
+                    FS_SMALL,
+                    egui::vec2(0.0, 24.0),
+                    c_text_muted(),
+                )
+                .on_hover_text("Back to parent conversation")
+                .clicked();
                 if let Some(parent) = parent {
                     ui.label(RichText::new("/").color(c_text_faint()));
                     let width = (ui.available_width() - 60.0).max(20.0);
@@ -459,6 +466,7 @@ impl OxiApp {
                             .frame(false)
                             .wrap_mode(egui::TextWrapMode::Truncate),
                         )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
                         self.select_subagent(ui.ctx(), key, &parent.root, &parent.id);
@@ -466,18 +474,14 @@ impl OxiApp {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if c.live && c.running() && c.capabilities["cancel"].is_object() {
-                        stop = ui
-                            .add(
-                                egui::Button::new(RichText::new("Stop").size(FS_SMALL))
-                                    .frame(false),
-                            )
+                        stop = crate::ui::chrome::ghost_button_icon(ui, ICON_STOP, "Stop", true)
                             .on_hover_text(if task { "Stop workflow" } else { "Stop agent" })
                             .clicked();
                     }
                 });
             });
             ui.add_space(8.0);
-            ui.add(egui::Label::new(RichText::new(c.label()).size(FS_BODY).strong()).truncate())
+            ui.add(egui::Label::new(strong_rich(c.label(), FS_BODY, c_text_strong())).truncate())
                 .on_hover_text(c.label());
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -506,7 +510,8 @@ impl OxiApp {
                 }
             });
             ui.add_space(10.0);
-            ui.separator();
+            crate::ui::chrome::hairline(ui);
+            ui.add_space(4.0);
         });
         let approval_height = if self
             .active_run_state()

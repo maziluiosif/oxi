@@ -1,11 +1,16 @@
 //! Git worker channel plumbing (spawn/refresh/drain) and the AI commit-message
 //! generator that rides on top of it.
 
+use std::time::{Duration, Instant};
+
 use eframe::egui;
 
-use crate::git::{GitOp, GitState};
+use crate::git::{BRANCH_REFRESH, GitOp, GitState};
 
 use super::super::OxiApp;
+use super::super::state::{ConfirmAction, SidebarMode};
+
+const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 impl OxiApp {
     /// Toggles the git panel. `None` toggles it on whatever tab it shows; `Some(tab)` switches
@@ -44,12 +49,51 @@ impl OxiApp {
         self.conv.git_ctx = ctx.clone();
     }
 
+    fn has_git_workspace(&self) -> bool {
+        // Index zero is the hidden scratch workspace while it still exists.
+        !self.conv.no_workspace || self.conv.active_workspace != 0
+    }
+
+    fn needs_full_git_snapshot(&self) -> bool {
+        !self.conv.settings_page.open
+            && (self.conv.git_ui.open
+                || (self.conv.sidebar.open && self.conv.sidebar.mode == SidebarMode::Explorer)
+                || self.conv.diff_view.open
+                || self
+                    .conv
+                    .editor
+                    .active_document()
+                    .is_some_and(|document| !document.is_scratchpad))
+    }
+
     /// Tell the git worker the active workspace changed, so it re-roots and
     /// refreshes. Called from `select_workspace` / new-workspace flows.
     pub(crate) fn refresh_git_cwd(&mut self) {
         self.conv.git_ui.last_auto_refresh = None;
         self.conv.git_ui.compare = Default::default();
+        if !self.has_git_workspace() {
+            let git_ui = &mut self.conv.git_ui;
+            git_ui.tx = None;
+            git_ui.rx = None;
+            git_ui.auto_refresh_pending = false;
+            git_ui.pending_branch_delete = None;
+            git_ui.commit_gen_pending = false;
+            git_ui.commit_gen_rx = None;
+            git_ui.commit_gen_error = None;
+            self.restore_commit_gen_stash();
+            self.conv.git = GitState::default();
+            self.conv.diff_view = Default::default();
+            self.conv.editor.diff_tab_active = false;
+            if matches!(
+                self.conv.confirm_prompt,
+                Some(ConfirmAction::GitDiscard { .. } | ConfirmAction::GitForceDeleteBranch { .. })
+            ) {
+                self.conv.confirm_prompt = None;
+            }
+            return;
+        }
         if self.conv.git_ui.rx.is_none() {
+            self.start_git_worker();
             return;
         }
         let cwd = self.active_workspace().root_path.clone();
@@ -64,7 +108,7 @@ impl OxiApp {
     /// Make sure the git worker thread exists and is rooted at the active workspace.
     /// `ensure_git_channels` lazily creates it using the real egui context.
     pub(crate) fn ensure_git_channels(&mut self) {
-        if self.conv.git_ui.rx.is_none() {
+        if self.has_git_workspace() && self.conv.git_ui.rx.is_none() {
             let cwd = self.active_workspace().root_path.clone();
             let chan = crate::git::GitChannels::new(cwd, self.conv.git_ctx.clone());
             self.conv.git_ui.tx = Some(chan.tx);
@@ -76,25 +120,45 @@ impl OxiApp {
         }
     }
 
+    /// Start asynchronously so the status bar can show the branch on launch.
+    pub(crate) fn start_git_worker(&mut self) {
+        if self.has_git_workspace() && self.conv.git_ui.rx.is_none() {
+            self.ensure_git_channels();
+            self.queue_auto_refresh(self.needs_full_git_snapshot());
+        }
+    }
+
     pub(crate) fn poll_git_changes(&mut self, ctx: &egui::Context) {
         if !ctx.input(|i| i.focused)
-            || self.conv.git_ui.rx.is_none()
+            || !self.has_git_workspace()
             || self.conv.git.busy
             || self.conv.git_ui.auto_refresh_pending
             || self.conv.git_ui.commit_gen_pending
-            || self
-                .conv
-                .git_ui
-                .last_auto_refresh
-                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2))
         {
             return;
         }
+        let full = self.needs_full_git_snapshot();
+        if let Some((at, previous_full)) = self.conv.git_ui.last_auto_refresh
+            && full == previous_full
+            && let Some(wait) = REFRESH_INTERVAL.checked_sub(at.elapsed())
+        {
+            ctx.request_repaint_after(wait);
+            return;
+        }
+        self.queue_auto_refresh(full);
+    }
+
+    fn queue_auto_refresh(&mut self, full: bool) {
+        let op = if full {
+            GitOp::AutoRefresh
+        } else {
+            GitOp::RefreshBranch
+        };
         if let Some(tx) = &self.conv.git_ui.tx
-            && tx.send(GitOp::AutoRefresh).is_ok()
+            && tx.send(op).is_ok()
         {
             self.conv.git_ui.auto_refresh_pending = true;
-            self.conv.git_ui.last_auto_refresh = Some(std::time::Instant::now());
+            self.conv.git_ui.last_auto_refresh = Some((Instant::now(), full));
         }
     }
 
@@ -109,6 +173,17 @@ impl OxiApp {
         let mut collected_diff: Option<String> = None;
         let mut saw_final_snapshot = false;
         while let Ok(mut state) = rx.try_recv() {
+            if state.last_op.as_deref() == Some(BRANCH_REFRESH) {
+                self.conv.git_ui.auto_refresh_pending = false;
+                let current = latest.as_mut().unwrap_or(&mut self.conv.git);
+                current.repo = state.repo;
+                current.branch = state.branch;
+                current.ahead = state.ahead;
+                current.behind = state.behind;
+                current.busy = false;
+                ctx.request_repaint();
+                continue;
+            }
             if state.last_op.as_deref() == Some("auto refresh") {
                 self.conv.git_ui.auto_refresh_pending = false;
                 if state.error.is_none() {
@@ -312,6 +387,9 @@ impl OxiApp {
     /// Send an op to the git worker; surfaces a visible error instead of silently
     /// dropping the request when the worker channel is gone.
     pub(crate) fn request(&mut self, op: GitOp) {
+        if !self.has_git_workspace() {
+            return;
+        }
         let sent = self
             .conv
             .git_ui
@@ -322,5 +400,42 @@ impl OxiApp {
             self.conv.git.error =
                 Some("Git worker is not running — reopen the panel to restart it.".to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_worker_is_detached_after_removing_the_last_workspace() {
+        crate::secrets::use_mock_store();
+        let mut app = OxiApp::new();
+        app.conv.workspaces.truncate(1);
+        app.conv.active_workspace = 0;
+        app.conv.no_workspace = false;
+        app.ensure_git_channels();
+        assert!(app.conv.git_ui.tx.is_some());
+        app.conv.git.repo = true;
+        app.conv.git.branch = "removed-branch".into();
+        app.conv.git_ui.auto_refresh_pending = true;
+        app.conv.confirm_prompt = Some(ConfirmAction::GitDiscard {
+            paths: vec!["file.txt".into()],
+        });
+
+        app.delete_workspace(0);
+        assert!(app.conv.no_workspace);
+        assert!(app.conv.git_ui.tx.is_none());
+        assert!(app.conv.git_ui.rx.is_none());
+        assert!(!app.conv.git_ui.auto_refresh_pending);
+        assert!(!app.conv.git.repo);
+        assert!(app.conv.git.branch.is_empty());
+        assert!(app.conv.confirm_prompt.is_none());
+
+        app.start_git_worker();
+        app.ensure_git_channels();
+        app.request(GitOp::Refresh);
+        assert!(app.conv.git_ui.tx.is_none());
+        assert!(app.conv.git.error.is_none());
     }
 }

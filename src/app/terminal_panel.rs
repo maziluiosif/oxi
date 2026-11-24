@@ -108,7 +108,7 @@ impl OxiApp {
             .frame(
                 Frame::new()
                     .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border())),
+                    .stroke(Stroke::new(1.0, c_border_subtle())),
             )
             .show(ui, |ui| {
                 self.render_terminal_resize_handle(ui);
@@ -155,8 +155,7 @@ impl OxiApp {
                 ui.label(
                     RichText::new(ICON_TERMINAL)
                         .font(FontId::new(FS_TINY, icon_font()))
-                        .color(c_sidebar_section())
-                        .strong(),
+                        .color(c_sidebar_section()),
                 );
                 ui.add_space(4.0);
                 let mut select = None;
@@ -260,7 +259,7 @@ impl OxiApp {
                 inner.left_top() + egui::vec2(2.0, 2.0),
                 egui::Align2::LEFT_TOP,
                 format!("Failed to start terminal: {e}"),
-                egui::FontId::monospace(12.0),
+                egui::FontId::monospace(FS_TINY),
                 c_danger(),
             );
             return;
@@ -301,7 +300,15 @@ fn terminal_tab(
     let close_w = if closable { CLOSE_W } else { 0.0 };
     let width = galley.size().x + 16.0 + dot_w + close_w;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, H), Sense::click());
-    let hovered = ui.rect_contains_pointer(rect);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            active,
+            label,
+        )
+    });
+    let hovered = ui.rect_contains_pointer(rect) || response.has_focus();
     let fill = if active {
         c_row_active()
     } else if hovered {
@@ -309,8 +316,9 @@ fn terminal_tab(
     } else {
         egui::Color32::TRANSPARENT
     };
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(RADIUS_ROW), fill);
+    let radius = egui::CornerRadius::same(RADIUS_ROW);
+    ui.painter().rect_filled(rect, radius, fill);
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, radius);
     let mut x = rect.left() + 8.0;
     if busy {
         ui.painter()

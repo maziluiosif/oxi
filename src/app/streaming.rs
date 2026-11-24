@@ -773,6 +773,78 @@ impl OxiApp {
             crate::agent::acp::claim_autonomous(&acp_key);
             self.start_autonomous_turn(key, acp_key);
         }
+        self.reconcile_stopped_background_tools();
+    }
+
+    /// If a chat kept an `InProgress` background tool after `end_turn` and its ACP subprocess
+    /// later exited or was stopped without sending a terminal update, mark that tool interrupted.
+    fn reconcile_stopped_background_tools(&mut self) {
+        let pending_auto = crate::agent::acp::pending_autonomous();
+        for wi in 0..self.conv.workspaces.len() {
+            let session_count = self.conv.workspaces[wi].sessions.len();
+            for si in 0..session_count {
+                let key = SessionKey {
+                    workspace_idx: wi,
+                    session_idx: si,
+                };
+                if self.is_remote_key(key)
+                    || self
+                        .run_state(key)
+                        .is_some_and(|run| run.waiting_response || run.agent_rx.is_some())
+                {
+                    continue;
+                }
+                let has_unfinished =
+                    self.conv.workspaces[wi].sessions[si]
+                        .messages
+                        .iter()
+                        .any(|m| {
+                            m.role == MsgRole::Assistant
+                                && !m.streaming
+                                && m.blocks.iter().any(|b| {
+                                    matches!(
+                                        b,
+                                        AssistantBlock::Tool {
+                                            metadata: Some(meta),
+                                            ..
+                                        } if matches!(
+                                            meta.status,
+                                            crate::model::ToolStatus::Pending
+                                                | crate::model::ToolStatus::InProgress
+                                        )
+                                    )
+                                })
+                        });
+                if !has_unfinished {
+                    continue;
+                }
+                let acp_key = self.acp_session_key(key);
+                if pending_auto.contains(&acp_key) {
+                    continue;
+                }
+                let active: std::collections::HashSet<String> =
+                    crate::agent::acp::background_tools(&acp_key)
+                        .into_iter()
+                        .map(|t| t.tool_call_id)
+                        .collect();
+                for msg in &mut self.conv.workspaces[wi].sessions[si].messages {
+                    if msg.role != MsgRole::Assistant || msg.streaming {
+                        continue;
+                    }
+                    for block in &mut msg.blocks {
+                        if let AssistantBlock::Tool {
+                            tool_call_id,
+                            metadata: Some(meta),
+                            ..
+                        } = block
+                            && !active.contains(tool_call_id)
+                        {
+                            meta.interrupt_if_unfinished();
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Write chats whose subagent transcripts changed between turns, at most once per
@@ -908,13 +980,18 @@ impl OxiApp {
     }
 
     pub(crate) fn finish_assistant_stream(&mut self, key: SessionKey) {
+        let active_bg: std::collections::HashSet<String> = self
+            .session_acp_background_tools(key)
+            .into_iter()
+            .map(|t| t.tool_call_id)
+            .collect();
         if let Some(last) = self.conv.workspaces[key.workspace_idx].sessions[key.session_idx]
             .messages
             .iter_mut()
             .rev()
             .find(|m| m.role == MsgRole::Assistant)
         {
-            last.finish_streaming();
+            last.finish_streaming_preserving_tools(&active_bg);
         }
         // Do not force the transcript back to the bottom when streaming ends. The user may
         // have scrolled up to read earlier content while the response was being generated.

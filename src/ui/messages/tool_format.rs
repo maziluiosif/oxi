@@ -499,7 +499,12 @@ pub(super) fn mono_output_job(text: &str, wrap_width: f32) -> LayoutJob {
     job.append(
         text,
         0.0,
-        TextFormat::simple(FontId::monospace(FS_TINY), c_text_muted()),
+        TextFormat {
+            font_id: FontId::monospace(FS_TINY),
+            color: c_text_muted(),
+            line_height: Some(FS_TINY * 1.45),
+            ..Default::default()
+        },
     );
     job
 }
