@@ -164,12 +164,7 @@ fn thinking_body_height(ui: &Ui, text: &str, wrap_width: f32, max_h: f32, line_h
 /// text inside a height-capped scrollable viewport. While `live`, stays pinned to the newest
 /// reasoning lines with a soft top fade; once done and unfolded, scrolls smoothly with wheel
 /// events and lets the user select text freely without accidental collapse.
-fn render_thinking_body(
-    ui: &mut Ui,
-    scroll_id: Id,
-    text: &str,
-    live: bool,
-) {
+fn render_thinking_body(ui: &mut Ui, scroll_id: Id, text: &str, live: bool) {
     let line_h = FS_SMALL * 1.45;
     let max_h = if live {
         THINKING_LIVE_PREVIEW_LINES as f32 * line_h
@@ -198,11 +193,7 @@ fn render_thinking_body(
                 live,
                 !live,
                 |ui| {
-                    selectable_layout_job(
-                        ui,
-                        thinking_wrapped_job(text.to_string(), inner),
-                        !live,
-                    );
+                    selectable_layout_job(ui, thinking_wrapped_job(text.to_string(), inner), !live);
                 },
             );
         });
@@ -309,13 +300,11 @@ pub(super) fn render_thinking_group_block(
                     _ => "Thought".to_string(),
                 };
                 ui.add(
-                    egui::Label::new(
-                        RichText::new(caption).size(FS_TINY).color(if hovered {
-                            c_text_muted()
-                        } else {
-                            c_text_faint()
-                        }),
-                    )
+                    egui::Label::new(RichText::new(caption).size(FS_TINY).color(if hovered {
+                        c_text_muted()
+                    } else {
+                        c_text_faint()
+                    }))
                     .selectable(false),
                 );
             }

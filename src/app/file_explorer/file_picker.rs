@@ -928,18 +928,36 @@ impl OxiApp {
             .fixed_pos(picker_pos)
             .fixed_size(picker_size)
             .show(ctx, |ui| {
-                let response = ui.add(
-                    TextEdit::singleline(&mut self.conv.editor.file_picker_query)
-                        .id_salt("workspace_file_picker_query")
-                        .hint_text(if self.conv.editor.file_picker_project_symbols {
-                            "Go to symbol in project…"
-                        } else {
-                            "Go to file…  (@ symbol, : line, > command, # chat)"
+                let hint = if self.conv.editor.file_picker_project_symbols {
+                    "Go to symbol in project…"
+                } else {
+                    "Go to file…  (@ symbol, : line, > command, # chat)"
+                };
+                let response = egui::Frame::new()
+                    .fill(c_bg_input())
+                    .stroke(egui::Stroke::new(1.0, c_composer_focus_border()))
+                    .corner_radius(RADIUS_BUTTON)
+                    .inner_margin(egui::Margin::symmetric(8, 5))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(crate::ui::chrome::icon_glyph_rich(
+                                ICON_SEARCH,
+                                FS_SMALL,
+                                c_text_faint(),
+                            ));
+                            ui.add(
+                                TextEdit::singleline(&mut self.conv.editor.file_picker_query)
+                                    .id_salt("workspace_file_picker_query")
+                                    .frame(egui::Frame::NONE)
+                                    .font(egui::FontId::proportional(FS_SMALL))
+                                    .hint_text(hint)
+                                    .desired_width(ui.available_width()),
+                            )
                         })
-                        // Room between the field's border and the caret.
-                        .margin(egui::Margin::symmetric(8, 5))
-                        .desired_width(f32::INFINITY),
-                );
+                        .inner
+                    })
+                    .inner;
                 if !response.has_focus() {
                     response.request_focus();
                 }
@@ -1046,6 +1064,7 @@ fn file_picker_row(ui: &mut egui::Ui, entry: &PickerEntry, selected: bool) -> eg
         egui::vec2(ui.available_width(), height),
         egui::Sense::click(),
     );
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     if !ui.is_rect_visible(rect) {
         return response;
     }

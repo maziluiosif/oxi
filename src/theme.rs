@@ -66,12 +66,18 @@ pub const SPACE_XS: f32 = 4.0;
 pub const SPACE_SM: f32 = 8.0;
 pub const SPACE_MD: f32 = 12.0;
 pub const SPACE_LG: f32 = 16.0;
-pub const CONTROL_HEIGHT: f32 = 28.0;
+/// Standard height for buttons, framed inputs, framed selects, and primary pills.
+pub const CONTROL_HEIGHT: f32 = 26.0;
+/// Compact height for mini toolbar buttons, filter pills, and inline action chips.
+pub const COMPACT_HEIGHT: f32 = 22.0;
+/// Standard row height shared across sidebars (workspaces, Explorer, Search, Git lists).
+pub const SIDEBAR_ROW_H: f32 = 24.0;
+/// Shared top header height across left and right side panels.
+pub const SIDEBAR_HEADER_H: f32 = 24.0;
 
 /// Draggable strip between sidebar and chat (must match `render_main_area`).
 pub const SIDEBAR_RESIZE_SEP_W: f32 = 5.0;
 pub const CHAT_VIEW_MARGIN_LEFT: f32 = 20.0;
-pub const CHAT_VIEW_MARGIN_RIGHT: f32 = 12.0;
 /// Right margin of the chat view (not the editor): the transcript scroll bar sits in it, and
 /// [`chat_column_center_width`] adds the rest so text ends as far from the edge as it starts.
 pub const CHAT_VIEW_MARGIN_RIGHT_CHAT: f32 = 6.0;

@@ -138,6 +138,7 @@ impl OxiApp {
                         if copy.inner.clicked() {
                             let all: String = visible.iter().map(|e| entry_as_text(e)).collect();
                             ui.ctx().copy_text(all);
+                            crate::ui::chrome::show_toast(ui.ctx(), "Activity log copied");
                         }
                     });
                 });
@@ -156,7 +157,9 @@ impl OxiApp {
                         }
                     }
                 });
-                ui.separator();
+                ui.add_space(4.0);
+                crate::ui::chrome::hairline(ui);
+                ui.add_space(4.0);
 
                 if entries.is_empty() {
                     ui.add_space(12.0);
@@ -203,7 +206,9 @@ impl OxiApp {
                             }
                         }
                     });
-                ui.separator();
+                ui.add_space(4.0);
+                crate::ui::chrome::hairline(ui);
+                ui.add_space(4.0);
 
                 let detail = view
                     .selected
@@ -211,14 +216,17 @@ impl OxiApp {
                     .or(visible.last());
                 if let Some(entry) = detail {
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(format!("{} · {}", entry.kind.label(), entry.title))
-                                .strong()
-                                .size(FS_SMALL),
-                        );
+                        ui.label(strong_rich(
+                            format!("{} · {}", entry.kind.label(), entry.title),
+                            FS_SMALL,
+                            c_text_strong(),
+                        ));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if crate::ui::chrome::ghost_button(ui, "Copy", false).clicked() {
+                            if crate::ui::chrome::ghost_button_icon(ui, ICON_COPY, "Copy", false)
+                                .clicked()
+                            {
                                 ui.ctx().copy_text(entry.body.clone());
+                                crate::ui::chrome::show_toast(ui.ctx(), "Entry copied");
                             }
                         });
                     });

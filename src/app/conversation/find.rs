@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use eframe::egui::{self, Align2, TextEdit, Ui};
+use eframe::egui::{self, Align2, Ui};
 
 use crate::model::{AssistantBlock, ChatMessage, MsgRole};
 use crate::theme::*;
@@ -176,22 +176,17 @@ impl OxiApp {
                                 format!("{} of {matches}", find.current + 1)
                             };
                             let field_w = BAR_W - 3.0 * 26.0 - 3.0 * SPACE_XS;
-                            let field = ui.add(
-                                TextEdit::singleline(&mut find.query)
-                                    .id(egui::Id::new(FIELD_ID))
-                                    .hint_text("Find in chat")
-                                    .font(egui::FontId::proportional(FS_SMALL))
-                                    .margin(egui::Margin {
-                                        left: 8,
-                                        right: 76,
-                                        top: 4,
-                                        bottom: 4,
-                                    })
-                                    .desired_width(field_w),
+                            let (field_rect, field) = crate::ui::chrome::framed_singleline_input(
+                                ui,
+                                egui::Id::new(FIELD_ID),
+                                &mut find.query,
+                                "Find in chat",
+                                field_w,
+                                76,
                             );
                             if !status.is_empty() {
                                 ui.painter().text(
-                                    egui::pos2(field.rect.right() - 8.0, field.rect.center().y),
+                                    egui::pos2(field_rect.right() - 8.0, field_rect.center().y),
                                     Align2::RIGHT_CENTER,
                                     status,
                                     egui::FontId::proportional(FS_TINY),

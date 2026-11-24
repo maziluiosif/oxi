@@ -89,6 +89,38 @@ fn auto_refresh_detects_unopened_files_without_opening_a_diff() {
 }
 
 #[test]
+fn branch_refresh_reads_refs_without_scanning_the_worktree() {
+    let repo = TestRepo::new();
+    let branch = current_branch(&repo.repo);
+    std::fs::write(repo.root.join("file.txt"), "modified\n").unwrap();
+    let channels = GitChannels::new(repo.cwd().into(), egui::Context::default());
+    channels.tx.send(GitOp::RefreshBranch).unwrap();
+    channels.tx.send(GitOp::AutoRefresh).unwrap();
+    let receive = |operation| loop {
+        let state = channels
+            .rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        if state.last_op.as_deref() == Some(operation) {
+            break state;
+        }
+    };
+    let summary = receive(BRANCH_REFRESH);
+    assert!(summary.repo);
+    assert!(!branch.is_empty());
+    assert_eq!(summary.branch, branch);
+    assert!(summary.unstaged.is_empty());
+    assert!(summary.log.is_empty());
+    assert!(summary.line_changes.is_empty());
+
+    let full = receive("auto refresh");
+    assert_eq!(full.branch, branch);
+    assert_eq!(full.unstaged[0].path, "file.txt");
+    assert!(!full.log.is_empty());
+    assert!(!full.line_changes.is_empty());
+}
+
+#[test]
 fn worker_distinguishes_auto_refresh_from_commit_diff_collection() {
     let repo = TestRepo::new();
     std::fs::write(repo.root.join("file.txt"), "external update\n").unwrap();

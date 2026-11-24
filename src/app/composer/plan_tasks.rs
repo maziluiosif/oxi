@@ -78,25 +78,22 @@ fn render_plan_ready_actions(ui: &mut Ui, editing_prompt: bool) -> (bool, bool) 
                 .size(FS_SMALL)
                 .color(c_text_muted()),
         );
-        if ui
-            .add(
-                Button::new(
-                    RichText::new("Implement plan")
-                        .size(FS_SMALL)
-                        .color(crate::theme::c_on_accent()),
-                )
-                .fill(c_accent())
-                .corner_radius(CornerRadius::same(255)),
-            )
+        if crate::ui::chrome::primary_button(ui, "Implement plan")
             .on_hover_text("Turn plan mode off and ask the agent to carry out the plan")
             .clicked()
         {
             implement = true;
         }
-        if ui
-            .add(Button::new(RichText::new("Keep planning").size(FS_SMALL)).frame(false))
-            .on_hover_text("Hide this; reply below to refine the plan")
-            .clicked()
+        if crate::ui::chrome::flat_button_icon(
+            ui,
+            "",
+            "Keep planning",
+            FS_SMALL,
+            egui::vec2(0.0, CONTROL_HEIGHT),
+            c_text_muted(),
+        )
+        .on_hover_text("Hide this; reply below to refine the plan")
+        .clicked()
         {
             dismiss = true;
         }
@@ -129,7 +126,8 @@ impl OxiApp {
                 Button::new(text)
                     .fill(c_pill_selected_bg())
                     .stroke(Stroke::new(1.0, c_pill_selected_border()))
-                    .corner_radius(CornerRadius::same(255)),
+                    .corner_radius(CornerRadius::same(255))
+                    .min_size(egui::vec2(0.0, CONTROL_HEIGHT)),
             )
             .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(
@@ -200,6 +198,7 @@ impl OxiApp {
             .data(|d| d.get_temp::<bool>(fold_id))
             .unwrap_or(false);
 
+        let header_bg = ui.painter().add(egui::Shape::Noop);
         let header = ui
             .horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
@@ -235,6 +234,17 @@ impl OxiApp {
             .response
             .interact(Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if header.hovered() || header.has_focus() {
+            ui.painter().set(
+                header_bg,
+                egui::Shape::rect_filled(
+                    header.rect.expand2(egui::vec2(6.0, 2.0)),
+                    CornerRadius::same(RADIUS_ROW),
+                    c_row_hover(),
+                ),
+            );
+        }
+        crate::ui::chrome::keyboard_focus_ring(ui, &header, CornerRadius::same(RADIUS_ROW));
         if header.clicked() {
             folded = !folded;
             ui.ctx().data_mut(|d| d.insert_temp(fold_id, folded));
@@ -256,10 +266,7 @@ impl OxiApp {
                         TodoStatus::InProgress => (
                             ICON_DOT_CIRCLE,
                             c_accent(),
-                            RichText::new(&todo.content)
-                                .size(FS_SMALL)
-                                .color(c_text())
-                                .strong(),
+                            strong_rich(&todo.content, FS_SMALL, c_text_strong()),
                         ),
                         TodoStatus::Pending => (
                             ICON_CIRCLE,

@@ -136,12 +136,11 @@ impl OxiApp {
                         FS_SMALL,
                         c_accent(),
                     ));
-                    ui.label(
-                        RichText::new(approval_question(&pa.name))
-                            .size(FS_SMALL)
-                            .color(c_text_strong())
-                            .strong(),
-                    );
+                    ui.label(strong_rich(
+                        approval_question(&pa.name),
+                        FS_SMALL,
+                        c_text_strong(),
+                    ));
                     // Only while the keys really answer the card (not while typing in the
                     // composer, or with a menu or modal up).
                     if kb_ready {
@@ -321,12 +320,11 @@ impl OxiApp {
                                 FS_SMALL,
                                 crate::theme::c_warning_fg(),
                             ));
-                            ui.label(
-                                RichText::new(format!("{} needs an API key", provider.label()))
-                                    .size(FS_SMALL)
-                                    .color(c_text_strong())
-                                    .strong(),
-                            );
+                            ui.label(strong_rich(
+                                format!("{} needs an API key", provider.label()),
+                                FS_SMALL,
+                                c_text_strong(),
+                            ));
                         });
                         ui.add_space(2.0);
                         ui.label(
@@ -355,12 +353,7 @@ impl OxiApp {
             if general {
                 return;
             }
-            ui.label(
-                RichText::new("Try one of these")
-                    .size(FS_TINY)
-                    .color(c_text_faint())
-                    .strong(),
-            );
+            ui.label(strong_rich("Try one of these", FS_TINY, c_text_faint()));
             ui.add_space(8.0);
             let prompts = [
                 (
@@ -1183,12 +1176,7 @@ fn dismissible_error(
                         action = Some(ErrorAction::Dismiss);
                     }
                     ui.with_layout(egui::Layout::top_down(Align::Min), |ui| {
-                        ui.label(
-                            RichText::new(title)
-                                .size(FS_SMALL)
-                                .color(c_text_strong())
-                                .strong(),
-                        );
+                        ui.label(strong_rich(title, FS_SMALL, c_text_strong()));
                         ui.add(
                             Label::new(RichText::new(detail).size(FS_SMALL).color(c_text()))
                                 .wrap()

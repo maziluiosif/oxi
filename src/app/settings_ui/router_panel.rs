@@ -118,12 +118,7 @@ impl OxiApp {
                 // Hand-built header (it shares the row with Refresh), so it hooks into the
                 // Settings search reveal itself.
                 let flash = ui.painter().add(egui::Shape::Noop);
-                let title = ui.label(
-                    RichText::new("Usage & quota")
-                        .size(FS_BODY)
-                        .color(c_text())
-                        .strong(),
-                );
+                let title = ui.label(strong_rich("Usage & quota", FS_BODY, c_text_strong()));
                 crate::ui::chrome::settings_reveal_flash(ui, "Usage & quota", title.rect, flash);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if quota::is_refreshing() {
@@ -178,12 +173,7 @@ impl OxiApp {
                 let billing = self.conv.settings.router.billing(kind);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.label(
-                        RichText::new(kind.label())
-                            .size(FS_SMALL)
-                            .color(c_text_strong())
-                            .strong(),
-                    );
+                    ui.label(strong_rich(kind.label(), FS_SMALL, c_text_strong()));
                     ui.label(
                         RichText::new(billing.label())
                             .size(FS_TINY)
@@ -281,12 +271,10 @@ impl OxiApp {
                 let before = prefs.clone();
                 'prefs: {
                 ui.horizontal(|ui| {
-                    crate::ui::chrome::toggle(ui,
+                    crate::ui::chrome::toggle(
+                        ui,
                         &mut prefs.enabled,
-                        RichText::new(kind.label())
-                            .size(FS_SMALL)
-                            .color(c_text_strong())
-                            .strong(),
+                        strong_rich(kind.label(), FS_SMALL, c_text_strong()),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let current = prefs.billing.unwrap_or(default_billing);

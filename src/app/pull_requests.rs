@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Frame, Margin, RichText, Stroke, Ui};
+use eframe::egui::{self, RichText, Ui};
 
 use super::OxiApp;
 use crate::git::pull_request::{NewPullRequest, PrState, PullRequest};
@@ -221,6 +221,7 @@ impl OxiApp {
                 egui::TextFormat::simple(font, *color),
             );
         }
+        let bg_slot = ui.painter().add(egui::Shape::Noop);
         let response = ui
             .add(egui::Label::new(job).sense(egui::Sense::click()))
             .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -228,6 +229,7 @@ impl OxiApp {
                 "Pull request #{}: {}\n{}",
                 pr.number, pr.title, pr.url
             ));
+        crate::ui::chrome::paint_status_bar_hover(ui, bg_slot, response.rect, &response, false);
         let mut action = None;
         egui::Popup::menu(&response).show(|ui| {
             ui.set_min_width(220.0);
@@ -258,7 +260,10 @@ impl OxiApp {
             }
             Some(1) => self.review_branch_changes(),
             Some(2) => self.compose(fix_checks_prompt(&pr)),
-            Some(3) => ui.ctx().copy_text(pr.url.clone()),
+            Some(3) => {
+                ui.ctx().copy_text(pr.url.clone());
+                crate::ui::chrome::show_toast(ui.ctx(), "Pull request link copied");
+            }
             Some(4) => self.refresh_pull_request(),
             _ => {}
         }
@@ -331,8 +336,7 @@ impl OxiApp {
                 .on_hover_text(error);
                 return;
             }
-            if ui
-                .button(RichText::new("Open a pull request…").size(FS_SMALL))
+            if crate::ui::chrome::ghost_button_icon(ui, ICON_GIT, "Open a pull request…", false)
                 .on_hover_text(format!(
                     "Push {} and open a pull request into {base} (GitHub CLI)",
                     self.conv.git.branch
@@ -460,24 +464,14 @@ impl OxiApp {
         if crate::ui::chrome::modal_backdrop(ctx, "pr_dialog_backdrop") && !busy {
             close = true;
         }
-        let frame = Frame::new()
-            .fill(c_bg_elevated())
-            .stroke(Stroke::new(1.0, c_border()))
-            .corner_radius(RADIUS_CHIP)
-            .inner_margin(Margin::same(16));
         egui::Area::new(egui::Id::new("pr_dialog"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                frame.show(ui, |ui| {
+                crate::ui::chrome::modal_frame(ui).show(ui, |ui| {
                     let width = 460.0_f32.min(ctx.content_rect().width() - 64.0);
                     ui.set_width(width);
-                    ui.label(
-                        RichText::new("Open a pull request")
-                            .size(FS_BODY)
-                            .color(c_text())
-                            .strong(),
-                    );
+                    crate::ui::chrome::modal_title(ui, "Open a pull request");
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(format!(

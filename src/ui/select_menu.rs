@@ -686,7 +686,7 @@ fn framed_button(ui: &mut Ui, id: Id, text: &str, width: f32, open: bool) -> Res
         egui::text::TextWrapping::truncate_at_width((width - CHEVRON_W - 2.0 * pad.x).max(0.0));
     let galley = ui.painter().layout_job(job);
     // As tall as the buttons that share Settings rows with it.
-    let height = 28.0_f32.max(galley.size().y + 2.0 * pad.y);
+    let height = CONTROL_HEIGHT.max(galley.size().y + 2.0 * pad.y);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), Sense::hover());
     let resp = ui.interact(rect, id.with("button"), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);

@@ -417,6 +417,45 @@ fn close_all_tabs_closes_clean_tabs_and_asks_before_dropping_edits() {
 }
 
 #[test]
+fn unsaved_prompt_blocks_enter_from_activating_a_background_button() {
+    use eframe::egui;
+
+    crate::secrets::use_mock_store();
+    let app = crate::app::OxiApp::new();
+    let mut theme_ready = false;
+    let mut focus_background = true;
+    let mut harness = egui_kittest::Harness::builder().build_ui_state(
+        |ui, (app, background_clicked)| {
+            if !theme_ready {
+                crate::theme::apply_theme(ui.ctx(), "dark");
+                theme_ready = true;
+                return;
+            }
+            let button = ui.button("Background action");
+            if focus_background {
+                button.request_focus();
+                focus_background = false;
+            }
+            *background_clicked |= button.clicked();
+            app.render_editor_prompt(ui.ctx());
+        },
+        (app, false),
+    );
+    harness.run_steps(2);
+    assert!(harness.ctx.memory(|m| m.focused()).is_some());
+    harness.state_mut().0.conv.editor.prompt = Some(super::super::state::EditorPrompt::CloseAll);
+    harness.run_steps(3);
+    harness.key_press(egui::Key::Enter);
+    harness.run_steps(2);
+    assert!(!harness.state().1);
+    assert!(harness.state().0.conv.editor.prompt.is_some());
+
+    harness.key_press(egui::Key::Escape);
+    harness.run_steps(2);
+    assert!(harness.state().0.conv.editor.prompt.is_none());
+}
+
+#[test]
 fn scratchpad_copy_is_named_after_its_first_line() {
     use super::documents::scratchpad_file_name;
     assert_eq!(

@@ -20,7 +20,7 @@ use super::tool_format::{
 use super::{is_edit_like_tool, selectable_layout_job, show_bounded_scroll_box};
 
 /// Unified height of a tool pill / edit card / explore group header row.
-const TOOL_PILL_HEADER_H: f32 = 30.0;
+const TOOL_PILL_HEADER_H: f32 = 28.0;
 /// Corner radius shared by every tool pill and card.
 const TOOL_CARD_RADIUS: u8 = RADIUS_CHIP;
 /// Vertical gap between consecutive tool pills (combined with `item_spacing.y = 3.0`).
@@ -92,9 +92,8 @@ fn render_tool_header(ui: &mut Ui, params: ToolHeaderParams<'_>) -> ToolHeaderRe
     let mut copy_hovered = false;
     let copy_id = params.persist_id.with("hdr_copy");
     let copied = crate::ui::chrome::copied_recently(ui.ctx(), copy_id);
-    let show_copy = params.expanded
-        && params.copy_text.is_some()
-        && (params.card_hovered || hovered || copied);
+    let show_copy =
+        params.expanded && params.copy_text.is_some() && (params.card_hovered || hovered || copied);
 
     let inner = rect.shrink2(egui::vec2(11.0, 0.0));
     ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
@@ -163,7 +162,12 @@ fn render_tool_header(ui: &mut Ui, params: ToolHeaderParams<'_>) -> ToolHeaderRe
                     diff_stat_labels(ui, added, removed);
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    render_summary_text(ui, params.summary, params.name_color, params.summary_color);
+                    render_summary_text(
+                        ui,
+                        params.summary,
+                        params.name_color,
+                        params.summary_color,
+                    );
                 });
             });
         });
@@ -431,10 +435,13 @@ pub(super) fn render_tool_pill(
     let card_w = ui.available_width().max(40.0);
     let card_rect_id = persist_id.with("card_rect");
     let card_hovered = card_was_hovered(ui, card_rect_id);
-    let preview_header = Rect::from_min_size(ui.cursor().min, egui::vec2(card_w, TOOL_PILL_HEADER_H));
-    let pre_hovered = ui
-        .ctx()
-        .input(|i| i.pointer.interact_pos().is_some_and(|p| preview_header.contains(p)));
+    let preview_header =
+        Rect::from_min_size(ui.cursor().min, egui::vec2(card_w, TOOL_PILL_HEADER_H));
+    let pre_hovered = ui.ctx().input(|i| {
+        i.pointer
+            .interact_pos()
+            .is_some_and(|p| preview_header.contains(p))
+    });
     let card_border = if has_error {
         pill_border
     } else if expanded || pre_hovered {
@@ -554,7 +561,11 @@ pub(super) fn render_tool_pill(
         command_context_menu(ui, header_rect, persist_id, command);
     }
     if header_toggled {
-        set_expanded(ui, persist_id, !is_expanded_or(ui, persist_id, open_by_default));
+        set_expanded(
+            ui,
+            persist_id,
+            !is_expanded_or(ui, persist_id, open_by_default),
+        );
     }
 }
 
@@ -885,11 +896,14 @@ fn render_edit_tool_block(
     let card_w = ui.available_width().max(40.0);
     let card_rect_id = open_id.with("card_rect");
     let card_hovered = card_was_hovered(ui, card_rect_id);
-    let preview_header = Rect::from_min_size(ui.cursor().min, egui::vec2(card_w, TOOL_PILL_HEADER_H));
+    let preview_header =
+        Rect::from_min_size(ui.cursor().min, egui::vec2(card_w, TOOL_PILL_HEADER_H));
     let pre_hovered = can_toggle
-        && ui
-            .ctx()
-            .input(|i| i.pointer.interact_pos().is_some_and(|p| preview_header.contains(p)));
+        && ui.ctx().input(|i| {
+            i.pointer
+                .interact_pos()
+                .is_some_and(|p| preview_header.contains(p))
+        });
     let outer_border = if has_error {
         crate::theme::c_tool_error_border()
     } else if has_open_body || pre_hovered {
@@ -1243,10 +1257,13 @@ fn render_explore_group(
     let card_w = ui.available_width().max(40.0);
     let pill_bg = crate::theme::c_tool_pill_bg();
     let header_hover_bg = blend_color(pill_bg, c_row_hover(), 0.75);
-    let preview_header = Rect::from_min_size(ui.cursor().min, egui::vec2(card_w, TOOL_PILL_HEADER_H));
-    let pre_hovered = ui
-        .ctx()
-        .input(|i| i.pointer.interact_pos().is_some_and(|p| preview_header.contains(p)));
+    let preview_header =
+        Rect::from_min_size(ui.cursor().min, egui::vec2(card_w, TOOL_PILL_HEADER_H));
+    let pre_hovered = ui.ctx().input(|i| {
+        i.pointer
+            .interact_pos()
+            .is_some_and(|p| preview_header.contains(p))
+    });
     let border = if expanded || pre_hovered {
         c_border()
     } else {

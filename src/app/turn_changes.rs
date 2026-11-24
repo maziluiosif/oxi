@@ -33,7 +33,10 @@ pub(crate) struct ChatChanges {
 
 impl ChatChanges {
     #[cfg(test)]
-    pub(crate) fn from_single(changes: &TurnChanges, author: Option<LlmProviderKind>) -> Option<Self> {
+    pub(crate) fn from_single(
+        changes: &TurnChanges,
+        author: Option<LlmProviderKind>,
+    ) -> Option<Self> {
         if changes.before == changes.after {
             return None;
         }
@@ -180,11 +183,11 @@ fn spawn<T: Send + 'static>(
     rx
 }
 
-/// Inset of the Revert button from the card's top, right and bottom edges.
-const CARD_INSET: f32 = 6.0;
-/// The header row's height: the Revert button's.
-const HEADER_H: f32 = 26.0;
-const FILE_ROW_H: f32 = 22.0;
+/// Inset of the header row from the card's top, right and bottom edges.
+const CARD_INSET: f32 = 4.0;
+/// The header row's height, keeping the card compact and proportional to tool pills.
+const HEADER_H: f32 = 24.0;
+const FILE_ROW_H: f32 = SIDEBAR_ROW_H;
 /// Chevron width plus its gap, so file rows start under "N files changed".
 const FILE_ROW_INDENT: f32 = 14.0;
 
@@ -288,68 +291,34 @@ impl OxiApp {
         egui::Frame::new()
             .fill(c_md_code_block_bg())
             .stroke(egui::Stroke::new(1.0, c_border()))
-            .corner_radius(crate::theme::RADIUS_CARD)
-            // The action buttons sit CARD_INSET from the top, right and bottom edges.
+            .corner_radius(crate::theme::RADIUS_CHIP)
             .inner_margin(egui::Margin {
-                left: 14,
-                right: 8,
-                top: 7,
-                bottom: 7,
+                left: 10,
+                right: 6,
+                top: CARD_INSET as i8,
+                bottom: CARD_INSET as i8,
             })
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    // Same height with or without the button ("Reverted" is a plain label).
-                    ui.set_min_height(HEADER_H);
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let header = ui
-                        .add(
-                            egui::Label::new(
-                                RichText::new(format!(
-                                    "{} file{} changed",
-                                    files.len(),
-                                    if files.len() == 1 { "" } else { "s" }
-                                ))
-                                .size(FS_SMALL)
-                                .color(c_text()),
-                            )
-                            .sense(Sense::click())
-                            .selectable(false),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    ui.label(
-                        RichText::new(format!("+{added}"))
-                            .font(FontId::monospace(FS_TINY))
-                            .color(c_diff_add_fg()),
-                    );
-                    ui.label(
-                        RichText::new(format!("-{deleted}"))
-                            .font(FontId::monospace(FS_TINY))
-                            .color(c_diff_del_fg()),
-                    );
-                    let chevron = if expanded {
-                        ICON_ANGLE_DOWN
-                    } else {
-                        ICON_CHEVRON_RIGHT
-                    };
-                    let icon = ui
-                        .add(
-                            egui::Label::new(
-                                RichText::new(chevron)
-                                    .font(FontId::new(FS_TINY - 1.5, icon_font()))
-                                    .color(c_text_faint()),
-                            )
-                            .sense(Sense::click())
-                            .selectable(false),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if header.clicked() || icon.clicked() {
-                        action = Some(CardAction::Toggle);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (header_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), HEADER_H),
+                    Sense::hover(),
+                );
+                let header_bg_slot = ui.painter().add(egui::Shape::Noop);
+                let mut right_edge = header_rect.right();
+
+                // Lay out right-side action buttons first so we know their exact bounds and can
+                // treat the entire rest of the header bar (text, +N/-M, chevron, and open space)
+                // as one clickable expand/collapse surface.
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(header_rect)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
                         let has_reviewer = !reviewers.is_empty();
                         if all_reverted || reverting {
-                            ui.label(
+                            let r = ui.label(
                                 RichText::new(if reverting {
                                     "Reverting…"
                                 } else {
@@ -358,13 +327,16 @@ impl OxiApp {
                                 .size(FS_TINY)
                                 .color(c_text_muted()),
                             );
-                        } else if crate::ui::chrome::ghost_button_icon(
-                            ui, ICON_UNDO, "Revert", true,
-                        )
-                        .on_hover_text("Put back every file changed in this chat")
-                        .clicked()
-                        {
-                            action = Some(CardAction::RevertAll);
+                            right_edge = right_edge.min(r.rect.left());
+                        } else {
+                            let revert = crate::ui::chrome::mini_button_icon_danger(
+                                ui, ICON_UNDO, "Revert", true,
+                            )
+                            .on_hover_text("Put back every file changed in this chat");
+                            right_edge = right_edge.min(revert.rect.left());
+                            if revert.clicked() {
+                                action = Some(CardAction::RevertAll);
+                            }
                         }
                         if has_reviewer && !all_reverted && !reverting {
                             let (sep_rect, _) =
@@ -374,19 +346,20 @@ impl OxiApp {
                                 sep_rect.y_range(),
                                 egui::Stroke::new(1.0, c_border_subtle()),
                             );
+                            right_edge = right_edge.min(sep_rect.left());
                         }
                         if let Some(&reviewer) = reviewers.first() {
                             let label = crate::app::composer::composer_provider_label;
                             if reviewers.len() > 1 {
                                 let picker_id = ui.id().with(("review_agent_picker", &key));
-                                let picker_btn = crate::ui::chrome::ghost_button_icon_enabled(
+                                let picker_btn = crate::ui::chrome::mini_button_icon_enabled(
                                     ui,
                                     ICON_ANGLE_DOWN,
                                     "",
-                                    false,
                                     !busy,
                                 )
                                 .on_hover_text("Choose another agent to review these changes");
+                                right_edge = right_edge.min(picker_btn.rect.left());
                                 egui::Popup::from_toggle_button_response(&picker_btn)
                                     .id(picker_id)
                                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -403,11 +376,10 @@ impl OxiApp {
                                         }
                                     });
                             }
-                            let button = crate::ui::chrome::ghost_button_icon_enabled(
+                            let button = crate::ui::chrome::mini_button_icon_enabled(
                                 ui,
                                 ICON_SEARCH,
                                 &format!("Review with {}", label(reviewer)),
-                                false,
                                 !busy,
                             )
                             .on_hover_text(if reviewers.len() > 1 {
@@ -415,6 +387,7 @@ impl OxiApp {
                             } else {
                                 "Ask another agent to review these changes in this chat"
                             });
+                            right_edge = right_edge.min(button.rect.left());
                             if button.clicked() {
                                 action = Some(CardAction::Review(reviewer));
                             }
@@ -432,8 +405,103 @@ impl OxiApp {
                                 });
                             }
                         }
-                    });
+                    },
+                );
+
+                let toggle_rect = egui::Rect::from_min_max(
+                    header_rect.min,
+                    egui::pos2((right_edge - 6.0).max(header_rect.left()), header_rect.bottom()),
+                );
+                let toggle_resp = ui.interact(
+                    toggle_rect,
+                    ui.id().with(("turn_changes_toggle", &key)),
+                    Sense::click(),
+                );
+                let title_text = format!(
+                    "{} file{} changed",
+                    files.len(),
+                    if files.len() == 1 { "" } else { "s" }
+                );
+                toggle_resp.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::CollapsingHeader,
+                        ui.is_enabled(),
+                        expanded,
+                        &title_text,
+                    )
                 });
+                let header_hovered = toggle_resp.hovered() || toggle_resp.has_focus();
+                if header_hovered {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    ui.painter().set(
+                        header_bg_slot,
+                        egui::Shape::rect_filled(
+                            toggle_rect.expand2(egui::vec2(4.0, 0.0)),
+                            egui::CornerRadius::same(RADIUS_ROW),
+                            c_row_hover(),
+                        ),
+                    );
+                }
+                crate::ui::chrome::keyboard_focus_ring(
+                    ui,
+                    &toggle_resp,
+                    egui::CornerRadius::same(RADIUS_ROW),
+                );
+
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(toggle_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let chevron = if expanded {
+                            ICON_ANGLE_DOWN
+                        } else {
+                            ICON_CHEVRON_RIGHT
+                        };
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(chevron)
+                                    .font(FontId::new(FS_TINY - 1.5, icon_font()))
+                                    .color(if header_hovered {
+                                        c_text_muted()
+                                    } else {
+                                        c_text_faint()
+                                    }),
+                            )
+                            .selectable(false),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&title_text)
+                                    .size(FS_SMALL)
+                                    .color(if header_hovered { c_text_strong() } else { c_text() }),
+                            )
+                            .selectable(false),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("+{added}"))
+                                    .font(FontId::monospace(FS_TINY))
+                                    .color(c_diff_add_fg()),
+                            )
+                            .selectable(false),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("-{deleted}"))
+                                    .font(FontId::monospace(FS_TINY))
+                                    .color(c_diff_del_fg()),
+                            )
+                            .selectable(false),
+                        );
+                    },
+                );
+
+                if action.is_none() && toggle_resp.clicked() {
+                    action = Some(CardAction::Toggle);
+                }
+
                 if expanded {
                     ui.add_space(4.0);
                     for file in &files {
@@ -612,50 +680,63 @@ fn render_loading_card(ui: &mut Ui) {
 
 fn render_file_row(ui: &mut Ui, file: &CompareFile, reverted: bool) -> Option<CardAction> {
     let mut action = None;
-    ui.horizontal(|ui| {
-        ui.set_min_height(FILE_ROW_H);
-        // Line up the status letter with the header text, past the chevron.
-        ui.add_space(FILE_ROW_INDENT);
-        ui.spacing_mut().item_spacing.x = 6.0;
-        // Right side first, so a long path truncates instead of pushing the counts and the
-        // revert button out of the card.
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Keep the icons off the card edge, inset like the Revert button's label.
-            ui.add_space(8.0);
-            if !reverted
-                && ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(ICON_UNDO)
-                                .font(FontId::new(FS_TINY, icon_font()))
-                                .color(c_text_muted()),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text("Revert this file")
-                    .clicked()
-            {
-                action = Some(CardAction::RevertFile(file.path.clone()));
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), FILE_ROW_H), Sense::click());
+    let row_hot = ui
+        .input(|i| i.pointer.hover_pos())
+        .is_some_and(|p| rect.contains(p));
+    let mut revert_hovered = false;
+    let mut revert_clicked = false;
+    let bg_slot = ui.painter().add(egui::Shape::Noop);
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + FILE_ROW_INDENT, rect.top()),
+        egui::pos2(rect.right() - 4.0, rect.bottom()),
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if !reverted {
+                let undo =
+                    crate::ui::chrome::icon_button_inline(ui, ICON_UNDO, FS_TINY, c_text_muted())
+                        .on_hover_text("Revert this file");
+                revert_hovered = undo.hovered();
+                if undo.clicked() {
+                    revert_clicked = true;
+                    action = Some(CardAction::RevertFile(file.path.clone()));
+                }
             }
             if file.deleted > 0 {
-                ui.label(
-                    RichText::new(format!("−{}", file.deleted))
-                        .font(FontId::monospace(FS_TINY))
-                        .color(c_danger()),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("−{}", file.deleted))
+                            .font(FontId::monospace(FS_TINY))
+                            .color(c_danger()),
+                    )
+                    .selectable(false),
                 );
             }
             if file.added > 0 {
-                ui.label(
-                    RichText::new(format!("+{}", file.added))
-                        .font(FontId::monospace(FS_TINY))
-                        .color(c_success()),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("+{}", file.added))
+                            .font(FontId::monospace(FS_TINY))
+                            .color(c_success()),
+                    )
+                    .selectable(false),
                 );
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(file.status.to_string())
-                        .font(FontId::monospace(FS_TINY))
-                        .color(crate::app::file_explorer::git_status_color(file.status)),
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(file.status.to_string())
+                            .font(FontId::monospace(FS_TINY))
+                            .color(crate::app::file_explorer::git_status_color(file.status)),
+                    )
+                    .selectable(false),
                 );
                 let name = RichText::new(&file.path).size(FS_SMALL);
                 let name = if reverted || file.status == 'D' {
@@ -663,21 +744,21 @@ fn render_file_row(ui: &mut Ui, file: &CompareFile, reverted: bool) -> Option<Ca
                 } else {
                     name.color(c_text())
                 };
-                let row = ui
-                    .add(
-                        egui::Label::new(name)
-                            .truncate()
-                            .sense(Sense::click())
-                            .selectable(false),
-                    )
-                    .on_hover_text("Show the diff against the files before this chat")
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if row.clicked() && !reverted {
-                    action = Some(CardAction::OpenDiff(file.path.clone()));
-                }
+                ui.add(egui::Label::new(name).truncate().selectable(false));
             });
-        });
-    });
+        },
+    );
+    if !reverted && row_hot && !revert_hovered {
+        ui.painter().set(
+            bg_slot,
+            egui::Shape::rect_filled(rect, egui::CornerRadius::same(RADIUS_ROW), c_row_hover()),
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let response = response.on_hover_text("Show the diff against the files before this chat");
+    if !revert_clicked && !revert_hovered && !reverted && response.clicked() {
+        action = Some(CardAction::OpenDiff(file.path.clone()));
+    }
     action
 }
 
@@ -793,5 +874,99 @@ mod tests {
         assert_eq!(files[0].added, 2);
         assert_eq!(files[1].added, 1);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn changed_files_header_only_toggles_on_unobstructed_clicks() {
+        crate::secrets::use_mock_store();
+        let changes = TurnChanges {
+            repo: "/tmp/demo".into(),
+            before: "aaa".into(),
+            after: "bbb".into(),
+            files: Some(vec![CompareFile {
+                path: "src/main.rs".into(),
+                old_path: None,
+                status: 'M',
+                added: 4,
+                deleted: 1,
+            }]),
+        };
+        let key = cache_key(&changes);
+        let overlay_id = egui::Id::new("test_tc_overlay");
+        let mut app = OxiApp::new();
+        let mut setup = false;
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(640.0, 200.0))
+            .build_ui(move |ui| {
+                if !setup {
+                    crate::theme::apply_theme(ui.ctx(), "dark");
+                    setup = true;
+                    return;
+                }
+                let card_rect = ui
+                    .vertical(|ui| {
+                        app.render_turn_changes(ui, &changes, None);
+                    })
+                    .response
+                    .rect;
+                let expanded = app
+                    .conv
+                    .transcript
+                    .turn_changes
+                    .entries
+                    .get(&key)
+                    .is_some_and(|e| e.expanded);
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(egui::Id::new("test_tc_expanded"), expanded);
+                    d.insert_temp(egui::Id::new("test_tc_rect"), card_rect);
+                });
+                if ui.ctx().data(|d| d.get_temp::<bool>(overlay_id)) == Some(true) {
+                    egui::Modal::new(overlay_id).show(ui.ctx(), |ui| {
+                        ui.label("Blocking dialog");
+                    });
+                }
+            });
+        harness.run_steps(3);
+        let is_expanded = |h: &egui_kittest::Harness<'_>| {
+            h.ctx
+                .data(|d| d.get_temp::<bool>(egui::Id::new("test_tc_expanded")))
+                .unwrap_or(false)
+        };
+        let card_rect = harness
+            .ctx
+            .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("test_tc_rect")))
+            .expect("card rect recorded");
+        assert!(!is_expanded(&harness), "starts collapsed");
+        let click_at = |h: &mut egui_kittest::Harness<'_>, pos: egui::Pos2| {
+            h.input_mut().events.extend([
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            h.run_steps(2);
+        };
+        // Click in the open space past "1 file changed +4 -1" (well left of the right actions).
+        let open_header_pos = egui::pos2(card_rect.left() + 200.0, card_rect.top() + 16.0);
+        click_at(&mut harness, open_header_pos);
+        assert!(is_expanded(&harness), "clicking anywhere on header expands");
+        // Click on the +4/-1 stats area to collapse back.
+        let stats_pos = egui::pos2(card_rect.left() + 135.0, card_rect.top() + 16.0);
+        click_at(&mut harness, stats_pos);
+        assert!(!is_expanded(&harness), "second click collapses");
+
+        harness.ctx.data_mut(|d| d.insert_temp(overlay_id, true));
+        harness.run_steps(3);
+        click_at(&mut harness, open_header_pos);
+        assert!(!is_expanded(&harness), "a dialog blocks the click");
     }
 }

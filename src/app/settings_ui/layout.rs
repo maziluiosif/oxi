@@ -407,42 +407,32 @@ impl OxiApp {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(ctx, |ui| {
-                Frame::new()
-                    .fill(c_bg_elevated())
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(RADIUS_CHIP)
-                    .inner_margin(Margin::same(16))
-                    .show(ui, |ui| {
-                        ui.set_width(crate::ui::chrome::MODAL_W);
-                        ui.label(
-                            RichText::new("Unsaved changes")
-                                .size(FS_BODY)
-                                .color(c_text())
-                                .strong(),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("Save changes before leaving Settings?")
-                                .size(FS_SMALL)
-                                .color(c_text_muted()),
-                        );
-                        ui.add_space(14.0);
+                crate::ui::chrome::modal_frame(ui).show(ui, |ui| {
+                    ui.set_width(crate::ui::chrome::MODAL_W);
+                    crate::ui::chrome::modal_title(ui, "Unsaved changes");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Save changes before leaving Settings?")
+                            .size(FS_SMALL)
+                            .color(c_text_muted()),
+                    );
+                    ui.add_space(14.0);
 
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if primary_button(ui, "Save").on_hover_text("Enter").clicked() {
-                                self.save_settings_and_continue(action);
-                            }
-                            if ghost_button(ui, "Discard", true).clicked() {
-                                self.discard_settings_and_continue(ctx, action);
-                            }
-                            if ghost_button(ui, "Stay", false)
-                                .on_hover_text("Esc")
-                                .clicked()
-                            {
-                                self.conv.settings_page.exit_prompt = None;
-                            }
-                        });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if primary_button(ui, "Save").on_hover_text("Enter").clicked() {
+                            self.save_settings_and_continue(action);
+                        }
+                        if ghost_button(ui, "Discard", true).clicked() {
+                            self.discard_settings_and_continue(ctx, action);
+                        }
+                        if ghost_button(ui, "Stay", false)
+                            .on_hover_text("Esc")
+                            .clicked()
+                        {
+                            self.conv.settings_page.exit_prompt = None;
+                        }
                     });
+                });
             });
 
         if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -543,7 +533,7 @@ impl OxiApp {
             ICON_CHEVRON_LEFT,
             back_label,
             FS_SMALL,
-            egui::vec2(ui.available_width(), 30.0),
+            egui::vec2(ui.available_width(), CONTROL_HEIGHT),
             c_text(),
         )
         .on_hover_text("Asks before discarding unsaved changes");
@@ -710,7 +700,7 @@ fn status_pill(ui: &mut Ui, text: &str, fg: Color32, fill: Color32, stroke: Colo
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().rect(
         rect,
-        egui::CornerRadius::same(10),
+        egui::CornerRadius::same(255),
         fill,
         Stroke::new(1.0, stroke),
         egui::StrokeKind::Inside,
@@ -732,14 +722,14 @@ pub(super) fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Respons
         .painter()
         .layout_no_wrap(icon.to_string(), icon_fid, Color32::PLACEHOLDER);
 
-    let pad = egui::vec2(12.0, 6.0);
-    let icon_gap = 8.0;
+    let pad_x = 10.0;
+    let icon_gap = 6.0;
     let size = egui::vec2(
-        icon_galley.rect.width() + icon_gap + label_galley.rect.width() + pad.x * 2.0,
-        label_galley.rect.height().max(icon_galley.rect.height()) + pad.y * 2.0,
+        icon_galley.rect.width() + icon_gap + label_galley.rect.width() + pad_x * 2.0,
+        CONTROL_HEIGHT,
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let hovered = response.hovered();
+    let hovered = response.hovered() || response.has_focus();
     let (fill, stroke_col, text_col) = if enabled && hovered {
         (c_row_active(), c_border(), c_text())
     } else if enabled {
@@ -757,12 +747,13 @@ pub(super) fn tool_chip(ui: &mut Ui, name: &str, enabled: bool) -> egui::Respons
         Stroke::new(1.0, stroke_col),
         egui::StrokeKind::Middle,
     );
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, r);
     let icon_col = if enabled { c_accent() } else { c_text_faint() };
     // Center each galley on its own: the icon font's line height differs from the UI font's,
     // so sharing the label's top left the check mark riding high.
     let icon_top = rect.center().y - icon_galley.rect.height() * 0.5;
     let label_top = rect.center().y - label_galley.rect.height() * 0.5;
-    let icon_x = rect.left() + pad.x;
+    let icon_x = rect.left() + pad_x;
     let label_x = icon_x + icon_galley.rect.width() + icon_gap;
     ui.painter()
         .galley(egui::pos2(icon_x, icon_top), icon_galley, icon_col);

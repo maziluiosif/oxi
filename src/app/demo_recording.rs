@@ -352,7 +352,7 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         let previous = rec.app().conv.settings.active_provider;
         rec.app().conv.settings.active_provider = LlmProviderKind::ClaudeCodeAcp;
         rec.app().conv.settings.router.read_claude_code_usage = true;
-        let popup_id = egui::Id::new("status_bar_context_popup");
+        let popup_id = egui::Id::new(crate::app::chat_status::CONTEXT_CARD_ID);
         egui::Popup::open_id(&rec.harness.ctx, popup_id);
         rec.harness.run_steps(3);
         rec.still("status-context-popup");
@@ -720,6 +720,17 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         rec.harness.run_steps(4);
         rec.still("editor-prefs");
         rec.app().conv.settings.editor = crate::settings::EditorSettings::default();
+        rec.harness.run_steps(2);
+        // Chat beside the editor, git panel open and closed.
+        rec.app().conv.editor.split_with_chat = true;
+        rec.harness.run_steps(4);
+        rec.still("editor-split-chat");
+        let git_was_open = rec.app().conv.git_ui.open;
+        rec.app().conv.git_ui.open = false;
+        rec.harness.run_steps(4);
+        rec.still("editor-split-chat-wide");
+        rec.app().conv.git_ui.open = git_was_open;
+        rec.app().conv.editor.split_with_chat = false;
         rec.harness.run_steps(2);
         rec.check_sublime_keys();
         // Scroll past end: the last line can reach the top of the view.

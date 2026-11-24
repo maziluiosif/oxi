@@ -287,13 +287,8 @@ impl OxiApp {
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add(
-                        egui::Label::new(
-                            RichText::new("EXPLORER")
-                                .size(FS_TINY)
-                                .strong()
-                                .color(c_text_muted()),
-                        )
-                        .truncate(),
+                        egui::Label::new(strong_rich("EXPLORER", FS_TINY, c_text_muted()))
+                            .truncate(),
                     );
                 });
             });
@@ -316,7 +311,7 @@ impl OxiApp {
                     .unwrap_or_else(|| root.to_str().unwrap_or("workspace"));
                 let root_expanded = !self.conv.explorer.collapsed_roots.contains(&root);
                 let (root_rect, root_response) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 22.0),
+                    egui::vec2(ui.available_width(), SIDEBAR_ROW_H),
                     egui::Sense::click(),
                 );
                 paint_explorer_row(ui, root_rect, root_response.hovered(), false);
@@ -344,13 +339,8 @@ impl OxiApp {
                                 c_text_muted(),
                             ));
                             ui.add(
-                                egui::Label::new(
-                                    RichText::new(label)
-                                        .strong()
-                                        .size(FS_SMALL)
-                                        .color(c_sidebar_section()),
-                                )
-                                .truncate(),
+                                egui::Label::new(strong_rich(label, FS_SMALL, c_sidebar_section()))
+                                    .truncate(),
                             );
                         });
                     },
@@ -426,7 +416,7 @@ impl OxiApp {
             if entry.is_dir {
                 let expanded = self.conv.explorer.expanded.contains(&path);
                 let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 22.0),
+                    egui::vec2(ui.available_width(), SIDEBAR_ROW_H),
                     egui::Sense::click(),
                 );
                 if ui.is_rect_visible(rect) {
@@ -482,7 +472,7 @@ impl OxiApp {
                     .and_then(|index| self.conv.editor.documents.get(index))
                     .is_some_and(|document| document.path == path);
                 let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 22.0),
+                    egui::vec2(ui.available_width(), SIDEBAR_ROW_H),
                     egui::Sense::click(),
                 );
                 if ui.is_rect_visible(rect) {

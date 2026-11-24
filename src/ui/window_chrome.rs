@@ -190,6 +190,7 @@ fn panel_toggle(
         ],
         egui::Stroke::new(1.0, color),
     );
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, pill_radius);
     response.on_hover_text(label).clicked()
 }
 

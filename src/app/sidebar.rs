@@ -25,22 +25,26 @@ impl OxiApp {
             ICON_PLUS,
             "New chat",
             FS_SMALL,
-            egui::vec2(ui.available_width(), 32.0),
+            egui::vec2(ui.available_width(), CONTROL_HEIGHT),
             c_text_strong(),
         )
         .on_hover_text("Start a new chat in the active workspace");
         if new_chat.rect.width() >= 170.0 {
-            ui.painter().text(
-                new_chat.rect.right_center() - egui::vec2(8.0, 0.0),
-                egui::Align2::RIGHT_CENTER,
-                if cfg!(target_os = "macos") {
-                    "⌘N"
-                } else {
-                    "Ctrl+N"
-                },
-                FontId::proportional(FS_TINY),
+            let key = if cfg!(target_os = "macos") {
+                "⌘N"
+            } else {
+                "Ctrl+N"
+            };
+            let galley = ui.painter().layout_job(crate::ui::chrome::shortcut_job(
+                key,
+                FS_TINY,
                 c_text_faint(),
+            ));
+            let pos = egui::pos2(
+                new_chat.rect.right() - 8.0 - galley.size().x,
+                new_chat.rect.center().y - galley.size().y * 0.5,
             );
+            ui.painter().galley(pos, galley, c_text_faint());
         }
         if new_chat.clicked() {
             self.new_chat();
@@ -75,11 +79,11 @@ impl OxiApp {
         // Full-width quiet search field (with inline clear when active).
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.set_height(30.0);
+            ui.set_height(CONTROL_HEIGHT);
             let clear_w = if self.conv.sidebar.search.is_empty() {
                 0.0
             } else {
-                24.0
+                22.0
             };
             let search_w = (ui.available_width()
                 - clear_w
@@ -90,7 +94,7 @@ impl OxiApp {
                 })
             .max(48.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(search_w, 30.0),
+                egui::vec2(search_w, CONTROL_HEIGHT),
                 Layout::left_to_right(Align::Center),
                 |ui| {
                     ui.set_width(search_w);
@@ -106,12 +110,12 @@ impl OxiApp {
             }
         });
 
-        ui.add_space(SPACE_MD);
+        ui.add_space(SPACE_SM);
 
         // "Projects" section header with right-aligned workspace actions (Antigravity-style).
         let narrow_sidebar = ui.available_width() < 195.0;
         ui.horizontal(|ui| {
-            ui.set_height(22.0);
+            ui.set_height(SIDEBAR_HEADER_H);
             ui.spacing_mut().item_spacing.x = 2.0;
             ui.add_space(6.0);
             ui.label(
@@ -135,16 +139,25 @@ impl OxiApp {
                     let open = egui::Popup::is_id_open(ui.ctx(), more_id);
                     let (rect, resp) =
                         ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            ui.is_enabled(),
+                            "More workspace actions",
+                        )
+                    });
                     let resp = resp
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text("More workspace actions");
-                    if open || resp.hovered() {
+                    let radius = CornerRadius::same(RADIUS_CHIP);
+                    if open || resp.hovered() || resp.has_focus() {
                         ui.painter().rect_filled(
                             rect,
-                            CornerRadius::same(RADIUS_ROW),
+                            radius,
                             if open { c_row_active() } else { c_row_hover() },
                         );
                     }
+                    crate::ui::chrome::keyboard_focus_ring(ui, &resp, radius);
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
@@ -204,7 +217,7 @@ impl OxiApp {
             self.render_sidebar_history_filters(ui);
         }
         // Reserve room for the bottom footer (History + Settings).
-        let footer_h = 74.0;
+        let footer_h = 66.0;
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
             .max_height((ui.available_height() - footer_h).max(40.0))
@@ -229,7 +242,7 @@ impl OxiApp {
             ICON_UNDO,
             label,
             FS_SMALL,
-            egui::vec2(ui.available_width(), 28.0),
+            egui::vec2(ui.available_width(), CONTROL_HEIGHT),
             c_text_muted(),
         )
         .on_hover_text("Browse all saved chats, including older and archived conversations")
@@ -242,7 +255,7 @@ impl OxiApp {
             ICON_SETTINGS,
             "Settings",
             FS_SMALL,
-            egui::vec2(ui.available_width(), 28.0),
+            egui::vec2(ui.available_width(), CONTROL_HEIGHT),
             c_text_muted(),
         )
         .on_hover_text("Settings (Cmd/Ctrl+,)")
@@ -348,7 +361,7 @@ impl OxiApp {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let selected = wi == active && si == self.conv.workspaces[wi].active;
-            const RUNNING_ROW_H: f32 = 28.0;
+            const RUNNING_ROW_H: f32 = SIDEBAR_ROW_H;
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), RUNNING_ROW_H),
                 Sense::click(),
@@ -364,17 +377,17 @@ impl OxiApp {
             } else {
                 Color32::TRANSPARENT
             };
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(RADIUS_CHIP), fill);
+            let radius = CornerRadius::same(RADIUS_ROW);
+            ui.painter().rect_filled(rect, radius, fill);
             if selected {
                 ui.painter().rect_stroke(
                     rect,
-                    CornerRadius::same(RADIUS_CHIP),
+                    radius,
                     Stroke::new(1.0, c_border()),
                     egui::StrokeKind::Inside,
                 );
             }
-            crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_CHIP));
+            crate::ui::chrome::keyboard_focus_ring(ui, &response, radius);
             let inner = rect.shrink2(egui::vec2(8.0, 2.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                 ui.horizontal_centered(|ui| {

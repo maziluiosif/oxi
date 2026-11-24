@@ -199,12 +199,7 @@ impl OxiApp {
         } else {
             format!("Update available: v{}", info.version)
         };
-        ui.label(
-            RichText::new(status)
-                .size(FS_TINY)
-                .color(c_accent())
-                .strong(),
-        );
+        ui.label(strong_rich(status, FS_TINY, c_accent()));
         ui.add_space(6.0);
         if ready {
             if ui

@@ -53,6 +53,7 @@ const MAX_DIFF_CHARS: usize = 200_000;
 /// Single-file diffs include every unchanged line, so they get a larger budget.
 const MAX_FILE_DIFF_CHARS: usize = 2_000_000;
 const FULL_FILE_CONTEXT: u32 = 1_000_000;
+pub(crate) const BRANCH_REFRESH: &str = "refresh branch";
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GitEntry {
@@ -114,6 +115,7 @@ pub struct GitState {
 pub enum GitOp {
     Refresh,
     AutoRefresh,
+    RefreshBranch,
     Stage(Vec<String>),
     Unstage(Vec<String>),
     Discard(Vec<String>),
@@ -183,7 +185,7 @@ impl GitSender {
                 (&self.diff, shared.generation)
             }
             // Re-reads the current view when it runs.
-            GitOp::AutoRefresh | GitOp::ApplyBlock(_) => (&self.main, 0),
+            GitOp::AutoRefresh | GitOp::RefreshBranch | GitOp::ApplyBlock(_) => (&self.main, 0),
             other => {
                 if let GitOp::SetCwd(path) = other {
                     shared.cwd = path.clone();
@@ -255,7 +257,11 @@ fn git_worker(
             ctx.request_repaint();
             continue;
         }
-        if matches!(op, GitOp::AutoRefresh | GitOp::ApplyBlock(_)) {
+        if matches!(op, GitOp::RefreshBranch) {
+            let mut state = branch_status(&cwd);
+            state.last_op = Some(BRANCH_REFRESH.into());
+            let _ = tx.send(state);
+        } else if matches!(op, GitOp::AutoRefresh | GitOp::ApplyBlock(_)) {
             let block_error = match &op {
                 GitOp::ApplyBlock(edit) => hunk::apply_block(&cwd, edit).err(),
                 _ => None,
@@ -390,6 +396,7 @@ fn auto_refresh(cwd: &str, diff_view: Option<&GitOp>) -> GitState {
 fn label_op(op: &GitOp) -> &'static str {
     match op {
         GitOp::Refresh | GitOp::AutoRefresh => "refresh",
+        GitOp::RefreshBranch => BRANCH_REFRESH,
         GitOp::Stage(_) => "stage",
         GitOp::Unstage(_) => "unstage",
         GitOp::Discard(_) => "discard",
@@ -457,6 +464,34 @@ fn ahead_behind(repo: &Repository) -> (usize, usize) {
     };
     repo.graph_ahead_behind(local_oid, upstream_oid)
         .unwrap_or((0, 0))
+}
+
+fn branch_summary(repo: &Repository) -> GitState {
+    let (ahead, behind) = ahead_behind(repo);
+    GitState {
+        repo: true,
+        branch: current_branch(repo),
+        ahead,
+        behind,
+        ..Default::default()
+    }
+}
+
+fn branch_status(cwd: &str) -> GitState {
+    if let Some(result) = remote::call(cwd, "branch_status", serde_json::json!({})) {
+        return match result {
+            // Older servers only support the full refresh.
+            Err(error) if error.contains("unknown git call: branch_status") => {
+                handle_op(cwd, GitOp::Refresh)
+            }
+            result => result.unwrap_or_else(|error| non_repo(Some(error))),
+        };
+    }
+    match open_repo(cwd) {
+        Ok(repo) if !repo.is_bare() => branch_summary(&repo),
+        Ok(_) => non_repo(Some("Bare repositories are not supported".into())),
+        Err(_) => non_repo(None),
+    }
 }
 
 fn status_entries(repo: &Repository) -> Result<(Vec<GitEntry>, Vec<GitEntry>), String> {
@@ -676,9 +711,7 @@ fn snapshot(
     preset: Option<(String, String)>,
     error: Option<String>,
 ) -> GitState {
-    let branch = current_branch(repo);
     let branches = list_branches(repo);
-    let (ahead, behind) = ahead_behind(repo);
     let (staged, unstaged) = status_entries(repo).unwrap_or_default();
     let line_changes = working_tree_line_changes(repo, &staged, &unstaged);
     let diff = preset.or_else(|| {
@@ -694,24 +727,16 @@ fn snapshot(
         })
     });
     GitState {
-        repo: true,
-        branch,
         branches,
-        ahead,
-        behind,
         staged,
         unstaged,
         line_changes,
         log: log_entries(repo),
         diff,
         error,
-        busy: false,
-        last_op: None,
         current_diff_path: diff_pref.as_ref().map(|x| x.0.clone()),
         current_diff_staged: diff_pref.map(|x| x.1),
-        commit_diff: None,
-        view_generation: 0,
-        diff_only: false,
+        ..branch_summary(repo)
     }
 }
 
@@ -729,6 +754,9 @@ pub fn run_op(cwd: &str, op: GitOp) -> GitState {
 }
 
 fn handle_op(cwd: &str, op: GitOp) -> GitState {
+    if matches!(op, GitOp::RefreshBranch) {
+        return branch_status(cwd);
+    }
     if let Some(result) = remote::call(cwd, "op", serde_json::json!({ "op": op })) {
         return result.unwrap_or_else(|e| non_repo(Some(e)));
     }
@@ -792,7 +820,7 @@ fn handle_op(cwd: &str, op: GitOp) -> GitState {
                 }
                 return Ok(Some(state));
             }
-            GitOp::SetCwd(_) => {}
+            GitOp::SetCwd(_) | GitOp::RefreshBranch => {}
         }
         Ok(None)
     })();

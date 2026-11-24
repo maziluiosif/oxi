@@ -34,7 +34,7 @@ const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// Characters of a long line shown before the match in a result row.
 const PREVIEW_LEAD: usize = 40;
 const PREVIEW_MAX: usize = 240;
-const ROW_H: f32 = 22.0;
+const ROW_H: f32 = SIDEBAR_ROW_H;
 
 /// One hit: where it is in the file and how its row shows it.
 pub(crate) struct LineHit {
@@ -751,13 +751,7 @@ impl OxiApp {
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.add(
-                        egui::Label::new(
-                            RichText::new("SEARCH")
-                                .size(FS_TINY)
-                                .strong()
-                                .color(c_text_muted()),
-                        )
-                        .truncate(),
+                        egui::Label::new(strong_rich("SEARCH", FS_TINY, c_text_muted())).truncate(),
                     );
                 });
             });

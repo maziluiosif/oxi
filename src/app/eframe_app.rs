@@ -53,6 +53,7 @@ impl eframe::App for OxiApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.bind_git_ctx(ctx);
         self.guard_editor_exit(ctx);
         self.poll_windows_clipboard_image_paste(ctx);
         self.handle_hold_space_dictation(ctx);
@@ -86,7 +87,7 @@ impl eframe::App for OxiApp {
         self.ensure_update_checked(ctx, false);
         self.drain_update_check(ctx);
         self.drain_update_install();
-        self.bind_git_ctx(ctx);
+        self.start_git_worker();
         super::delegation::watch(ctx);
         self.ensure_active_models_fetched(ctx);
         self.drain_git(ctx);
@@ -109,9 +110,7 @@ impl eframe::App for OxiApp {
         self.poll_pull_requests(ctx);
 
         // A focus event runs these checks again when returning to an idle background window.
-        if ctx.input(|i| i.focused)
-            && (!self.conv.editor.documents.is_empty() || self.conv.git_ui.rx.is_some())
-        {
+        if ctx.input(|i| i.focused) && !self.conv.editor.documents.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
 

@@ -890,7 +890,8 @@ pub struct GitUiState {
     /// Git worker request channel. Responses arrive on `rx`; drained each frame.
     pub tx: Option<crate::git::GitSender>,
     pub rx: Option<std::sync::mpsc::Receiver<crate::git::GitState>>,
-    pub last_auto_refresh: Option<Instant>,
+    /// Time and scope (full snapshot or branch only) of the last automatic refresh.
+    pub last_auto_refresh: Option<(Instant, bool)>,
     pub auto_refresh_pending: bool,
     /// Counts finished Git snapshots: diff tabs re-read their base when it changes.
     pub epoch: u64,

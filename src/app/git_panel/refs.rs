@@ -12,12 +12,11 @@ use super::super::OxiApp;
 impl OxiApp {
     pub(super) fn render_git_branches(&mut self, ui: &mut Ui) {
         // New branch input
-        ui.label(
-            RichText::new("Create branch from current")
-                .size(FS_TINY)
-                .color(c_text_muted())
-                .strong(),
-        );
+        ui.label(strong_rich(
+            "Create branch from current",
+            FS_TINY,
+            c_text_muted(),
+        ));
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -70,7 +69,8 @@ impl OxiApp {
 
     fn render_branch_row(&mut self, ui: &mut Ui, branch: &str, is_current: bool) {
         let full_w = ui.available_width();
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(full_w, 22.0), Sense::click());
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(full_w, SIDEBAR_ROW_H), Sense::click());
         // Geometric hover: the trash button on top of the row takes the pointer away from
         // the row response, which would otherwise hide the button under the cursor.
         let row_hot = ui
@@ -135,7 +135,7 @@ impl OxiApp {
                     .max_rect(slot)
                     .layout(Layout::right_to_left(Align::Center)),
                 |ui| {
-                    delete = crate::ui::chrome::icon_button_inline(
+                    delete = crate::ui::chrome::icon_button_inline_danger(
                         ui,
                         ICON_TRASH,
                         FS_TINY,
@@ -158,6 +158,7 @@ impl OxiApp {
             }
             if ui.button("Copy name").clicked() {
                 ui.ctx().copy_text(branch.to_string());
+                crate::ui::chrome::show_toast(ui.ctx(), "Branch name copied");
                 ui.close();
             }
             ui.separator();

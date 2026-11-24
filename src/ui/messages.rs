@@ -320,16 +320,15 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
                     .inner_margin(Margin::symmetric(12, 9))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        egui::CollapsingHeader::new(
-                            RichText::new("Conversation summary")
-                                .size(FS_SMALL)
-                                .color(c_text_muted()),
-                        )
-                        .id_salt(("summary", msg_idx))
-                        .default_open(false)
-                        .show(ui, |ui| {
+                        if crate::ui::chrome::disclosure_row(
+                            ui,
+                            ui.id().with(("summary", msg_idx)),
+                            "Conversation summary",
+                            false,
+                        ) {
+                            ui.add_space(6.0);
                             markdown::render_markdown(ui, &msg.text);
-                        });
+                        }
                     });
             })
             .response;

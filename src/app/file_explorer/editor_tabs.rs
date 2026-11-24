@@ -45,13 +45,6 @@ impl OxiApp {
             .is_some_and(|r| r.completion_unseen);
         let mut return_to_chat = false;
         let mut toggle_split_chat = false;
-        let chat_tab_reserve = if split_rendered {
-            0.0
-        } else if chat_needs_approval {
-            116.0
-        } else {
-            76.0
-        };
         let workspace_root = PathBuf::from(&self.active_workspace().root_path);
         let markdown_available = !git_diff_active
             && self
@@ -59,21 +52,18 @@ impl OxiApp {
                 .editor
                 .active_document()
                 .is_some_and(|document| document.supports_markdown_preview());
-        let tab_strip_width = (ui.available_width()
-            - if markdown_available { 74.0 } else { 0.0 }
-            - 156.0
-            - chat_tab_reserve
-            - if editor_touches_left {
-                crate::ui::window_chrome::WINDOW_CONTROLS_W
-            } else {
-                0.0
-            }
-            - if git_open {
+        // The tabs get whatever the right-hand buttons leave, measured last frame (they change
+        // with the Markdown Preview button and the git panel), instead of a fixed guess.
+        let right_buttons_id = egui::Id::new("editor_tabs_right_buttons_w");
+        let right_buttons_w = ui
+            .data(|d| d.get_temp::<f32>(right_buttons_id))
+            .unwrap_or(if markdown_available { 160.0 } else { 90.0 })
+            + if git_open {
                 0.0
             } else {
                 crate::ui::window_chrome::RIGHT_CONTROLS_W
-            })
-        .max(80.0);
+            };
+        let mut right_buttons_used = None;
 
         Frame::new()
             .fill(c_bg_elevated_2())
@@ -97,33 +87,33 @@ impl OxiApp {
                         }
                         ui.add_space(4.0);
                     }
-                    let back = ui.add_enabled(
+                    let back = crate::ui::chrome::icon_button_plain_enabled(
+                        ui,
+                        ICON_CHEVRON_LEFT,
+                        26.0,
+                        false,
                         can_go_back,
-                        egui::Button::new(icon_glyph_rich(
-                            ICON_CHEVRON_LEFT,
-                            FS_SMALL,
-                            c_text_muted(),
-                        ))
-                        .frame(false)
-                        .min_size(egui::vec2(24.0, 30.0)),
-                    );
+                    )
+                    .on_hover_text("Navigate back");
                     if back.clicked() {
                         navigate_back = true;
                     }
-                    let forward = ui.add_enabled(
+                    let forward = crate::ui::chrome::icon_button_plain_enabled(
+                        ui,
+                        ICON_CHEVRON_RIGHT,
+                        26.0,
+                        false,
                         can_go_forward,
-                        egui::Button::new(icon_glyph_rich(
-                            ICON_CHEVRON_RIGHT,
-                            FS_SMALL,
-                            c_text_muted(),
-                        ))
-                        .frame(false)
-                        .min_size(egui::vec2(24.0, 30.0)),
-                    );
+                    )
+                    .on_hover_text("Navigate forward");
                     if forward.clicked() {
                         navigate_forward = true;
                     }
 
+                    let tab_strip_width = (ui.available_width()
+                        - right_buttons_w
+                        - ui.spacing().item_spacing.x * 2.0)
+                        .max(80.0);
                     ScrollArea::horizontal()
                         .id_salt("editor_tabs")
                         .max_width(tab_strip_width)
@@ -332,7 +322,7 @@ impl OxiApp {
                                 }
                             }
                             if !self.conv.editor.documents.is_empty() || git_diff_tab {
-                                ui.separator();
+                                crate::ui::chrome::hairline(ui);
                                 if ui.button("Close All Tabs").clicked() {
                                     close_all = true;
                                     ui.close();
@@ -341,34 +331,48 @@ impl OxiApp {
                         })
                         .0
                         .on_hover_text("Open tabs");
-                        if editor_split_chat_button(ui, split_with_chat)
-                            .on_hover_text(if split_with_chat {
+                        if crate::ui::chrome::split_pane_button(
+                            ui,
+                            if split_with_chat {
                                 "Hide side-by-side chat"
                             } else {
                                 "Show chat next to editor"
-                            })
-                            .clicked()
+                            },
+                            split_with_chat,
+                            true,
+                        )
+                        .on_hover_text(if split_with_chat {
+                            "Hide side-by-side chat"
+                        } else {
+                            "Show chat next to editor"
+                        })
+                        .clicked()
                         {
                             toggle_split_chat = true;
                         }
-                        if ui
-                            .add(
-                                egui::Button::new(icon_glyph_rich(
-                                    ICON_PLUS,
-                                    FS_SMALL,
-                                    c_text_muted(),
-                                ))
-                                .frame(false)
-                                .min_size(egui::vec2(24.0, 30.0)),
-                            )
+                        if crate::ui::chrome::icon_button_plain(ui, ICON_PLUS, 26.0, false)
                             .on_hover_text("New file")
                             .clicked()
                         {
                             new_file = true;
                         }
+                        right_buttons_used = Some(ui.max_rect().right() - ui.cursor().max.x);
                     });
                 });
             });
+        if let Some(used) = right_buttons_used {
+            let used = used
+                - if git_open {
+                    0.0
+                } else {
+                    crate::ui::window_chrome::RIGHT_CONTROLS_W
+                };
+            let previous = ui.data(|d| d.get_temp::<f32>(right_buttons_id));
+            if previous.is_none_or(|p| (p - used).abs() > 0.5) {
+                ui.data_mut(|d| d.insert_temp(right_buttons_id, used));
+                ui.ctx().request_repaint();
+            }
+        }
         if return_to_chat {
             self.conv.editor.split_with_chat = false;
             self.reveal_chat_view();
@@ -601,12 +605,13 @@ fn text_tab_button(ui: &mut Ui, label: &str) -> egui::Response {
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
     });
-    let hovered = response.hovered();
+    let hovered = response.hovered() || response.has_focus();
+    let radius = egui::CornerRadius::same(RADIUS_CHIP);
     if hovered {
-        ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(RADIUS_ROW), c_row_hover());
+        ui.painter().rect_filled(rect, radius, c_row_hover());
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, radius);
     ui.painter().galley_with_override_text_color(
         rect.center() - galley.size() / 2.0,
         galley,
@@ -625,14 +630,17 @@ struct EditorTab {
 /// The close button shows on the active and hovered tabs; an unsaved tab shows a dot there
 /// instead until hovered.
 fn editor_tab(ui: &mut Ui, id: egui::Id, label: &str, active: bool, dirty: bool) -> EditorTab {
-    const PADDING_LEFT: f32 = 12.0;
-    const CLOSE_SLOT: f32 = 26.0;
+    const PADDING_LEFT: f32 = 10.0;
+    const CLOSE_SLOT: f32 = 24.0;
     const TOP_INSET: f32 = 8.0;
     let font = FontId::proportional(FS_SMALL);
-    let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap(label.to_owned(), font, c_text()));
-    // Sublime keeps tabs at a roomy minimum width instead of hugging the name; the strip
-    // scrolls when they no longer fit.
-    const MIN_WIDTH: f32 = 140.0;
+    // PLACEHOLDER so the paint-time active/hovered/muted text color applies below.
+    let galley = ui.fonts_mut(|fonts| {
+        fonts.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER)
+    });
+    // A short name still gets a tab wide enough to hit comfortably, but no wider: a roomy
+    // minimum left most of a short tab empty and pushed later tabs out of view.
+    const MIN_WIDTH: f32 = 84.0;
     let width = (galley.rect.width() + PADDING_LEFT + CLOSE_SLOT).max(MIN_WIDTH);
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(width, ui.available_height()),
@@ -837,10 +845,14 @@ fn editor_chat_pill(
         "Chat"
     };
     let font = FontId::proportional(FS_SMALL);
-    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, c_text()));
+    let galley =
+        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
     let indicator_w = 14.0;
     let width = galley.size().x + indicator_w + 18.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
     let hovered = resp.hovered() || resp.has_focus();
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -860,17 +872,26 @@ fn editor_chat_pill(
             c_text_strong(),
         )
     } else if hovered {
-        (c_row_hover(), c_border(), c_text_strong())
+        (c_row_hover(), egui::Color32::TRANSPARENT, c_text_strong())
     } else {
-        (c_bg_elevated(), c_border_subtle(), c_text())
+        // Frameless at rest, like the chat header's buttons: only an approval request earns
+        // the box, so it stands out when it shows.
+        (
+            egui::Color32::TRANSPARENT,
+            egui::Color32::TRANSPARENT,
+            c_text(),
+        )
     };
     ui.painter().rect_filled(rect, radius, fill);
-    ui.painter().rect_stroke(
-        rect,
-        radius,
-        egui::Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
-    );
+    if border != egui::Color32::TRANSPARENT {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            egui::Stroke::new(1.0, border),
+            egui::StrokeKind::Inside,
+        );
+    }
+    crate::ui::chrome::keyboard_focus_ring(ui, &resp, radius);
     let icon_center = egui::pos2(rect.left() + 12.0, rect.center().y);
     if needs_approval {
         ui.painter().circle_filled(icon_center, 3.5, c_accent());
@@ -894,7 +915,7 @@ fn editor_chat_pill(
             egui::Align2::CENTER_CENTER,
             ICON_CHEVRON_LEFT,
             FontId::new(FS_TINY, icon_font()),
-            c_text_muted(),
+            if hovered { c_accent() } else { c_text_muted() },
         );
     }
     ui.painter().galley(
@@ -910,51 +931,6 @@ fn editor_chat_pill(
         "Return to chat (keeps editor tabs open)"
     };
     resp.on_hover_text(hover)
-}
-
-/// Toggle button on the editor tab bar to show the active chat side by side with the editor.
-fn editor_split_chat_button(ui: &mut Ui, active: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
-    let hovered = resp.hovered() || resp.has_focus();
-    if hovered {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    let radius = egui::CornerRadius::same(RADIUS_ROW);
-    if active {
-        ui.painter().rect_filled(rect, radius, c_row_active());
-    } else if hovered {
-        ui.painter().rect_filled(rect, radius, c_row_hover());
-    }
-    let icon = rect.shrink2(egui::vec2(6.5, 7.5));
-    let color = if active {
-        c_accent()
-    } else if hovered {
-        c_text_strong()
-    } else {
-        c_text_muted()
-    };
-    ui.painter().rect_stroke(
-        icon,
-        2,
-        egui::Stroke::new(1.15, color),
-        egui::StrokeKind::Inside,
-    );
-    if active {
-        let left_half = egui::Rect::from_min_max(
-            icon.min + egui::vec2(1.5, 1.5),
-            egui::pos2(icon.center().x, icon.bottom() - 1.5),
-        );
-        ui.painter()
-            .rect_filled(left_half, 0, c_accent().gamma_multiply(0.45));
-    }
-    ui.painter().line_segment(
-        [
-            egui::pos2(icon.center().x, icon.top()),
-            egui::pos2(icon.center().x, icon.bottom()),
-        ],
-        egui::Stroke::new(1.0, color),
-    );
-    resp
 }
 
 #[cfg(test)]
