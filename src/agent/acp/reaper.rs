@@ -85,6 +85,22 @@ impl Activity {
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
     }
 
+    /// How long ago the agent last sent or was sent anything.
+    pub(super) fn quiet_for(&self) -> Duration {
+        self.idle(Instant::now())
+    }
+
+    /// A tracked background command ended. Returns whether it was tracked.
+    pub(super) fn finish_background_tool(&self, tool_call_id: &str) -> bool {
+        let mut tools = self
+            .background_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = tools.len();
+        tools.retain(|t| t.tool_call_id != tool_call_id);
+        tools.len() != before
+    }
+
     fn idle(&self, now: Instant) -> Duration {
         now.saturating_duration_since(*self.last.lock().unwrap_or_else(|e| e.into_inner()))
     }

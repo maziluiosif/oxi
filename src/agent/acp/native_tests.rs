@@ -1581,3 +1581,150 @@ fn claude_native_live_smoke() {
     assert!(answer.to_uppercase().contains("OK"), "answer={answer:?}");
     mgr.close(&session_key);
 }
+
+/// Claude Code ends the turn while a `run_in_background` command keeps going, then starts a
+/// turn of its own when the command finishes. The command stays shown as running in between,
+/// and the later turn is held until the UI attaches to show it.
+#[cfg(unix)]
+#[test]
+fn claude_background_command_stays_running_and_its_followup_turn_is_attached() {
+    let dir = TempDir::new("oxi-claude-bg");
+    let script = r#"#!/usr/bin/env python3
+import sys, json, threading, time
+lock = threading.Lock()
+def send(obj):
+    with lock:
+        sys.stdout.write(json.dumps(obj) + "\n")
+        sys.stdout.flush()
+sid = "claude-bg-1"
+def finish_later():
+    time.sleep(1.0)
+    send({"type": "system", "subtype": "task_updated", "task_id": "bg1", "patch": {"status": "completed"}, "session_id": sid})
+    send({"type": "system", "subtype": "task_notification", "task_id": "bg1", "tool_use_id": "toolu_bg", "status": "completed", "summary": "Background command \"ci\" completed (exit code 0)", "session_id": sid})
+    send({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": sid})
+    send({"type": "system", "subtype": "init", "session_id": sid})
+    send({"type": "assistant", "parent_tool_use_id": None, "session_id": sid, "message": {"content": [{"type": "text", "text": "CI is green"}]}})
+    send({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "usage": {}, "modelUsage": {}})
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    msg = json.loads(line)
+    if msg.get("type") == "control_request":
+        rid, sub = msg["request_id"], msg["request"]["subtype"]
+        if sub == "initialize":
+            send({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": {
+                "models": [{"value": "default", "displayName": "Default", "description": "", "supportedEffortLevels": []}],
+                "commands": [], "current_permission_mode": "default"
+            }}})
+        else:
+            send({"type": "control_response", "response": {"subtype": "success", "request_id": rid, "response": {}}})
+    elif msg.get("type") == "user":
+        send({"type": "system", "subtype": "init", "session_id": sid})
+        send({"type": "assistant", "parent_tool_use_id": None, "session_id": sid, "message": {"content": [
+            {"type": "tool_use", "id": "toolu_bg", "name": "Bash", "input": {"command": "gh pr checks --watch", "description": "ci", "run_in_background": True}}
+        ]}})
+        send({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "bg1"}], "session_id": sid})
+        send({"type": "system", "subtype": "task_started", "task_id": "bg1", "tool_use_id": "toolu_bg", "description": "ci", "is_backgrounded": True, "task_type": "local_bash", "session_id": sid})
+        send({"type": "user", "parent_tool_use_id": None, "session_id": sid,
+              "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_bg", "content": "Command running in background with ID: bg1."}]},
+              "tool_use_result": {"stdout": "", "backgroundTaskId": "bg1"}})
+        send({"type": "assistant", "parent_tool_use_id": None, "session_id": sid, "message": {"content": [{"type": "text", "text": "waiting"}]}})
+        send({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "usage": {}, "modelUsage": {}})
+        threading.Thread(target=finish_later).start()
+"#;
+    let bin = write_executable(dir.path(), "claude", script);
+    let cmd_line = bin.display().to_string();
+    let session_key = format!("mem:claude-bg:{}", rand::random::<u64>());
+    let mgr = AcpManager::spawn();
+    let rt = crate::runtime::runtime().unwrap();
+
+    let tool_status = |events: &[AgentEvent]| {
+        events.iter().rev().find_map(|ev| match ev {
+            AgentEvent::ToolUpdate(u) if u.tool_call_id == "toolu_bg" => Some(u.metadata.status),
+            _ => None,
+        })
+    };
+
+    let (ev_tx, ev_rx) = channel();
+    let (_ap_tx, ap_rx) = channel();
+    let req = AcpPrompt {
+        session_key: session_key.clone(),
+        cwd: dir.path().to_path_buf(),
+        command_line: cmd_line.clone(),
+        env: Vec::new(),
+        model: "default".into(),
+        effort: String::new(),
+        mcp_servers: Vec::new(),
+        text: "watch CI".into(),
+        history: String::new(),
+        missed: String::new(),
+        archive: Vec::new(),
+        images: Vec::new(),
+        resources: Vec::new(),
+        event_tx: ev_tx,
+        approval_rx: ap_rx,
+        approval_policy: ApprovalPolicy::disabled(),
+        bash_allowlist: Vec::new(),
+        allowed_tools: Vec::new(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        plan_mode: false,
+        steer: None,
+        evidence_policy: crate::evidence::Policy::default(),
+        evidence_base: None,
+    };
+    rt.block_on(mgr.prompt(req)).unwrap();
+    let events: Vec<AgentEvent> = ev_rx.try_iter().collect();
+    assert_eq!(tool_status(&events), Some(ToolStatus::InProgress));
+    let running = super::background_tools(&session_key);
+    assert_eq!(
+        running
+            .iter()
+            .map(|t| t.tool_call_id.as_str())
+            .collect::<Vec<_>>(),
+        ["toolu_bg"]
+    );
+    assert_eq!(running[0].label, "ci");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !super::pending_autonomous().contains(&session_key) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the follow-up turn was never announced"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    super::claim_autonomous(&session_key);
+
+    let (ev_tx, ev_rx) = channel();
+    let (_ap_tx, ap_rx) = channel();
+    let attached = rt.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            mgr.attach(super::AcpAttach {
+                session_key: session_key.clone(),
+                cwd: dir.path().to_path_buf(),
+                event_tx: ev_tx,
+                approval_rx: ap_rx,
+                approval_policy: ApprovalPolicy::disabled(),
+                bash_allowlist: Vec::new(),
+                allowed_tools: Vec::new(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                plan_mode: false,
+            }),
+        )
+        .await
+    });
+    assert!(matches!(attached, Ok(Ok(()))), "{attached:?}");
+    let events: Vec<AgentEvent> = ev_rx.try_iter().collect();
+    assert_eq!(tool_status(&events), Some(ToolStatus::Completed));
+    let text: String = events
+        .iter()
+        .filter_map(|ev| match ev {
+            AgentEvent::TextDelta(t) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(text.contains("CI is green"), "{text:?}");
+    assert!(super::background_tools(&session_key).is_empty());
+    mgr.close(&session_key);
+}
