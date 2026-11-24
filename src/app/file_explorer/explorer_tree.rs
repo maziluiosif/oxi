@@ -604,7 +604,7 @@ impl OxiApp {
                 ui.close();
             }
             if ui.button("Delete Folder").clicked() {
-                self.start_file_operation(FileOperation::Delete(path.to_path_buf()));
+                self.start_file_operation(FileOperation::DeleteFolder(path.to_path_buf()));
                 ui.close();
             }
             if ui.button("Find in Folder...").clicked() {
