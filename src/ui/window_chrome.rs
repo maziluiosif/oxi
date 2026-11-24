@@ -133,7 +133,7 @@ fn panel_toggle(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let pill_radius = egui::CornerRadius::same(14);
-    if open && side == PanelSide::Left {
+    if open {
         ui.painter()
             .rect_filled(rect, pill_radius, crate::theme::c_bg_elevated_2());
         ui.painter().rect_stroke(

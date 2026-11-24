@@ -31,20 +31,29 @@ pub enum ApprovalDecision {
     Elicitation(serde_json::Value),
 }
 
+/// Extract the shell command string from native (`command`) or ACP (`CommandLine`, e.g.
+/// Antigravity `run_command`) tool arguments.
+pub(crate) fn bash_command_arg(args: &Value) -> Option<&str> {
+    args.get("command")
+        .or_else(|| args.get("CommandLine"))
+        .and_then(Value::as_str)
+}
+
 /// Build a short human-readable summary of a pending tool call for the approval prompt.
 pub fn approval_summary(name: &str, args: &Option<Value>) -> String {
     let Some(args) = args else {
         return name.to_string();
     };
-    let field = match name {
-        "bash" => "command",
-        "write" | "edit" | "delete" | "mkdir" => "path",
-        "move" => "from",
-        "scratchpad" => "mode",
-        _ => "",
+    let fields: &[&str] = match name {
+        "bash" => &["command", "CommandLine"],
+        "write" | "edit" | "delete" | "mkdir" => &["path", "Path", "file_path", "filePath"],
+        "move" => &["from", "From"],
+        "scratchpad" => &["mode"],
+        _ => &[],
     };
-    args.get(field)
-        .and_then(|v| v.as_str())
+    fields
+        .iter()
+        .find_map(|field| args.get(*field).and_then(|v| v.as_str()))
         .map(|s| s.to_string())
         .unwrap_or_default()
 }
@@ -182,9 +191,7 @@ impl ApprovalGate {
     fn allowlisted(&self, name: &str, args: &Value) -> bool {
         tool_allowed(name, &self.allowed_tools)
             || name.eq_ignore_ascii_case("bash")
-                && args
-                    .get("command")
-                    .and_then(Value::as_str)
+                && bash_command_arg(args)
                     .is_some_and(|command| bash_command_allowlisted(command, &self.bash_allowlist))
     }
 

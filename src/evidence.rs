@@ -359,16 +359,31 @@ fn items_dir(turn_dir: &Path) -> PathBuf {
     turn_dir.join("items")
 }
 
-/// The next free item id in a turn: `e1`, `e2`, ...
+/// Reserve the next free item id in a turn: `e1`, `e2`, ...
+///
+/// The oxi MCP server runs tool calls in parallel, and a capture takes a while between picking
+/// its id and saving its item, so the id is claimed up front by creating its (still empty) item
+/// file; [`save_item`] later replaces it, and [`collect`] skips one never filled.
 pub fn next_id(turn_dir: &Path) -> String {
-    let count = std::fs::read_dir(items_dir(turn_dir))
+    let dir = items_dir(turn_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let count = std::fs::read_dir(&dir)
         .map(|entries| entries.flatten().count())
         .unwrap_or(0);
     let mut n = count + 1;
-    while items_dir(turn_dir).join(format!("e{n}.json")).exists() {
-        n += 1;
+    loop {
+        let path = dir.join(format!("e{n}.json"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => return format!("e{n}"),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            // Unwritable directory: saving the item fails later with the real error.
+            Err(_) => return format!("e{n}"),
+        }
     }
-    format!("e{n}")
 }
 
 pub fn save_item(turn_dir: &Path, item: &EvidenceItem) -> Result<(), String> {
@@ -549,6 +564,19 @@ mod tests {
         let pairs = report.pairs();
         assert_eq!(pairs.len(), 1);
         assert!(pairs[0].before.is_some() && pairs[0].after.is_some());
+    }
+
+    #[test]
+    fn parallel_calls_never_share_an_item_id() {
+        let dir = tempfile_dir("parallel_ids").join("t1");
+        let ids: Vec<String> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16).map(|_| scope.spawn(|| next_id(&dir))).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(unique.len(), ids.len(), "duplicate ids: {ids:?}");
+        // Reserved but never saved items are not reported.
+        assert!(collect(dir.parent().unwrap(), "t1", false).items.is_empty());
     }
 
     #[test]

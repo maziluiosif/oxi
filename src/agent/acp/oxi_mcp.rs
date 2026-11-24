@@ -66,7 +66,8 @@ pub(super) fn names_todo_tool(s: &str) -> bool {
 /// The oxi tool `s` names, however the agent spells MCP tool names.
 pub(super) fn oxi_tool_name(s: &str) -> Option<&'static str> {
     let s = s.trim();
-    // Claude: `mcp__oxi__todo_write`; Codex and others: `oxi.todo_write`, `oxi/todo_write`, ...
+    // Claude: `mcp__oxi__todo_write`; Antigravity: `mcp_oxi_todo_write`; Codex and others:
+    // `oxi.todo_write`, `oxi/todo_write`, ...
     TOOL_NAMES
         .into_iter()
         .chain([
@@ -75,6 +76,7 @@ pub(super) fn oxi_tool_name(s: &str) -> Option<&'static str> {
             super::learned_rules::TOOL,
         ])
         .chain(crate::evidence::tools::NAMES)
+        .chain(crate::delegation::NAMES)
         .find(|tool| {
             s.strip_suffix(tool)
                 .and_then(|rest| rest.strip_suffix(['_', '.', '/', ':']))
@@ -178,19 +180,46 @@ fn instructions() -> String {
 }
 
 /// Serve MCP over stdin/stdout until the agent closes the pipe.
+///
+/// `tools/call` requests run on worker threads so a long-running call (`task_status` waiting up
+/// to 60 s, `evidence_run`, `evidence_capture`) never blocks `ping` healthchecks or parallel tool
+/// calls from the agent.
 pub fn run_stdio() -> i32 {
     let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
+    let stdout = std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout()));
+    let write_reply = |out: &std::sync::Mutex<std::io::Stdout>, reply: &Value| -> bool {
+        let mut guard = out.lock().unwrap_or_else(|e| e.into_inner());
+        writeln!(guard, "{reply}").is_ok() && guard.flush().is_ok()
+    };
+    let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         let Ok(msg) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(reply) = handle(&msg)
-            && (writeln!(stdout, "{reply}").is_err() || stdout.flush().is_err())
+        if msg["method"].as_str() == Some("tools/call")
+            && msg.get("id").is_some_and(|id| !id.is_null())
         {
-            break;
+            let out = std::sync::Arc::clone(&stdout);
+            workers.retain(|worker| !worker.is_finished());
+            workers.push(std::thread::spawn(move || {
+                if let Some(reply) = handle(&msg) {
+                    let _ = write_reply(&out, &reply);
+                }
+            }));
+            continue;
         }
+        if let Some(reply) = handle(&msg)
+            && !write_reply(&stdout, &reply)
+        {
+            // Nobody reads the replies any more: don't wait for the calls still running.
+            return 0;
+        }
+    }
+    // The agent closed stdin: finish the calls in flight so their replies and evidence files
+    // are written before the process exits.
+    for worker in workers {
+        let _ = worker.join();
     }
     0
 }
@@ -341,11 +370,22 @@ mod tests {
         assert_eq!(oxi_tool_name("mcp__oxi__chat_read"), Some("chat_read"));
         assert_eq!(oxi_tool_name("oxi.chat_search"), Some("chat_search"));
         assert_eq!(oxi_tool_name("mcp__oxi__learn_rules"), Some("learn_rules"));
+        assert_eq!(oxi_tool_name("mcp_oxi_todo_write"), Some(TOOL_NAME));
+        assert_eq!(
+            oxi_tool_name("mcp_oxi_delegate_task"),
+            Some("delegate_task")
+        );
+        assert_eq!(oxi_tool_name("mcp_oxi_task_status"), Some("task_status"));
+        assert_eq!(oxi_tool_name("mcp_oxi_task_cancel"), Some("task_cancel"));
         assert_eq!(
             oxi_tool(
                 &json!({"title": "Scratchpad", "_meta": {"claudeCode": {"toolName": "mcp__oxi__scratchpad"}}})
             ),
             Some(SCRATCHPAD)
+        );
+        assert_eq!(
+            oxi_tool(&json!({"title": "Run mcp_oxi_todo_write", "name": "mcp_oxi_todo_write"})),
+            Some(TOOL_NAME)
         );
     }
 

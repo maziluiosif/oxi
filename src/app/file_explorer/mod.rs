@@ -48,7 +48,7 @@ pub(crate) use multi_cursor::DocumentView;
 pub(crate) use multi_cursor::text_point;
 pub(crate) use project_search::{FIND_REFERENCES_REQUEST, ProjectSearchState, search_json};
 pub(crate) use remote_io::RemoteIo;
-pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches};
+pub(crate) use support::{FindOptions, FindResults, file_icon, find_matches, fuzzy_path_score};
 
 pub(crate) use diff_editor::{Change as DiffChange, DiffSource, DocumentDiff};
 pub(crate) use explorer_tree::{ExplorerCache, git_status_color};

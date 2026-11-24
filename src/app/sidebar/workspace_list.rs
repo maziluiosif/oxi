@@ -99,12 +99,14 @@ impl OxiApp {
             FontId::new(FS_TINY, icon_font()),
             c_sidebar_section(),
         );
+        let actions_reserve = if row_hovered {
+            PLUS_W * if can_worktree { 2.0 } else { 1.0 } + 2.0
+        } else {
+            4.0
+        };
         let label_rect = egui::Rect::from_min_max(
             egui::pos2(rect.left() + 4.0 + GLYPH_W + 4.0, rect.top()),
-            egui::pos2(
-                rect.right() - PLUS_W * if can_worktree { 2.0 } else { 1.0 } - 2.0,
-                rect.bottom(),
-            ),
+            egui::pos2(rect.right() - actions_reserve, rect.bottom()),
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect), |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -154,7 +156,7 @@ impl OxiApp {
         crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
 
         let mut worktree_hovered = false;
-        if can_worktree {
+        if can_worktree && row_hovered {
             let action_rect = egui::Rect::from_min_max(
                 egui::pos2(rect.right() - PLUS_W * 2.0 - 2.0, rect.top()),
                 egui::pos2(rect.right() - PLUS_W - 2.0, rect.bottom()),
@@ -408,6 +410,7 @@ impl OxiApp {
         // Folding hides the normal chat list. The chat currently open in the main view,
         // in-progress chats, and chats that need attention remain visible.
         let mut visible_sessions = 0usize;
+        let mut hidden_older_sessions = 0usize;
         let mut row_advance: Option<f32> = None;
         let order = sidebar_session_order(&self.conv.workspaces[wi]);
         let searching = !q.is_empty();
@@ -421,6 +424,9 @@ impl OxiApp {
                 && ((!matches!(group, SidebarGroup::Pinned | SidebarGroup::Today) || folded)
                     && !exceptional)
             {
+                if !folded && group == SidebarGroup::Older {
+                    hidden_older_sessions += 1;
+                }
                 continue;
             }
             if self.conv.sidebar.history && !self.sidebar_session_in_history_period(wi, si) {
@@ -705,7 +711,7 @@ impl OxiApp {
                                     ICON_TRASH,
                                     FontId::new(FS_TINY, icon_font()),
                                     if trash_resp.hovered() {
-                                        c_accent()
+                                        c_danger()
                                     } else {
                                         c_text_faint()
                                     },
@@ -733,9 +739,12 @@ impl OxiApp {
                     .horizontal(|ui| {
                         ui.add_space(14.0);
                         ui.add(
-                            egui::Label::new(
-                                RichText::new(excerpt).size(FS_TINY).color(c_text_muted()),
-                            )
+                            egui::Label::new(search_highlight_job(
+                                excerpt,
+                                q,
+                                FontId::proportional(FS_TINY),
+                                c_text_muted(),
+                            ))
                             .truncate()
                             .sense(Sense::click()),
                         )
@@ -753,12 +762,43 @@ impl OxiApp {
                 return true;
             }
         }
+        if hidden_older_sessions > 0 && !folded && !searching && !self.conv.sidebar.history {
+            ui.horizontal(|ui| {
+                ui.add_space(12.0);
+                let label = format!(
+                    "Show {hidden_older_sessions} older chat{}…",
+                    if hidden_older_sessions == 1 { "" } else { "s" }
+                );
+                let resp = ui
+                    .add(
+                        egui::Label::new(RichText::new(label).size(FS_TINY).color(c_text_faint()))
+                            .sense(Sense::click())
+                            .selectable(false),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Open History filtered to this project");
+                if resp.clicked() {
+                    self.conv.sidebar.history = true;
+                    let project_root = match parent {
+                        Some(pi) => self.conv.workspaces[pi].root_path.clone(),
+                        None => self.conv.workspaces[wi].root_path.clone(),
+                    };
+                    self.conv.sidebar.history_project = Some(project_root);
+                    self.conv.sidebar.history_days = None;
+                }
+            });
+            ui.add_space(2.0);
+        }
         // A folded workspace with no exceptional rows is intentionally just its header;
         // "No recent chats" would otherwise make folding look as if the workspace were empty.
         // An empty work tree is just its header too: it sits under its repository, where a
         // line per empty work tree only adds noise.
         let empty_worktree = self.conv.workspaces[wi].worktree.is_some() && q.is_empty();
-        if visible_sessions == 0 && !empty_worktree && (!folded || !q.is_empty()) {
+        if visible_sessions == 0
+            && hidden_older_sessions == 0
+            && !empty_worktree
+            && (!folded || !q.is_empty())
+        {
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
                 let msg = if q.is_empty() {
@@ -909,17 +949,28 @@ impl OxiApp {
                     egui::Layout::left_to_right(Align::Center),
                     |ui| {
                         use eframe::egui::Label;
-                        let title_text = if selected {
-                            strong_rich(title.as_str(), FS_SMALL, c_text_strong())
-                        } else {
-                            RichText::new(title.as_str())
-                                .size(FS_SMALL)
-                                .color(c_text_muted())
-                        };
+                        let q = self.conv.sidebar.search.trim();
                         // `Label::truncate` already provides the complete text on hover.
                         // Adding another tooltip here caused two differently styled tooltip
                         // layers, especially when the hover-only delete action overlapped it.
-                        ui.add(Label::new(title_text).truncate().halign(Align::LEFT));
+                        if !q.is_empty() && find_ignore_case(&title, q).is_some() {
+                            let (font, color) = if selected {
+                                (FontId::new(FS_SMALL, strong_font()), c_text_strong())
+                            } else {
+                                (FontId::proportional(FS_SMALL), c_text_muted())
+                            };
+                            let job = search_highlight_job(&title, q, font, color);
+                            ui.add(Label::new(job).truncate().halign(Align::LEFT));
+                        } else {
+                            let title_text = if selected {
+                                strong_rich(title.as_str(), FS_SMALL, c_text_strong())
+                            } else {
+                                RichText::new(title.as_str())
+                                    .size(FS_SMALL)
+                                    .color(c_text_muted())
+                            };
+                            ui.add(Label::new(title_text).truncate().halign(Align::LEFT));
+                        }
                     },
                 );
             });
@@ -1017,5 +1068,79 @@ mod tests {
         harness.run_steps(3);
         press(&mut harness, egui::Key::Escape);
         assert_eq!(harness.state().1, Some(false));
+    }
+}
+
+/// Byte range of the first case-insensitive occurrence of `needle` in `haystack`, on char
+/// boundaries of `haystack` (lowercasing can change byte lengths, so no index arithmetic on a
+/// lowercased copy).
+pub(super) fn find_ignore_case(haystack: &str, needle: &str) -> Option<std::ops::Range<usize>> {
+    if needle.is_empty() {
+        return None;
+    }
+    let lower = |c: char| c.to_lowercase();
+    haystack.char_indices().find_map(|(start, _)| {
+        let mut rest = haystack[start..].char_indices();
+        let mut end = start;
+        let mut wanted = needle.chars().flat_map(lower);
+        let mut pending = None::<char>;
+        loop {
+            let next_wanted = pending.take().or_else(|| wanted.next());
+            let Some(w) = next_wanted else {
+                return Some(start..end);
+            };
+            let (offset, c) = rest.next()?;
+            let mut got = lower(c);
+            if got.next() != Some(w) {
+                return None;
+            }
+            // Multi-char lowercase forms must match the following needle chars too.
+            for g in got {
+                if wanted.next() != Some(g) {
+                    return None;
+                }
+            }
+            end = start + offset + c.len_utf8();
+        }
+    })
+}
+
+/// `text` laid out in `font`/`color`, with every case-insensitive match of `query` marked like
+/// the project search marks its hits.
+pub(super) fn search_highlight_job(
+    text: &str,
+    query: &str,
+    font: FontId,
+    color: Color32,
+) -> egui::text::LayoutJob {
+    let plain = egui::text::TextFormat::simple(font.clone(), color);
+    let mut marked = egui::text::TextFormat::simple(font, c_text_strong());
+    marked.background = crate::theme::blend_color(c_bg_sidebar(), c_warning_fg(), 0.38);
+    let mut job = egui::text::LayoutJob::default();
+    let mut rest = 0;
+    while let Some(hit) = find_ignore_case(&text[rest..], query) {
+        let (start, end) = (rest + hit.start, rest + hit.end);
+        if end == start {
+            break;
+        }
+        job.append(&text[rest..start], 0.0, plain.clone());
+        job.append(&text[start..end], 0.0, marked.clone());
+        rest = end;
+    }
+    job.append(&text[rest..], 0.0, plain);
+    job
+}
+
+#[cfg(test)]
+mod search_highlight_tests {
+    use super::find_ignore_case;
+
+    #[test]
+    fn finds_case_insensitive_ranges_on_original_boundaries() {
+        assert_eq!(find_ignore_case("Add CSV export", "csv"), Some(4..7));
+        assert_eq!(find_ignore_case("Ștergere ȘIR", "șir"), Some(10..14));
+        assert_eq!(find_ignore_case("abc", "abcd"), None);
+        assert_eq!(find_ignore_case("abc", ""), None);
+        assert_eq!(find_ignore_case("xx İstanbul", "i̇st"), Some(3..7));
     }
 }

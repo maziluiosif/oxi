@@ -37,6 +37,44 @@ impl OxiApp {
             }
         }
     }
+
+    /// Open a truncated tool's full output file: inside the workspace it opens in an editor tab;
+    /// temporary spill files open in the built-in text viewer modal.
+    pub(crate) fn open_tool_output_file(&mut self, ctx: &egui::Context, raw_path: &str) {
+        const MAX_VIEW_BYTES: usize = 512 * 1024;
+        let root = PathBuf::from(&self.active_workspace().root_path);
+        if let Some((path, line)) = workspace_file_link(raw_path, &root) {
+            self.open_file_at_line(path, line);
+            return;
+        }
+        let path = Path::new(raw_path);
+        if !path.is_file() {
+            crate::ui::chrome::show_error_toast(ctx, "Full output file is no longer available");
+            return;
+        }
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let truncated = bytes.len() > MAX_VIEW_BYTES;
+                let slice = &bytes[..bytes.len().min(MAX_VIEW_BYTES)];
+                let mut text = String::from_utf8_lossy(slice).into_owned();
+                if truncated {
+                    text.push_str(&format!(
+                        "\n\n… (showing first {} KiB of {} KiB)",
+                        MAX_VIEW_BYTES / 1024,
+                        bytes.len().div_ceil(1024)
+                    ));
+                }
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| raw_path.to_owned());
+                crate::ui::text_attachment::open(ctx, &name, &text);
+            }
+            Err(e) => {
+                crate::ui::chrome::show_error_toast(ctx, format!("Could not read output: {e}"));
+            }
+        }
+    }
 }
 
 fn is_web_link(link: &str) -> bool {

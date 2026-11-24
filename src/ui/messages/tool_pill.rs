@@ -332,11 +332,40 @@ pub(super) fn render_tool_pill(
             );
         }
         if *output_truncated || full_output_path.is_some() {
-            let caption = match full_output_path.as_deref() {
-                Some(path) => format!("output truncated — full output: {path}"),
-                None => "output truncated".to_string(),
-            };
-            ui.label(RichText::new(caption).size(FS_TINY).color(c_text_faint()));
+            match full_output_path.as_deref() {
+                Some(path) => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                        ui.label(
+                            RichText::new("output truncated —")
+                                .size(FS_TINY)
+                                .color(c_text_faint()),
+                        );
+                        let resp = ui
+                            .add(
+                                Label::new(
+                                    RichText::new(format!("open full output ({path})"))
+                                        .size(FS_TINY)
+                                        .color(c_accent()),
+                                )
+                                .sense(egui::Sense::click())
+                                .selectable(false),
+                            )
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("Inspect the full saved output");
+                        if resp.clicked() {
+                            crate::ui::messages::request_open_tool_output(ui.ctx(), path);
+                        }
+                    });
+                }
+                None => {
+                    ui.label(
+                        RichText::new("output truncated")
+                            .size(FS_TINY)
+                            .color(c_text_faint()),
+                    );
+                }
+            }
         }
     }
 }
@@ -641,7 +670,7 @@ fn render_edit_tool_block(
     Frame::new()
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::new(1.0, outer_border))
-        .corner_radius(CornerRadius::same(RADIUS_CHIP))
+        .corner_radius(CornerRadius::same(RADIUS_CARD))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
 
@@ -649,15 +678,15 @@ fn render_edit_tool_block(
                 .fill(header_bg)
                 .corner_radius(if is_open && has_diff {
                     eframe::egui::CornerRadius {
-                        nw: RADIUS_CHIP,
-                        ne: RADIUS_CHIP,
+                        nw: RADIUS_CARD,
+                        ne: RADIUS_CARD,
                         sw: 0,
                         se: 0,
                     }
                 } else {
-                    CornerRadius::same(RADIUS_CHIP)
+                    CornerRadius::same(RADIUS_CARD)
                 })
-                .inner_margin(Margin::symmetric(12, 8))
+                .inner_margin(Margin::symmetric(14, 8))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
@@ -683,11 +712,11 @@ fn render_edit_tool_block(
                             ui.add(
                                 Label::new(
                                     RichText::new(if is_open {
-                                        ICON_ANGLE_UP
-                                    } else {
                                         ICON_ANGLE_DOWN
+                                    } else {
+                                        ICON_CHEVRON_RIGHT
                                     })
-                                    .font(FontId::new(FS_TINY, icon_font()))
+                                    .font(FontId::new(FS_TINY - 1.5, icon_font()))
                                     .color(c_text_faint()),
                                 )
                                 .selectable(false),
@@ -732,8 +761,8 @@ fn render_edit_tool_block(
                     .corner_radius(eframe::egui::CornerRadius {
                         nw: 0,
                         ne: 0,
-                        sw: 8,
-                        se: 8,
+                        sw: RADIUS_CARD,
+                        se: RADIUS_CARD,
                     })
                     .inner_margin(Margin::symmetric(10, 8))
                     .show(ui, |ui| {
@@ -804,9 +833,120 @@ fn render_edit_tool_block(
     ui.add_space(6.0);
 }
 
+/// Whether a completed tool call is a quiet read-only exploration step that can be folded into
+/// an "Explored N files · M searches" summary group in Balanced/Minimal mode.
+fn is_collapsible_explore_tool(block: &AssistantBlock) -> bool {
+    let AssistantBlock::Tool {
+        name,
+        is_error,
+        diff,
+        ..
+    } = block
+    else {
+        return false;
+    };
+    if *is_error == Some(true) || diff.as_deref().is_some_and(|d| !d.trim().is_empty()) {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "read"
+            | "read_file"
+            | "view_file"
+            | "view_file_outline"
+            | "view_code_item"
+            | "grep"
+            | "grep_search"
+            | "search"
+            | "find"
+            | "find_by_name"
+            | "glob"
+            | "ls"
+            | "list"
+            | "list_dir"
+            | "fetch"
+            | "web_fetch"
+            | "codebase_search"
+            | "web_search"
+            | "search_web"
+            | "read_url_content"
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ExploreKind {
+    File,
+    Search,
+    List,
+    Web,
+}
+
+fn explore_kind(name: &str) -> ExploreKind {
+    match name.to_ascii_lowercase().as_str() {
+        "read" | "read_file" | "view_file" | "view_file_outline" | "view_code_item" => {
+            ExploreKind::File
+        }
+        "grep" | "grep_search" | "search" | "find" | "find_by_name" | "glob" => ExploreKind::Search,
+        "ls" | "list" | "list_dir" => ExploreKind::List,
+        _ => ExploreKind::Web,
+    }
+}
+
+fn explore_group_summary(blocks: &[AssistantBlock], tool_run: &[usize]) -> String {
+    let (mut files, mut searches, mut lists, mut web) = (0usize, 0usize, 0usize, 0usize);
+    for &ti in tool_run {
+        if let AssistantBlock::Tool { name, .. } = &blocks[ti] {
+            match explore_kind(name) {
+                ExploreKind::File => files += 1,
+                ExploreKind::Search => searches += 1,
+                ExploreKind::List => lists += 1,
+                ExploreKind::Web => web += 1,
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    if files > 0 {
+        parts.push(format!(
+            "{files} {}",
+            if files == 1 { "file" } else { "files" }
+        ));
+    }
+    if searches > 0 {
+        parts.push(format!(
+            "{searches} {}",
+            if searches == 1 { "search" } else { "searches" }
+        ));
+    }
+    if lists > 0 {
+        parts.push(format!(
+            "{lists} {}",
+            if lists == 1 { "folder" } else { "folders" }
+        ));
+    }
+    if web > 0 {
+        parts.push(format!(
+            "{web} {}",
+            if web == 1 {
+                "web lookup"
+            } else {
+                "web lookups"
+            }
+        ));
+    }
+    if parts.is_empty() {
+        format!("Explored {} items", tool_run.len())
+    } else {
+        format!("Explored {}", parts.join(" · "))
+    }
+}
+
 /// Render one consecutive run of tool blocks directly in transcript order. Tool calls must not be
 /// capped independently of thinking blocks: hiding only tools makes interleaved thinking segments
 /// collapse together and visually destroys the provider's chronological event order.
+///
+/// Once the turn finishes, runs of 3+ quiet read-only exploration calls fold into one clickable
+/// summary pill in Balanced/Minimal mode so long investigation turns stay scannable.
 fn render_explored_tool_pill_run(
     ui: &mut Ui,
     msg_idx: usize,
@@ -816,11 +956,135 @@ fn render_explored_tool_pill_run(
     newest_tool_idx: Option<usize>,
     streaming: bool,
 ) {
-    for &ti in tool_run {
-        let is_last = Some(ti) == last_tool_idx;
-        let is_newest = Some(ti) == newest_tool_idx;
-        render_tool_pill(ui, msg_idx, ti, &blocks[ti], streaming, is_last, is_newest);
-        ui.add_space(TOOL_PILL_GAP);
+    let may_collapse = !streaming && super::tool_detail(ui) != ToolDetail::Expanded;
+    let segments = if may_collapse {
+        explore_segments(blocks, tool_run)
+    } else {
+        vec![(false, tool_run)]
+    };
+    for (collapse, segment) in segments {
+        if collapse {
+            render_explore_group(
+                ui,
+                msg_idx,
+                blocks,
+                segment,
+                last_tool_idx,
+                newest_tool_idx,
+                streaming,
+            );
+            continue;
+        }
+        for &ti in segment {
+            let is_last = Some(ti) == last_tool_idx;
+            let is_newest = Some(ti) == newest_tool_idx;
+            render_tool_pill(ui, msg_idx, ti, &blocks[ti], streaming, is_last, is_newest);
+            ui.add_space(TOOL_PILL_GAP);
+        }
+    }
+}
+
+/// Splits a run of tool calls into stretches to render: `true` marks 3+ consecutive quiet
+/// exploration calls that fold into one summary pill, `false` calls shown one by one. A run
+/// that reads six files and then edits one still folds the reads.
+fn explore_segments<'a>(
+    blocks: &[AssistantBlock],
+    tool_run: &'a [usize],
+) -> Vec<(bool, &'a [usize])> {
+    let mut segments: Vec<(bool, &'a [usize])> = Vec::new();
+    let mut start = 0;
+    while start < tool_run.len() {
+        let explore = is_collapsible_explore_tool(&blocks[tool_run[start]]);
+        let len = tool_run[start..]
+            .iter()
+            .take_while(|&&ti| is_collapsible_explore_tool(&blocks[ti]) == explore)
+            .count();
+        let stretch = &tool_run[start..start + len];
+        let collapse = explore && len >= 3;
+        // Short explore stretches render like their neighbours; merge them so the plain calls
+        // stay one slice.
+        match segments.last_mut() {
+            Some((false, prev)) if !collapse => {
+                let begin = start - prev.len();
+                *prev = &tool_run[begin..start + len];
+            }
+            _ => segments.push((collapse, stretch)),
+        }
+        start += len;
+    }
+    segments
+}
+
+/// One folded "Explored …" pill for `tool_run`, expandable to the calls themselves.
+fn render_explore_group(
+    ui: &mut Ui,
+    msg_idx: usize,
+    blocks: &[AssistantBlock],
+    tool_run: &[usize],
+    last_tool_idx: Option<usize>,
+    newest_tool_idx: Option<usize>,
+    streaming: bool,
+) {
+    let persist_id = expand_persist_id(Id::new(("explore_group", msg_idx, tool_run[0])));
+    let expanded = is_expanded(ui, persist_id);
+    let summary = explore_group_summary(blocks, tool_run);
+    let frame = Frame::new()
+        .fill(crate::theme::c_tool_pill_bg())
+        .stroke(Stroke::new(
+            1.0,
+            if expanded {
+                c_border()
+            } else {
+                crate::theme::c_tool_pill_border()
+            },
+        ))
+        .corner_radius(CornerRadius::same(RADIUS_CARD))
+        .inner_margin(Margin::symmetric(14, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(
+                    RichText::new(ICON_SEARCH)
+                        .font(FontId::new(FS_SMALL + 0.5, icon_font()))
+                        .color(c_text_faint()),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(
+                        Label::new(
+                            RichText::new(if expanded {
+                                ICON_ANGLE_DOWN
+                            } else {
+                                ICON_CHEVRON_RIGHT
+                            })
+                            .font(FontId::new(FS_TINY - 1.5, icon_font()))
+                            .color(c_text_faint()),
+                        )
+                        .selectable(false),
+                    );
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(
+                            Label::new(
+                                RichText::new(&summary).size(FS_SMALL).color(c_text_muted()),
+                            )
+                            .truncate()
+                            .selectable(false),
+                        );
+                    });
+                });
+            });
+        });
+    clickable_expand_overlay(ui, frame.response.rect, persist_id);
+    ui.add_space(TOOL_PILL_GAP);
+    if expanded {
+        ui.indent(persist_id.with("items"), |ui| {
+            for &ti in tool_run {
+                let is_last = Some(ti) == last_tool_idx;
+                let is_newest = Some(ti) == newest_tool_idx;
+                render_tool_pill(ui, msg_idx, ti, &blocks[ti], streaming, is_last, is_newest);
+                ui.add_space(TOOL_PILL_GAP);
+            }
+        });
     }
 }
 
@@ -915,7 +1179,11 @@ pub(super) fn render_explored_cluster(ui: &mut Ui, ctx: ExploredClusterCtx<'_>) 
 /// The shell command of a `bash` call, from its (possibly truncated) JSON arguments.
 fn bash_command(args_summary: Option<&str>) -> Option<String> {
     let args: serde_json::Value = serde_json::from_str(args_summary?).ok()?;
-    let command = args.get("command")?.as_str()?.trim();
+    let command = args
+        .get("command")
+        .or_else(|| args.get("CommandLine"))?
+        .as_str()?
+        .trim();
     (!command.is_empty()).then(|| command.to_owned())
 }
 
@@ -945,4 +1213,77 @@ fn command_context_menu(ui: &mut Ui, rect: eframe::egui::Rect, persist_id: Id, c
             ui.close();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(name: &str, is_error: Option<bool>) -> AssistantBlock {
+        AssistantBlock::Tool {
+            tool_call_id: format!("call_{name}"),
+            name: name.into(),
+            args_summary: None,
+            output: String::new(),
+            diff: None,
+            is_error,
+            full_output_path: None,
+            output_truncated: false,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn explore_group_summarizes_files_searches_and_folders() {
+        let blocks = vec![
+            tool("read", Some(false)),
+            tool("read_file", Some(false)),
+            tool("grep", Some(false)),
+            tool("list_dir", Some(false)),
+            tool("search_web", Some(false)),
+        ];
+        assert_eq!(
+            explore_group_summary(&blocks, &[0, 1, 2, 3, 4]),
+            "Explored 2 files · 1 search · 1 folder · 1 web lookup"
+        );
+        assert_eq!(explore_group_summary(&blocks, &[0]), "Explored 1 file");
+    }
+
+    #[test]
+    fn collapsible_explore_excludes_errors_and_mutating_or_shell_tools() {
+        assert!(is_collapsible_explore_tool(&tool("read", Some(false))));
+        assert!(is_collapsible_explore_tool(&tool(
+            "grep_search",
+            Some(false)
+        )));
+        assert!(!is_collapsible_explore_tool(&tool("read", Some(true))));
+        assert!(!is_collapsible_explore_tool(&tool("bash", Some(false))));
+        assert!(!is_collapsible_explore_tool(&tool("edit", Some(false))));
+        assert!(is_collapsible_explore_tool(&tool("web_fetch", Some(false))));
+        assert!(is_collapsible_explore_tool(&tool(
+            "codebase_search",
+            Some(false)
+        )));
+    }
+
+    #[test]
+    fn explore_stretches_fold_even_next_to_other_tools() {
+        let names = [
+            "read", "grep", "read", "read", "edit", "read", "bash", "ls", "ls", "ls",
+        ];
+        let blocks: Vec<_> = names.iter().map(|name| tool(name, Some(false))).collect();
+        let run: Vec<usize> = (0..blocks.len()).collect();
+        let segments = explore_segments(&blocks, &run);
+        assert_eq!(
+            segments,
+            vec![
+                (true, &run[0..4]),
+                // A lone read between other tools stays inline with them.
+                (false, &run[4..7]),
+                (true, &run[7..10]),
+            ]
+        );
+        let short: Vec<usize> = run[0..2].to_vec();
+        assert_eq!(explore_segments(&blocks, &short), vec![(false, &short[..])]);
+    }
 }

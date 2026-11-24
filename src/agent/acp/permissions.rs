@@ -80,6 +80,7 @@ pub(super) async fn handle_permission(
                 | super::oxi_mcp::SCRATCHPAD_READ
                 | super::chat_archive::TOOL
                 | super::chat_history::TOOL
+                | crate::delegation::STATUS
         )
     ) || crate::evidence::tools::NAMES.contains(&name.as_str())
         || plan_mode && is_plan_file_edit(&pr.params["toolCall"])
@@ -94,8 +95,7 @@ pub(super) async fn handle_permission(
         || (name == "bash"
             && args
                 .as_ref()
-                .and_then(|a| a.get("command"))
-                .and_then(Value::as_str)
+                .and_then(crate::agent::approval::bash_command_arg)
                 .is_some_and(|c| {
                     crate::agent::approval::bash_command_allowlisted(c, bash_allowlist)
                 }))
@@ -232,13 +232,19 @@ pub(super) fn pick_option(options: &[Value], wanted_kinds: &[&str]) -> Option<St
 pub(super) fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
     let kind = tool.get("kind").and_then(|k| k.as_str()).unwrap_or("");
     let title = tool.get("title").and_then(|t| t.as_str()).unwrap_or("");
+    let raw_input = tool
+        .get("rawInput")
+        .filter(|v| !v.is_null())
+        .or_else(|| tool.get("args").filter(|v| !v.is_null()));
     // Same names as oxi's own tools, so the approval settings mean the same thing for both.
     if let Some(name) = super::oxi_mcp::oxi_tool(tool) {
         // Evidence tools that run a shell command are approved like `bash` running it.
-        if let Some(args) = crate::evidence::tools::command_args(name, &tool["rawInput"]) {
+        if let Some(args) =
+            raw_input.and_then(|input| crate::evidence::tools::command_args(name, input))
+        {
             return ("bash".to_string(), Some(args));
         }
-        return (name.to_string(), tool.get("rawInput").cloned());
+        return (name.to_string(), raw_input.cloned());
     }
     let name = match kind {
         "execute" => "bash".to_string(),
@@ -247,10 +253,15 @@ pub(super) fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
         "search" => "grep".to_string(),
         "fetch" => "web_fetch".to_string(),
         "think" => "task".to_string(),
-        // MCP tools carry their full name (`mcp__server__tool`), which stays the same from
-        // call to call where the title may not, so an allowed tool keeps matching.
+        // MCP tools carry their full name (`mcp__server__tool` or `mcp_server_tool`), which
+        // stays the same from call to call where the title may not, so an allowed tool keeps
+        // matching.
         "" | "other" => {
-            if let Some(tool) = tool["_meta"]["claudeCode"]["toolName"].as_str() {
+            if let Some(tool) = tool["_meta"]["claudeCode"]["toolName"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| tool["name"].as_str().filter(|s| !s.is_empty()))
+            {
                 tool.to_string()
             } else if title.is_empty() {
                 "tool".to_string()
@@ -260,5 +271,5 @@ pub(super) fn permission_name_args(tool: &Value) -> (String, Option<Value>) {
         }
         other => other.to_string(),
     };
-    (name, tool.get("rawInput").cloned())
+    (name, raw_input.cloned())
 }

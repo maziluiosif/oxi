@@ -42,13 +42,19 @@ pub fn server_config() -> Option<McpServerConfig> {
 }
 
 /// Whether `name` is an agent-desktop tool, however the agent spells MCP tool names
-/// (`mcp__agent-desktop__desktop_click`, `agent-desktop.desktop_click`, ...).
+/// (`mcp__agent-desktop__desktop_click`, `mcp_agent-desktop_desktop_click`,
+/// `agent-desktop.desktop_click`, ...).
 pub fn is_tool(name: &str) -> bool {
     let name = name.trim();
     let tool = name
         .strip_prefix("mcp__")
         .and_then(|rest| rest.strip_prefix(SERVER_NAME))
         .and_then(|rest| rest.strip_prefix("__"))
+        .or_else(|| {
+            name.strip_prefix("mcp_")
+                .and_then(|rest| rest.strip_prefix(SERVER_NAME))
+                .and_then(|rest| rest.strip_prefix('_'))
+        })
         .or_else(|| {
             name.strip_prefix(SERVER_NAME)
                 .and_then(|rest| rest.strip_prefix(['.', '/', ':']))
@@ -340,15 +346,23 @@ mod tests {
     #[test]
     fn recognises_only_agent_desktop_tools() {
         assert!(is_tool("mcp__agent-desktop__desktop_click"));
+        assert!(is_tool("mcp_agent-desktop_desktop_snapshot"));
+        assert!(is_tool("mcp_agent-desktop_desktop_click"));
         assert!(is_tool("agent-desktop.desktop_snapshot"));
         assert!(is_tool("agent-desktop/desktop_skills_get"));
         assert!(!is_tool("mcp__other__desktop_click"));
+        assert!(!is_tool("mcp_other_desktop_click"));
         assert!(!is_tool("mcp__agent-desktop__other"));
+        assert!(!is_tool("mcp_agent-desktop_other"));
         assert!(!is_tool("agent-desktop click @s1:e1"));
         assert!(!is_tool("agent-desktop.desktop_click; rm -rf ~"));
         assert!(is_acp_tool(&json!({
             "title": "Click",
             "_meta": { "claudeCode": { "toolName": "mcp__agent-desktop__desktop_click" } },
+        })));
+        assert!(is_acp_tool(&json!({
+            "title": "Run mcp_agent-desktop_desktop_snapshot",
+            "name": "mcp_agent-desktop_desktop_snapshot",
         })));
     }
 

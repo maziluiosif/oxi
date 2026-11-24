@@ -74,6 +74,9 @@ impl eframe::App for OxiApp {
         if let Some(command) = crate::ui::messages::take_terminal_command(ctx) {
             self.open_command_in_terminal(ctx, &command);
         }
+        if let Some(path) = crate::ui::messages::take_open_tool_output(ctx) {
+            self.open_tool_output_file(ctx, &path);
+        }
         self.drain_local_models(ctx);
         self.drain_voice(ctx);
         self.drain_voice_models(ctx);
@@ -219,6 +222,7 @@ impl eframe::App for OxiApp {
         self.render_activity_window(ui.ctx());
         self.render_session_import(ui.ctx());
         self.route_opened_links(ui.ctx());
+        crate::ui::chrome::render_toast(ui.ctx());
         // Last, so the check marks see every toggle made this frame (keys, menu, buttons).
         #[cfg(target_os = "macos")]
         self.sync_menu_bar(ui.ctx());
@@ -575,12 +579,18 @@ impl OxiApp {
         // editor/composer. Skip when the terminal panel is showing so Escape stays available to
         // the PTY (the terminal is hidden while Settings is open, so Escape works there
         // regardless). Escape for the shared confirm modal is handled by the modal itself.
+        // The closes below take the key, so nothing drawn later this frame (the approval card's
+        // Escape = Deny) acts on it a second time.
+        let take_escape = || ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
         if escape && self.conv.editor.file_picker_open {
             self.cancel_file_picker();
+            take_escape();
         } else if escape && self.conv.editor.find_open {
             self.conv.editor.close_find();
+            take_escape();
         } else if escape && self.conv.transcript.find.is_some() && !self.conv.settings_page.open {
             self.close_chat_find();
+            take_escape();
         } else if escape && self.conv.settings_page.open {
             if self.conv.settings_page.exit_prompt.is_some() {
                 // Modal already up: Escape means "Stay".
@@ -607,7 +617,11 @@ impl OxiApp {
                 document.view.extra.clear();
             }
             self.conv.editor.focus_editor_next_frame = true;
-        } else if escape && !self.conv.terminal_panel.open && !self.confirm_prompt_open() {
+        } else if escape
+            && !self.conv.terminal_panel.open
+            && !self.confirm_prompt_open()
+            && self.active_pending_approval().is_none()
+        {
             self.focus_active_view_next_frame();
         }
     }

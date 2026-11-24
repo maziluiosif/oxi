@@ -20,14 +20,45 @@ impl OxiApp {
         self.render_context_status(ui);
         if let Some(quota) = self.subscription_status(ui.ctx()) {
             status_sep(ui);
-            let response = ui.add(
-                egui::Label::new(RichText::new(quota.text).size(FS_TINY).color(quota.color))
-                    .sense(Sense::hover()),
-            );
-            response.on_hover_ui(|ui| {
-                for (text, color) in quota.lines {
-                    ui.label(RichText::new(text).size(FS_SMALL).color(color));
+            let is_off = quota.usage_disabled;
+            let response = ui
+                .add(
+                    egui::Label::new(RichText::new(&quota.text).size(FS_TINY).color(quota.color))
+                        .sense(Sense::click())
+                        .selectable(false),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if response.clicked() {
+                if is_off {
+                    self.open_settings_page();
+                    self.conv.settings_page.tab = super::state::SettingsTab::Providers;
+                    self.conv.settings_page.provider_tab = LlmProviderKind::Router;
+                } else {
+                    let settings = self.conv.settings.clone();
+                    let ctx = ui.ctx().clone();
+                    if let Ok(rt) = crate::runtime::runtime() {
+                        rt.spawn(async move {
+                            crate::router::quota::refresh(&settings, true).await;
+                            ctx.request_repaint();
+                        });
+                        crate::ui::chrome::show_toast(ui.ctx(), "Refreshing usage limits…");
+                    }
                 }
+            }
+            response.on_hover_ui(|ui| {
+                for (text, color) in &quota.lines {
+                    ui.label(RichText::new(text).size(FS_SMALL).color(*color));
+                }
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(if is_off {
+                        "Click to open Router settings"
+                    } else {
+                        "Click to refresh now"
+                    })
+                    .size(FS_TINY)
+                    .color(c_text_faint()),
+                );
             });
         }
         if let Some(text) = self.tokens_per_sec_text() {
@@ -63,8 +94,9 @@ impl OxiApp {
         }
     }
 
-    /// A small ring and `used / window`, with the agent-reported cost on hover.
-    fn render_context_status(&self, ui: &mut egui::Ui) {
+    /// A small ring and `used / window`; clicking opens a popover with details and one-click
+    /// `/compact`.
+    fn render_context_status(&mut self, ui: &mut egui::Ui) {
         let (used_tokens, max_tokens) = self.active_context_tokens();
         let pct = if max_tokens == 0 {
             0.0
@@ -78,7 +110,7 @@ impl OxiApp {
             format_context_tokens(max_tokens as u64),
         );
         let galley = ui.painter().layout_no_wrap(
-            text,
+            text.clone(),
             egui::FontId::proportional(FS_TINY),
             if pct >= 0.75 {
                 context_indicator_color(pct)
@@ -88,9 +120,10 @@ impl OxiApp {
         );
         let ring = 12.0;
         let size = egui::vec2(ring + 5.0 + galley.size().x, ui.available_height());
-        let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+        let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
         resp.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), "Context usage")
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Context usage")
         });
         let center = egui::pos2(rect.left() + ring * 0.5, rect.center().y);
         let radius = ring * 0.5 - 1.0;
@@ -109,28 +142,125 @@ impl OxiApp {
             rect.center().y - galley.size().y * 0.5,
         );
         ui.painter().galley(text_pos, galley, c_text_muted());
-        if !resp.hovered() {
-            return;
-        }
-        let mut hover = format!("Context used ({:.0}% of the window)", pct * 100.0);
-        // What the agent says this chat cost (on a subscription, what it would cost at API
-        // prices).
+
+        let popup_id = egui::Id::new("status_bar_context_popup");
+        let popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+
         let cfg = self.conv.settings.active_config();
-        if cfg.is_acp()
+        let cost_line = if cfg.is_acp()
             && let Some((amount, currency)) =
                 crate::agent::acp::reported_cost(&self.acp_session_key(self.active_session_key()))
             && amount > 0.0
         {
-            let amount = if currency == "USD" {
+            let formatted = if currency == "USD" {
                 format!("${amount:.2}")
             } else {
                 format!("{amount:.2} {currency}")
             };
-            hover.push_str(&format!(
-                "\nAgent-reported cost since oxi started: {amount}"
-            ));
+            Some(format!("Agent-reported cost: {formatted}"))
+        } else {
+            None
+        };
+
+        let key = self.active_session_key();
+        let busy = self.active_waiting_response();
+        let compacting = self.compaction_active_for(key);
+        let can_compact = !busy
+            && !compacting
+            && self.compactable_turns(key) > super::compaction::COMPACT_KEEP_RECENT_TURNS;
+        let mut trigger_compact = false;
+
+        egui::Popup::from_toggle_button_response(&resp)
+            .id(popup_id)
+            .align(egui::RectAlign::TOP_START)
+            .gap(6.0)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(220.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("Context window")
+                                .size(FS_SMALL)
+                                .color(c_text_strong())
+                                .strong(),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(format!("{:.0}%", pct * 100.0))
+                                    .size(FS_TINY)
+                                    .color(context_indicator_color(pct))
+                                    .strong(),
+                            );
+                        });
+                    });
+                    // Mini progress bar
+                    let (bar_rect, _) = ui
+                        .allocate_exact_size(egui::vec2(ui.available_width(), 5.0), Sense::hover());
+                    let r = egui::CornerRadius::same(3);
+                    ui.painter().rect_filled(bar_rect, r, c_border_subtle());
+                    let filled_w = (bar_rect.width() * pct).max(if pct > 0.0 { 4.0 } else { 0.0 });
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            bar_rect.min,
+                            egui::vec2(filled_w, bar_rect.height()),
+                        ),
+                        r,
+                        context_indicator_color(pct),
+                    );
+                    ui.label(
+                        RichText::new(format!("{text} tokens"))
+                            .size(FS_TINY)
+                            .color(c_text_muted()),
+                    );
+                    if let Some(cost) = &cost_line {
+                        ui.label(RichText::new(cost).size(FS_TINY).color(c_text_muted()));
+                    }
+                    ui.separator();
+                    let label = if compacting {
+                        "Compacting…"
+                    } else {
+                        "Compact conversation"
+                    };
+                    let btn = crate::ui::chrome::ghost_button_icon_enabled(
+                        ui,
+                        ICON_MAGIC,
+                        label,
+                        false,
+                        can_compact,
+                    )
+                    .on_hover_text("Summarize older turns to free context window (/compact)")
+                    .on_disabled_hover_text(if compacting {
+                        "Compaction is already running"
+                    } else if busy {
+                        "Wait for the current response to finish"
+                    } else {
+                        "Need more turns before compacting"
+                    });
+                    if btn.clicked() {
+                        trigger_compact = true;
+                        ui.close();
+                    }
+                });
+            });
+
+        if trigger_compact {
+            self.start_compaction(key, None);
+            crate::ui::chrome::show_toast(ui.ctx(), "Compacting conversation…");
         }
-        resp.show_tooltip_text(hover);
+
+        if !popup_open && resp.hovered() {
+            let mut hover = format!(
+                "Context used ({:.0}% of the window)\nClick for details & /compact",
+                pct * 100.0
+            );
+            if let Some(cost) = cost_line {
+                hover.push('\n');
+                hover.push_str(&cost);
+            }
+            resp.show_tooltip_text(hover);
+        }
     }
 
     /// Subscription windows for providers whose usage oxi can read: `5h 34% · 7d 12%`, colored
@@ -153,6 +283,7 @@ impl OxiApp {
             return Some(QuotaStatus {
                 text: "usage off".into(),
                 color: c_text_faint(),
+                usage_disabled: true,
                 lines: vec![(
                     "Turn on subscription usage in Settings → Router to see usage limits".into(),
                     c_text_faint(),
@@ -177,6 +308,7 @@ impl OxiApp {
             return Some(QuotaStatus {
                 text: "usage…".into(),
                 color: c_text_faint(),
+                usage_disabled: false,
                 lines: vec![("Reading subscription usage…".into(), c_text_faint())],
             });
         };
@@ -227,6 +359,7 @@ impl OxiApp {
                 text
             },
             color,
+            usage_disabled: false,
             lines,
         })
     }
@@ -250,6 +383,7 @@ impl OxiApp {
 struct QuotaStatus {
     text: String,
     color: Color32,
+    usage_disabled: bool,
     /// Hover: one line per window with its reset time, then the last probe error.
     lines: Vec<(String, Color32)>,
 }

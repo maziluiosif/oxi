@@ -30,7 +30,15 @@ const MIN_IDLE_FOR_LIMIT: Duration = Duration::from_secs(60);
 pub(super) const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
 /// Tools whose work outlives the turn that started them.
-const BACKGROUND_TOOLS: &[&str] = &["ScheduleWakeup", "Monitor", "CronCreate"];
+const BACKGROUND_TOOLS: &[&str] = &[
+    "ScheduleWakeup",
+    "Monitor",
+    "CronCreate",
+    "schedule",
+    "run_workflow",
+    "invoke_subagent",
+    "swarm",
+];
 
 /// Set the stopping policy from the settings.
 pub fn set_policy(idle_minutes: u32, max_live: u32) {
@@ -86,13 +94,20 @@ impl Activity {
 }
 
 /// Whether a tool call starts work that keeps running after the turn.
-fn starts_background(update: &Value) -> bool {
+pub(super) fn starts_background(update: &Value) -> bool {
+    // Antigravity sends a tool's arguments as `args` instead of `rawInput`.
+    let input = match &update["rawInput"] {
+        Value::Null => &update["args"],
+        input => input,
+    };
     matches!(
         update["sessionUpdate"].as_str(),
         Some("tool_call" | "tool_call_update")
-    ) && (update["rawInput"]["run_in_background"].as_bool() == Some(true)
+    ) && (input["run_in_background"].as_bool() == Some(true)
+        || input["IsDaemon"].as_bool() == Some(true)
         || update["_meta"]["claudeCode"]["toolName"]
             .as_str()
+            .or_else(|| update["name"].as_str())
             .is_some_and(|name| BACKGROUND_TOOLS.contains(&name)))
 }
 
@@ -266,6 +281,26 @@ mod tests {
         let activity = Activity::new();
         activity.note(&update(json!({"sessionUpdate": "tool_call_update",
             "_meta": {"claudeCode": {"toolName": "ScheduleWakeup"}}})));
+        assert!(activity.background.load(Ordering::Relaxed));
+
+        let activity = Activity::new();
+        activity.note(&update(
+            json!({"sessionUpdate": "tool_call", "name": "run_command",
+            "rawInput": {"CommandLine": "npm run dev", "IsDaemon": true}}),
+        ));
+        assert!(activity.background.load(Ordering::Relaxed));
+
+        let activity = Activity::new();
+        activity.note(&update(
+            json!({"sessionUpdate": "tool_call", "name": "schedule"}),
+        ));
+        assert!(activity.background.load(Ordering::Relaxed));
+
+        let activity = Activity::new();
+        activity.note(&update(
+            json!({"sessionUpdate": "tool_call", "name": "run_command",
+            "args": {"CommandLine": "npm run dev", "IsDaemon": true}}),
+        ));
         assert!(activity.background.load(Ordering::Relaxed));
     }
 }

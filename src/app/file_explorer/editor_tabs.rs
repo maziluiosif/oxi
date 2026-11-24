@@ -31,6 +31,26 @@ impl OxiApp {
         let can_go_forward = !self.conv.editor.navigation_forward.is_empty();
         let sidebar_open = self.conv.sidebar.open;
         let git_open = self.conv.git_ui.open;
+        let split_rendered = self.conv.editor.split_rendered;
+        let split_with_chat = self.conv.editor.split_with_chat;
+        let editor_touches_left = !sidebar_open && !split_rendered;
+        let active_key = self.active_session_key();
+        let chat_streaming = self.active_waiting_response();
+        let chat_needs_approval = self
+            .run_state(active_key)
+            .is_some_and(|r| r.pending_approval.is_some());
+        let chat_unseen = self
+            .run_state(active_key)
+            .is_some_and(|r| r.completion_unseen);
+        let mut return_to_chat = false;
+        let mut toggle_split_chat = false;
+        let chat_tab_reserve = if split_rendered {
+            0.0
+        } else if chat_needs_approval {
+            116.0
+        } else {
+            76.0
+        };
         let workspace_root = PathBuf::from(&self.active_workspace().root_path);
         let markdown_available = !git_diff_active
             && self
@@ -40,11 +60,12 @@ impl OxiApp {
                 .is_some_and(|document| document.supports_markdown_preview());
         let tab_strip_width = (ui.available_width()
             - if markdown_available { 74.0 } else { 0.0 }
-            - 126.0
-            - if sidebar_open {
-                0.0
-            } else {
+            - 156.0
+            - chat_tab_reserve
+            - if editor_touches_left {
                 crate::ui::window_chrome::WINDOW_CONTROLS_W
+            } else {
+                0.0
             }
             - if git_open {
                 0.0
@@ -62,10 +83,18 @@ impl OxiApp {
                 // stop short of the strip's lower edge and a hovered tab would float above it.
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    if !sidebar_open {
+                    if editor_touches_left {
                         // The top-left window controls (traffic lights on macOS + sidebar toggle)
                         // sit over this corner.
                         ui.add_space(crate::ui::window_chrome::WINDOW_CONTROLS_W);
+                    }
+                    if !split_rendered {
+                        if editor_chat_pill(ui, chat_streaming, chat_needs_approval, chat_unseen)
+                            .clicked()
+                        {
+                            return_to_chat = true;
+                        }
+                        ui.add_space(4.0);
                     }
                     let back = ui.add_enabled(
                         can_go_back,
@@ -311,6 +340,16 @@ impl OxiApp {
                         })
                         .0
                         .on_hover_text("Open tabs");
+                        if editor_split_chat_button(ui, split_with_chat)
+                            .on_hover_text(if split_with_chat {
+                                "Hide side-by-side chat"
+                            } else {
+                                "Show chat next to editor"
+                            })
+                            .clicked()
+                        {
+                            toggle_split_chat = true;
+                        }
                         if ui
                             .add(
                                 egui::Button::new(icon_glyph_rich(
@@ -329,6 +368,14 @@ impl OxiApp {
                     });
                 });
             });
+        if return_to_chat {
+            self.conv.editor.split_with_chat = false;
+            self.reveal_chat_view();
+            self.conv.composer.focus_next_frame = true;
+        }
+        if toggle_split_chat {
+            self.conv.editor.split_with_chat = !self.conv.editor.split_with_chat;
+        }
         if new_file {
             let root = PathBuf::from(&self.active_workspace().root_path);
             self.start_file_operation(FileOperation::NewFile(root));
@@ -773,6 +820,140 @@ fn digit(key: egui::Key) -> Option<usize> {
         Key::Num9 => 9,
         _ => return None,
     })
+}
+
+/// Pinned "Chat" pill on the left of the editor tab bar so returning to the active conversation
+/// never requires closing open files or hunting through the sidebar. Shows live agent status.
+fn editor_chat_pill(
+    ui: &mut Ui,
+    streaming: bool,
+    needs_approval: bool,
+    unseen_completion: bool,
+) -> egui::Response {
+    let label = if needs_approval {
+        "Chat · Approval"
+    } else {
+        "Chat"
+    };
+    let font = FontId::proportional(FS_SMALL);
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, c_text()));
+    let indicator_w = 14.0;
+    let width = galley.size().x + indicator_w + 18.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+    let hovered = resp.hovered() || resp.has_focus();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let radius = egui::CornerRadius::same(RADIUS_CHIP);
+    let (fill, border, text_col) = if needs_approval {
+        let pulse = if ui.input(|i| i.focused) {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(60));
+            (0.5 + 0.5 * (ui.input(|i| i.time) * 3.6).sin()) as f32
+        } else {
+            0.7
+        };
+        (
+            blend_color(c_info_bg(), c_accent(), 0.16 + 0.14 * pulse),
+            c_accent().gamma_multiply(0.55 + 0.45 * pulse),
+            c_text_strong(),
+        )
+    } else if hovered {
+        (c_row_hover(), c_border(), c_text_strong())
+    } else {
+        (c_bg_elevated(), c_border_subtle(), c_text())
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
+    let icon_center = egui::pos2(rect.left() + 12.0, rect.center().y);
+    if needs_approval {
+        ui.painter().circle_filled(icon_center, 3.5, c_accent());
+    } else if streaming {
+        let angle = (ui.input(|i| i.time) * 5.0) as f32;
+        let r = 4.5;
+        let p = egui::pos2(
+            icon_center.x + r * angle.cos(),
+            icon_center.y + r * angle.sin(),
+        );
+        ui.painter()
+            .circle_stroke(icon_center, r, egui::Stroke::new(1.2, c_border()));
+        ui.painter().circle_filled(p, 1.8, c_accent());
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    } else if unseen_completion {
+        ui.painter().circle_filled(icon_center, 3.5, c_accent());
+    } else {
+        ui.painter().text(
+            icon_center,
+            egui::Align2::CENTER_CENTER,
+            ICON_CHEVRON_LEFT,
+            FontId::new(FS_TINY, icon_font()),
+            c_text_muted(),
+        );
+    }
+    ui.painter().galley(
+        egui::pos2(rect.left() + 21.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        text_col,
+    );
+    let hover = if needs_approval {
+        "Agent is waiting for approval — return to chat"
+    } else if streaming {
+        "Agent is working — return to chat (keeps editor tabs open)"
+    } else {
+        "Return to chat (keeps editor tabs open)"
+    };
+    resp.on_hover_text(hover)
+}
+
+/// Toggle button on the editor tab bar to show the active chat side by side with the editor.
+fn editor_split_chat_button(ui: &mut Ui, active: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+    let hovered = resp.hovered() || resp.has_focus();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let radius = egui::CornerRadius::same(RADIUS_ROW);
+    if active {
+        ui.painter().rect_filled(rect, radius, c_row_active());
+    } else if hovered {
+        ui.painter().rect_filled(rect, radius, c_row_hover());
+    }
+    let icon = rect.shrink2(egui::vec2(6.5, 7.5));
+    let color = if active {
+        c_accent()
+    } else if hovered {
+        c_text_strong()
+    } else {
+        c_text_muted()
+    };
+    ui.painter().rect_stroke(
+        icon,
+        2,
+        egui::Stroke::new(1.15, color),
+        egui::StrokeKind::Inside,
+    );
+    if active {
+        let left_half = egui::Rect::from_min_max(
+            icon.min + egui::vec2(1.5, 1.5),
+            egui::pos2(icon.center().x, icon.bottom() - 1.5),
+        );
+        ui.painter()
+            .rect_filled(left_half, 0, c_accent().gamma_multiply(0.45));
+    }
+    ui.painter().line_segment(
+        [
+            egui::pos2(icon.center().x, icon.top()),
+            egui::pos2(icon.center().x, icon.bottom()),
+        ],
+        egui::Stroke::new(1.0, color),
+    );
+    resp
 }
 
 #[cfg(test)]

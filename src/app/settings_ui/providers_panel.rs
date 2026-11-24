@@ -20,6 +20,39 @@ impl OxiApp {
         let active = self.conv.settings.active_provider;
         let configured = self.cached_configured_providers(ui.ctx());
         let provider = self.conv.settings_page.provider_tab;
+
+        if !configured.is_empty() {
+            settings_section(
+                ui,
+                "Configured providers",
+                Some("Quick switch between ready providers. Click any pill to edit its settings."),
+                |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                        for &kind in &configured {
+                            let is_selected = kind == provider;
+                            let is_active = kind == active;
+                            let resp = configured_provider_pill(
+                                ui,
+                                crate::app::composer::composer_provider_label(kind),
+                                is_selected,
+                                is_active,
+                            )
+                            .on_hover_text(if is_active {
+                                format!("{} — active default for new chats", kind.label())
+                            } else {
+                                format!("{} — configured & ready", kind.label())
+                            });
+                            if resp.clicked() {
+                                self.conv.settings_page.provider_tab = kind;
+                            }
+                        }
+                    });
+                },
+            );
+        }
+
+        let provider = self.conv.settings_page.provider_tab;
         settings_section(ui, "Provider", None, |ui| {
             let kinds: Vec<LlmProviderKind> = PROVIDER_GROUPS
                 .iter()
@@ -35,7 +68,7 @@ impl OxiApp {
                     self.conv.settings.active_provider = provider;
                 }
                 ui.add_space(8.0);
-                SelectMenu::new("settings_provider", "Change provider")
+                SelectMenu::new("settings_provider", "All providers")
                     .framed(170.0)
                     .show(ui, || {
                         let mut options = Vec::new();
@@ -182,4 +215,49 @@ fn chip_hint(active: bool, state: ChipState) -> Option<&'static str> {
         (false, ChipState::NeedsKey) => Some("No API key yet"),
         (false, ChipState::Neutral) => None,
     }
+}
+
+fn configured_provider_pill(
+    ui: &mut Ui,
+    label: &str,
+    selected: bool,
+    active: bool,
+) -> egui::Response {
+    use crate::theme::*;
+    let font = egui::FontId::proportional(FS_SMALL);
+    let text_col = if selected { c_text_strong() } else { c_text() };
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, text_col));
+    let size = egui::vec2(galley.size().x + 28.0, 26.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hovered = resp.hovered() || resp.has_focus();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let radius = egui::CornerRadius::same(RADIUS_CHIP);
+    let (fill, border) = if selected {
+        (c_pill_selected_bg(), c_pill_selected_border())
+    } else if hovered {
+        (c_row_hover(), c_border())
+    } else {
+        (c_bg_input(), c_border_subtle())
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
+    let dot_col = if active { c_accent() } else { c_success() };
+    ui.painter().circle_filled(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        3.0,
+        dot_col,
+    );
+    ui.painter().galley(
+        egui::pos2(rect.left() + 18.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        text_col,
+    );
+    resp
 }

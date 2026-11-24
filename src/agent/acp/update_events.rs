@@ -139,6 +139,11 @@ impl UpdateState {
                 tool.fields.insert(key.to_owned(), value.clone());
             }
         }
+        if !tool.fields.contains_key("rawInput")
+            && let Some(args) = update.get("args").filter(|v| !v.is_null())
+        {
+            tool.fields.insert("rawInput".to_owned(), args.clone());
+        }
         if let Some(content) = update.get("content").filter(|v| v.is_array()) {
             tool.content = extract_tool_content(content);
         }

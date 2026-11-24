@@ -162,6 +162,13 @@ pub struct EditorState {
     pub diff_tab_active: bool,
     /// The preview tab for the active document is selected.
     pub markdown_preview_active: bool,
+    /// Show the active chat side by side with the editor/diff pane.
+    pub split_with_chat: bool,
+    /// Fraction of the central column given to Chat in Chat+Editor split mode (`0.0` = default 0.46).
+    pub split_ratio: f32,
+    /// True during frames where Chat+Editor split actually fit on screen (chat is on the left,
+    /// editor on the right).
+    pub split_rendered: bool,
     pub error: Option<String>,
     pub find_open: bool,
     /// Whether the bottom search panel also shows replacement controls.

@@ -1,3 +1,5 @@
+#[path = "composer/mention_menu.rs"]
+mod mention_menu;
 #[path = "composer/plan_tasks.rs"]
 mod plan_tasks;
 #[path = "composer/selectors.rs"]
@@ -248,26 +250,58 @@ impl OxiApp {
         let scope = self.text_attachment_scope();
         let mut remove = None;
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 5.0);
             for (index, attachment) in self.conv.composer.pending_texts.iter().enumerate() {
                 if let crate::model::UserAttachment::Text { name, text } = attachment {
-                    if ui
-                        .button(format!(
-                            "{ICON_FILE} {name} · {} lines",
-                            text.lines().count()
-                        ))
-                        .clicked()
-                    {
-                        crate::ui::text_attachment::open_draft(ui.ctx(), name, text, scope);
-                    }
-                    if crate::ui::chrome::dismiss_button(ui)
-                        .on_hover_text("Remove text attachment")
-                        .clicked()
-                    {
-                        remove = Some(index);
-                    }
+                    let lines = text.lines().count();
+                    Frame::new()
+                        .fill(c_bg_input())
+                        .stroke(Stroke::new(1.0, c_border()))
+                        .corner_radius(CornerRadius::same(RADIUS_CHIP))
+                        .inner_margin(Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 5.0;
+                                ui.label(crate::ui::chrome::icon_glyph_rich(
+                                    ICON_FILE,
+                                    FS_TINY,
+                                    c_text_muted(),
+                                ));
+                                let resp = ui
+                                    .add(
+                                        egui::Label::new(
+                                            RichText::new(name).size(FS_TINY).color(c_text()),
+                                        )
+                                        .sense(Sense::click())
+                                        .selectable(false),
+                                    )
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .on_hover_text("Click to inspect or edit attached text");
+                                if resp.clicked() {
+                                    crate::ui::text_attachment::open_draft(
+                                        ui.ctx(),
+                                        name,
+                                        text,
+                                        scope,
+                                    );
+                                }
+                                ui.label(
+                                    RichText::new(format!("· {lines} lines"))
+                                        .size(FS_TINY)
+                                        .color(c_text_faint()),
+                                );
+                                if crate::ui::chrome::dismiss_button(ui)
+                                    .on_hover_text("Remove text attachment")
+                                    .clicked()
+                                {
+                                    remove = Some(index);
+                                }
+                            });
+                        });
                 }
             }
         });
+        ui.add_space(COMPOSER_GAP);
         if let Some(index) = remove {
             self.conv.composer.pending_texts.remove(index);
         }
@@ -457,17 +491,23 @@ impl OxiApp {
                         }
 
                         self.render_text_attachments(ui);
+                        self.render_mention_chips(ui);
 
                         // === Text area ===
-                        // The `/` menu takes its keys first so they don't reach the TextEdit.
+                        // The `/` and `@` menus take their keys first so they don't reach the TextEdit.
                         let slash_menu_open = self.slash_menu_keys(ui, input_id, composer_focused);
+                        let mention_menu_open = if slash_menu_open {
+                            false
+                        } else {
+                            self.mention_menu_keys(ui, input_id, composer_focused)
+                        };
                         // desired_rows(1) keeps it compact; it grows naturally
                         // as the user types (both newlines and soft-wrap).
                         let mut te_output = composer_text_edit(
                             ui,
                             &mut self.conv.composer.input,
                             input_id,
-                            slash_menu_open,
+                            slash_menu_open || mention_menu_open,
                             plan_mode,
                         );
                         draft_laid_out |= !te_output.galley.job.text.is_empty();
@@ -484,6 +524,14 @@ impl OxiApp {
                             te_output.response.rect,
                             te_output.response.has_focus(),
                         );
+                        if !slash_menu_open {
+                            self.render_mention_menu(
+                                ui,
+                                input_id,
+                                te_output.response.rect,
+                                te_output.response.has_focus(),
+                            );
+                        }
                         if self.conv.composer.focus_next_frame {
                             // Navigation should put the caret at the end of any existing draft,
                             // not at egui's default/start position.

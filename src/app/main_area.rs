@@ -86,7 +86,104 @@ impl OxiApp {
                 // default home for every diff, whether or not a file was already open.
                 let editor_open = self.conv.editor.active_document().is_some()
                     || (self.conv.diff_view.open && self.conv.git.diff.is_some());
-                if editor_open {
+                let show_split_chat_editor =
+                    editor_open && self.conv.editor.split_with_chat && chat_w >= 640.0;
+                self.conv.editor.split_rendered = show_split_chat_editor;
+                if show_split_chat_editor {
+                    let ratio = if self.conv.editor.split_ratio > 0.0 {
+                        self.conv.editor.split_ratio.clamp(0.28, 0.72)
+                    } else {
+                        0.46
+                    };
+                    let sep_w = SIDEBAR_RESIZE_SEP_W;
+                    let left_w = ((chat_w - sep_w) * ratio).clamp(260.0, chat_w - sep_w - 280.0);
+                    let right_w = (chat_w - sep_w - left_w).max(200.0);
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let left_rect =
+                            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(left_w, full_h));
+                        let mut left_ui = ui.new_child(
+                            egui::UiBuilder::new()
+                                .id_salt("split_chat_pane")
+                                .max_rect(left_rect)
+                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                        );
+                        left_ui.shrink_clip_rect(left_rect);
+                        Frame::new()
+                            .fill(c_bg_main())
+                            .inner_margin(Margin::same(0))
+                            .show(&mut left_ui, |ui| {
+                                self.render_chat_header(ui);
+                                Frame::new()
+                                    .fill(c_bg_main())
+                                    .inner_margin(Margin {
+                                        left: CHAT_VIEW_MARGIN_LEFT as i8,
+                                        right: crate::theme::CHAT_VIEW_MARGIN_RIGHT_CHAT as i8,
+                                        top: CHAT_FRAME_TOP as i8,
+                                        bottom: CHAT_FRAME_BOTTOM as i8,
+                                    })
+                                    .show(ui, |ui| {
+                                        self.render_chat_column(ui);
+                                    });
+                            });
+                        drop(left_ui);
+                        ui.advance_cursor_after_rect(left_rect);
+
+                        // Draggable splitter between Chat and Editor.
+                        let boundary_x = ui.cursor().min.x;
+                        let sep_rect = egui::Rect::from_min_size(
+                            egui::pos2(boundary_x, left_rect.top()),
+                            egui::vec2(sep_w, full_h),
+                        );
+                        let sep =
+                            ui.interact(sep_rect, ui.id().with("chat_editor_sep"), Sense::drag());
+                        if sep.hovered() || sep.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                        }
+                        if sep.dragged()
+                            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                        {
+                            let new_left =
+                                (pos.x - left_rect.left()).clamp(260.0, chat_w - sep_w - 280.0);
+                            self.conv.editor.split_ratio =
+                                (new_left / (chat_w - sep_w)).clamp(0.28, 0.72);
+                        }
+                        let sep_col = if sep.hovered() || sep.dragged() {
+                            c_accent()
+                        } else {
+                            c_border_subtle()
+                        };
+                        ui.painter().vline(
+                            sep_rect.center().x,
+                            sep_rect.y_range(),
+                            Stroke::new(1.0, sep_col),
+                        );
+                        ui.advance_cursor_after_rect(sep_rect);
+
+                        let right_rect =
+                            egui::Rect::from_min_size(ui.cursor().min, egui::vec2(right_w, full_h));
+                        let mut right_ui = ui.new_child(
+                            egui::UiBuilder::new()
+                                .id_salt("split_editor_pane")
+                                .max_rect(right_rect)
+                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                        );
+                        right_ui.shrink_clip_rect(right_rect);
+                        Frame::new()
+                            .fill(c_bg_main())
+                            .inner_margin(Margin {
+                                left: 0,
+                                right: CHAT_VIEW_MARGIN_RIGHT as i8,
+                                top: 0,
+                                bottom: 0,
+                            })
+                            .show(&mut right_ui, |ui| {
+                                self.render_text_editor(ui);
+                            });
+                        drop(right_ui);
+                        ui.advance_cursor_after_rect(right_rect);
+                    });
+                } else if editor_open {
                     Frame::new()
                         .fill(c_bg_main())
                         .inner_margin(Margin {
@@ -168,7 +265,7 @@ impl OxiApp {
         } else {
             crate::ui::window_chrome::WINDOW_CONTROLS_W + 8.0
         };
-        let right_inset = if self.conv.git_ui.open {
+        let right_inset = if self.conv.git_ui.open || self.conv.editor.split_rendered {
             10.0
         } else {
             crate::ui::window_chrome::RIGHT_CONTROLS_W + 4.0
@@ -184,12 +281,26 @@ impl OxiApp {
         let ws_root = self.active_workspace().root_path.clone();
         let ws_name = header_workspace_name(&ws_root);
         let session_title = sidebar_session_title_display(&self.active_session().title);
-        let term_open = self.conv.terminal_panel.open;
-        let explorer_open =
-            self.conv.sidebar.open && self.conv.sidebar.mode == super::state::SidebarMode::Explorer;
+        let find_open = self.conv.transcript.find.is_some();
+        let split_open = self.conv.split.is_some();
+        let has_hidden_editor = !self.conv.editor.split_rendered
+            && (self.conv.editor.hidden_active.is_some() || !self.conv.editor.documents.is_empty());
 
-        let mut toggle_term = false;
+        let rename_id = egui::Id::new("chat_header_rename_state");
+        let active_key = self.active_session_key();
+        let mut renaming = ui
+            .ctx()
+            .data(|d| d.get_temp::<(super::state::SessionKey, String)>(rename_id))
+            .filter(|(k, _)| *k == active_key);
+
+        let mut toggle_find = false;
         let mut toggle_explorer = false;
+        let mut open_palette = false;
+        let mut toggle_split = false;
+        let mut reopen_editor = false;
+        let mut commit_rename: Option<String> = None;
+        let mut cancel_rename = false;
+        let mut start_rename = false;
 
         ui.scope_builder(
             egui::UiBuilder::new()
@@ -197,54 +308,160 @@ impl OxiApp {
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if crate::ui::chrome::icon_button_plain(ui, ICON_TERMINAL, 26.0, term_open)
-                    .on_hover_text("Toggle terminal panel (Cmd/Ctrl+`)")
-                    .clicked()
-                {
-                    toggle_term = true;
-                }
-                if crate::ui::chrome::icon_button_plain(ui, ICON_EXPLORER, 26.0, explorer_open)
-                    .on_hover_text(if explorer_open {
-                        "Hide workspace explorer (Cmd/Ctrl+E)"
+                if crate::ui::chrome::icon_button_plain(ui, ICON_SEARCH, 26.0, find_open)
+                    .on_hover_text(if find_open {
+                        "Close find in chat (Esc)"
                     } else {
-                        "Open workspace explorer (Cmd/Ctrl+E)"
+                        "Find in chat (Cmd/Ctrl+F)"
                     })
                     .clicked()
                 {
-                    toggle_explorer = true;
+                    toggle_find = true;
+                }
+                if !self.conv.editor.split_rendered
+                    && header_split_button(ui, split_open)
+                        .on_hover_text(if split_open {
+                            "Close split chat"
+                        } else {
+                            "New chat side by side (compare two agents)"
+                        })
+                        .clicked()
+                {
+                    toggle_split = true;
+                }
+                if has_hidden_editor
+                    && crate::ui::chrome::icon_button_plain(ui, ICON_FILE, 26.0, false)
+                        .on_hover_text("Return to open editor tabs")
+                        .clicked()
+                {
+                    reopen_editor = true;
+                }
+                if header_palette_button(ui)
+                    .on_hover_text(if cfg!(target_os = "macos") {
+                        "Command palette (⇧⌘P)"
+                    } else {
+                        "Command palette (Ctrl+Shift+P)"
+                    })
+                    .clicked()
+                {
+                    open_palette = true;
                 }
                 ui.add_space(6.0);
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(
-                        egui::RichText::new(&ws_name)
-                            .size(FS_SMALL)
-                            .color(c_text_muted()),
-                    );
+                    let ws_resp = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(&ws_name)
+                                    .size(FS_SMALL)
+                                    .color(c_text_muted()),
+                            )
+                            .sense(Sense::click())
+                            .selectable(false),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("Open workspace explorer (Cmd/Ctrl+E)");
+                    if ws_resp.clicked() {
+                        toggle_explorer = true;
+                    }
                     ui.label(
                         egui::RichText::new("/")
                             .size(FS_SMALL)
                             .color(c_text_faint()),
                     );
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&session_title)
-                                .size(FS_SMALL)
-                                .color(c_text()),
-                        )
-                        .truncate()
-                        .selectable(false),
-                    )
-                    .on_hover_text(&session_title);
+                    if let Some((_, ref mut draft)) = renaming {
+                        let field_id = egui::Id::new("chat_header_rename_input");
+                        let edit = ui.add(
+                            egui::TextEdit::singleline(draft)
+                                .id(field_id)
+                                .font(egui::FontId::proportional(FS_SMALL))
+                                .desired_width((ui.available_width() - 8.0).clamp(80.0, 260.0))
+                                .margin(Margin::symmetric(6, 2)),
+                        );
+                        if !edit.has_focus() && !edit.lost_focus() {
+                            edit.request_focus();
+                        }
+                        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        if esc {
+                            cancel_rename = true;
+                        } else if enter || edit.lost_focus() {
+                            commit_rename = Some(draft.clone());
+                        }
+                    } else {
+                        let title_resp = ui
+                            .add(
+                                egui::Label::new(
+                                    egui::RichText::new(&session_title)
+                                        .size(FS_SMALL)
+                                        .color(c_text()),
+                                )
+                                .truncate()
+                                .sense(Sense::click())
+                                .selectable(false),
+                            )
+                            .on_hover_cursor(egui::CursorIcon::Text)
+                            .on_hover_text(format!("{session_title}\nDouble-click to rename"));
+                        if title_resp.double_clicked() {
+                            start_rename = true;
+                        }
+                    }
                 });
             },
         );
 
-        if toggle_term {
-            self.request_settings_exit(super::state::SettingsExitAction::ToggleTerminal);
+        if cancel_rename {
+            ui.ctx()
+                .data_mut(|d| d.remove::<(super::state::SessionKey, String)>(rename_id));
+        } else if let Some(new_title) = commit_rename {
+            ui.ctx()
+                .data_mut(|d| d.remove::<(super::state::SessionKey, String)>(rename_id));
+            let trimmed = new_title.trim().to_owned();
+            if !trimmed.is_empty() && trimmed != self.active_session().title {
+                let si = self.active_workspace().active;
+                self.rename_session(si, trimmed);
+                crate::ui::chrome::show_toast(ui.ctx(), "Chat renamed");
+            }
+        } else if start_rename {
+            let current = self.active_session().title.clone();
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(rename_id, (active_key, current)));
+        } else if let Some(state) = renaming {
+            ui.ctx().data_mut(|d| d.insert_temp(rename_id, state));
+        }
+
+        if toggle_find {
+            if find_open {
+                self.close_chat_find();
+            } else {
+                self.open_chat_find();
+            }
         }
         if toggle_explorer {
             self.request_settings_exit(super::state::SettingsExitAction::ToggleExplorer);
+        }
+        if open_palette {
+            self.open_file_picker_with(">");
+        }
+        if toggle_split {
+            if split_open {
+                self.close_split();
+            } else {
+                self.new_chat_split();
+            }
+        }
+        if reopen_editor {
+            let idx = self
+                .conv
+                .editor
+                .hidden_active
+                .take()
+                .filter(|&i| i < self.conv.editor.documents.len())
+                .or_else(|| (!self.conv.editor.documents.is_empty()).then_some(0));
+            if let Some(i) = idx {
+                self.conv.editor.active = Some(i);
+                self.conv.editor.focus_editor_next_frame = true;
+            }
         }
     }
 
@@ -320,7 +537,7 @@ impl OxiApp {
             self.run_state_mut(self.active_session_key()).stream_error =
                 Some(format!("Save settings: {e}"));
         }
-        let col = if sep.dragged() {
+        let col = if sep.hovered() || sep.dragged() {
             c_accent()
         } else {
             c_border_subtle()
@@ -367,7 +584,7 @@ impl OxiApp {
         if sep.hovered() || sep.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        let col = if sep.dragged() {
+        let col = if sep.hovered() || sep.dragged() {
             c_accent()
         } else {
             crate::theme::c_border_subtle()
@@ -399,25 +616,86 @@ fn header_workspace_name(root_path: &str) -> String {
 }
 
 pub(super) fn paint_composer_scrim(ui: &mut Ui, rect: egui::Rect) {
-    if rect.height() < 4.0 {
+    if rect.height() < 4.0 || rect.width() <= 0.0 {
         return;
     }
     let base = c_bg_main();
-    let steps = 12usize;
-    let step_h = rect.height() / steps as f32;
-    for i in 0..steps {
-        let t = (i as f32 + 0.5) / steps as f32;
-        // Ease-in: transparent at the top, opaque near the composer.
-        let alpha = (t * t * 220.0) as u8;
-        let y0 = rect.top() + i as f32 * step_h;
-        let band = egui::Rect::from_min_max(
-            egui::pos2(rect.left(), y0),
-            egui::pos2(rect.right(), y0 + step_h + 0.5),
-        );
-        ui.painter().rect_filled(
-            band,
-            0.0,
-            Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha),
-        );
+    // Smooth GPU-interpolated vertical gradient (ease-in stops from transparent at the top to
+    // opaque behind the composer), avoiding visible horizontal step bands on dark themes.
+    const STOPS: usize = 5;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=STOPS {
+        let t = i as f32 / STOPS as f32;
+        let alpha = (t * t * 235.0).round() as u8;
+        let color = Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha);
+        let y = egui::lerp(rect.top()..=rect.bottom(), t);
+        mesh.colored_vertex(egui::pos2(rect.left(), y), color);
+        mesh.colored_vertex(egui::pos2(rect.right(), y), color);
+        if i > 0 {
+            let row = (i as u32) * 2;
+            let prev = row - 2;
+            mesh.add_triangle(prev, prev + 1, row + 1);
+            mesh.add_triangle(prev, row + 1, row);
+        }
     }
+    ui.painter().add(egui::Shape::mesh(mesh));
+}
+
+/// Compact dual-pane split icon button for the chat header.
+fn header_split_button(ui: &mut Ui, active: bool) -> egui::Response {
+    let size = egui::vec2(26.0, 26.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = resp.hovered() || resp.has_focus();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let radius = egui::CornerRadius::same(RADIUS_ROW);
+    if active {
+        ui.painter().rect_filled(rect, radius, c_row_active());
+    } else if hovered {
+        ui.painter().rect_filled(rect, radius, c_row_hover());
+    }
+    let icon = rect.shrink2(egui::vec2(6.5, 7.5));
+    let color = if active {
+        c_accent()
+    } else if hovered {
+        c_text_strong()
+    } else {
+        c_text_muted()
+    };
+    ui.painter()
+        .rect_stroke(icon, 2, Stroke::new(1.15, color), egui::StrokeKind::Inside);
+    ui.painter().line_segment(
+        [
+            egui::pos2(icon.center().x, icon.top()),
+            egui::pos2(icon.center().x, icon.bottom()),
+        ],
+        Stroke::new(1.0, color),
+    );
+    resp
+}
+
+/// Compact `>_` / command-palette icon button for the chat header.
+fn header_palette_button(ui: &mut Ui) -> egui::Response {
+    let size = egui::vec2(26.0, 26.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = resp.hovered() || resp.has_focus();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(RADIUS_ROW), c_row_hover());
+    }
+    let color = if hovered {
+        c_text_strong()
+    } else {
+        c_text_muted()
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "⌘",
+        egui::FontId::proportional(FS_SMALL),
+        color,
+    );
+    resp
 }

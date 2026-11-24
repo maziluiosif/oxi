@@ -221,6 +221,7 @@ impl OxiApp {
         if copy {
             let text = message_text(&self.active_session().messages[menu.start..menu.end]);
             ctx.copy_text(text);
+            crate::ui::chrome::show_toast(ctx, "Copied message");
         }
         if fork {
             self.fork_active_chat(menu.start, menu.end, is_user);
@@ -237,7 +238,7 @@ impl OxiApp {
 
     /// Fork the active chat: keep `messages[..end]` (or `[..start]` with that user message put
     /// in the composer when `edit_user` is set).
-    fn fork_active_chat(&mut self, start: usize, end: usize, edit_user: bool) {
+    pub(crate) fn fork_active_chat(&mut self, start: usize, end: usize, edit_user: bool) {
         let source = self.active_session();
         let keep = if edit_user { start } else { end };
         let mut messages = source.messages[..keep].to_vec();
@@ -291,7 +292,7 @@ impl OxiApp {
 }
 
 /// Plain text of a transcript unit, for "Copy message".
-fn message_text(messages: &[crate::model::ChatMessage]) -> String {
+pub(crate) fn message_text(messages: &[crate::model::ChatMessage]) -> String {
     let mut parts = Vec::new();
     for message in messages {
         match message.role {

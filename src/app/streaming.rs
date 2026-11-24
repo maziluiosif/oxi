@@ -29,6 +29,7 @@ impl OxiApp {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn begin_edit_last_prompt(&mut self) {
         let key = self.active_session_key();
         if self.active_waiting_response() || self.compaction_active_for(key) {

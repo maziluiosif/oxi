@@ -36,9 +36,9 @@ impl OxiApp {
                         && self.conv.sidebar.mode == crate::app::state::SidebarMode::Chats;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_MENU, 20.0, sidebar_on)
                         .on_hover_text(if sidebar_on {
-                            "Hide sidebar (Cmd/Ctrl+B)"
+                            "Chats view active — click to hide (Cmd/Ctrl+B)"
                         } else {
-                            "Show sidebar (Cmd/Ctrl+B)"
+                            "Chats view (Cmd/Ctrl+B)"
                         })
                         .clicked()
                     {
@@ -52,9 +52,9 @@ impl OxiApp {
                         && self.conv.sidebar.mode == crate::app::state::SidebarMode::Explorer;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_EXPLORER, 20.0, explorer_on)
                         .on_hover_text(if explorer_on {
-                            "Hide workspace explorer (Cmd/Ctrl+E)"
+                            "Files explorer active — click to hide (Cmd/Ctrl+E)"
                         } else {
-                            "Open workspace explorer (Cmd/Ctrl+E)"
+                            "Files explorer (Cmd/Ctrl+E)"
                         })
                         .clicked()
                     {
@@ -68,9 +68,9 @@ impl OxiApp {
                         && self.conv.sidebar.mode == crate::app::state::SidebarMode::Search;
                     if crate::ui::chrome::icon_button_plain(ui, ICON_SEARCH, 20.0, search_on)
                         .on_hover_text(if search_on {
-                            "Hide search (Cmd/Ctrl+Shift+F)"
+                            "Search view active — click to hide (Cmd/Ctrl+Shift+F)"
                         } else {
-                            "Find in files (Cmd/Ctrl+Shift+F)"
+                            "Search in files (Cmd/Ctrl+Shift+F)"
                         })
                         .clicked()
                     {
@@ -96,12 +96,16 @@ impl OxiApp {
                     let file_shown = self.conv.editor.active.is_some()
                         && !self.conv.settings_page.open
                         && !self.conv.editor.diff_tab_active;
+                    if file_shown || !settings_on {
+                        status_bar_divider(ui);
+                    }
                     if file_shown {
-                        ui.add_space(10.0);
                         self.render_caret_status(ui);
+                        if !settings_on {
+                            ui.add_space(10.0);
+                        }
                     }
                     if !settings_on {
-                        ui.add_space(10.0);
                         self.render_chat_status(ui);
                     }
 
@@ -132,18 +136,8 @@ impl OxiApp {
                                 crate::app::state::SettingsExitAction::ToggleTerminal,
                             );
                         }
-                        let git_on = self.conv.git_ui.open;
-                        if crate::ui::chrome::icon_button_plain(ui, ICON_GIT, 20.0, git_on)
-                            .on_hover_text(if git_on {
-                                "Hide git panel (Cmd/Ctrl+Shift+B)"
-                            } else {
-                                "Open git panel (Cmd/Ctrl+Shift+B)"
-                            })
-                            .clicked()
-                        {
-                            self.request_settings_exit(
-                                crate::app::state::SettingsExitAction::ToggleGitPanel,
-                            );
+                        if file_shown || self.conv.git.repo || self.update_available().is_some() {
+                            status_bar_divider(ui);
                         }
 
                         if file_shown {
@@ -247,4 +241,13 @@ impl OxiApp {
         }
         ui.add_space(6.0);
     }
+}
+
+fn status_bar_divider(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 12.0), egui::Sense::hover());
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range(),
+        Stroke::new(1.0, c_border_subtle()),
+    );
 }
