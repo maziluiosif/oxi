@@ -48,7 +48,8 @@ pub fn claim(session_key: &str) {
         .retain(|key| key != session_key);
 }
 
-fn announce(session_key: &str) {
+/// Tell the UI `session_key` holds a turn its agent started on its own.
+pub(super) fn announce(session_key: &str) {
     {
         let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
         if pending.iter().any(|key| key == session_key) {

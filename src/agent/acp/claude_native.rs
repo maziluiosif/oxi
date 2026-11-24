@@ -242,7 +242,7 @@ struct ClaudeTurnResult {
     stop_notice: Option<&'static str>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ClaudeToolState {
     name: String,
     raw_name: String,
@@ -277,9 +277,171 @@ struct ClaudeTurnCtx {
     command_line: String,
     cwd: PathBuf,
     session_id: Arc<Mutex<String>>,
+    /// Tools whose work moved to a background task (`task_started` with `is_backgrounded`).
+    backgrounded: std::collections::HashSet<String>,
+    /// Background tools of this connection, kept across turns so a later turn can finish them.
+    bg_tools: BgTools,
+    /// `result` frames that close a cycle the agent started itself before this turn's prompt
+    /// was read, rather than this turn.
+    skip_results: usize,
+}
+
+/// Background tools by `tool_use_id`, with what their pill showed when the turn moved on.
+type BgTools = Arc<Mutex<HashMap<String, ClaudeToolState>>>;
+
+/// What Claude Code streamed with no turn in flight, oldest first: a turn it started itself
+/// (a background command finished, a wake-up fired), held until the UI attaches a turn.
+type IdleQueue = Arc<Mutex<VecDeque<Value>>>;
+
+/// More held frames than this drops the oldest, so a cycle nobody attaches to stays bounded.
+const MAX_IDLE_FRAMES: usize = 20_000;
+
+/// An attached turn that hears nothing from Claude Code for this long is taken as over.
+const ATTACH_QUIET_LIMIT: Duration = Duration::from_secs(10 * 60);
+
+/// Whether a frame received between turns means Claude Code is running a turn of its own.
+fn starts_cycle(msg: &Value) -> bool {
+    match msg["type"].as_str().unwrap_or("") {
+        "assistant" | "stream_event" | "user" | "control_request" => true,
+        "system" => msg["subtype"].as_str() == Some("task_notification"),
+        _ => false,
+    }
+}
+
+/// Keep a frame that arrived with no turn in flight. Only one that starts a cycle opens the
+/// queue; anything else (rate limits, task bookkeeping) is kept only behind it.
+fn hold_idle(idle: &IdleQueue, session_key: &str, msg: &Value) {
+    let starts = starts_cycle(msg);
+    {
+        let mut queue = idle.lock().unwrap_or_else(|e| e.into_inner());
+        if !starts && queue.is_empty() {
+            return;
+        }
+        if queue.len() >= MAX_IDLE_FRAMES {
+            queue.pop_front();
+        }
+        queue.push_back(msg.clone());
+    }
+    if starts {
+        autonomous::announce(session_key);
+    }
+}
+
+/// Deliver one frame to the turn in flight.
+fn route(ctx: &mut ClaudeTurnCtx, msg: &Value) {
+    match msg["type"].as_str().unwrap_or("") {
+        "control_request" => {
+            let rid = msg["request_id"].as_str().unwrap_or("").to_owned();
+            let request = msg.get("request").cloned().unwrap_or(Value::Null);
+            let withdrawn = Arc::new(AtomicBool::new(false));
+            ctx.withdrawn_map
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(rid.clone(), withdrawn.clone());
+            let _ = ctx.ctrl_tx.send(ClaudeControlReq {
+                request_id: rid,
+                request,
+                withdrawn,
+            });
+        }
+        "control_cancel_request" => {
+            if let Some(rid) = msg["request_id"].as_str()
+                && let Some(flag) = ctx
+                    .withdrawn_map
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(rid)
+            {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
+        _ => ctx.handle_message(msg),
+    }
+}
+
+/// Replay frames held between turns into `ctx`. Their `result` frames close cycles that are
+/// already over and do not end `ctx`'s turn. Returns whether the last held cycle is still open.
+fn replay_idle(ctx: &mut ClaudeTurnCtx, held: Vec<Value>) -> bool {
+    let mut open = false;
+    for msg in held {
+        if msg["type"].as_str() == Some("result") {
+            open = false;
+            if let Some(usage) = parse_claude_usage(&msg["usage"]) {
+                let _ = ctx.event_tx.send(AgentEvent::ExternalUsage(usage));
+            }
+            continue;
+        }
+        if starts_cycle(&msg) {
+            open = true;
+        }
+        route(ctx, &msg);
+    }
+    open
 }
 
 impl ClaudeTurnCtx {
+    fn new(
+        handles: &ClaudeHandles,
+        event_tx: StdSender<AgentEvent>,
+        ctrl_tx: mpsc::UnboundedSender<ClaudeControlReq>,
+        done_tx: oneshot::Sender<ClaudeTurnResult>,
+        session_key: String,
+        command_line: String,
+        cwd: PathBuf,
+    ) -> Self {
+        Self {
+            event_tx,
+            ctrl_tx,
+            done_tx: Some(done_tx),
+            withdrawn_map: Arc::new(Mutex::new(HashMap::new())),
+            block_tools: HashMap::new(),
+            tools: HashMap::new(),
+            streamed_text: false,
+            streamed_thinking: false,
+            answer_text: String::new(),
+            last_checklist: None,
+            last_error: None,
+            context_window: 0,
+            session_key,
+            command_line,
+            cwd,
+            session_id: handles.session_id.clone(),
+            backgrounded: Default::default(),
+            bg_tools: handles.bg_tools.clone(),
+            skip_results: 0,
+        }
+    }
+
+    /// A tool's background task ended: finish its pill, wherever it was shown.
+    fn finish_background(&mut self, msg: &Value) {
+        let Some(id) = msg["tool_use_id"].as_str().filter(|s| !s.is_empty()) else {
+            return;
+        };
+        let stored = self
+            .bg_tools
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+        let Some(mut tool) = self.tools.get(id).cloned().or(stored) else {
+            return;
+        };
+        tool.status = match msg["status"].as_str() {
+            Some("failed") => ToolStatus::Failed,
+            Some("killed" | "stopped" | "cancelled") => ToolStatus::Interrupted,
+            _ => ToolStatus::Completed,
+        };
+        if let Some(summary) = msg["summary"].as_str().filter(|s| !s.trim().is_empty()) {
+            if !tool.output.is_empty() {
+                tool.output.push_str("\n\n");
+            }
+            tool.output.push_str(summary.trim());
+        }
+        if let Some(t) = self.tools.get_mut(id) {
+            *t = tool.clone();
+        }
+        self.emit_tool(id, &tool);
+    }
+
     fn emit_tool(&self, id: &str, tool: &ClaudeToolState) {
         let limit = crate::agent::tools::MAX_TOOL_OUTPUT_CHARS;
         let output_truncated = tool.output.chars().count() > limit;
@@ -559,6 +721,12 @@ impl ClaudeTurnCtx {
                     };
                     let is_err = block["is_error"].as_bool() == Some(true);
                     let output = extract_tool_result_text(&block["content"]);
+                    // A command moved to a background task: it reports back after the turn.
+                    let backgrounded = !is_err
+                        && (self.backgrounded.contains(id)
+                            || msg["tool_use_result"]["backgroundTaskId"]
+                                .as_str()
+                                .is_some_and(|s| !s.is_empty()));
                     if let Some(tool) = self.tools.get_mut(id) {
                         if tool.raw_name == "ToolSearch"
                             || tool.raw_name == "TodoWrite"
@@ -568,11 +736,19 @@ impl ClaudeTurnCtx {
                         }
                         tool.status = if is_err {
                             ToolStatus::Failed
+                        } else if backgrounded {
+                            ToolStatus::InProgress
                         } else {
                             ToolStatus::Completed
                         };
                         if !output.is_empty() {
                             tool.output = output;
+                        }
+                        if backgrounded {
+                            self.bg_tools
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(id.to_owned(), tool.clone());
                         }
                         let snapshot = ClaudeToolState {
                             name: tool.name.clone(),
@@ -591,6 +767,27 @@ impl ClaudeTurnCtx {
                     }
                 }
             }
+            Some("system") => match msg["subtype"].as_str() {
+                Some("task_started") if msg["is_backgrounded"].as_bool() == Some(true) => {
+                    if let Some(id) = msg["tool_use_id"].as_str().filter(|s| !s.is_empty()) {
+                        self.backgrounded.insert(id.to_owned());
+                        // Moved to the background after its result arrived: keep it running.
+                        if let Some(tool) = self.tools.get_mut(id)
+                            && tool.status != ToolStatus::InProgress
+                        {
+                            tool.status = ToolStatus::InProgress;
+                            let snapshot = tool.clone();
+                            self.bg_tools
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(id.to_owned(), snapshot.clone());
+                            self.emit_tool(id, &snapshot);
+                        }
+                    }
+                }
+                Some("task_notification") => self.finish_background(msg),
+                _ => {}
+            },
             Some("rate_limit_event") => {
                 let info = &msg["rate_limit_info"];
                 if info["status"].as_str() == Some("rejected") {
@@ -598,6 +795,14 @@ impl ClaudeTurnCtx {
                 }
             }
             Some("result") => {
+                if self.skip_results > 0 {
+                    // Closes the agent's own cycle that ran ahead of this turn's prompt.
+                    self.skip_results -= 1;
+                    if let Some(usage) = parse_claude_usage(&msg["usage"]) {
+                        let _ = self.event_tx.send(AgentEvent::ExternalUsage(usage));
+                    }
+                    return;
+                }
                 // Report exact per-turn usage & context window & cost.
                 if let Some(usage) = parse_claude_usage(&msg["usage"]) {
                     let _ = self.event_tx.send(AgentEvent::ExternalUsage(usage));
@@ -687,6 +892,9 @@ pub(super) struct ClaudeHandles {
     turn_ctx: Arc<AsyncMutex<Option<ClaudeTurnCtx>>>,
     workflow_tx: Arc<AsyncMutex<Option<StdSender<AgentEvent>>>>,
     held: Arc<autonomous::Held>,
+    /// Frames of a turn Claude Code started itself, until a turn is attached to show them.
+    idle: IdleQueue,
+    bg_tools: BgTools,
     session_id: Arc<Mutex<String>>,
     state: Arc<Mutex<ClaudeState>>,
     needs_history: Arc<AtomicBool>,
@@ -733,6 +941,11 @@ impl ClaudeHandles {
     pub(super) fn busy(&self) -> bool {
         self.turn_lock.try_lock().is_err()
             || !self.held.is_empty()
+            || !self
+                .idle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
             || self.pending_ctrl.try_lock().map_or(true, |p| !p.is_empty())
     }
 
@@ -973,6 +1186,7 @@ async fn spawn_attempt(
     let alive = Arc::new(AtomicBool::new(true));
     let activity = Arc::new(reaper::Activity::new());
     let held = Arc::new(autonomous::Held::new(spec.session_key));
+    let idle: IdleQueue = Arc::default();
     let session_id = Arc::new(Mutex::new(resume_id.unwrap_or("").to_owned()));
     let stderr_tail = Arc::new(Mutex::new(VecDeque::new()));
 
@@ -984,6 +1198,7 @@ async fn spawn_attempt(
         alive.clone(),
         activity.clone(),
         session_id.clone(),
+        (idle.clone(), spec.session_key.to_owned()),
     ));
 
     let init = tokio::time::timeout(
@@ -1106,6 +1321,8 @@ async fn spawn_attempt(
         turn_ctx,
         workflow_tx,
         held,
+        idle,
+        bg_tools: Arc::default(),
         session_id,
         state: Arc::new(Mutex::new(state)),
         needs_history: Arc::new(AtomicBool::new(needs_history)),
@@ -1242,24 +1459,22 @@ pub(super) async fn run_prompt(
         let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<ClaudeControlReq>();
         let (done_tx, mut done_rx) = oneshot::channel::<ClaudeTurnResult>();
         {
-            *handles.turn_ctx.lock().await = Some(ClaudeTurnCtx {
-                event_tx: event_tx.clone(),
+            let mut slot = handles.turn_ctx.lock().await;
+            let mut ctx = ClaudeTurnCtx::new(
+                &handles,
+                event_tx.clone(),
                 ctrl_tx,
-                done_tx: Some(done_tx),
-                withdrawn_map: Arc::new(Mutex::new(HashMap::new())),
-                block_tools: HashMap::new(),
-                tools: HashMap::new(),
-                streamed_text: false,
-                streamed_thinking: false,
-                answer_text: String::new(),
-                last_checklist: None,
-                last_error: None,
-                context_window: 0,
-                session_key: session_key.clone(),
-                command_line: command_line.clone(),
-                cwd: cwd.clone(),
-                session_id: handles.session_id.clone(),
-            });
+                done_tx,
+                session_key.clone(),
+                command_line.clone(),
+                cwd.clone(),
+            );
+            // A turn the agent started itself shows here when this prompt overtook it; a cycle
+            // still running ends with a `result` of its own before this prompt's.
+            if replay_idle(&mut ctx, take_idle(&handles)) {
+                ctx.skip_results = 1;
+            }
+            *slot = Some(ctx);
         }
 
         let sid = handles
@@ -1414,6 +1629,129 @@ pub(super) async fn run_prompt(
         }
     }
     let _ = reply.send(final_result);
+}
+
+/// Show a turn Claude Code started on its own (a background command finished, a wake-up fired)
+/// the way a prompted one is shown, without sending anything: ends with that cycle's `result`.
+pub(super) async fn run_attach(
+    handles: ClaudeHandles,
+    req: super::AcpAttach,
+    reply: oneshot::Sender<Result<(), String>>,
+) {
+    let super::AcpAttach {
+        session_key,
+        cwd,
+        event_tx,
+        mut approval_rx,
+        approval_policy,
+        mut bash_allowlist,
+        mut allowed_tools,
+        cancel,
+        plan_mode,
+    } = req;
+    let _turn = handles.turn_lock.clone().lock_owned().await;
+    handles.activity.touch();
+    let command_line = handles
+        .state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .command_line
+        .clone();
+    let effective_plan_mode =
+        plan_mode || handles.state.lock().unwrap_or_else(|e| e.into_inner()).mode == "plan";
+
+    let _ = event_tx.send(AgentEvent::AgentStart);
+    *handles.workflow_tx.lock().await = Some(event_tx.clone());
+    for params in handles.held.drain() {
+        let root = handles
+            .session_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let _ = event_tx.send(AgentEvent::Delegated { root, params });
+    }
+
+    let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<ClaudeControlReq>();
+    let (done_tx, mut done_rx) = oneshot::channel::<ClaudeTurnResult>();
+    let open = {
+        let mut slot = handles.turn_ctx.lock().await;
+        let mut ctx = ClaudeTurnCtx::new(
+            &handles,
+            event_tx.clone(),
+            ctrl_tx,
+            done_tx,
+            session_key,
+            command_line,
+            cwd,
+        );
+        let open = replay_idle(&mut ctx, take_idle(&handles));
+        // Nothing left running (the cycle was over, or a prompt already showed it): no turn.
+        if open {
+            *slot = Some(ctx);
+        }
+        open
+    };
+
+    if open {
+        let mut auto_approve = false;
+        let mut cancel_sent_at: Option<std::time::Instant> = None;
+        let outcome = loop {
+            tokio::select! {
+                biased;
+                done = &mut done_rx => break done.ok(),
+                maybe_req = ctrl_rx.recv() => {
+                    if let Some(creq) = maybe_req {
+                        handle_control_request(
+                            &handles.stdin,
+                            &event_tx,
+                            &mut approval_rx,
+                            approval_policy,
+                            &mut bash_allowlist,
+                            &mut allowed_tools,
+                            effective_plan_mode,
+                            &cancel,
+                            &mut auto_approve,
+                            creq,
+                        )
+                        .await;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(150)) => {
+                    if !handles.alive.load(Ordering::SeqCst) {
+                        break None;
+                    }
+                    if let Some(sent_at) = cancel_sent_at {
+                        if sent_at.elapsed() >= CANCEL_WAIT_LIMIT {
+                            handles.alive.store(false, Ordering::SeqCst);
+                            break None;
+                        }
+                    } else if cancel.load(Ordering::SeqCst) {
+                        cancel_sent_at = Some(std::time::Instant::now());
+                        let h = handles.clone();
+                        tokio::spawn(async move {
+                            let _ = control_request_within(
+                                &h.stdin,
+                                &h.next_id,
+                                &h.pending_ctrl,
+                                json!({ "subtype": "interrupt" }),
+                                CANCEL_WAIT_LIMIT,
+                            )
+                            .await;
+                        });
+                    } else if handles.activity.quiet_for() >= ATTACH_QUIET_LIMIT {
+                        break None;
+                    }
+                }
+            }
+        };
+        *handles.turn_ctx.lock().await = None;
+        if let Some(notice) = outcome.and_then(|r| r.stop_notice) {
+            let _ = event_tx.send(AgentEvent::TextDelta(notice.to_owned()));
+        }
+    }
+    *handles.workflow_tx.lock().await = None;
+    handles.activity.touch();
+    let _ = reply.send(Ok(()));
 }
 
 async fn sync_claude_plan_mode(handles: &ClaudeHandles, plan_mode: bool) -> bool {
@@ -1685,6 +2023,69 @@ async fn send_control(
     Ok((id, rx))
 }
 
+/// Take the frames held between turns, which also settles their announcement.
+fn take_idle(handles: &ClaudeHandles) -> Vec<Value> {
+    let held: Vec<Value> = handles
+        .idle
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .drain(..)
+        .collect();
+    autonomous::claim(handles.held.session_key());
+    held
+}
+
+/// Keep the connection's running background commands current, so the chat shows it waits on
+/// them after the turn ended. Returns `true` when one finished.
+fn track_background_task(
+    msg: &Value,
+    activity: &reaper::Activity,
+    tasks: &mut HashMap<String, String>,
+) -> bool {
+    match msg["subtype"].as_str() {
+        Some("task_started") if msg["is_backgrounded"].as_bool() == Some(true) => {
+            if let (Some(task), Some(tool)) = (
+                msg["task_id"].as_str().filter(|s| !s.is_empty()),
+                msg["tool_use_id"].as_str().filter(|s| !s.is_empty()),
+            ) {
+                tasks.insert(task.to_owned(), tool.to_owned());
+                activity.add_background_tools(vec![reaper::BackgroundTool {
+                    tool_call_id: tool.to_owned(),
+                    label: msg["description"].as_str().unwrap_or("").trim().to_owned(),
+                    started_at: std::time::Instant::now(),
+                }]);
+            }
+            false
+        }
+        Some("task_notification") => {
+            let tool = msg["task_id"]
+                .as_str()
+                .and_then(|task| tasks.remove(task))
+                .or_else(|| msg["tool_use_id"].as_str().map(str::to_owned));
+            tool.is_some_and(|tool| activity.finish_background_tool(&tool))
+        }
+        // The full list of running tasks: anything missing ended (e.g. stopped with TaskStop).
+        Some("background_tasks_changed") => {
+            let running: std::collections::HashSet<&str> = msg["tasks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t["task_id"].as_str())
+                .collect();
+            let mut finished = false;
+            tasks.retain(|task, tool| {
+                let keep = running.contains(task.as_str());
+                if !keep {
+                    finished |= activity.finish_background_tool(tool);
+                }
+                keep
+            });
+            finished
+        }
+        _ => false,
+    }
+}
+
 async fn read_loop(
     stdout: tokio::process::ChildStdout,
     pending_ctrl: PendingControl,
@@ -1692,7 +2093,11 @@ async fn read_loop(
     alive: Arc<AtomicBool>,
     activity: Arc<reaper::Activity>,
     session_id: Arc<Mutex<String>>,
+    idle: (IdleQueue, String),
 ) {
+    let (idle, session_key) = idle;
+    // Background task id -> the tool call that started it.
+    let mut tasks: HashMap<String, String> = HashMap::new();
     let mut lines = BufReader::new(stdout).lines();
     let mut chunks = String::new();
     let mut chunk_count = 0usize;
@@ -1756,44 +2161,19 @@ async fn read_loop(
                     }
                 }
             }
-            "control_request" => {
-                let rid = msg["request_id"].as_str().unwrap_or("").to_owned();
-                let request = msg.get("request").cloned().unwrap_or(Value::Null);
-                let ctx = turn_ctx.lock().await;
-                if let Some(ctx) = ctx.as_ref() {
-                    let withdrawn = Arc::new(AtomicBool::new(false));
-                    ctx.withdrawn_map
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(rid.clone(), withdrawn.clone());
-                    let _ = ctx.ctrl_tx.send(ClaudeControlReq {
-                        request_id: rid,
-                        request,
-                        withdrawn,
-                    });
-                }
-            }
-            "control_cancel_request" => {
-                if let Some(rid) = msg["request_id"].as_str() {
-                    let ctx = turn_ctx.lock().await;
-                    if let Some(ctx) = ctx.as_ref()
-                        && let Some(flag) = ctx
-                            .withdrawn_map
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .remove(rid)
-                    {
-                        flag.store(true, Ordering::SeqCst);
-                    }
-                }
-            }
             "keep_alive" => {}
             _ => {
-                let mut ctx = turn_ctx.lock().await;
-                if let Some(ctx) = ctx.as_mut() {
-                    ctx.handle_message(&msg);
+                let mut slot = turn_ctx.lock().await;
+                match slot.as_mut() {
+                    Some(ctx) => route(ctx, &msg),
+                    None => hold_idle(&idle, &session_key, &msg),
                 }
             }
+        }
+        // After routing: a finished task is held for the turn that shows it before the UI
+        // stops showing the command as running.
+        if msg_type == "system" && track_background_task(&msg, &activity, &mut tasks) {
+            autonomous::wake();
         }
     }
 

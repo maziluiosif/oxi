@@ -637,14 +637,23 @@ impl AcpManager {
                             let handles = agents.conns.lock().await.get(&req.session_key).and_then(
                                 |conn| match conn {
                                     ManagedConn::Acp(c) if c.alive.load(Ordering::SeqCst) => {
-                                        Some(c.handles.clone())
+                                        Some(ManagedHandles::Acp(c.handles.clone()))
+                                    }
+                                    ManagedConn::Claude(c) if c.alive.load(Ordering::SeqCst) => {
+                                        Some(ManagedHandles::Claude(c.handles.clone()))
                                     }
                                     _ => None,
                                 },
                             );
                             match handles {
-                                Some(handles) => {
+                                Some(ManagedHandles::Acp(handles)) => {
                                     tokio::spawn(run_attach(handles, req, reply));
+                                }
+                                Some(ManagedHandles::Claude(handles)) => {
+                                    tokio::spawn(claude_native::run_attach(handles, req, reply));
+                                }
+                                Some(ManagedHandles::Codex(_)) => {
+                                    let _ = reply.send(Ok(()));
                                 }
                                 // The agent is gone, and with it the turn.
                                 None => {
