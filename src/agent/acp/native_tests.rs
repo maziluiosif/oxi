@@ -11,13 +11,19 @@ use serde_json::{Value, json};
 
 use super::claude_native;
 use super::codex_native;
+#[cfg(unix)]
 use super::config_options::{self, AcpConfigKind};
+#[cfg(unix)]
 use super::import::{AcpImport, list_sessions, load_session};
-use super::{AcpManager, AcpPrompt, AcpSetOption, AcpWarm, commands, session_info};
+use super::{AcpManager, AcpPrompt, AcpWarm};
+#[cfg(unix)]
+use super::{AcpSetOption, commands, session_info};
 use crate::agent::approval::{ApprovalDecision, ApprovalPolicy};
 use crate::agent::events::AgentEvent;
 use crate::agent::steer::SteerInbox;
-use crate::model::{AssistantBlock, MsgRole, ToolStatus};
+#[cfg(unix)]
+use crate::model::ToolStatus;
+use crate::model::{AssistantBlock, MsgRole};
 use crate::settings::{McpServerConfig, McpTransport};
 
 struct TempDir(PathBuf);
