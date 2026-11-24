@@ -317,6 +317,7 @@ pub(super) fn fs_op(params: &Value) -> Result<Value, String> {
         "create_dir_all" => std::fs::create_dir_all(&path),
         "remove_file" => std::fs::remove_file(&path),
         "remove_dir" => std::fs::remove_dir(&path),
+        "remove_dir_all" => std::fs::remove_dir_all(&path),
         "rename" => std::fs::rename(&path, str_param(params, "to")?),
         other => return Err(format!("unknown fs op: {other}")),
     };

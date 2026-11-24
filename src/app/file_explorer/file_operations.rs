@@ -1,5 +1,6 @@
 //! Explorer create, rename, and delete operations.
 
+use std::io;
 use std::path::Path;
 
 use eframe::egui::{self, RichText, Ui};
@@ -27,7 +28,8 @@ impl OxiApp {
             FileOperation::NewFile(_) => ("New file name", false),
             FileOperation::NewFolder(_) => ("New folder name", false),
             FileOperation::Rename(_) => ("Rename to", false),
-            FileOperation::Delete(_) => ("Delete this path?", true),
+            FileOperation::Delete(_) => ("Delete this file?", true),
+            FileOperation::DeleteFolder(_) => ("Delete this folder and everything in it?", true),
         };
         ui.label(RichText::new(label).size(FS_TINY).color(c_text_muted()));
         if !destructive {
@@ -60,10 +62,11 @@ impl OxiApp {
         });
     }
 
-    fn apply_file_operation(&mut self, operation: FileOperation) {
+    pub(super) fn apply_file_operation(&mut self, operation: FileOperation) {
         let name = self.conv.editor.file_operation_name.trim();
         let invalid_name =
             name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']);
+        let folder = matches!(operation, FileOperation::DeleteFolder(_));
         let result = match operation {
             FileOperation::NewFile(parent) if !invalid_name => {
                 crate::vfs::create_new_file(&parent.join(name))
@@ -108,25 +111,48 @@ impl OxiApp {
                 }
                 result
             }
-            FileOperation::Delete(path) => {
+            FileOperation::Delete(path) | FileOperation::DeleteFolder(path) => {
+                // Open documents keep resolved paths. Resolve only the parent, so a symlink being
+                // deleted is not followed.
+                let target = path
+                    .parent()
+                    .zip(path.file_name())
+                    .and_then(|(parent, name)| {
+                        crate::vfs::canonicalize(parent).ok().map(|p| p.join(name))
+                    })
+                    .unwrap_or_else(|| path.clone());
+                // A folder takes every open file under it along, so none of them may be unsaved.
                 if self
                     .conv
                     .editor
                     .documents
                     .iter()
-                    .any(|document| document.path == path && document.is_dirty())
+                    .any(|document| document.is_dirty() && document.path.starts_with(&target))
                 {
-                    self.conv.editor.error =
-                        Some("Save or close the modified file before deleting it.".into());
+                    self.conv.editor.error = Some(if folder {
+                        "Save or close the modified files in this folder before deleting it.".into()
+                    } else {
+                        "Save or close the modified file before deleting it.".into()
+                    });
                     return;
                 }
-                let result = if crate::vfs::is_dir(&path) {
-                    crate::vfs::remove_dir(&path)
+                let result = if folder {
+                    crate::vfs::remove_dir_all(&path)
                 } else {
                     crate::vfs::remove_file(&path)
                 };
-                if result.is_ok() {
-                    self.remove_editor_path(&path);
+                match &result {
+                    Ok(()) => self.forget_deleted_path(&path, &target),
+                    // A folder can be partly deleted before the error.
+                    Err(_) if folder => {
+                        self.conv.explorer.cache.invalidate();
+                        self.close_documents_where(|document| {
+                            document.starts_with(&target)
+                                && crate::vfs::metadata(document)
+                                    .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+                        });
+                    }
+                    Err(_) => {}
                 }
                 result
             }
@@ -145,22 +171,21 @@ impl OxiApp {
         }
     }
 
-    fn remove_editor_path(&mut self, path: &Path) {
-        self.conv.editor.markdown_preview_active = false;
+    /// `path` as the explorer lists it, `target` as open documents store it.
+    fn forget_deleted_path(&mut self, path: &Path, target: &Path) {
         self.conv
-            .editor
-            .documents
-            .retain(|document| !document.path.starts_with(path));
-        self.conv.editor.active = if self.conv.editor.documents.is_empty() {
-            None
-        } else {
-            Some(
-                self.conv
-                    .editor
-                    .active
-                    .unwrap_or(0)
-                    .min(self.conv.editor.documents.len() - 1),
-            )
-        };
+            .explorer
+            .expanded
+            .retain(|expanded| !expanded.starts_with(path));
+        self.close_documents_where(|document| document.starts_with(target));
+    }
+
+    fn close_documents_where(&mut self, close: impl Fn(&Path) -> bool) {
+        let editor = &mut self.conv.editor;
+        for index in (0..editor.documents.len()).rev() {
+            if close(&editor.documents[index].path) {
+                editor.remove_document(index);
+            }
+        }
     }
 }
