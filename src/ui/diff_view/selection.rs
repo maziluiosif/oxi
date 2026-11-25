@@ -69,11 +69,11 @@ impl DiffView {
         let Some(job) = line_job(f, line, side) else {
             return (row, 0);
         };
-        let galley = ui.painter().layout_job(job);
+        let galley = line_galley(ui.ctx(), job, self.wrap_width(pane), line_height());
         let text_x = self.pane_text_column(pane, origin.x, width, numbers_w).min - self.scroll_x;
-        let col = galley
-            .cursor_from_pos(vec2(pos.x - text_x, galley.size().y / 2.0))
-            .index;
+        // Within the line's rows (it starts at its row's top).
+        let y = (pos.y - origin.y - self.layout.ys[row]).clamp(0.0, galley.rect.bottom() - 0.5);
+        let col = galley.cursor_from_pos(vec2(pos.x - text_x, y)).index;
         (row, col.into())
     }
 
@@ -86,7 +86,7 @@ impl DiffView {
         numbers_w: f32,
         area: Rect,
     ) {
-        let split = self.layout_key.is_some_and(|(split, _, _)| split);
+        let split = self.layout_key.is_some_and(|(split, ..)| split);
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }

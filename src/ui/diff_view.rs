@@ -2,9 +2,11 @@
 //! side-by-side or inline panes with line numbers, syntax colors, word-level change highlights,
 //! collapsible unchanged regions, change navigation (F7 / Shift+F7) and an overview ruler.
 //!
-//! Rows have fixed heights and only the visible ones are laid out, so whole-file diffs stay
-//! cheap. Text selection works like the editor's: it stays inside one pane, is painted as one
-//! continuous shape and supports double/triple click, Shift+click, select all and copy.
+//! Rows are as tall as their lines wrap (one row each without soft wrap; side by side, the
+//! taller side's). Only the visible rows are painted, but with soft wrap every line that may
+//! not fit is laid out again to measure it whenever the width changes. Text selection works
+//! like the editor's: it stays inside one pane, is painted as one continuous shape and supports
+//! double/triple click, Shift+click, select all and copy.
 
 mod paint;
 mod parse;
@@ -18,7 +20,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 
-use eframe::egui::text::{CCursor, LayoutJob, TextWrapping};
+use eframe::egui::text::{CharIndex, LayoutJob, TextWrapping};
 use eframe::egui::{
     self, Align, Align2, Color32, FontId, Layout, Rect, Sense, Shape, Stroke, TextFormat, Ui,
     UiBuilder, pos2, vec2,
@@ -26,7 +28,7 @@ use eframe::egui::{
 
 use crate::theme::*;
 
-use paint::{commit_height, line_job};
+use paint::{commit_height, fits_unwrapped, line_galley, line_job};
 pub(crate) use paint::{segment, toolbar_icon};
 use parse::parse;
 pub(crate) use parse::word_diff;
@@ -44,6 +46,8 @@ const BAND_H: f32 = 24.0;
 const RULER_W: f32 = 12.0;
 const SIGN_W: f32 = 16.0;
 const GUTTER_PAD: f32 = 10.0;
+/// Space kept right of wrapped text.
+const WRAP_PAD: f32 = 12.0;
 /// Word-level highlights only help when most of the line survived; past this share of
 /// changed text the line tint alone reads better.
 const MAX_WORD_CHANGE: f32 = 0.6;
@@ -250,10 +254,30 @@ struct RowLayout {
     foldable: bool,
 }
 
+impl RowLayout {
+    fn row_height(&self, row: usize) -> f32 {
+        self.ys.get(row + 1).copied().unwrap_or(self.total) - self.ys[row]
+    }
+
+    /// The row at content offset `y`, and how far into it `y` is (0 at its top, 1 at its bottom).
+    fn anchor(&self, y: f32) -> Option<(usize, f32)> {
+        let row = self.ys.partition_point(|&top| top <= y).checked_sub(1)?;
+        let h = self.row_height(row);
+        Some((row, if h > 0.0 { (y - self.ys[row]) / h } else { 0.0 }))
+    }
+
+    /// The content offset of an [`Self::anchor`], in this layout.
+    fn anchored_y(&self, (row, fraction): (usize, f32)) -> Option<f32> {
+        (row < self.ys.len()).then(|| self.ys[row] + fraction * self.row_height(row))
+    }
+}
+
 /// What the host should do after a frame of the diff view.
 pub enum DiffAction {
     /// Open the file (patch path, e.g. `src/main.rs`) in the editor, optionally at a 1-based line.
     OpenFile { path: String, line: Option<usize> },
+    /// Turn soft wrap on or off (the editor's word wrap setting).
+    ToggleWrap,
     /// Apply `action` to one block of changed lines.
     Block {
         action: BlockAction,
@@ -302,7 +326,10 @@ pub struct DiffView {
     expanded: HashSet<(usize, usize)>,
     collapsed_files: HashSet<usize>,
     layout: RowLayout,
-    layout_key: Option<(bool, bool, u64)>,
+    /// What `layout` was built for: split, collapsed, folds, and the wrap widths' hash.
+    layout_key: Option<(bool, bool, u64, u64)>,
+    /// Each pane's wrap width this frame (split left, split right, inline), when wrapping.
+    wrap: Option<[f32; 3]>,
     digits: usize,
     scroll_x: f32,
     scroll_y: f32,
@@ -364,6 +391,7 @@ impl DiffView {
             collapsed_files: HashSet::new(),
             layout: RowLayout::default(),
             layout_key: None,
+            wrap: None,
             digits,
             scroll_x,
             scroll_y,
@@ -383,21 +411,31 @@ impl DiffView {
     }
 
     /// Render toolbar + body into the remaining space. `source` labels where the diff comes
-    /// from ("Working Tree", "Staged", …); `can_open` says whether a patch path exists on disk.
+    /// from ("Working Tree", "Staged", …); `can_open` says whether a patch path exists on disk;
+    /// `wrap` soft-wraps long lines to the panes' width.
     pub fn show(
         &mut self,
         ui: &mut Ui,
         source: &str,
         can_open: &dyn Fn(&str) -> bool,
         block_actions: &[BlockAction],
+        wrap: bool,
     ) -> Option<DiffAction> {
         let mut action = None;
         let full = ui.available_rect_before_wrap();
         let body_w = full.width() - RULER_W;
         let split_possible = body_w >= MIN_SPLIT_WIDTH;
         let split = split_possible && !self.inline;
+        let char_w = ui.fonts_mut(|f| f.glyph_width(&code_font(), '0'));
+        self.wrap = wrap.then(|| {
+            let numbers_w = self.digits as f32 * char_w;
+            [0, 1, 2].map(|pane| {
+                let column = self.pane_text_column(pane, 0.0, body_w, numbers_w);
+                (column.span() - WRAP_PAD).max(40.0).round()
+            })
+        });
 
-        self.ensure_layout(split);
+        self.ensure_layout(split, ui.ctx());
         let toolbar_rect = Rect::from_min_size(full.min, vec2(full.width(), TOOLBAR_H));
         let mut toolbar = ui.new_child(
             UiBuilder::new()
@@ -406,12 +444,12 @@ impl DiffView {
                 .layout(Layout::left_to_right(Align::Center)),
         );
         toolbar.set_clip_rect(toolbar_rect.intersect(ui.clip_rect()));
-        if let Some(a) = self.toolbar(&mut toolbar, source, split_possible, can_open) {
+        if let Some(a) = self.toolbar(&mut toolbar, source, split_possible, can_open, wrap) {
             action = Some(a);
         }
         // Toolbar toggles apply this frame, not one input event later.
         let split = split_possible && !self.inline;
-        self.ensure_layout(split);
+        self.ensure_layout(split, ui.ctx());
         ui.painter().hline(
             full.x_range(),
             toolbar_rect.bottom() - 0.5,
@@ -436,7 +474,6 @@ impl DiffView {
         }
 
         // Horizontal scrolling is shared by both panes so aligned rows stay aligned.
-        let char_w = ui.fonts_mut(|f| f.glyph_width(&code_font(), '0'));
         let pane_text_w = if split {
             content.width() / 2.0 - self.gutter_w(char_w, false)
         } else {
@@ -450,7 +487,11 @@ impl DiffView {
             .max()
             .unwrap_or(0) as f32
             * char_w;
-        let max_x = (widest + 24.0 - pane_text_w).max(0.0);
+        let max_x = if self.wrap.is_some() {
+            0.0
+        } else {
+            (widest + 24.0 - pane_text_w).max(0.0)
+        };
         if ui.rect_contains_pointer(content) {
             let delta = ui.input(|i| i.smooth_scroll_delta.x);
             self.scroll_x -= delta;
@@ -486,19 +527,77 @@ impl DiffView {
         action
     }
 
-    fn ensure_layout(&mut self, split: bool) {
-        let key = (split, self.collapse_unchanged, self.fold_state_hash());
-        if self.layout_key != Some(key) {
-            // Selections are row positions; they don't survive the rows changing.
+    fn ensure_layout(&mut self, split: bool, ctx: &egui::Context) {
+        let wrap_key = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            self.wrap
+                .map(|widths| widths.map(f32::to_bits))
+                .hash(&mut hasher);
+            (
+                editor_font_size().to_bits(),
+                fonts_generation(),
+                editor_wrap_indent(),
+                ctx.pixels_per_point().to_bits(),
+            )
+                .hash(&mut hasher);
+            hasher.finish()
+        };
+        let key = (
+            split,
+            self.collapse_unchanged,
+            self.fold_state_hash(),
+            wrap_key,
+        );
+        if self.layout_key == Some(key) {
+            return;
+        }
+        // Selections are row positions; they don't survive the rows changing.
+        let same_rows = self
+            .layout_key
+            .is_some_and(|old| old.0 == key.0 && old.1 == key.1 && old.2 == key.2);
+        if !same_rows {
             self.selection = None;
-            self.layout = build_rows(
-                &self.model,
-                split,
-                self.collapse_unchanged,
-                &self.expanded,
-                &self.collapsed_files,
-            );
-            self.layout_key = Some(key);
+        }
+        // Only the row heights change (wrap toggled, resized, font): keep the top row in view.
+        let anchor = (same_rows && self.pending_scroll.is_none())
+            .then(|| self.layout.anchor(self.scroll_y))
+            .flatten();
+        let wrap = self.wrap;
+        let model = &self.model;
+        let mut line_rows = |file: usize, item: usize, pane: usize| -> usize {
+            let Some(width) = wrap.map(|widths| widths[pane]) else {
+                return 1;
+            };
+            let f = &model.files[file];
+            let Some(line) = f.line(item) else {
+                return 1;
+            };
+            if fits_unwrapped(&line.text, width, ctx) {
+                return 1;
+            }
+            let side = match pane {
+                2 => usize::from(line.kind != Kind::Removed),
+                side => side,
+            };
+            line_job(f, line, side).map_or(1, |job| {
+                line_galley(ctx, job, Some(width), line_height())
+                    .rows
+                    .len()
+                    .max(1)
+            })
+        };
+        self.layout = build_rows(
+            model,
+            split,
+            self.collapse_unchanged,
+            &self.expanded,
+            &self.collapsed_files,
+            &mut line_rows,
+        );
+        self.layout_key = Some(key);
+        if let Some(y) = anchor.and_then(|anchor| self.layout.anchored_y(anchor)) {
+            self.scroll_y = y;
+            self.pending_scroll = Some(y);
         }
     }
 
