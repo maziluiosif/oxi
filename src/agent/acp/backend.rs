@@ -146,11 +146,7 @@ pub(super) async fn resolve_cli_binary(
         .await
         .or_else(|| std::env::var("PATH").ok())
         .unwrap_or_default();
-    let exts: &[&str] = if cfg!(windows) {
-        &["", ".exe", ".cmd", ".bat", ".com"]
-    } else {
-        &[""]
-    };
+    let exts = candidate_exts(program);
     let mut dirs: Vec<PathBuf> = std::env::split_paths(&path_env).collect();
     if let Some(home) = dirs::home_dir() {
         for rel in extra_home_dirs {
@@ -170,6 +166,28 @@ pub(super) async fn resolve_cli_binary(
         }
     }
     fallback.filter(|p| is_runnable_file(p))
+}
+
+/// Extensions to try for a bare program name. On Windows the extensionless file is only a
+/// candidate when the name already carries an extension: npm installs an extensionless POSIX
+/// shell shim next to `codex.cmd`, and spawning it fails with "not a valid Win32 application".
+fn candidate_exts(program: &str) -> &'static [&'static str] {
+    if !cfg!(windows) {
+        return &[""];
+    }
+    let has_ext = Path::new(program)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| {
+            ["exe", "cmd", "bat", "com"]
+                .iter()
+                .any(|x| e.eq_ignore_ascii_case(x))
+        });
+    if has_ext {
+        &[""]
+    } else {
+        &[".exe", ".cmd", ".bat", ".com"]
+    }
 }
 
 fn is_runnable_file(path: &Path) -> bool {

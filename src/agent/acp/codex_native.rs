@@ -1993,12 +1993,35 @@ async fn spawn_codex_process(
                 "Could not find `{program_word}` in PATH. Install OpenAI Codex CLI (`npm i -g @openai/codex` or `brew install codex`) and sign in with `codex login`."
             )
         })?;
+    #[cfg(windows)]
+    let npm_native = npm_native_codex_exe(&bin);
+    #[cfg(windows)]
+    let bin = npm_native.clone().unwrap_or(bin);
     let extra_args: &[String] = words.get(1..).unwrap_or(&[]);
     let mut args = build_codex_args(extra_args, mcp_servers, evidence_dir, delegation_dir);
     let mut cmd = Command::new(&bin);
     cmd.args(&mut args);
     cmd.current_dir(cwd);
     crate::shell_env::apply_async(&mut cmd).await;
+    // Mirror what npm's `codex.js` wrapper does: put the bundled `rg` on PATH.
+    #[cfg(windows)]
+    if let Some(exe) = &npm_native {
+        if let Some(tools) = exe.parent().and_then(Path::parent).map(|d| d.join("path")) {
+            let current = cmd
+                .as_std()
+                .get_envs()
+                .find(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+                .and_then(|(_, v)| v.map(ToOwned::to_owned))
+                .or_else(|| std::env::var_os("PATH"))
+                .unwrap_or_default();
+            let joined =
+                std::env::join_paths(std::iter::once(tools).chain(std::env::split_paths(&current)));
+            if let Ok(joined) = joined {
+                cmd.env("PATH", joined);
+            }
+        }
+        cmd.env("CODEX_MANAGED_BY_NPM", "1");
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -2018,6 +2041,50 @@ async fn spawn_codex_process(
     let stdout = child.stdout.take().ok_or("Codex: child has no stdout")?;
     let stderr = child.stderr.take().ok_or("Codex: child has no stderr")?;
     Ok((child, stdin, stdout, stderr))
+}
+
+/// For an npm-installed Codex (`%APPDATA%\npm\codex.cmd`), the native `codex.exe` shipped
+/// inside the package. Spawning it directly avoids the `cmd.exe` → `node` → `codex.exe` chain,
+/// whose grandchild would survive `kill_on_drop` and whose batch quoting mangles `-c` overrides.
+#[cfg(windows)]
+fn npm_native_codex_exe(shim: &Path) -> Option<std::path::PathBuf> {
+    let is_shim = shim
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+    if !is_shim {
+        return None;
+    }
+    let pkg = shim
+        .parent()?
+        .join("node_modules")
+        .join("@openai")
+        .join("codex");
+    find_file_named(&pkg, "codex.exe", 7)
+}
+
+#[cfg(windows)]
+fn find_file_named(dir: &Path, name: &str, depth: usize) -> Option<std::path::PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(name)
+        {
+            return Some(path);
+        }
+        if ft.is_dir() && depth > 0 {
+            subdirs.push(path);
+        }
+    }
+    subdirs
+        .into_iter()
+        .find_map(|d| find_file_named(&d, name, depth - 1))
 }
 
 /// Build CLI arguments for `codex app-server --stdio`, injecting oxi's MCP server and any
