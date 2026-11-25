@@ -37,6 +37,8 @@ pub(crate) struct PaneCache {
     pub(super) wrap_width: f32,
     key: u64,
     galley: Option<Arc<Galley>>,
+    /// The text version `galley` lays out.
+    galley_version: Option<u64>,
     /// `galley` with transparent glyphs, for `TextEdit`: egui recolors selected glyphs with a
     /// single color, so the colored text is painted on top of it instead.
     geometry: Option<Arc<Galley>>,
@@ -61,9 +63,14 @@ pub(super) struct PaneInput<'a> {
     pub alignment_generation: u64,
     pub zones: Option<ZoneText<'a>>,
     pub scroll_y: f32,
+    /// This pane scrolls the diff: when its layout changes (wrap, width, font), `scroll_y` moves
+    /// to keep the same point of the same line at the top.
+    pub keep_place: bool,
 }
 
 pub(super) struct PaneOutput {
+    /// The scroll offset the pane was drawn at: `scroll_y`, moved with `keep_place`.
+    pub scroll_y: f32,
     /// Vertical wheel scrolling over the pane, for the diff to apply to every pane.
     pub wheel_y: f32,
     /// Screen spans of the changes, and the text column they were drawn in.
@@ -193,11 +200,23 @@ pub(super) fn readonly_pane(
         (cache.measure_key, input.alignment_generation, input.side).hash(&mut hasher);
         hasher.finish()
     };
+    let mut scroll_y = input.scroll_y;
     if cache.key != key || cache.galley.is_none() {
         let laid = cache.laid.as_ref().expect("measured above");
         let galley = apply_gaps(laid, 0, input.alignment.gaps(input.side));
+        // The scroll offset counts the text's margin above the galley; within it, the view is
+        // at the top and stays there.
+        let margin = f32::from(TEXT_MARGIN);
+        if let Some(old) = cache.galley.as_ref().filter(|_| {
+            input.keep_place
+                && scroll_y > margin
+                && cache.galley_version == Some(input.text_version)
+        }) {
+            scroll_y = super::decor::same_place(old, &galley, scroll_y - margin) + margin;
+        }
         cache.geometry = Some(transparent_glyphs(&galley));
         cache.galley = Some(galley);
+        cache.galley_version = Some(input.text_version);
         cache.key = key;
     }
     let galley = cache.galley.clone().expect("laid out above");
@@ -237,7 +256,7 @@ pub(super) fn readonly_pane(
         .scroll_source(ScrollSource::NONE)
         .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
         .auto_shrink([false, false])
-        .scroll_offset(vec2(cache.scroll_x, input.scroll_y))
+        .scroll_offset(vec2(cache.scroll_x, scroll_y))
         .show(&mut child, |ui| {
             // The underlay goes under the text TextEdit paints: its slot is taken first and
             // filled once TextEdit has placed the galley.
@@ -350,6 +369,7 @@ pub(super) fn readonly_pane(
     }
 
     PaneOutput {
+        scroll_y,
         wheel_y: wheel.y,
         spans,
         clip,

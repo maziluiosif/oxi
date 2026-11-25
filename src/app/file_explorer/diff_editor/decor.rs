@@ -510,6 +510,43 @@ pub(crate) fn apply_gaps(galley: &Galley, first: usize, gaps: &[Gap]) -> Arc<Gal
     Arc::new(out)
 }
 
+/// Where each logical line of `galley` starts, down to the next one's start: a line owns the
+/// gap after it (the first line also the gap before it, from 0), and the last one runs to the
+/// galley's bottom.
+fn line_tops(galley: &Galley) -> Vec<f32> {
+    let mut starts = vec![0.0];
+    for (index, row) in galley.rows.iter().enumerate().skip(1) {
+        if galley.rows[index - 1].ends_with_newline {
+            starts.push(row.pos.y);
+        }
+    }
+    starts
+}
+
+/// The y in `new` of the point at `y` in `old`, two layouts of the same text: the same fraction
+/// down the same logical line, however each wraps and whatever gaps each has.
+pub(crate) fn same_place(old: &Galley, new: &Galley, y: f32) -> f32 {
+    let (old_starts, new_starts) = (line_tops(old), line_tops(new));
+    let line = old_starts
+        .partition_point(|&start| start <= y)
+        .saturating_sub(1);
+    let extent = |starts: &[f32], bottom: f32| {
+        let top = starts.get(line).copied().unwrap_or(bottom);
+        (
+            top,
+            starts.get(line + 1).copied().unwrap_or(bottom).max(top),
+        )
+    };
+    let (top, bottom) = extent(&old_starts, old.rect.bottom());
+    let fraction = if bottom > top {
+        ((y - top) / (bottom - top)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (top, bottom) = extent(&new_starts, new.rect.bottom());
+    top + fraction * (bottom - top)
+}
+
 /// Line tints, word highlights and the gap fillers of one pane, painted under its text.
 /// `zones` (inline view) holds the removed lines to show in the new side's gaps.
 pub(crate) struct Underlay<'a> {

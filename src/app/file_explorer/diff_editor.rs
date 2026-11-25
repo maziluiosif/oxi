@@ -913,6 +913,8 @@ impl OxiApp {
                     alignment_generation,
                     zones: None,
                     scroll_y,
+                    // The editor (or the staged pane) scrolls the diff.
+                    keep_place: false,
                 },
                 &mut diff.left,
             );
@@ -984,9 +986,11 @@ impl OxiApp {
                     wrap_width: diff.right.wrap_width,
                 }),
                 scroll_y: diff.scroll_y,
+                keep_place: true,
             },
             &mut diff.right,
         );
+        diff.scroll_y = output.scroll_y;
         let max = (output.content_h - output.viewport_h).max(0.0);
         if output.wheel_y != 0.0 {
             diff.scroll_y = (diff.scroll_y - output.wheel_y).clamp(0.0, max);

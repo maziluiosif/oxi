@@ -275,3 +275,71 @@ fn sub_pixel_differences_add_up_to_a_gap_instead_of_vanishing() {
     // Ten lines apart by 2.0 in all: the base is padded by all but the last half pixel.
     assert!(padded > 1.5 && padded <= 2.0 + 1e-3, "{padded}");
 }
+
+#[test]
+fn toggling_wrap_keeps_the_same_point_of_the_same_line_at_the_top() {
+    use super::decor::{apply_gaps, same_place};
+    use eframe::egui;
+    let ctx = egui::Context::default();
+    crate::theme::setup_style(&ctx);
+    // Line 1 wraps to several rows at 200 pt; every other line is one row.
+    let text = format!("a\n{}\n{}", "word ".repeat(40), "b\n".repeat(20));
+    let mut laid = None;
+    for _ in 0..2 {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let lay_out = |width: f32| {
+                let job = egui::text::LayoutJob::simple(
+                    text.clone(),
+                    crate::theme::editor_font(),
+                    egui::Color32::WHITE,
+                    width,
+                );
+                ui.fonts_mut(|fonts| fonts.layout_job(job))
+            };
+            laid = Some((lay_out(f32::INFINITY), lay_out(200.0)));
+        });
+    }
+    let (unwrapped, wrapped) = laid.unwrap();
+    let wrapped_lines = LineGeometry::measure(&wrapped, 0.0);
+    let pitch = wrapped_lines.row_h;
+    let tall = wrapped_lines.height(1);
+    assert!(tall > 2.0 * pitch, "line 1 should wrap");
+    // A gap before line 5 on the wrapped side only (the other side's lines are taller).
+    let wrapped = apply_gaps(
+        &wrapped,
+        0,
+        &[Gap {
+            line: 5,
+            height: 30.0,
+        }],
+    );
+    let top = |galley: &egui::Galley, line: usize| {
+        let row = (0..galley.rows.len())
+            .filter(|&row| row == 0 || galley.rows[row - 1].ends_with_newline)
+            .nth(line)
+            .unwrap();
+        galley.rows[row].pos.y
+    };
+
+    // The top of a line stays the top of that line, past wrapped rows and gaps.
+    for line in [0, 1, 2, 7, 15] {
+        let y = same_place(&unwrapped, &wrapped, top(&unwrapped, line));
+        assert!((y - top(&wrapped, line)).abs() < 0.01, "line {line}: {y}");
+        let back = same_place(&wrapped, &unwrapped, top(&wrapped, line));
+        assert!(
+            (back - top(&unwrapped, line)).abs() < 0.01,
+            "line {line}: {back}"
+        );
+    }
+    // Halfway into the wrapped line is halfway into it unwrapped, and back.
+    let middle = top(&wrapped, 1) + tall / 2.0;
+    let unwrapped_middle = same_place(&wrapped, &unwrapped, middle);
+    assert!((unwrapped_middle - (top(&unwrapped, 1) + pitch / 2.0)).abs() < 0.5);
+    assert!((same_place(&unwrapped, &wrapped, unwrapped_middle) - middle).abs() < 0.5);
+    // Inside the gap (owned by the line above it): still between those two lines.
+    let in_gap = top(&wrapped, 5) - 10.0;
+    let y = same_place(&wrapped, &unwrapped, in_gap);
+    assert!(y > top(&unwrapped, 4) && y < top(&unwrapped, 5));
+    // Above everything stays at the top.
+    assert_eq!(same_place(&unwrapped, &wrapped, 0.0), 0.0);
+}

@@ -249,7 +249,15 @@ impl OxiApp {
         // Exact, not rounded: at fractional DPI (125%/150% on Windows) a sidebar drag moves the
         // width by sub-pixel steps that still re-wrap rows. Treating those frames as "no resize"
         // re-sampled the anchor from a shifted layout and the file crept away while dragging.
-        let prospective_width_bits = prospective_editor_width.to_bits();
+        //
+        // Unwrapped, the width moves no rows and turning wrap on or off moves them all: the
+        // anchor goes by the width the text wraps at (infinite when it doesn't).
+        let wraps = if diff_key != 0 { diff_wrap } else { word_wrap };
+        let prospective_width_bits = if wraps {
+            prospective_editor_width.to_bits()
+        } else {
+            f32::INFINITY.to_bits()
+        };
         let resize_anchor = self.conv.editor.documents[index]
             .viewport_width_bits
             .filter(|width| *width != prospective_width_bits)
