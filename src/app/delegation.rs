@@ -570,11 +570,19 @@ impl OxiApp {
     ) -> Receiver<Result<Prepared, String>> {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = self.conv.git_ctx.clone();
+        // Workers of one batch prepare one at a time: parallel snapshots (`git add -A`,
+        // `write-tree`) and work tree checkouts write and read the same objects, which fails
+        // now and then on Windows ("Permission denied" on an object file). Each takes a moment.
+        static PREPARING: std::sync::Mutex<()> = std::sync::Mutex::new(());
         std::thread::spawn(move || {
+            let prepared = {
+                let _turn = PREPARING.lock().unwrap_or_else(|e| e.into_inner());
+                work()
+            };
             if let Err(std::sync::mpsc::SendError(Ok(Prepared {
                 worktree: Some(path),
                 ..
-            }))) = tx.send(work())
+            }))) = tx.send(prepared)
                 && let Err(e) = crate::orchestrator::remove_worker_tree(&path)
             {
                 log::warn!("cleaning up abandoned worker preparation: {e}");
@@ -2506,7 +2514,7 @@ mod tests {
             c.worker.clone().unwrap(),
         );
         assert_ne!(wa.cwd, wa.root, "two editors: each in a work tree: {a:?}");
-        assert_ne!(wb.cwd, wb.root);
+        assert_ne!(wb.cwd, wb.root, "{b:?}");
         assert_ne!(wa.cwd, wb.cwd);
         assert_eq!(wc.cwd, wc.root, "a reader stays in the workspace");
         assert!(
