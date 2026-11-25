@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.49.0] - 2026-11-25
+
+### Added
+- **Orchestrator:** Spawn multiple AI workers to collaborate on tasks, with automatic task delegation and quota-aware rerouting between providers.
+- **Orchestrator:** Each worker gets an isolated git worktree snapshot, and changes merge back automatically when work completes.
+- **Orchestrator:** View worker status, send messages to specific workers, review their diffs, and stop workers from a new orchestrator panel.
+- **UI:** Worker rows appear in the composer tray, and a worker return bar shows when agents hand off work back to you.
+- **UI:** Report cards for orchestrator runs are now collapsible for easier navigation.
+
+### Fixed
+- **Orchestrator:** Workers initialize one at a time to prevent parallel git worktree checkout failures on Windows.
+- **Tests:** Fixed flaky orchestrator tests by isolating fixtures from parallel test interference and sharing quota locks properly.
+
+
 ## [1.48.0] - 2026-11-25
 
 ### Added
@@ -1519,7 +1533,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.48.0...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.49.0...HEAD
+[1.49.0]: https://github.com/maziluiosif/oxi/compare/v1.48.0...v1.49.0
 [1.48.0]: https://github.com/maziluiosif/oxi/compare/v1.47.1...v1.48.0
 [1.47.1]: https://github.com/maziluiosif/oxi/compare/v1.47.0...v1.47.1
 [1.47.0]: https://github.com/maziluiosif/oxi/compare/v1.46.0...v1.47.0
