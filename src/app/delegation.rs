@@ -2001,16 +2001,45 @@ mod tests {
     fn test_lead(root: &Path) -> (OxiApp, SessionKey, PathBuf) {
         crate::secrets::use_mock_store();
         std::fs::create_dir_all(root).unwrap();
-        let mut app = OxiApp::new();
-        app.conn.no_session = true;
-        let lead = app.active_session_key();
-        app.conv.workspaces[lead.workspace_idx].root_path = root.to_string_lossy().into_owned();
+        let (mut app, lead) = lead_app(root);
         app.conv.settings.orchestrator.lead_provider = crate::settings::LlmProviderKind::OpenAi;
         app.set_active_session_provider(crate::settings::LlmProviderKind::Orchestrator);
         app.session_mut_by_key(lead).session_file =
             Some(root.join("lead.jsonl").display().to_string());
         let dir = crate::delegation::dir_for(&app.acp_session_key(lead));
         (app, lead, dir)
+    }
+
+    /// An app whose only workspace is `root`, with one blank chat (the future lead) active,
+    /// whose workers stay on the fixture provider.
+    ///
+    /// Tests in this process share one config dir, and `OxiApp::new` restores the workspaces
+    /// and chats other tests saved there: the active chat could be another test's worker. The
+    /// quota board is process-wide too: another test's OpenAI cooldown would reroute
+    /// `spawn_workers` to whichever ACP agents are installed, and a real agent would run.
+    fn lead_app(root: &Path) -> (OxiApp, SessionKey) {
+        let mut app = OxiApp::new();
+        app.conn.no_session = true;
+        app.conv.workspaces = vec![Workspace {
+            root_path: root.to_string_lossy().into_owned(),
+            sessions: vec![OxiApp::blank_session("lead")],
+            active: 0,
+            sidebar_folded: false,
+            pinned: Vec::new(),
+            archived: Vec::new(),
+            folded_groups: Vec::new(),
+            worktree: None,
+        }];
+        app.conv.active_workspace = 0;
+        app.flow.sessions.clear();
+        app.conv.settings.orchestrator.workers = vec![crate::settings::WorkerSlot {
+            provider: crate::settings::LlmProviderKind::OpenAi,
+            model: String::new(),
+            note: String::new(),
+            enabled: true,
+        }];
+        let lead = app.active_session_key();
+        (app, lead)
     }
 
     fn request(task: &str, access: Access) -> WorkerRequest {
@@ -2412,12 +2441,9 @@ mod tests {
         // Uncommitted work the workers should see.
         std::fs::write(root.join("draft.txt"), "wip\n").unwrap();
 
-        let mut app = OxiApp::new();
-        app.conn.no_session = true;
-        let lead = app.active_session_key();
+        let (mut app, lead) = lead_app(&root);
         app.session_mut_by_key(lead).session_file =
             Some(root.join("lead.jsonl").display().to_string());
-        app.conv.workspaces[lead.workspace_idx].root_path = root.to_string_lossy().into_owned();
         let mut config = crate::model::SessionConfig::from_provider(
             app.conv
                 .settings
