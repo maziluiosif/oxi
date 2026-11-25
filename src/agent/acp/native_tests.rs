@@ -1069,7 +1069,7 @@ for line in sys.stdin:
             continue
 
         # Stream thinking + tool_use + text
-        send({{"type": "stream_event", "parent_tool_use_id": None, "event": {{"type": "message_start", "message": {{}}}}}})
+        send({{"type": "stream_event", "parent_tool_use_id": None, "event": {{"type": "message_start", "message": {{"usage": {{"input_tokens": 2, "cache_read_input_tokens": 3000, "cache_creation_input_tokens": 200, "output_tokens": 1}}}}}}}})
         send({{"type": "stream_event", "parent_tool_use_id": None, "event": {{"type": "content_block_delta", "index": 0, "delta": {{"type": "thinking_delta", "thinking": "Planning fix"}}}}}})
         send({{"type": "stream_event", "parent_tool_use_id": None, "event": {{"type": "content_block_start", "index": 1, "content_block": {{"type": "tool_use", "id": "tu_edit", "name": "Edit", "input": {{}}}}}}}})
         send({{"type": "stream_event", "parent_tool_use_id": None, "event": {{"type": "content_block_delta", "index": 1, "delta": {{"type": "input_json_delta", "partial_json": "{{\"file_path\":\"src/app.rs\",\"old_string\":\"old\",\"new_string\":\"new\"}}"}}}}}})
@@ -1098,6 +1098,9 @@ for line in sys.stdin:
         ans = q_resp["response"]["response"]["updatedInput"]["answers"]["Ship it?"]
 
         send({{"type": "user", "session_id": sid, "parent_tool_use_id": None, "message": {{"content": [{{"type": "tool_result", "tool_use_id": "tu_edit", "content": "Edited ok"}}]}}}})
+        # Second API call of the turn; a subagent's call must not count.
+        send({{"type": "stream_event", "parent_tool_use_id": "tu_task", "event": {{"type": "message_start", "message": {{"usage": {{"input_tokens": 9, "cache_read_input_tokens": 90000}}}}}}}})
+        send({{"type": "stream_event", "parent_tool_use_id": None, "event": {{"type": "message_start", "message": {{"usage": {{"input_tokens": 3, "cache_read_input_tokens": 3200, "cache_creation_input_tokens": 100, "output_tokens": 1}}}}}}}})
         send({{"type": "stream_event", "parent_tool_use_id": None, "event": {{"type": "content_block_delta", "index": 2, "delta": {{"type": "text_delta", "text": f"Shipped ({{ans}})."}}}}}})
         # Duplicate full assistant message must NOT double-emit text!
         send({{"type": "assistant", "session_id": sid, "parent_tool_use_id": None, "message": {{"content": [
@@ -1105,6 +1108,7 @@ for line in sys.stdin:
             {{"type": "tool_use", "id": "tu_todo", "name": "mcp__oxi__todo_write", "input": {{"todos": [{{"content": "Verify", "status": "completed"}}]}}}},
             {{"type": "tool_use", "id": "tu_ts", "name": "ToolSearch", "input": {{"query": "foo"}}}}
         ]}}}})
+        send({{"type": "stream_event", "parent_tool_use_id": None, "event": {{"type": "message_delta", "delta": {{"stop_reason": "end_turn"}}, "usage": {{"output_tokens": 40}}}}}})
         send({{"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "total_cost_usd": 0.42, "usage": {{"input_tokens": 1000, "output_tokens": 250, "cache_read_input_tokens": 5000, "cache_creation_input_tokens": 300}}, "modelUsage": {{"claude-opus-5-5": {{"inputTokens": 1000, "cacheReadInputTokens": 5000, "cacheCreationInputTokens": 300, "contextWindow": 200000}}}}}})
 "#,
         log_path = log_file.to_string_lossy()
@@ -1229,13 +1233,17 @@ for line in sys.stdin:
             .iter()
             .any(|e| matches!(e, AgentEvent::ToolUpdate(u) if u.name == "ToolSearch"))
     );
-    assert!(events.iter().any(|e| matches!(
-        e,
-        AgentEvent::ContextUsage {
-            used: 6300,
-            size: 200000
-        }
-    )));
+    // Context is the last main-agent call (3 + 3200 + 100 in, 40 out), not the turn's
+    // `modelUsage` total (6300) that adds up both calls.
+    let context: Vec<(u64, u64)> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::ContextUsage { used, size } => Some((*used, *size)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(context.last(), Some(&(3343, 200000)), "{context:?}");
+    assert!(context.iter().all(|(used, _)| *used < 6300), "{context:?}");
     assert!(events.iter().any(|e| matches!(e, AgentEvent::ExternalUsage(u) if u.input_tokens == 1000 && u.cache_read_input_tokens == 5000 && u.cache_creation_input_tokens == 300 && u.output_tokens == 250)));
     let (cost, cur) = session_info::reported_cost(&session_key).unwrap();
     assert!((cost - 0.42).abs() < 1e-6 && cur == "USD");

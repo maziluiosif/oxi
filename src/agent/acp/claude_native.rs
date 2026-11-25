@@ -15,7 +15,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver as StdReceiver, Sender as StdSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -272,7 +272,12 @@ struct ClaudeTurnCtx {
     answer_text: String,
     last_checklist: Option<Value>,
     last_error: Option<String>,
-    context_window: u64,
+    /// The model's window, learned from the first `result` and kept on the connection, so
+    /// later turns can show context live after each API call.
+    context_window: Arc<AtomicU64>,
+    /// Prompt side (`input` + cache read + cache write) and output of the main agent's latest
+    /// API call: the context the next call starts from. `result` only has turn totals.
+    last_call: Option<(u64, u64)>,
     session_key: String,
     command_line: String,
     cwd: PathBuf,
@@ -401,7 +406,8 @@ impl ClaudeTurnCtx {
             answer_text: String::new(),
             last_checklist: None,
             last_error: None,
-            context_window: 0,
+            context_window: handles.context_window.clone(),
+            last_call: None,
             session_key,
             command_line,
             cwd,
@@ -593,7 +599,12 @@ impl ClaudeTurnCtx {
                         self.streamed_text = false;
                         self.streamed_thinking = false;
                         if let Some(usage) = ev["message"].get("usage") {
-                            self.emit_context_from_message_usage(usage);
+                            self.note_call_usage(usage, true);
+                        }
+                    }
+                    Some("message_delta") => {
+                        if let Some(usage) = ev.get("usage") {
+                            self.note_call_usage(usage, false);
                         }
                     }
                     Some("content_block_start") => {
@@ -675,7 +686,7 @@ impl ClaudeTurnCtx {
                 }
                 let message = &msg["message"];
                 if let Some(usage) = message.get("usage") {
-                    self.emit_context_from_message_usage(usage);
+                    self.note_call_usage(usage, false);
                 }
                 for block in message["content"].as_array().into_iter().flatten() {
                     match block["type"].as_str() {
@@ -807,10 +818,12 @@ impl ClaudeTurnCtx {
                 if let Some(usage) = parse_claude_usage(&msg["usage"]) {
                     let _ = self.event_tx.send(AgentEvent::ExternalUsage(usage));
                 }
-                if let Some((used, size)) = extract_model_usage_context(&msg["modelUsage"]) {
-                    self.context_window = size;
-                    let _ = self.event_tx.send(AgentEvent::ContextUsage { used, size });
+                // `modelUsage` token counts add up every API call of the turn, so they say
+                // nothing about how full the context is; only its window is used.
+                if let Some(size) = model_context_window(&msg["modelUsage"]) {
+                    self.context_window.store(size, Ordering::Relaxed);
                 }
+                self.emit_context();
                 if let Some(cost) = msg["total_cost_usd"].as_f64() {
                     let sid = self
                         .session_id
@@ -857,17 +870,31 @@ impl ClaudeTurnCtx {
         }
     }
 
-    fn emit_context_from_message_usage(&self, usage: &Value) {
-        if self.context_window == 0 {
-            return;
-        }
-        let used = usage["input_tokens"].as_u64().unwrap_or(0)
+    /// Usage of one main-agent API call. `message_start` opens a new call; the full `assistant`
+    /// frames and `message_delta` repeat it with a growing output count.
+    fn note_call_usage(&mut self, usage: &Value, new_call: bool) {
+        let prompt = usage["input_tokens"].as_u64().unwrap_or(0)
             + usage["cache_read_input_tokens"].as_u64().unwrap_or(0)
             + usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
-        if used > 0 {
+        let output = usage["output_tokens"].as_u64().unwrap_or(0);
+        let next = match self.last_call {
+            Some((p, o)) if !new_call => (if prompt > 0 { prompt } else { p }, o.max(output)),
+            _ if prompt > 0 => (prompt, output),
+            _ => return,
+        };
+        let changed = self.last_call != Some(next);
+        self.last_call = Some(next);
+        if changed {
+            self.emit_context();
+        }
+    }
+
+    fn emit_context(&self) {
+        let size = self.context_window.load(Ordering::Relaxed);
+        if let (Some((prompt, output)), true) = (self.last_call, size > 0) {
             let _ = self.event_tx.send(AgentEvent::ContextUsage {
-                used,
-                size: self.context_window,
+                used: prompt + output,
+                size,
             });
         }
     }
@@ -895,6 +922,7 @@ pub(super) struct ClaudeHandles {
     /// Frames of a turn Claude Code started itself, until a turn is attached to show them.
     idle: IdleQueue,
     bg_tools: BgTools,
+    context_window: Arc<AtomicU64>,
     session_id: Arc<Mutex<String>>,
     state: Arc<Mutex<ClaudeState>>,
     needs_history: Arc<AtomicBool>,
@@ -1323,6 +1351,7 @@ async fn spawn_attempt(
         held,
         idle,
         bg_tools: Arc::default(),
+        context_window: Arc::default(),
         session_id,
         state: Arc::new(Mutex::new(state)),
         needs_history: Arc::new(AtomicBool::new(needs_history)),
@@ -2697,21 +2726,15 @@ fn parse_claude_usage(v: &Value) -> Option<TokenUsage> {
     (!usage.is_zero()).then_some(usage)
 }
 
-fn extract_model_usage_context(model_usage: &Value) -> Option<(u64, u64)> {
-    let obj = model_usage.as_object()?;
-    let mut best_window = 0u64;
-    let mut best_used = 0u64;
-    for entry in obj.values() {
-        let window = entry["contextWindow"].as_u64().unwrap_or(0);
-        let used = entry["inputTokens"].as_u64().unwrap_or(0)
-            + entry["cacheReadInputTokens"].as_u64().unwrap_or(0)
-            + entry["cacheCreationInputTokens"].as_u64().unwrap_or(0);
-        if window > best_window {
-            best_window = window;
-            best_used = used;
-        }
-    }
-    (best_window > 0 && best_used > 0).then_some((best_used, best_window))
+/// The largest `contextWindow` in a `result`'s `modelUsage` (the main model; helpers such as
+/// title generation run on smaller ones).
+fn model_context_window(model_usage: &Value) -> Option<u64> {
+    model_usage
+        .as_object()?
+        .values()
+        .filter_map(|e| e["contextWindow"].as_u64())
+        .max()
+        .filter(|w| *w > 0)
 }
 
 fn claude_assistant_error_text(code: &str) -> &'static str {
