@@ -152,7 +152,8 @@ impl AppSettings {
             | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp
             | LlmProviderKind::OpenCodeAcp
-            | LlmProviderKind::Router => String::new(),
+            | LlmProviderKind::Router
+            | LlmProviderKind::Orchestrator => String::new(),
         };
         cfg.openrouter_http_referer = old.openrouter_http_referer;
         cfg.openrouter_title = old.openrouter_title;
@@ -273,6 +274,18 @@ impl AppSettings {
         if let Some(legacy_require_approval) = self.require_approval.take() {
             self.require_write_edit_approval = legacy_require_approval;
             self.require_bash_approval = legacy_require_approval;
+        }
+        // Write each oxi tool's confirmation down once, so tools that used to follow the
+        // file-edit switch keep today's behavior but stop changing with it from now on.
+        for info in super::super::oxi_tools::OXI_TOOLS {
+            if !self.oxi_tool_confirmation.contains_key(info.name) {
+                let asks = super::super::oxi_tools::oxi_tool_default(
+                    info,
+                    self.require_write_edit_approval,
+                );
+                self.oxi_tool_confirmation
+                    .insert(info.name.to_owned(), asks);
+            }
         }
         if self.context_window_default == 0 {
             self.context_window_default = default_context_window();

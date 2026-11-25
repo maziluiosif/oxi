@@ -625,3 +625,125 @@ fn fields_never_saved_on_purpose_are_not_kept_as_unknown() {
     assert!(!saved.contains("require_approval"));
     assert!(saved.contains("futurellm"));
 }
+
+#[test]
+fn oxi_tool_confirmation_defaults_and_roundtrips() {
+    let mut s = AppSettings::default();
+    assert!(s.oxi_tool_asks("spawn_workers"));
+    assert!(s.oxi_tool_asks("merge_worker"));
+    assert!(s.oxi_tool_asks("delegate_task"));
+    assert!(s.oxi_tool_asks("scratchpad"));
+    assert!(s.oxi_tool_asks("learn_rules"));
+    assert!(!s.oxi_tool_asks("team"));
+    assert!(!s.oxi_tool_asks("worker_status"));
+    assert!(!s.oxi_tool_asks("todo_write"));
+    assert!(!s.oxi_tool_asks("evidence_run"));
+
+    s.oxi_tool_confirmation
+        .insert("spawn_workers".into(), false);
+    s.oxi_tool_confirmation.insert("todo_write".into(), true);
+    s.normalize();
+    assert_eq!(
+        s.oxi_tool_confirmation.len(),
+        crate::settings::OXI_TOOLS.len()
+    );
+    assert!(!s.oxi_tool_asks("spawn_workers"));
+    assert!(s.oxi_tool_asks("todo_write"));
+    assert!(s.oxi_tool_asks("merge_worker"));
+
+    let json = serde_json::to_string(&s).unwrap();
+    let mut restored: AppSettings = serde_json::from_str(&json).unwrap();
+    restored.normalize();
+    assert_eq!(restored.oxi_tool_confirmation, s.oxi_tool_confirmation);
+    assert!(!restored.oxi_tool_asks("spawn_workers"));
+    assert!(restored.oxi_tool_asks("todo_write"));
+    assert!(restored.oxi_tool_asks("merge_worker"));
+}
+
+#[test]
+fn oxi_tool_confirmation_deserializes_leniently() {
+    let json = r#"{
+        "active_provider": "openai",
+        "providers": {"openai": {"model_id": "gpt-4o-mini", "base_url": ""}},
+        "system_prompt": "hi",
+        "oxi_tool_confirmation": {
+            "spawn_workers": false,
+            "todo_write": true,
+            "merge_worker": "yes",
+            "team": 1,
+            "worker_status": null,
+            "stop_worker": {"ask": false}
+        }
+    }"#;
+    let mut s: AppSettings = serde_json::from_str(json).unwrap();
+    assert_eq!(s.oxi_tool_confirmation.get("spawn_workers"), Some(&false));
+    assert_eq!(s.oxi_tool_confirmation.get("todo_write"), Some(&true));
+    // Non-bool values are dropped without discarding valid entries.
+    assert!(!s.oxi_tool_confirmation.contains_key("merge_worker"));
+    assert!(!s.oxi_tool_confirmation.contains_key("team"));
+    assert!(!s.oxi_tool_confirmation.contains_key("worker_status"));
+    assert!(!s.oxi_tool_confirmation.contains_key("stop_worker"));
+
+    s.normalize();
+    assert!(!s.oxi_tool_asks("spawn_workers"));
+    assert!(s.oxi_tool_asks("todo_write"));
+    assert!(s.oxi_tool_asks("merge_worker"));
+    assert!(!s.oxi_tool_asks("team"));
+
+    // A non-object value falls back cleanly to defaults.
+    let bad_shape = r#"{
+        "active_provider": "openai",
+        "providers": {"openai": {"model_id": "gpt-4o-mini", "base_url": ""}},
+        "system_prompt": "hi",
+        "oxi_tool_confirmation": ["spawn_workers"]
+    }"#;
+    let mut s: AppSettings = serde_json::from_str(bad_shape).unwrap();
+    assert!(s.oxi_tool_confirmation.is_empty());
+    s.normalize();
+    assert!(s.oxi_tool_asks("spawn_workers"));
+    assert!(!s.oxi_tool_asks("team"));
+}
+
+#[test]
+fn normalize_migrates_oxi_tool_confirmation_from_file_edit_and_legacy_approval() {
+    // Legacy settings without `oxi_tool_confirmation` and with file edits off: tools that used
+    // to follow the file-edit switch (`scratchpad`, `learn_rules`) freeze at `false`, while
+    // orchestrator/delegation defaults stay `true`.
+    let json = r#"{
+        "active_provider": "openai",
+        "providers": {"openai": {"model_id": "gpt-4o-mini", "base_url": ""}},
+        "system_prompt": "hi",
+        "require_write_edit_approval": false
+    }"#;
+    let mut s: AppSettings = serde_json::from_str(json).unwrap();
+    s.normalize();
+    assert_eq!(
+        s.oxi_tool_confirmation.len(),
+        crate::settings::OXI_TOOLS.len()
+    );
+    assert_eq!(s.oxi_tool_confirmation.get("scratchpad"), Some(&false));
+    assert_eq!(s.oxi_tool_confirmation.get("learn_rules"), Some(&false));
+    assert_eq!(s.oxi_tool_confirmation.get("spawn_workers"), Some(&true));
+    assert_eq!(s.oxi_tool_confirmation.get("delegate_task"), Some(&true));
+    assert_eq!(s.oxi_tool_confirmation.get("team"), Some(&false));
+
+    // Flipping `require_write_edit_approval` later no longer changes the written-down entries.
+    s.require_write_edit_approval = true;
+    assert!(!s.oxi_tool_asks("scratchpad"));
+    assert!(!s.oxi_tool_asks("learn_rules"));
+
+    // Legacy single `require_approval: false` migrates before oxi tool defaults are written.
+    let legacy = r#"{
+        "active_provider": "openai",
+        "providers": {"openai": {"model_id": "gpt-4o-mini", "base_url": ""}},
+        "system_prompt": "hi",
+        "require_approval": false
+    }"#;
+    let mut s: AppSettings = serde_json::from_str(legacy).unwrap();
+    s.normalize();
+    assert!(!s.require_write_edit_approval);
+    assert!(!s.require_bash_approval);
+    assert!(!s.oxi_tool_asks("scratchpad"));
+    assert!(!s.oxi_tool_asks("learn_rules"));
+    assert!(s.oxi_tool_asks("spawn_workers"));
+}

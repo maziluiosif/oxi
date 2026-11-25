@@ -14,6 +14,7 @@ use crate::ui::preview_expand::{
 };
 
 use super::inline::{InlineDensity, InlineEnd, fmt_body, fmt_code, selectable_job};
+use super::table::render_table;
 use super::{
     ParserPeek, SZ_CODE, SZ_TINY, allocate_full_width_block, consume_until_end,
     line_height_for_body_size, render_list, set_job_wrap,
@@ -143,11 +144,10 @@ pub(super) fn render_blockquote(
     ui: &mut Ui,
     wrap_w: f32,
     it: &mut ParserPeek<'_>,
-    src: &str,
-    quote_idx: usize,
+    copy_source: Option<(&str, usize)>,
+    fence_idx: &mut u32,
 ) {
     const COPY_CHIP_W: f32 = 76.0;
-    let copy_id = ui.id().with("md_quote").with(quote_idx);
     allocate_full_width_block(ui, wrap_w, |ui| {
         let frame = Frame::new()
             .fill(c_md_code_block_bg())
@@ -173,20 +173,35 @@ pub(super) fn render_blockquote(
                                 Event::End(TagEnd::BlockQuote(_)) => break,
                                 Event::Start(Tag::Paragraph) => render_paragraph(ui, inner_w, it),
                                 Event::Start(Tag::List(kind)) => {
-                                    render_list(ui, inner_w, kind, 0, it)
+                                    render_list(ui, inner_w, kind, 0, it, fence_idx);
                                 }
                                 Event::Start(Tag::Heading { level, .. }) => {
                                     render_heading(ui, inner_w, level, it);
                                 }
                                 Event::Start(Tag::CodeBlock(kind)) => {
-                                    render_fenced_block(
-                                        ui,
-                                        inner_w,
-                                        kind,
-                                        it,
-                                        ui.id().with("quote_fence"),
-                                    );
+                                    let lang = code_block_language(&kind);
+                                    let base =
+                                        ui.id().with("quote_fence").with(*fence_idx).with(&lang);
+                                    *fence_idx += 1;
+                                    render_fenced_block(ui, inner_w, kind, it, base);
                                 }
+                                Event::Start(Tag::BlockQuote(_)) => {
+                                    render_blockquote(ui, inner_w, it, None, fence_idx);
+                                }
+                                Event::Start(Tag::Table(alignments)) => {
+                                    render_table(ui, inner_w, &alignments, it);
+                                }
+                                Event::Start(Tag::HtmlBlock) => {
+                                    render_html_block(ui, inner_w, it);
+                                }
+                                Event::Rule => {
+                                    allocate_full_width_block(ui, inner_w, |ui| {
+                                        ui.add_space(4.0);
+                                        ui.separator();
+                                        ui.add_space(6.0);
+                                    });
+                                }
+                                Event::Start(tag) => consume_until_end(it, tag.to_end()),
                                 _ => {}
                             }
                         }
@@ -203,31 +218,34 @@ pub(super) fn render_blockquote(
         );
         ui.painter()
             .rect_filled(bar, CornerRadius::same(2), c_md_quote_accent());
-        let chip_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.right() - COPY_CHIP_W - 6.0, rect.top() + 6.0),
-            vec2(COPY_CHIP_W, 22.0),
-        );
-        let show_chip = ui.rect_contains_pointer(rect)
-            || ui.rect_contains_pointer(chip_rect)
-            || crate::ui::chrome::copied_recently(ui.ctx(), copy_id);
-        if show_chip {
-            ui.scope_builder(
-                egui::UiBuilder::new()
-                    .max_rect(chip_rect)
-                    .layout(Layout::right_to_left(Align::Center)),
-                |ui| {
-                    Frame::new()
-                        .fill(c_bg_elevated())
-                        .stroke(Stroke::new(1.0, c_border_subtle()))
-                        .corner_radius(CornerRadius::same(RADIUS_ROW))
-                        .inner_margin(Margin::symmetric(2, 1))
-                        .show(ui, |ui| {
-                            crate::ui::chrome::copy_chip_lazy(ui, copy_id, || {
-                                super::blockquote_source(src, quote_idx)
-                            });
-                        });
-                },
+        if let Some((src, quote_idx)) = copy_source {
+            let copy_id = ui.id().with("md_quote").with(quote_idx);
+            let chip_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.right() - COPY_CHIP_W - 6.0, rect.top() + 6.0),
+                vec2(COPY_CHIP_W, 22.0),
             );
+            let show_chip = ui.rect_contains_pointer(rect)
+                || ui.rect_contains_pointer(chip_rect)
+                || crate::ui::chrome::copied_recently(ui.ctx(), copy_id);
+            if show_chip {
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(chip_rect)
+                        .layout(Layout::right_to_left(Align::Center)),
+                    |ui| {
+                        Frame::new()
+                            .fill(c_bg_elevated())
+                            .stroke(Stroke::new(1.0, c_border_subtle()))
+                            .corner_radius(CornerRadius::same(RADIUS_ROW))
+                            .inner_margin(Margin::symmetric(2, 1))
+                            .show(ui, |ui| {
+                                crate::ui::chrome::copy_chip_lazy(ui, copy_id, || {
+                                    super::blockquote_source(src, quote_idx)
+                                });
+                            });
+                    },
+                );
+            }
         }
     });
     ui.add_space(7.0);

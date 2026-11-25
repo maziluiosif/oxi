@@ -305,10 +305,15 @@ impl OxiApp {
             if parent.is_some() || (self.conv.no_workspace && wi == 0) {
                 continue;
             }
+            // Orchestrator workers' work trees show with their lead chat instead.
             let children: Vec<usize> = order
                 .iter()
                 .filter(|(_, p)| *p == Some(wi))
                 .map(|&(child, _)| child)
+                .filter(|&child| {
+                    child == self.conv.active_workspace
+                        || !self.hidden_worker_workspace(&self.conv.workspaces[child].root_path)
+                })
                 .collect();
             if self.conv.sidebar.history
                 && self

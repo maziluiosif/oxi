@@ -6,9 +6,13 @@
 
 mod app_settings;
 mod availability;
+mod orchestrator;
+mod oxi_tools;
 mod provider;
 mod router;
 
 pub use app_settings::*;
+pub use orchestrator::*;
+pub use oxi_tools::*;
 pub use provider::*;
 pub use router::*;

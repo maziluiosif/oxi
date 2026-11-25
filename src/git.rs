@@ -24,6 +24,8 @@ pub use compare::{CompareFile, GitCompare, compare};
 #[path = "git/checkpoint.rs"]
 pub mod checkpoint;
 
+#[path = "git/handoff.rs"]
+pub mod handoff;
 #[path = "git/worktree.rs"]
 pub mod worktree;
 

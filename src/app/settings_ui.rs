@@ -15,6 +15,7 @@ mod layout;
 mod local_hf_messages;
 mod local_hf_panel;
 mod local_hf_runtime;
+mod orchestrator_panel;
 mod prompts_panel;
 mod provider_catalog;
 mod provider_models;

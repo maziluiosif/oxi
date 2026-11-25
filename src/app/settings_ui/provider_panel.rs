@@ -197,7 +197,7 @@ impl OxiApp {
                 LlmProviderKind::AntigravityAcp => {
                     "Optional GEMINI_API_KEY (else Google account sign-in is used)"
                 }
-                LlmProviderKind::Router => "",
+                LlmProviderKind::Router | LlmProviderKind::Orchestrator => "",
             };
             let key_help = if kind.is_acp() {
                 "Kept in the OS keychain."

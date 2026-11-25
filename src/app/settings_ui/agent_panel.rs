@@ -4,7 +4,10 @@ use super::super::OxiApp;
 use super::layout::tool_chip;
 use crate::agent::mcp::McpServerStatus;
 use crate::app::remote::LOCAL_MACHINE;
-use crate::settings::{ALL_TOOL_NAMES, DEFAULT_MCP_TIMEOUT_SECS, McpServerConfig, McpTransport};
+use crate::settings::{
+    ALL_TOOL_NAMES, AppSettings, DEFAULT_MCP_TIMEOUT_SECS, McpServerConfig, McpTransport,
+    OXI_TOOLS, OxiToolGroup, oxi_tool_default,
+};
 use crate::theme::*;
 use crate::ui::chrome::{
     alert_banner, field_hint, field_label, ghost_button, ghost_button_icon, icon_button_plain,
@@ -144,6 +147,37 @@ impl OxiApp {
                             }
                         },
                     );
+                }
+            },
+        );
+
+        // ── Ask before oxi tools ───────────────────────────────────────────
+        settings_section(
+            ui,
+            "Ask before oxi tools",
+            Some(
+                "Controls when oxi prompts before running its own MCP and built-in tools. Agents in auto-approve/bypass mode, or agents that do not ask permission for MCP tools, will not prompt.",
+            ),
+            |ui| {
+                let ask_count = OXI_TOOLS
+                    .iter()
+                    .filter(|info| self.conv.settings.oxi_tool_asks(info.name))
+                    .count();
+                let summary = format!("{ask_count} of {} ask before running.", OXI_TOOLS.len());
+                setting_row(ui, "Oxi tool confirmations", Some(&summary), |ui| {
+                    if ghost_button(ui, "Reset defaults", false).clicked() {
+                        reset_oxi_tool_confirmations(&mut self.conv.settings);
+                    }
+                });
+                for group in OxiToolGroup::ALL {
+                    let reveals: Vec<&str> = OXI_TOOLS
+                        .iter()
+                        .filter(|t| t.group == group)
+                        .map(|t| t.name)
+                        .collect();
+                    settings_disclosure(ui, group.label(), &reveals, |ui| {
+                        render_oxi_tool_confirm_group(ui, &mut self.conv.settings, group);
+                    });
                 }
             },
         );
@@ -454,6 +488,33 @@ impl OxiApp {
             .unwrap_or_else(|e| e.into_inner())
             .get(machine)
             .cloned()
+    }
+}
+
+/// Render confirmation switches for every oxi tool in `group`, writing explicit choices into
+/// `settings.oxi_tool_confirmation` only when toggled.
+pub(super) fn render_oxi_tool_confirm_group(
+    ui: &mut Ui,
+    settings: &mut AppSettings,
+    group: OxiToolGroup,
+) {
+    for info in OXI_TOOLS.iter().filter(|t| t.group == group) {
+        let mut asks = settings.oxi_tool_asks(info.name);
+        if setting_switch(ui, &mut asks, info.name, Some(info.description)).changed() {
+            settings
+                .oxi_tool_confirmation
+                .insert(info.name.to_owned(), asks);
+        }
+    }
+}
+
+fn reset_oxi_tool_confirmations(settings: &mut AppSettings) {
+    let file_edit = settings.require_write_edit_approval;
+    settings.oxi_tool_confirmation.clear();
+    for info in OXI_TOOLS {
+        settings
+            .oxi_tool_confirmation
+            .insert(info.name.to_owned(), oxi_tool_default(info, file_edit));
     }
 }
 

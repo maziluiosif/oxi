@@ -84,7 +84,15 @@ async fn run_case(
     let mut settings = AppSettings {
         active_provider: if matches!(
             mode,
-            "pinned" | "direct" | "directwait" | "authwait" | "chain"
+            "pinned"
+                | "direct"
+                | "directwait"
+                | "authwait"
+                | "chain"
+                | "lead"
+                | "worker"
+                | "worker_quota"
+                | "worker_team_bound"
         ) {
             LlmProviderKind::CodexAcp
         } else {
@@ -92,6 +100,26 @@ async fn run_case(
         },
         ..Default::default()
     };
+    if mode == "solo" {
+        settings.active_provider = LlmProviderKind::Orchestrator;
+        settings.orchestrator.lead_provider = LlmProviderKind::CodexAcp;
+    }
+    if matches!(mode, "worker_quota" | "worker_team_bound") {
+        settings.orchestrator.workers = vec![
+            crate::settings::WorkerSlot {
+                provider: LlmProviderKind::CodexAcp,
+                model: String::new(),
+                note: "backend".into(),
+                enabled: true,
+            },
+            crate::settings::WorkerSlot {
+                provider: LlmProviderKind::ClaudeCodeAcp,
+                model: String::new(),
+                note: "frontend only".into(),
+                enabled: mode == "worker_quota",
+            },
+        ];
+    }
     settings.router.use_jev = false;
     settings.router.wait_for_quota = matches!(
         mode,
@@ -147,9 +175,18 @@ async fn run_case(
             LlmProviderKind::CodexAcp,
             if matches!(mode, "directwait" | "authwait") {
                 "quotaonce"
-            } else if matches!(mode, "initialwait" | "initialcancel") {
+            } else if matches!(mode, "initialwait" | "initialcancel" | "worker") {
                 "success"
-            } else if matches!(mode, "exhaust" | "tohttp" | "pinned" | "direct" | "chain") {
+            } else if matches!(
+                mode,
+                "exhaust"
+                    | "tohttp"
+                    | "pinned"
+                    | "direct"
+                    | "chain"
+                    | "worker_quota"
+                    | "worker_team_bound"
+            ) {
                 "quota"
             } else {
                 mode
@@ -211,7 +248,12 @@ async fn run_case(
     let (approval_tx, approval_rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let acp = crate::agent::acp::AcpManager::spawn();
-    let session_key = format!("routing-test-{}", root.display());
+    let mut session_key = format!("routing-test-{}", root.display());
+    if matches!(mode, "lead") {
+        session_key.push_str("#lead");
+    } else if matches!(mode, "worker" | "worker_quota" | "worker_team_bound") {
+        session_key.push_str("#worker");
+    }
     let executor = AgentExecutor::new().unwrap();
     let handle = spawn_agent_run(
         &executor,
@@ -226,11 +268,18 @@ async fn run_case(
                 "Use OpenAI API for this task"
             } else if mode == "image" {
                 "Generează o imagine cu o pisică pe lună"
-            } else if mode == "pinned" {
+            } else if matches!(mode, "pinned" | "lead" | "worker" | "solo") {
                 "foloseste claude care sunt stirile de azi?"
             } else if matches!(
                 mode,
-                "direct" | "directwait" | "authwait" | "initialwait" | "initialcancel" | "chain"
+                "direct"
+                    | "directwait"
+                    | "authwait"
+                    | "initialwait"
+                    | "initialcancel"
+                    | "chain"
+                    | "worker_quota"
+                    | "worker_team_bound"
             ) {
                 "Fix the parser"
             } else if exclusive {
@@ -295,6 +344,53 @@ async fn run_case(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acp_failover_replays_progress_preserves_permissions_and_stops_safely() {
+    let _quota_guard = crate::router::quota::TEST_LOCK.lock().await;
+    // Provider directives in user/worker text never reroute the lead or a worker.
+    for mode in ["lead", "worker", "solo"] {
+        let (events, second_prompt) = run_case(mode, false, false, false).await;
+        assert!(second_prompt.is_empty(), "{mode}: {second_prompt}");
+        assert!(
+            events.iter().all(|e| !matches!(e, AgentEvent::Routed(_))),
+            "{mode}: {events:?}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Finished(AgentOutcome::Success { .. }))
+            ),
+            "{mode}: {events:?}"
+        );
+    }
+    // When a worker's assigned subscription hits quota mid-turn, it fails over to another
+    // enabled subscription on the orchestrator team regardless of its specialization note.
+    let (events, second_prompt) = run_case("worker_quota", false, false, false).await;
+    assert!(
+        !second_prompt.is_empty(),
+        "worker should fail over to Claude"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Routed(note) if note.provider == LlmProviderKind::ClaudeCodeAcp)),
+        "{events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Finished(AgentOutcome::Success { .. }))
+        ),
+        "{events:?}"
+    );
+    // A worker hitting quota never escapes to a team slot that was disabled in Settings.
+    let (events, second_prompt) = run_case("worker_team_bound", false, false, false).await;
+    assert!(second_prompt.is_empty(), "{second_prompt}");
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Finished(AgentOutcome::Failed { .. }))
+        ),
+        "{events:?}"
+    );
     let (events, replay) = run_case("quota", false, false, false).await;
     let routes: Vec<_> = events
         .iter()
@@ -571,6 +667,175 @@ async fn acp_failover_replays_progress_preserves_permissions_and_stops_safely() 
         events.last(),
         Some(AgentEvent::Finished(AgentOutcome::Success { .. }))
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lead_skips_exhausted_provider_without_launching_it() {
+    let _quota_guard = crate::router::quota::TEST_LOCK.lock().await;
+    crate::secrets::use_mock_store();
+    for kind in [LlmProviderKind::CodexAcp, LlmProviderKind::ClaudeCodeAcp] {
+        crate::router::quota::clear_cooldown(kind);
+        crate::router::quota::clear_snapshot_for_tests(kind);
+    }
+    let root = std::env::temp_dir().join(format!(
+        "oxi-routing-lead-preexhaust-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let script = root.join("adapter.py");
+    std::fs::write(&script, ADAPTER).unwrap();
+
+    let mut settings = AppSettings {
+        active_provider: LlmProviderKind::Orchestrator,
+        ..Default::default()
+    };
+    settings.orchestrator.lead_provider = LlmProviderKind::CodexAcp;
+    settings.orchestrator.workers = vec![
+        crate::settings::WorkerSlot {
+            provider: LlmProviderKind::CodexAcp,
+            model: String::new(),
+            note: "lead".into(),
+            enabled: true,
+        },
+        crate::settings::WorkerSlot {
+            provider: LlmProviderKind::ClaudeCodeAcp,
+            model: String::new(),
+            note: "worker".into(),
+            enabled: true,
+        },
+    ];
+    settings.router.use_jev = false;
+    settings.router.failover = true;
+    settings.require_write_edit_approval = true;
+    for kind in LlmProviderKind::ALL {
+        settings.router.prefs_mut(kind).enabled = false;
+    }
+    let python = crate::agent::test_python_executable();
+    let first_log = root.join("first.json");
+    let second_log = root.join("second.json");
+    for (kind, adapter_mode, log) in [
+        (LlmProviderKind::CodexAcp, "quota", &first_log),
+        (LlmProviderKind::ClaudeCodeAcp, "success", &second_log),
+    ] {
+        settings.router.prefs_mut(kind).enabled = true;
+        let cfg = settings.provider_mut(kind);
+        cfg.model_id = "default".into();
+        cfg.acp_command = format!(
+            "\"{}\" -u \"{}\" {adapter_mode} \"{}\"",
+            python.display(),
+            script.display(),
+            log.display()
+        );
+    }
+    settings.provider_mut(LlmProviderKind::OpenRouter).base_url = "http://127.0.0.1:1/v1".into();
+
+    // Mark the Orchestrator lead (CodexAcp) as already at 100% quota before the turn starts.
+    crate::router::quota::set_snapshot_for_tests(
+        LlmProviderKind::CodexAcp,
+        crate::router::quota::QuotaSnapshot {
+            windows: vec![crate::router::quota::UsageWindow {
+                label: "5h".into(),
+                used_pct: 100.0,
+                resets_at: Some(crate::router::quota::now_secs() + 3600),
+                model_scope: None,
+            }],
+            limit_reached: true,
+            ..Default::default()
+        },
+    );
+
+    let (tx, rx) = mpsc::channel();
+    let (approval_tx, approval_rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let acp = crate::agent::acp::AcpManager::spawn();
+    let session_key = format!("routing-test-{}#lead", root.display());
+    let executor = AgentExecutor::new().unwrap();
+    let handle = spawn_agent_run(
+        &executor,
+        AgentRunRequest {
+            settings,
+            tunnels: crate::compute::TunnelManager::spawn(),
+            acp: acp.clone(),
+            mcp: crate::agent::mcp::McpManager::new(),
+            acp_session_key: session_key.clone(),
+            cwd: root.clone(),
+            chat_for_history: vec![user("Fix the parser")],
+            approval_rx,
+            cancel: cancel.clone(),
+            wire_candidate: None,
+            chars_per_token: 4.0,
+            plan_mode: false,
+            evidence_mode: false.into(),
+            undo_journal: Arc::new(std::sync::Mutex::new(Default::default())),
+            steer: Default::default(),
+        },
+        tx,
+    );
+    let mut events = Vec::new();
+    let timeout = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            while let Ok(event) = rx.try_recv() {
+                if matches!(event, AgentEvent::ApprovalRequest { .. }) {
+                    let _ = approval_tx.send(ApprovalDecision::Approve);
+                }
+                let done = matches!(event, AgentEvent::Finished(_));
+                events.push(event);
+                if done {
+                    return;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    if timeout.is_err() {
+        cancel.store(true, Ordering::SeqCst);
+        handle.abort();
+    }
+    timeout.expect("lead pre-exhausted fixture timed out");
+    handle.await.unwrap();
+    acp.close(&session_key);
+
+    let first_written = first_log.exists();
+    let second_written = second_log.exists();
+    let _ = std::fs::remove_dir_all(root);
+    for kind in [LlmProviderKind::CodexAcp, LlmProviderKind::ClaudeCodeAcp] {
+        crate::router::quota::clear_cooldown(kind);
+        crate::router::quota::clear_snapshot_for_tests(kind);
+    }
+
+    assert!(
+        !first_written,
+        "exhausted lead CodexAcp should never have been launched"
+    );
+    assert!(
+        second_written,
+        "fallback ClaudeCodeAcp should have handled the turn"
+    );
+    let routes: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Routed(note) => Some((**note).clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(routes.len(), 1, "{events:?}");
+    assert_eq!(routes[0].provider, LlmProviderKind::ClaudeCodeAcp);
+    assert!(
+        routes[0]
+            .failover_from
+            .as_deref()
+            .is_some_and(|f| f.contains("usage limit reached")),
+        "{routes:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Finished(AgentOutcome::Success { .. }))
+        ),
+        "{events:?}"
+    );
 }
 
 #[test]

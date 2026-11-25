@@ -164,19 +164,9 @@ pub fn save_session_messages(root_path: &str, session: &mut Session) -> Result<(
     .map_err(|e| e.to_string())?;
 
     if let Some(config) = session.config.as_ref() {
-        writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&json!({
-                "type": "session_config",
-                "provider": config.provider,
-                "model_id": config.model_id,
-                "effort": config.effort,
-                "context_window": config.context_window,
-            }))
-            .map_err(|e| e.to_string())?
-        )
-        .map_err(|e| e.to_string())?;
+        let mut entry = serde_json::to_value(config).map_err(|e| e.to_string())?;
+        entry["type"] = json!("session_config");
+        writeln!(file, "{entry}").map_err(|e| e.to_string())?;
     }
 
     if !session.title.trim().is_empty() {
@@ -564,6 +554,8 @@ mod tests {
             model_id: "m".into(),
             effort: String::new(),
             context_window: Some(1234),
+            lead: None,
+            worker_access: Default::default(),
         })
         .unwrap();
         entry["type"] = json!("session_config");

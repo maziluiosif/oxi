@@ -941,6 +941,8 @@ pub struct ConversationState {
     pub worktree_ops: Vec<std::sync::mpsc::Receiver<super::worktrees::WorktreeResult>>,
     /// Tasks chats' agents delegated to other agents (see [`super::delegation`]).
     pub delegations: Vec<super::delegation::DelegatedTask>,
+    /// One app window at a time reconciles and changes a saved lead's worker records.
+    pub worker_owners: HashMap<String, std::fs::File>,
     /// Comments on diff lines, sent with the next message of their workspace's chat.
     pub review_comments: Vec<super::review_comments::ReviewComment>,
     /// The diff comment being written.

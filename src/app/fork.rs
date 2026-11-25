@@ -148,8 +148,9 @@ impl OxiApp {
             self.conv.transcript.message_menu = None;
             return;
         }
-        let is_user = self.active_session().messages[menu.start].role == MsgRole::User;
-        let rewindable = is_user && !self.active_session().messages[menu.start].is_summary;
+        let msg = &self.active_session().messages[menu.start];
+        let is_user = msg.role == MsgRole::User && !msg.is_summary && !msg.is_system_report();
+        let rewindable = is_user;
         let busy = self.active_waiting_response();
         let mut fork = false;
         let mut rewind = false;

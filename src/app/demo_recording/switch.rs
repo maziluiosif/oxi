@@ -114,7 +114,7 @@ fn switch_clip(rec: &mut Recorder<'_>) {
     rec.chapter(
         0,
         "Start with Claude Code",
-        "Your Claude subscription, over ACP. No API key.",
+        "Your Claude Code login, directly. No API key.",
     );
     rec.hold(1.0);
     rec.type_text("Run the tests and fix the failing one", 1);

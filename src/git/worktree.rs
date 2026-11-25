@@ -30,15 +30,30 @@ pub struct WorktreeInfo {
 /// containing `cwd`. Returns the work tree folder; when `cwd` is a subfolder of the repository,
 /// the same subfolder inside the new work tree.
 pub fn create(cwd: &Path) -> Result<PathBuf, String> {
+    create_at(cwd, None)
+}
+
+/// [`create`], with the branch starting at commit `base` (e.g. a [`super::handoff::snapshot`])
+/// instead of `HEAD`.
+pub fn create_at(cwd: &Path, base: Option<&str>) -> Result<PathBuf, String> {
+    // Names come from the time: work trees made at once (orchestrator workers) take turns, so
+    // each sees the others' branches and picks the next free name.
+    static CREATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = CREATING.lock().unwrap_or_else(|e| e.into_inner());
     let repo = open_repo(&cwd.to_string_lossy())?;
     if repo.is_worktree() {
         return Err("This folder is already a work tree; create it from the main checkout".into());
     }
     let root = repo_root(&repo)?.to_path_buf();
-    let head = repo
-        .head()
-        .and_then(|h| h.peel_to_commit())
-        .map_err(|_| "The repository has no commits yet".to_string())?;
+    let head = match base {
+        Some(base) => git2::Oid::from_str(base)
+            .and_then(|id| repo.find_commit(id))
+            .map_err(|e| format!("Base commit {base}: {e}"))?,
+        None => repo
+            .head()
+            .and_then(|h| h.peel_to_commit())
+            .map_err(|_| "The repository has no commits yet".to_string())?,
+    };
     let repo_name = root
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

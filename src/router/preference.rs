@@ -361,10 +361,7 @@ mod tests {
     }
     #[test]
     fn compaction_preserves_each_provider_without_parsing_generated_instructions() {
-        for kind in LlmProviderKind::ALL
-            .into_iter()
-            .filter(|k| *k != LlmProviderKind::Router)
-        {
+        for kind in LlmProviderKind::ALL.into_iter().filter(|k| !k.is_pseudo()) {
             let name = match kind {
                 LlmProviderKind::OpenAi => "OpenAI API",
                 LlmProviderKind::CustomAnthropic => "Anthropic API",

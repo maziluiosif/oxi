@@ -63,7 +63,7 @@ fn ledger() -> &'static Mutex<Ledger> {
             .map(|raw| {
                 raw.lines()
                     .filter_map(|l| serde_json::from_str::<LedgerEntry>(l).ok())
-                    .filter(|e| e.ts >= cutoff)
+                    .filter(|e| e.ts >= cutoff && !e.provider.is_pseudo())
                     .collect()
             })
             .unwrap_or_default();
@@ -86,7 +86,7 @@ pub fn estimate_cost(kind: LlmProviderKind, model: &str, usage: &TokenUsage) -> 
 
 /// Append one round. Cheap enough for the UI thread (a single short line append).
 pub fn record(kind: LlmProviderKind, model: &str, billing: Billing, usage: &TokenUsage) {
-    if usage.is_zero() || kind == LlmProviderKind::Router {
+    if usage.is_zero() || kind.is_pseudo() {
         return;
     }
     let cost = match billing {
@@ -98,6 +98,9 @@ pub fn record(kind: LlmProviderKind, model: &str, billing: Billing, usage: &Toke
 
 /// Record an explicitly reported cost (e.g. an OpenRouter Decisions request).
 pub(super) fn record_cost(kind: LlmProviderKind, model: &str, usage: &TokenUsage, cost: f64) {
+    if kind.is_pseudo() {
+        return;
+    }
     let entry = LedgerEntry {
         ts: now_secs(),
         provider: kind,

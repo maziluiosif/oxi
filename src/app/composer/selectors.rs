@@ -47,6 +47,7 @@ enum ComposerSelector {
     Model,
     Effort,
     Router,
+    Lead,
 }
 
 /// The id of the dropdown list `control` opens.
@@ -57,6 +58,7 @@ fn selector_popup_id(control: &ComposerSelector, options: &[AcpConfigOption]) ->
         ComposerSelector::Model => popup_id("model"),
         ComposerSelector::Effort => popup_id("effort"),
         ComposerSelector::Router => popup_id("router_strategy"),
+        ComposerSelector::Lead => popup_id("orchestrator_lead"),
     }
 }
 
@@ -239,6 +241,7 @@ impl OxiApp {
                 }
                 ComposerSelector::Effort => self.render_effort_selector(ui, false),
                 ComposerSelector::Router => self.render_router_strategy_selector(ui, width),
+                ComposerSelector::Lead => self.render_orchestrator_lead_selector(ui, width),
             }
         }
         if hidden_controls.is_empty() {
@@ -268,6 +271,9 @@ impl OxiApp {
                         ComposerSelector::Effort => self.render_effort_selector(ui, false),
                         ComposerSelector::Router => {
                             self.render_router_strategy_selector(ui, width.max(140.0))
+                        }
+                        ComposerSelector::Lead => {
+                            self.render_orchestrator_lead_selector(ui, width.max(140.0))
                         }
                     }
                 }
@@ -319,6 +325,8 @@ impl OxiApp {
         }
         if self.conv.settings.active_provider == LlmProviderKind::Router {
             controls.push((ComposerSelector::Router, 130.0, 3));
+        } else if self.conv.settings.active_provider == LlmProviderKind::Orchestrator {
+            controls.push((ComposerSelector::Lead, 150.0, 3));
         } else {
             if !options.iter().any(AcpConfigOption::is_model) {
                 let label = short_model_label(
@@ -370,7 +378,7 @@ impl OxiApp {
         // reports the one model currently loaded. The Router has strategies, not models.
         if matches!(kind, LlmProviderKind::LocalHf | LlmProviderKind::RemoteHf) {
             self.refresh_local_hf_model_choices();
-        } else if kind != LlmProviderKind::Router {
+        } else if !kind.is_pseudo() {
             self.spawn_model_fetch(ui.ctx(), kind);
         }
     }
@@ -427,6 +435,54 @@ impl OxiApp {
             self.start_selected_local_hf_model(ui.ctx(), &model_id);
         } else {
             self.set_active_session_model(model_id);
+            self.save_settings_quietly();
+        }
+    }
+
+    /// Under the Orchestrator the model slot picks the lead agent (Settings > Orchestrator has
+    /// its model and the worker pool).
+    fn render_orchestrator_lead_selector(&mut self, ui: &mut Ui, width: f32) {
+        let current = self.conv.settings.orchestrator.lead_provider;
+        let mut kinds: Vec<LlmProviderKind> = self
+            .cached_configured_providers(ui.ctx())
+            .into_iter()
+            .filter(|k| k.is_acp())
+            .collect();
+        if !kinds.contains(&current) && !current.is_pseudo() {
+            kinds.insert(0, current);
+        }
+        let model = self
+            .conv
+            .settings
+            .orchestrator
+            .lead_model
+            .trim()
+            .to_string();
+        let model = if model.is_empty() {
+            self.conv.settings.provider(current).model_id.clone()
+        } else {
+            model
+        };
+        let label = format!("Lead · {}", composer_provider_label(current));
+        let hover = format!(
+            "The agent you talk to; it hands work to your other agents.\n{} · {model}",
+            current.label()
+        );
+        let picked = SelectMenu::new("orchestrator_lead", &label)
+            .hover(&hover)
+            .max_width(width)
+            .show(ui, || {
+                kinds
+                    .iter()
+                    .map(|k| SelectOption::new(k.label(), *k == current))
+                    .collect()
+            });
+        if let Some(kind) = picked.map(|i| kinds[i])
+            && kind != current
+        {
+            let orch = &mut self.conv.settings.orchestrator;
+            orch.lead_provider = kind;
+            orch.lead_model.clear();
             self.save_settings_quietly();
         }
     }

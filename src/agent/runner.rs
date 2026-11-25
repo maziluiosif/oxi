@@ -167,10 +167,7 @@ fn spawn_agent_attempt(
                 &chat_for_history,
                 &tx,
                 approval_rx,
-                ApprovalPolicy {
-                    write_edit: settings.require_write_edit_approval,
-                    bash: settings.require_bash_approval,
-                },
+                ApprovalPolicy::from_settings(&settings),
                 settings.bash_allowlist.clone(),
                 settings.allowed_tools_for(&cwd),
                 &cancel,
@@ -280,19 +277,16 @@ fn spawn_agent_attempt(
             subagent: None,
             evidence,
             // Delegated tasks run as chats of the app (not of a headless server).
-            delegation: crate::delegation::available()
-                .then(|| crate::delegation::dir_for(&acp_session_key)),
+            // Orchestrator workers hand nothing on.
+            delegation: (crate::delegation::available()
+                && crate::orchestrator::Role::of_session_key(&acp_session_key)
+                    != Some(crate::orchestrator::Role::Worker))
+            .then(|| crate::delegation::dir_for(&acp_session_key)),
         };
-        let mut gate = ApprovalGate::new(
-            ApprovalPolicy {
-                write_edit: settings.require_write_edit_approval,
-                bash: settings.require_bash_approval,
-            },
-            approval_rx,
-        )
-        .with_plan_mode(plan_mode)
-        .with_bash_allowlist(settings.bash_allowlist.clone())
-        .with_allowed_tools(settings.allowed_tools_for(&cwd));
+        let mut gate = ApprovalGate::new(ApprovalPolicy::from_settings(&settings), approval_rx)
+            .with_plan_mode(plan_mode)
+            .with_bash_allowlist(settings.bash_allowlist.clone())
+            .with_allowed_tools(settings.allowed_tools_for(&cwd));
 
         let outcome = {
             tool_env.subagent = Some(Arc::new(
@@ -471,10 +465,7 @@ pub fn spawn_acp_attach(
                 cwd: cwd.clone(),
                 event_tx: tx.clone(),
                 approval_rx,
-                approval_policy: ApprovalPolicy {
-                    write_edit: settings.require_write_edit_approval,
-                    bash: settings.require_bash_approval,
-                },
+                approval_policy: ApprovalPolicy::from_settings(&settings),
                 allowed_tools: settings.allowed_tools_for(&cwd),
                 bash_allowlist: settings.bash_allowlist,
                 cancel: cancel.clone(),
@@ -530,12 +521,29 @@ async fn run_acp_turn(
     // providers, so the agent sees real files (and opens big ones itself).
     let (text, resources) = last_user
         .map(|m| {
+            if crate::orchestrator::is_worker_report(&m.text) {
+                return (m.user_prompt_text(), Vec::new());
+            }
             let mut raw = m.clone();
             raw.text = crate::app::mentions::strip_mention_context(&m.text).to_string();
             let resources = crate::app::mentions::mentioned_paths(&raw.text, &cwd);
             (raw.user_prompt_text(), resources)
         })
         .unwrap_or_default();
+    // An orchestrator lead hears about its team and workers with every message.
+    let text = if crate::orchestrator::Role::of_session_key(&acp_session_key)
+        == Some(crate::orchestrator::Role::Lead)
+    {
+        let dir = crate::delegation::dir_for(&acp_session_key);
+        let team = crate::orchestrator::read_team(&dir);
+        let workers = crate::orchestrator::workers(&dir);
+        format!(
+            "{}\n\n{text}",
+            crate::orchestrator::turn_preamble(team.as_ref(), &workers)
+        )
+    } else {
+        text
+    };
     let images: Vec<(String, Vec<u8>)> = last_user
         .map(|m| {
             m.attachments

@@ -41,7 +41,7 @@ impl OxiApp {
         let mut users = session
             .messages
             .iter()
-            .filter(|m| m.role == MsgRole::User && !m.is_summary);
+            .filter(|m| m.role == MsgRole::User && !m.is_summary && !m.is_system_report());
         let (Some(first), None) = (users.next(), users.next()) else {
             return;
         };
@@ -128,7 +128,7 @@ impl OxiApp {
             let first = session
                 .messages
                 .iter()
-                .find(|m| m.role == MsgRole::User && !m.is_summary);
+                .find(|m| m.role == MsgRole::User && !m.is_summary && !m.is_system_report());
             let Some(first) = first else {
                 continue;
             };

@@ -70,23 +70,19 @@ pub(super) async fn handle_permission(
     let options = pr.params["options"].as_array().cloned().unwrap_or_default();
     let kind = pr.params["toolCall"]["kind"].as_str().unwrap_or("");
 
-    // oxi's own checklist tool only updates the UI; reading the scratchpad or chats changes
-    // nothing;
-    // evidence tools that run no command only capture and record.
-    let decision = if matches!(
-        super::oxi_mcp::oxi_tool(&pr.params["toolCall"]),
-        Some(
-            "todo_write"
-                | super::oxi_mcp::SCRATCHPAD_READ
-                | super::chat_archive::TOOL
-                | super::chat_history::TOOL
-                | crate::delegation::STATUS
-        )
-    ) || crate::evidence::tools::NAMES.contains(&name.as_str())
-        || plan_mode && is_plan_file_edit(&pr.params["toolCall"])
-    {
+    // oxi's own tools ask per Settings > Agent > "Ask before oxi tools" (through
+    // `requires_approval`); its read-only ones may run in plan mode whatever kind the agent
+    // reports.
+    let oxi_read_only = super::oxi_mcp::oxi_tool(&pr.params["toolCall"])
+        .is_some_and(|tool| tool == name && crate::settings::oxi_tool_is_read_only(tool));
+    let bash_read_only = name == "bash"
+        && args
+            .as_ref()
+            .and_then(crate::agent::approval::bash_command_arg)
+            .is_some_and(crate::agent::approval::bash_command_is_read_only);
+    let decision = if plan_mode && (is_plan_file_edit(&pr.params["toolCall"]) || bash_read_only) {
         Some(ApprovalDecision::Approve)
-    } else if plan_mode && !acp_kind_is_read_only(kind) {
+    } else if plan_mode && !acp_kind_is_read_only(kind) && !oxi_read_only {
         Some(ApprovalDecision::Deny)
     } else if *auto_approve
         || crate::computer_use::is_acp_tool(&pr.params["toolCall"])

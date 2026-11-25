@@ -911,6 +911,7 @@ impl Server {
         let config = self.ensure_config(id);
         let mut settings = self.settings.clone();
         config.apply_to_settings(&mut settings);
+        crate::orchestrator::apply_lead(&mut settings);
         settings.active_config().effective_acp_command()
     }
 
@@ -1134,17 +1135,23 @@ impl Server {
         if let Some(plan) = prompt.plan {
             chat.plan_mode = plan;
         }
+        chat.plan_mode |=
+            config.lead.is_some() && config.worker_access == crate::orchestrator::Access::ReadOnly;
         if let Some(evidence) = prompt.evidence {
             chat.evidence_mode.set(evidence);
         }
         let cwd = PathBuf::from(chat.root.trim());
-        let expanded = crate::app::mentions::expand_at_mentions(&prompt.text, &cwd);
+        let mut expanded = crate::app::mentions::expand_at_mentions(&prompt.text, &cwd);
+        if config.provider == LlmProviderKind::Orchestrator {
+            expanded = format!("{}\n\n{expanded}", crate::orchestrator::SOLO_NOTICE);
+        }
         let wire_candidate = chat.session.wire_cache.take();
+        let effective = config.effective_config(&self.settings);
         let direct = (config.provider != LlmProviderKind::Router).then(|| {
             Box::new(RouteNote::direct(
-                config.provider,
-                &config.model_id,
-                &config.effort,
+                effective.provider,
+                &effective.model_id,
+                &effective.effort,
             ))
         });
         let usage_target = direct
@@ -1173,7 +1180,8 @@ impl Server {
 
         let mut settings = self.settings.clone();
         config.apply_to_settings(&mut settings);
-        let command_line = settings.active_config().effective_acp_command();
+        // Keep the solo lead's selection until routing so worker names in its prompt cannot switch providers.
+        let command_line = effective.effective_acp_command();
         for (config_id, value) in prompt.agent_options {
             self.apply_agent_option(&id, &command_line, config_id, value, |result| {
                 if let Err(e) = result {
@@ -1305,6 +1313,8 @@ impl Server {
             if let Some(config) = &chat.session.config {
                 config.apply_to_settings(&mut settings);
             }
+            // No workers away from the desktop app: the lead answers by itself.
+            crate::orchestrator::apply_lead(&mut settings);
             let run_id = self.next_run;
             self.next_run += 1;
             let (approval_tx, approval_rx) = mpsc::channel();

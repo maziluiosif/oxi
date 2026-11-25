@@ -202,6 +202,38 @@ impl Stage {
     }
 }
 
+/// Render a single still on the product stage (same backdrop, window shadow, rounded corners,
+/// headline, subtitle and optional chapter rail as the video) without spawning ffmpeg.
+pub(super) fn compose_still(
+    app: &RgbaImage,
+    title: &str,
+    subtitle: &str,
+    chapters: Vec<&'static str>,
+    chapter: Option<usize>,
+) -> RgbaImage {
+    let mut harness = Harness::builder()
+        .with_size(STAGE)
+        .with_pixels_per_point(SCALE)
+        .wgpu()
+        .build_ui_state(
+            |ui, state: &mut StageState| paint_stage(ui, state),
+            StageState {
+                chapters,
+                chapter,
+                headline: Some((title.to_owned(), subtitle.to_owned())),
+                headline_t: 1.0,
+                ..Default::default()
+            },
+        );
+    egui_extras::install_image_loaders(&harness.ctx);
+    // First step installs the stage fonts; subsequent steps paint with them.
+    harness.run_steps(3);
+    let mut stage = harness.render().expect("render stage still");
+    let at = ((WINDOW_AT.x * SCALE) as u32, (WINDOW_AT.y * SCALE) as u32);
+    composite_window(&mut stage, app, at, WINDOW_RADIUS * SCALE, 1.0);
+    stage
+}
+
 pub(super) fn ease(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -397,7 +429,7 @@ fn paint_card(ui: &mut egui::Ui, card: Card, window: Rect, alpha: f32) {
             painter.text(
                 center + vec2(0.0, 72.0),
                 Align2::CENTER_CENTER,
-                "Local GGUF models · Claude Code · Codex · Cursor · any API",
+                "Local GGUF · Claude Code · Codex · Antigravity · Cursor · any API",
                 text(18.0),
                 MUTED.gamma_multiply(alpha),
             );

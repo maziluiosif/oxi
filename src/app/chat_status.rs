@@ -116,11 +116,21 @@ impl OxiApp {
         }
     }
 
+    /// Active provider config, resolving the Orchestrator pseudo-provider to its lead agent so
+    /// context window, live ACP context/cost readings, and subscription quota follow the lead.
+    fn effective_active_config(&self) -> crate::settings::ProviderConfig {
+        if self.conv.settings.active_provider == LlmProviderKind::Orchestrator {
+            crate::orchestrator::lead_config(&self.conv.settings)
+        } else {
+            self.conv.settings.active_config().clone()
+        }
+    }
+
     /// `(used, window)` tokens for the active chat. An ACP agent keeps its own context (system
     /// prompt, tools, compaction), so its own reading beats anything estimated from oxi's
     /// transcript.
     fn active_context_tokens(&self) -> (usize, usize) {
-        let cfg = self.conv.settings.active_config();
+        let cfg = self.effective_active_config();
         let key = self.active_session_key();
         let reported = self
             .session_by_key(key)
@@ -203,7 +213,7 @@ impl OxiApp {
         );
         ui.painter().galley(text_pos, galley, c_text_muted());
 
-        let cfg = self.conv.settings.active_config();
+        let cfg = self.effective_active_config();
         let cost_line = if cfg.is_acp()
             && let Some((amount, currency)) =
                 crate::agent::acp::reported_cost(&self.acp_session_key(self.active_session_key()))
@@ -468,6 +478,50 @@ impl OxiApp {
         }
     }
 
+    /// Whether this chat should keep subscription quota snapshots warm in the background.
+    /// Runs for providers with their own usage probe and for `Orchestrator` / `Router` chats
+    /// whenever any team usage probe is enabled (even if the lead itself has no usage probe).
+    fn should_poll_quota(&self) -> bool {
+        let router = &self.conv.settings.router;
+        let any_probe = router.read_claude_code_usage
+            || router.read_codex_cli_usage
+            || router.read_antigravity_usage;
+        if matches!(
+            self.conv.settings.active_provider,
+            LlmProviderKind::Orchestrator | LlmProviderKind::Router
+        ) && any_probe
+        {
+            return true;
+        }
+        match self.effective_active_config().provider {
+            LlmProviderKind::ClaudeCodeAcp => router.read_claude_code_usage,
+            LlmProviderKind::CodexAcp => router.read_codex_cli_usage,
+            LlmProviderKind::AntigravityAcp => router.read_antigravity_usage,
+            LlmProviderKind::GptCodex => true,
+            _ => false,
+        }
+    }
+
+    /// Asks for fresh subscription usage every [`QUOTA_POLL_SECS`] while frames run;
+    /// [`crate::router::quota::refresh`] throttles the probes itself.
+    fn maybe_refresh_quota_in_background(&self, ctx: &egui::Context) {
+        use crate::router::quota;
+        let id = egui::Id::new("status_bar_quota_refresh");
+        let t = ctx.input(|i| i.time);
+        let last = ctx.data(|d| d.get_temp::<f64>(id));
+        if !quota::is_refreshing() && last.is_none_or(|l| t - l >= QUOTA_POLL_SECS) {
+            ctx.data_mut(|d| d.insert_temp(id, t));
+            let settings = self.conv.settings.clone();
+            let ctx = ctx.clone();
+            if let Ok(rt) = crate::runtime::runtime() {
+                rt.spawn(async move {
+                    quota::refresh(&settings, false).await;
+                    ctx.request_repaint();
+                });
+            }
+        }
+    }
+
     /// Subscription windows for providers whose usage oxi can read: `5h 34% · 7d 12%`, colored
     /// by the fullest window, with reset times on hover. Asks for fresh numbers every
     /// [`QUOTA_POLL_SECS`] while frames run; [`quota::refresh`] throttles the probes itself.
@@ -475,7 +529,10 @@ impl OxiApp {
     /// [`quota::refresh`]: crate::router::quota::refresh
     fn subscription_status(&self, ctx: &egui::Context) -> Option<QuotaStatus> {
         use crate::router::quota;
-        let kind = self.conv.settings.active_provider;
+        if self.should_poll_quota() {
+            self.maybe_refresh_quota_in_background(ctx);
+        }
+        let kind = self.effective_active_config().provider;
         let router = &self.conv.settings.router;
         let enabled = match kind {
             LlmProviderKind::ClaudeCodeAcp => router.read_claude_code_usage,
@@ -497,20 +554,6 @@ impl OxiApp {
                     c_text_faint(),
                 )],
             });
-        }
-        let id = egui::Id::new("status_bar_quota_refresh");
-        let t = ctx.input(|i| i.time);
-        let last = ctx.data(|d| d.get_temp::<f64>(id));
-        if !quota::is_refreshing() && last.is_none_or(|l| t - l >= QUOTA_POLL_SECS) {
-            ctx.data_mut(|d| d.insert_temp(id, t));
-            let settings = self.conv.settings.clone();
-            let ctx = ctx.clone();
-            if let Ok(rt) = crate::runtime::runtime() {
-                rt.spawn(async move {
-                    quota::refresh(&settings, false).await;
-                    ctx.request_repaint();
-                });
-            }
         }
         let Some(snap) = quota::snapshot(kind) else {
             return Some(QuotaStatus {
@@ -699,4 +742,77 @@ fn status_sep(ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.label(RichText::new("·").size(FS_TINY).color(c_text_faint()));
     ui.add_space(4.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orchestrator_context_window_follows_lead_model_and_live_agent_context() {
+        crate::secrets::use_mock_store();
+        let mut app = OxiApp::new();
+        app.conn.no_session = true;
+        app.conv.settings = crate::settings::AppSettings::default();
+        let key = app.active_session_key();
+        app.session_mut_by_key(key).agent_context = None;
+        app.conv.settings.active_provider = LlmProviderKind::Orchestrator;
+        app.conv.settings.orchestrator.lead_provider = LlmProviderKind::AntigravityAcp;
+        app.conv.settings.orchestrator.lead_model = "gemini-4-neon".into();
+
+        // ACP lead gets ACP_CONTEXT_WINDOW (1M) before live usage_update arrives, not 128k.
+        let (_, window) = app.active_context_tokens();
+        assert_eq!(window, crate::settings::ProviderConfig::ACP_CONTEXT_WINDOW);
+
+        // Live agent_context reported by the lead ACP agent takes precedence.
+        app.session_mut_by_key(key).agent_context =
+            Some((LlmProviderKind::AntigravityAcp, 42_000, 500_000));
+        assert_eq!(app.active_context_tokens(), (42_000, 500_000));
+
+        // Non-ACP lead uses its model's catalog context window dynamically.
+        app.session_mut_by_key(key).agent_context = None;
+        app.conv.settings.orchestrator.lead_provider = LlmProviderKind::CustomAnthropic;
+        app.conv.settings.orchestrator.lead_model = "claude-opus-4-6".into();
+        let (_, window) = app.active_context_tokens();
+        assert_eq!(window, 200_000);
+    }
+
+    #[test]
+    fn orchestrator_and_router_poll_team_quota_regardless_of_lead() {
+        crate::secrets::use_mock_store();
+        let mut app = OxiApp::new();
+        app.conn.no_session = true;
+        app.conv.settings = crate::settings::AppSettings::default();
+        app.conv.settings.router.read_claude_code_usage = false;
+        app.conv.settings.router.read_codex_cli_usage = false;
+        app.conv.settings.router.read_antigravity_usage = false;
+
+        // Orchestrator with a lead that has no usage probe (CursorAcp):
+        // no probes enabled -> should not poll.
+        app.conv.settings.active_provider = LlmProviderKind::Orchestrator;
+        app.conv.settings.orchestrator.lead_provider = LlmProviderKind::CursorAcp;
+        assert!(!app.should_poll_quota());
+
+        // Enabling any team usage probe triggers background polling even for Cursor/Copilot/OpenCode leads.
+        app.conv.settings.router.read_claude_code_usage = true;
+        for lead in [
+            LlmProviderKind::CursorAcp,
+            LlmProviderKind::CopilotAcp,
+            LlmProviderKind::OpenCodeAcp,
+        ] {
+            app.conv.settings.orchestrator.lead_provider = lead;
+            assert!(
+                app.should_poll_quota(),
+                "lead {lead:?} should poll team quota"
+            );
+        }
+
+        // Router also polls when any probe is enabled.
+        app.conv.settings.active_provider = LlmProviderKind::Router;
+        assert!(app.should_poll_quota());
+
+        // Direct CursorAcp chat does not poll unrelated subscription probes.
+        app.conv.settings.active_provider = LlmProviderKind::CursorAcp;
+        assert!(!app.should_poll_quota());
+    }
 }
