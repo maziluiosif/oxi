@@ -211,12 +211,30 @@ pub(super) fn render_inline_until(
             let mut bold = 0u32;
             let mut italic = 0u32;
             let mut strike = 0u32;
-            while let Some(ev) = it.next() {
-                match (&ev, end) {
-                    (Event::End(TagEnd::Paragraph), InlineEnd::Paragraph) => break,
-                    (Event::End(TagEnd::Item), InlineEnd::Item) => break,
-                    _ => {}
+            loop {
+                match end {
+                    InlineEnd::Paragraph => match it.peek() {
+                        Some(Event::End(TagEnd::Paragraph)) => {
+                            it.next();
+                            break;
+                        }
+                        None => break,
+                        _ => {}
+                    },
+                    InlineEnd::Item => match it.peek() {
+                        Some(ev)
+                            if matches!(
+                                ev,
+                                Event::End(TagEnd::Item) | Event::End(TagEnd::List(_))
+                            ) || super::is_list_item_block_start(ev) =>
+                        {
+                            break;
+                        }
+                        None => break,
+                        _ => {}
+                    },
                 }
+                let Some(ev) = it.next() else { break };
                 match ev {
                     Event::Start(Tag::Strong) => bold += 1,
                     Event::End(TagEnd::Strong) => bold = bold.saturating_sub(1),

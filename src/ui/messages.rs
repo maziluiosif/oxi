@@ -336,6 +336,47 @@ pub fn render_message(ui: &mut Ui, msg_idx: usize, msg: &ChatMessage) -> egui::R
         return response;
     }
 
+    if msg.is_system_report() {
+        let view = parse_system_report(&msg.text);
+        let response = ui
+            .vertical(|ui| {
+                ui.set_width(col_w);
+                Frame::new()
+                    .fill(c_bg_elevated_2())
+                    .stroke(Stroke::new(1.0, c_border_subtle()))
+                    .corner_radius(CornerRadius::same(RADIUS_CARD))
+                    .inner_margin(Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let (icon, icon_color) = if view.any_failed {
+                            (ICON_WARNING, c_error_fg())
+                        } else if view.all_completed {
+                            (ICON_CHECK_CIRCLE, c_success())
+                        } else {
+                            (ICON_INFO, c_text_muted())
+                        };
+                        if system_report_disclosure_row(
+                            ui,
+                            ui.id().with(("system_report", msg_idx)),
+                            icon,
+                            icon_color,
+                            &view.title,
+                        ) {
+                            ui.add_space(6.0);
+                            markdown::render_markdown(ui, &view.body_markdown);
+                        }
+                    });
+            })
+            .response;
+        crate::ui::chrome::copy_message_context_menu(
+            &response,
+            egui::Id::new(("copy_system_report", msg_idx)),
+            &msg.text,
+        );
+        ui.add_space(8.0);
+        return response;
+    }
+
     if msg.role == MsgRole::User {
         // Right-aligned rounded pill bubble (capped width) matching Antigravity's calm dark pill.
         let bubble_w = (col_w * 0.78).max(220.0).min(col_w);
@@ -1374,9 +1415,258 @@ pub(crate) fn take_user_message_action(ctx: &eframe::egui::Context) -> Option<Us
     })
 }
 
+/// Short single-line summary for a worker/delegated completion report delivered by oxi.
+pub(crate) fn system_report_title(text: &str) -> String {
+    parse_system_report(text).title
+}
+
+struct SystemReportView {
+    title: String,
+    body_markdown: String,
+    all_completed: bool,
+    any_failed: bool,
+}
+
+fn system_report_disclosure_row(
+    ui: &mut Ui,
+    id: egui::Id,
+    status_icon: &str,
+    status_color: egui::Color32,
+    title: &str,
+) -> bool {
+    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(id, || false));
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::CollapsingHeader,
+            ui.is_enabled(),
+            open,
+            title,
+        )
+    });
+    let hovered = ui.is_enabled() && (response.hovered() || response.has_focus());
+    let radius = CornerRadius::same(RADIUS_ROW);
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_filled(rect, radius, c_row_hover());
+    }
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, radius);
+    let ink = if hovered { c_text() } else { c_text_muted() };
+    ui.painter().text(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        if open {
+            ICON_ANGLE_DOWN
+        } else {
+            ICON_CHEVRON_RIGHT
+        },
+        FontId::new(FS_TINY - 1.5, icon_font()),
+        ink,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 24.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        status_icon,
+        FontId::new(FS_TINY, icon_font()),
+        status_color,
+    );
+    let text_left = rect.left() + 38.0;
+    let max_text_w = (rect.right() - text_left - 8.0).max(0.0);
+    let mut job = LayoutJob::single_section(
+        title.to_string(),
+        egui::TextFormat::simple(FontId::proportional(FS_SMALL), ink),
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: max_text_w,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    let galley = ui.painter().layout_job(job);
+    let text_y = rect.center().y - galley.size().y * 0.5;
+    ui.painter()
+        .galley(egui::pos2(text_left, text_y), galley, ink);
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|d| d.insert_persisted(id, open));
+    }
+    open
+}
+
+fn parse_system_report(text: &str) -> SystemReportView {
+    if let Some(rest) = text.strip_prefix("[Delegated task] ") {
+        let first_line = rest.lines().next().unwrap_or(rest).trim();
+        let (who, state) = parse_task_header_line(first_line);
+        let any_failed = matches!(state, Some("failed" | "not started"));
+        let all_completed = matches!(state, Some("completed"));
+        let noun = if any_failed {
+            "Delegated task failed"
+        } else {
+            "Delegated task finished"
+        };
+        let title = match who {
+            Some(who) => format!("{noun} · {who}"),
+            None => noun.to_string(),
+        };
+        return SystemReportView {
+            title,
+            body_markdown: rest.trim().to_string(),
+            all_completed,
+            any_failed,
+        };
+    }
+
+    // Worker batch report (`[Worker finished]\n...` or `[Workers finished]\n...`).
+    let mut lines = text.lines();
+    let header = lines.next().unwrap_or("");
+    let is_plural = header.starts_with("[Workers finished]");
+    let mut body_lines: Vec<String> = Vec::new();
+    let mut total = 0usize;
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    let mut single_who: Option<String> = None;
+
+    for line in lines {
+        if line == "Worker output for the lead to review. Each quoted report comes from the named worker."
+        {
+            continue;
+        }
+        let unquoted = line
+            .strip_prefix("> ")
+            .or_else(|| line.strip_prefix('>'))
+            .unwrap_or(line);
+        if unquoted.starts_with("Task ") {
+            let (who, state) = parse_task_header_line(unquoted);
+            total += 1;
+            if total == 1 {
+                single_who = who.map(str::to_owned);
+            }
+            match state {
+                Some("completed") => completed += 1,
+                Some("failed" | "not started") => failed += 1,
+                _ => {}
+            }
+            if total > 1 {
+                body_lines.push(String::new());
+                body_lines.push("---".to_string());
+                body_lines.push(String::new());
+            }
+            body_lines.push(format!("**{}**", unquoted.trim()));
+        } else {
+            body_lines.push(unquoted.to_string());
+        }
+    }
+
+    let body_markdown = body_lines.join("\n").trim().to_string();
+    let any_failed = failed > 0;
+    let all_completed = total > 0 && completed == total;
+    let title = match total {
+        0 => if is_plural {
+            "Workers finished"
+        } else {
+            "Worker finished"
+        }
+        .to_string(),
+        1 => {
+            let verb = if any_failed { "failed" } else { "finished" };
+            match single_who {
+                Some(who) => format!("Worker {verb} · {who}"),
+                None => format!("Worker {verb}"),
+            }
+        }
+        n if all_completed => format!("{n} workers finished"),
+        n if failed == n => format!("{n} workers failed"),
+        n => {
+            let mut parts = Vec::new();
+            if completed > 0 {
+                parts.push(format!("{completed} done"));
+            }
+            if failed > 0 {
+                parts.push(format!("{failed} failed"));
+            }
+            let other = n.saturating_sub(completed + failed);
+            if other > 0 {
+                parts.push(format!("{other} stopped"));
+            }
+            format!("{n} workers finished · {}", parts.join(", "))
+        }
+    };
+
+    SystemReportView {
+        title,
+        body_markdown,
+        all_completed,
+        any_failed,
+    }
+}
+
+/// Extract `(who, state)` from a line shaped like `Task w6be92e65 (Antigravity · model): completed.`.
+fn parse_task_header_line(line: &str) -> (Option<&str>, Option<&str>) {
+    let Some(after_open) = line.split_once(" (").map(|(_, r)| r) else {
+        return (None, None);
+    };
+    let Some((who, after_close)) = after_open.split_once("): ") else {
+        return (None, None);
+    };
+    let state = after_close
+        .split('.')
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let who = (!who.trim().is_empty()).then_some(who.trim());
+    (who, state)
+}
+
 #[cfg(test)]
 mod answer_render_tests {
-    use super::{error_hint, floor_char_boundary, split_error_tail};
+    use super::{error_hint, floor_char_boundary, parse_system_report, split_error_tail};
+
+    #[test]
+    fn system_report_parser_builds_clean_titles_and_unquoted_markdown() {
+        let two_done = "[Workers finished]\n\
+            Worker output for the lead to review. Each quoted report comes from the named worker.\n\n\
+            > Task w6be92e65 (Antigravity (ACP) · gemini-4-neon): completed.\n\
+            >\n\
+            > Report:\n\
+            > Found backend.\n\n\
+            > Task w2d6e07fe (Antigravity (ACP) · gemini-4-neon): completed.\n\
+            >\n\
+            > Report:\n\
+            > Found UI.";
+        let view = parse_system_report(two_done);
+        assert_eq!(view.title, "2 workers finished");
+        assert!(view.all_completed);
+        assert!(!view.any_failed);
+        assert!(!view.body_markdown.contains("[Workers finished]"));
+        assert!(!view.body_markdown.contains("Worker output for the lead"));
+        assert!(view.body_markdown.contains("Found backend."));
+        assert!(view.body_markdown.contains("Found UI."));
+        assert!(view.body_markdown.contains("---"));
+
+        let mixed = "[Workers finished]\n\
+            Worker output for the lead to review. Each quoted report comes from the named worker.\n\n\
+            > Task w1 (Codex · gpt): completed.\n\n\
+            > Task w2 (Antigravity): failed. Ended without a report.";
+        let view = parse_system_report(mixed);
+        assert_eq!(view.title, "2 workers finished · 1 done, 1 failed");
+        assert!(!view.all_completed);
+        assert!(view.any_failed);
+
+        let single = "[Worker finished]\n\
+            Worker output for the lead to review. Each quoted report comes from the named worker.\n\n\
+            > Task w1 (Antigravity · gemini): failed. Boom.";
+        let view = parse_system_report(single);
+        assert_eq!(view.title, "Worker failed · Antigravity · gemini");
+        assert!(view.any_failed);
+
+        let delegated = "[Delegated task] Task d1 (Codex): completed.\n\nReport:\nAll good.";
+        let view = parse_system_report(delegated);
+        assert_eq!(view.title, "Delegated task finished · Codex");
+        assert!(view.all_completed);
+        assert!(!view.any_failed);
+        assert_eq!(view.body_markdown, "Task d1 (Codex): completed.\n\nReport:\nAll good.");
+    }
 
     #[test]
     fn common_errors_get_a_hint() {

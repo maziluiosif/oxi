@@ -269,6 +269,7 @@ impl OxiApp {
                 worktree_setups: Vec::new(),
                 review_comments: review_comments::load_comments(),
                 delegations: Vec::new(),
+                worker_owners: Default::default(),
                 comment_draft: None,
                 setup_script_editor: None,
                 split: None,
@@ -338,6 +339,7 @@ impl OxiApp {
         app.connect_remote_workspaces();
         // The constructor doesn't have an egui::Context yet; it's bound on the first
         // `update()` via `eframe_app.rs` -> `bind_git_ctx`.
+        app.restore_worker_records();
         app.restore_drafts();
         app.ensure_active_session_loaded();
         app.restore_active_session_config();
@@ -727,7 +729,8 @@ impl OxiApp {
     pub(crate) fn capture_active_session_config(&mut self) {
         self.remember_acp_workspace_preferences();
         let key = self.active_session_key();
-        let config = SessionConfig::from_provider(self.conv.settings.active_config());
+        let mut config = SessionConfig::from_provider(self.conv.settings.active_config());
+        config.keep_worker_role(self.session_by_key(key).config.as_ref());
         if self.session_by_key(key).config.as_ref() == Some(&config) {
             return;
         }
@@ -769,7 +772,7 @@ impl OxiApp {
         provider: crate::settings::LlmProviderKind,
     ) {
         let key = self.active_session_key();
-        let config = self
+        let mut config = self
             .conv
             .settings
             .acp_workspace_preferences
@@ -777,6 +780,7 @@ impl OxiApp {
             .filter(|preference| provider.is_acp() && preference.config.provider == provider)
             .map(|preference| preference.config.clone())
             .unwrap_or_else(|| SessionConfig::from_provider(self.conv.settings.provider(provider)));
+        config.keep_worker_role(self.session_by_key(key).config.as_ref());
         config.apply_to_settings(&mut self.conv.settings);
         self.session_mut_by_key(key).config = Some(config);
     }
@@ -813,7 +817,8 @@ impl OxiApp {
                 .get(&self.active_workspace().root_path)
                 .filter(|preference| preference.config.provider == config.provider)
                 .is_some_and(|preference| preference.plan_mode);
-            self.run_state_mut(key).plan_mode = plan_mode;
+            self.run_state_mut(key).plan_mode =
+                plan_mode || config.worker_access == crate::orchestrator::Access::ReadOnly;
         }
     }
 

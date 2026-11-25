@@ -88,6 +88,10 @@ pub struct AppSettings {
     /// approval prompt, by workspace root path.
     #[serde(default)]
     pub workspace_tool_allowlist: BTreeMap<String, Vec<String>>,
+    /// Whether each of oxi's own tools (see [`super::oxi_tools::OXI_TOOLS`]) asks before it
+    /// runs, by tool name. Missing entries take the tool's default; `normalize` fills them in.
+    #[serde(default, deserialize_with = "super::oxi_tools::deserialize_choices")]
+    pub oxi_tool_confirmation: BTreeMap<String, bool>,
     /// Shell script run in each new work tree of a repository before its agent starts, by the
     /// main checkout's root path.
     #[serde(default)]
@@ -234,6 +238,9 @@ pub struct AppSettings {
     /// Preferences for the Router pseudo-provider (see `crate::router`).
     #[serde(default)]
     pub router: super::router::RouterSettings,
+    /// The Orchestrator pseudo-provider's lead agent and worker pool (see `crate::orchestrator`).
+    #[serde(default)]
+    pub orchestrator: super::orchestrator::OrchestratorSettings,
     /// Text editor preferences.
     #[serde(default)]
     pub editor: EditorSettings,
@@ -282,6 +289,19 @@ pub const DEFAULT_COMMIT_MSG_SYSTEM_PROMPT: &str = "You generate concise, well-f
 
 fn default_tools_enabled() -> Vec<bool> {
     vec![true; ALL_TOOL_NAMES.len()]
+}
+
+fn default_oxi_tool_confirmation() -> BTreeMap<String, bool> {
+    let file_edit = default_require_approval();
+    super::oxi_tools::OXI_TOOLS
+        .iter()
+        .map(|info| {
+            (
+                info.name.to_owned(),
+                super::oxi_tools::oxi_tool_default(info, file_edit),
+            )
+        })
+        .collect()
 }
 
 fn default_searxng_url() -> String {
@@ -359,6 +379,7 @@ impl Default for AppSettings {
             require_bash_approval: default_require_approval(),
             bash_allowlist: Vec::new(),
             workspace_tool_allowlist: BTreeMap::new(),
+            oxi_tool_confirmation: default_oxi_tool_confirmation(),
             worktree_setup_scripts: BTreeMap::new(),
             acp_idle_minutes: default_acp_idle_minutes(),
             acp_max_live_agents: default_acp_max_live_agents(),
@@ -401,6 +422,7 @@ impl Default for AppSettings {
             activity_log_enabled: false,
             auto_update: true,
             router: super::router::RouterSettings::default(),
+            orchestrator: super::orchestrator::OrchestratorSettings::default(),
             editor: EditorSettings::default(),
             unreadable: Default::default(),
         }

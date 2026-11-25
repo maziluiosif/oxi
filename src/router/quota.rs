@@ -39,6 +39,21 @@ pub struct UsageWindow {
 }
 
 impl UsageWindow {
+    /// Whether this usage window applies to `model`.
+    /// Scopes may list multiple `|`-separated tokens (e.g. `"claude|gpt"`). A `"gemini"`
+    /// scope also applies to an unset or `"default"` model (Antigravity's default pool).
+    pub fn applies_to(&self, model: &str) -> bool {
+        let Some(scope) = self.model_scope.as_deref() else {
+            return true;
+        };
+        let m = model.trim().to_ascii_lowercase();
+        let is_default = m.is_empty() || m == "default";
+        scope.split('|').any(|token| {
+            let t = token.trim();
+            !t.is_empty() && (m.contains(t) || (is_default && t == "gemini"))
+        })
+    }
+
     /// `5h 34% used (resets in 2h 10m)`; a window whose reset already passed reads as empty.
     pub fn summary(&self, now: u64) -> String {
         match self.resets_at {
@@ -74,21 +89,44 @@ pub struct QuotaSnapshot {
 impl QuotaSnapshot {
     /// Highest used percentage among the windows that apply to `model`.
     pub fn used_pct_for(&self, model: &str) -> Option<f64> {
-        let m = model.to_ascii_lowercase();
         let now = now_secs();
         self.windows
             .iter()
-            .filter(|w| {
-                w.model_scope
-                    .as_ref()
-                    .is_none_or(|s| m.contains(s.as_str()))
-            })
+            .filter(|w| w.applies_to(model))
             // A window whose reset already passed is empty again.
             .map(|w| match w.resets_at {
                 Some(t) if t <= now => 0.0,
                 _ => w.used_pct,
             })
             .reduce(f64::max)
+    }
+
+    /// Whether `model` has no quota/credit left right now (0% remaining / limit reached).
+    pub fn is_exhausted_for(&self, model: &str, now: u64) -> bool {
+        if self.credits_left.is_some_and(|c| c <= 0.0) {
+            return true;
+        }
+        let applicable_exhausted = self.windows.iter().any(|w| {
+            w.applies_to(model)
+                && w.resets_at.is_none_or(|t| t > now)
+                && w.used_pct >= 99.0
+        });
+        if applicable_exhausted {
+            return true;
+        }
+        if !self.limit_reached {
+            return false;
+        }
+        // If `limit_reached` came from an exhausted window whose reset already passed,
+        // treat the window as reset while waiting for the next probe.
+        let had_applicable_exhausted = self
+            .windows
+            .iter()
+            .any(|w| w.applies_to(model) && w.used_pct >= 99.0);
+        if had_applicable_exhausted {
+            return false;
+        }
+        !self.windows.iter().any(|w| w.used_pct >= 99.0)
     }
 }
 
@@ -127,8 +165,22 @@ pub fn set_snapshot_for_tests(kind: LlmProviderKind, snap: QuotaSnapshot) {
     });
 }
 
+#[cfg(test)]
+pub fn clear_snapshot_for_tests(kind: LlmProviderKind) {
+    with_board(|b| {
+        b.snapshots.remove(&kind);
+    });
+}
+
 pub fn snapshot(kind: LlmProviderKind) -> Option<QuotaSnapshot> {
     with_board(|b| b.snapshots.get(&kind).cloned())
+}
+
+/// Is `kind` (with `model`) known to be out of quota/credit right now (cooling down after a
+/// quota error, flagged `limit_reached`, or at >= 99% of an active usage window)?
+pub fn is_exhausted(kind: LlmProviderKind, model: &str) -> bool {
+    cooldown_left(kind).is_some()
+        || snapshot(kind).is_some_and(|s| s.is_exhausted_for(model, now_secs()))
 }
 
 pub fn openrouter_price(model: &str) -> Option<Price> {
@@ -810,11 +862,7 @@ pub(crate) fn parse_antigravity_usage(v: &Value) -> Result<QuotaSnapshot, String
     if windows.is_empty() {
         return Err("Antigravity CLI returned no quota windows".into());
     }
-    let unscoped_any = windows.iter().any(|w| w.model_scope.is_none());
-    let limit_reached = windows
-        .iter()
-        .filter(|w| !unscoped_any || w.model_scope.is_none())
-        .any(|w| w.used_pct >= 100.0);
+    let limit_reached = antigravity_limit_reached(&windows);
     Ok(QuotaSnapshot {
         windows,
         plan,
@@ -885,11 +933,7 @@ fn parse_antigravity_usage_text(text: &str) -> Result<QuotaSnapshot, String> {
     if windows.is_empty() {
         return Err("could not parse Antigravity /usage output".into());
     }
-    let unscoped_any = windows.iter().any(|w| w.model_scope.is_none());
-    let limit_reached = windows
-        .iter()
-        .filter(|w| !unscoped_any || w.model_scope.is_none())
-        .any(|w| w.used_pct >= 100.0);
+    let limit_reached = antigravity_limit_reached(&windows);
     Ok(QuotaSnapshot {
         windows,
         limit_reached,
@@ -898,27 +942,63 @@ fn parse_antigravity_usage_text(text: &str) -> Result<QuotaSnapshot, String> {
     })
 }
 
+/// For multi-pool Antigravity snapshots, the provider as a whole is only at its limit when
+/// an unscoped window hits 100%, or when every scoped pool has an exhausted window.
+fn antigravity_limit_reached(windows: &[UsageWindow]) -> bool {
+    if windows.is_empty() {
+        return false;
+    }
+    if windows
+        .iter()
+        .any(|w| w.model_scope.is_none() && w.used_pct >= 100.0)
+    {
+        return true;
+    }
+    if windows.iter().any(|w| w.model_scope.is_none()) {
+        return false;
+    }
+    let mut scopes: Vec<&str> = Vec::new();
+    for w in windows {
+        if let Some(s) = w.model_scope.as_deref()
+            && !scopes.contains(&s)
+        {
+            scopes.push(s);
+        }
+    }
+    !scopes.is_empty()
+        && scopes.iter().all(|&scope| {
+            windows
+                .iter()
+                .any(|w| w.model_scope.as_deref() == Some(scope) && w.used_pct >= 100.0)
+        })
+}
+
 /// Short status-bar prefix + router `model_scope` for an Antigravity quota group.
-/// The primary Gemini pool stays unscoped (`None`) so default-model chats and status bars
-/// always see it; secondary model pools (Claude/GPT, Argon) carry a model scope.
+/// In multi-group snapshots, each pool carries its own `model_scope` (`gemini`, `claude|gpt`,
+/// `argon`) so exhausting Gemini does not block Claude/GPT models; `UsageWindow::applies_to`
+/// still matches `"default"` / empty models to the `"gemini"` pool.
 fn antigravity_family_scope(family: &str, multi_group: bool) -> (String, Option<String>) {
     let lower = family.to_ascii_lowercase();
     if lower.contains("claude") || lower.contains("gpt") || lower.contains("third") {
-        let label = if lower.contains("claude") && lower.contains("gpt") {
-            "Claude/GPT"
+        let (label, scope) = if (lower.contains("claude") && lower.contains("gpt"))
+            || lower.contains("third")
+        {
+            ("Claude/GPT", "claude|gpt")
         } else if lower.contains("claude") {
-            "Claude"
+            ("Claude", "claude")
         } else {
-            "GPT"
+            ("GPT", "gpt")
         };
-        return (label.into(), Some("claude".into()));
+        return (label.into(), Some(scope.into()));
     }
     if lower.contains("argon") {
         return ("Argon".into(), Some("argon".into()));
     }
     if lower.contains("gemini") {
-        let prefix = if multi_group { "Gemini" } else { "" };
-        return (prefix.into(), None);
+        if multi_group {
+            return ("Gemini".into(), Some("gemini".into()));
+        }
+        return (String::new(), None);
     }
     (String::new(), None)
 }
@@ -1317,16 +1397,107 @@ mod tests {
         assert_eq!(s.windows.len(), 3);
         assert_eq!(s.windows[0].label, "Gemini 5h");
         assert!((s.windows[0].used_pct - 25.0).abs() < 1e-6);
-        assert_eq!(s.windows[0].model_scope, None);
+        assert_eq!(s.windows[0].model_scope.as_deref(), Some("gemini"));
         assert_eq!(s.windows[1].label, "Gemini 7d");
         assert!((s.windows[1].used_pct - 40.0).abs() < 1e-6);
         assert_eq!(s.windows[2].label, "Claude/GPT 7d");
         assert!((s.windows[2].used_pct - 80.0).abs() < 1e-6);
-        assert_eq!(s.windows[2].model_scope.as_deref(), Some("claude"));
+        assert_eq!(s.windows[2].model_scope.as_deref(), Some("claude|gpt"));
         assert!(!s.limit_reached);
         assert!((s.used_pct_for("gemini-4-neon").unwrap() - 40.0).abs() < 1e-6);
         assert!((s.used_pct_for("claude-sonnet-4-6").unwrap() - 80.0).abs() < 1e-6);
+        assert!((s.used_pct_for("gpt-5").unwrap() - 80.0).abs() < 1e-6);
         assert!((s.used_pct_for("default").unwrap() - 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn antigravity_dual_pools_isolate_exhaustion() {
+        let v = json!({
+            "command": {
+                "status": "SUCCESS",
+                "data": {
+                    "plan_tier": "pro",
+                    "groups": [
+                        {
+                            "family": "Gemini Models",
+                            "buckets": [
+                                {
+                                    "id": "gemini-5h",
+                                    "window": "5 hours",
+                                    "remaining_fraction": 0.0,
+                                    "reset_time": "2099-01-01T00:00:00Z"
+                                },
+                                {
+                                    "id": "gemini-weekly",
+                                    "window": "7 days",
+                                    "remaining_fraction": 0.50,
+                                    "reset_time": "2099-01-03T00:00:00Z"
+                                }
+                            ]
+                        },
+                        {
+                            "family": "Claude and GPT models",
+                            "buckets": [
+                                {
+                                    "id": "claude-5h",
+                                    "window": "5 hours",
+                                    "remaining_fraction": 1.0,
+                                    "reset_time": "2099-01-01T00:00:00Z"
+                                },
+                                {
+                                    "id": "claude-weekly",
+                                    "window": "7 days",
+                                    "remaining_fraction": 1.0,
+                                    "reset_time": "2099-01-03T00:00:00Z"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        });
+        let now = 1_000_000;
+        let s = parse_antigravity_usage(&v).unwrap();
+        assert!(!s.limit_reached);
+        assert!(s.is_exhausted_for("gemini-4-neon", now));
+        assert!(s.is_exhausted_for("default", now));
+        assert!(s.is_exhausted_for("", now));
+        assert!(!s.is_exhausted_for("claude-sonnet-4-6", now));
+        assert!(!s.is_exhausted_for("gpt-5", now));
+        assert!((s.used_pct_for("claude-sonnet-4-6").unwrap() - 0.0).abs() < 1e-6);
+        assert!((s.used_pct_for("gpt-5").unwrap() - 0.0).abs() < 1e-6);
+
+        // When every pool is at 100%, the provider as a whole is limit_reached.
+        let both_full = json!({
+            "command": {
+                "status": "SUCCESS",
+                "data": {
+                    "groups": [
+                        {
+                            "family": "Gemini Models",
+                            "buckets": [{
+                                "window": "5 hours",
+                                "remaining_fraction": 0.0,
+                                "reset_time": "2099-01-01T00:00:00Z"
+                            }]
+                        },
+                        {
+                            "family": "Claude and GPT models",
+                            "buckets": [{
+                                "window": "5 hours",
+                                "remaining_fraction": 0.0,
+                                "reset_time": "2099-01-01T00:00:00Z"
+                            }]
+                        }
+                    ]
+                }
+            }
+        });
+        let s = parse_antigravity_usage(&both_full).unwrap();
+        assert!(s.limit_reached);
+        assert!(s.is_exhausted_for("gemini-4-neon", now));
+        assert!(s.is_exhausted_for("claude-sonnet-4-6", now));
+        assert!(s.is_exhausted_for("gpt-5", now));
     }
 
     #[test]
@@ -1356,6 +1527,53 @@ mod tests {
 
         let err = json!({"status": "ERROR", "error": "not signed in"});
         assert!(parse_antigravity_usage(&err).is_err());
+    }
+
+    #[test]
+    fn exhausted_checks_active_windows_scopes_resets_and_credits() {
+        let now = 1_000_000;
+        let full = QuotaSnapshot {
+            windows: vec![UsageWindow {
+                label: "5h".into(),
+                used_pct: 100.0,
+                resets_at: Some(now + 600),
+                model_scope: None,
+            }],
+            limit_reached: true,
+            ..Default::default()
+        };
+        assert!(full.is_exhausted_for("opus", now));
+        // Once the exhausted window's reset passes, it is no longer exhausted.
+        assert!(!full.is_exhausted_for("opus", now + 600));
+
+        // Scoped window exhausts only matching models.
+        let opus_full = QuotaSnapshot {
+            windows: vec![
+                UsageWindow {
+                    label: "5h".into(),
+                    used_pct: 20.0,
+                    resets_at: Some(now + 600),
+                    model_scope: None,
+                },
+                UsageWindow {
+                    label: "7d Opus".into(),
+                    used_pct: 100.0,
+                    resets_at: Some(now + 3600),
+                    model_scope: Some("opus".into()),
+                },
+            ],
+            limit_reached: false,
+            ..Default::default()
+        };
+        assert!(opus_full.is_exhausted_for("claude-opus", now));
+        assert!(!opus_full.is_exhausted_for("claude-sonnet", now));
+
+        // Zero credits left also counts as exhausted.
+        let no_credits = QuotaSnapshot {
+            credits_left: Some(0.0),
+            ..Default::default()
+        };
+        assert!(no_credits.is_exhausted_for("any", now));
     }
 
     /// Runs the real `agy` CLI (needs an Antigravity login), so it's ignored by default:

@@ -262,6 +262,12 @@ impl OxiApp {
         });
     }
 
+    pub(super) fn cancel_worker_setup(&self, root: &str) {
+        if let Some(setup) = self.conv.worktree_setups.iter().find(|s| s.root == root) {
+            setup.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
     /// The setup of workspace `wi`'s work tree, while it holds back its agent.
     pub(crate) fn setup_holding_agent(&self, wi: usize) -> Option<&WorktreeSetup> {
         let root = &self.conv.workspaces.get(wi)?.root_path;

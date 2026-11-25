@@ -1882,20 +1882,18 @@ async fn handle_control_request(
                 None => (mapped_name, input.clone()),
             };
 
-            let decision = if matches!(
-                oxi_name,
-                Some(
-                    "todo_write"
-                        | oxi_mcp::SCRATCHPAD_READ
-                        | super::chat_archive::TOOL
-                        | super::chat_history::TOOL
-                        | crate::delegation::STATUS
-                )
-            ) || crate::evidence::tools::NAMES.contains(&effective_name.as_str())
-                || (plan_mode && is_claude_plan_file_edit(tool_name, &input))
-            {
-                Some(ApprovalDecision::Approve)
-            } else if plan_mode && !is_read_only && tool_name != "ExitPlanMode" {
+            // oxi's own tools ask per Settings > Agent > "Ask before oxi tools" (through
+            // `requires_approval`); its read-only ones may run in plan mode.
+            let oxi_read_only = oxi_name.is_some_and(|tool| {
+                tool == effective_name && crate::settings::oxi_tool_is_read_only(tool)
+            });
+            let bash_read_only = effective_name == "bash"
+                && crate::agent::approval::bash_command_arg(&effective_args)
+                    .is_some_and(crate::agent::approval::bash_command_is_read_only);
+            let decision =
+                if plan_mode && (is_claude_plan_file_edit(tool_name, &input) || bash_read_only) {
+                    Some(ApprovalDecision::Approve)
+                } else if plan_mode && !is_read_only && !oxi_read_only && tool_name != "ExitPlanMode" {
                 Some(ApprovalDecision::Deny)
             } else if *auto_approve
                 || is_computer_use_tool(tool_name)
@@ -2470,14 +2468,9 @@ fn parse_claude_commands(v: &Value) -> Vec<AcpSlashCommand> {
 /// Map a Claude tool name to `(oxi_name, acp_kind, is_read_only)`.
 fn map_claude_tool_name(raw: &str) -> (String, &'static str, bool) {
     if let Some(oxi) = oxi_mcp::oxi_tool_name(raw) {
-        let ro = matches!(
-            oxi,
-            "todo_write"
-                | oxi_mcp::SCRATCHPAD_READ
-                | super::chat_archive::TOOL
-                | super::chat_history::TOOL
-                | crate::delegation::STATUS
-        );
+        // Evidence tools may run a command, which plan mode refuses like `bash`.
+        let ro = crate::settings::oxi_tool_is_read_only(oxi)
+            && !crate::evidence::tools::NAMES.contains(&oxi);
         return (oxi.to_owned(), "other", ro);
     }
     match raw {

@@ -99,6 +99,10 @@ impl OxiApp {
             self.render_router_settings(ui);
             return;
         }
+        if provider == LlmProviderKind::Orchestrator {
+            self.render_orchestrator_settings(ui);
+            return;
+        }
         self.render_provider_config(ui, provider);
 
         if provider == LlmProviderKind::GptCodex {

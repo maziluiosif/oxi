@@ -109,7 +109,12 @@ impl OxiApp {
                     || cur.providers != orig.providers
                     || cur.local_hf != orig.local_hf
                     || cur.router != orig.router
+                    || cur.orchestrator != orig.orchestrator
                     || cur.context_window_default != orig.context_window_default
+                    || crate::settings::OXI_TOOLS
+                        .iter()
+                        .filter(|t| t.group == crate::settings::OxiToolGroup::Orchestrator)
+                        .any(|t| cur.oxi_tool_asks(t.name) != orig.oxi_tool_asks(t.name))
             }
             SettingsTab::Agent => {
                 cur.tools_enabled != orig.tools_enabled
@@ -119,6 +124,7 @@ impl OxiApp {
                     || cur.require_bash_approval != orig.require_bash_approval
                     || cur.bash_allowlist != orig.bash_allowlist
                     || cur.workspace_tool_allowlist != orig.workspace_tool_allowlist
+                    || cur.oxi_tool_confirmation != orig.oxi_tool_confirmation
                     || cur.max_tool_rounds != orig.max_tool_rounds
                     || cur.bash_timeout_cap_secs != orig.bash_timeout_cap_secs
                     || cur.mcp_servers != orig.mcp_servers

@@ -36,14 +36,8 @@ fn evidence_commands_obey_shell_approvals_even_when_the_tool_is_allowlisted() {
     let (tx, rx) = mpsc::channel();
     let (approvals, approval_rx) = mpsc::channel();
     approvals.send(ApprovalDecision::Deny).unwrap();
-    let mut gate = ApprovalGate::new(
-        ApprovalPolicy {
-            write_edit: false,
-            bash: true,
-        },
-        approval_rx,
-    )
-    .with_allowed_tools(vec!["evidence_run".into()]);
+    let mut gate = ApprovalGate::new(ApprovalPolicy::new(false, true), approval_rx)
+        .with_allowed_tools(vec!["evidence_run".into()]);
     let result = crate::agent::dispatch::run_gated_tool(
         &mut gate,
         &tx,
@@ -74,14 +68,8 @@ fn evidence_capture_drivers_cannot_bypass_approval_or_plan_mode() {
     let (tx, rx) = mpsc::channel();
     let (approvals, approval_rx) = mpsc::channel();
     approvals.send(ApprovalDecision::Deny).unwrap();
-    let mut gate = ApprovalGate::new(
-        ApprovalPolicy {
-            write_edit: false,
-            bash: true,
-        },
-        approval_rx,
-    )
-    .with_bash_allowlist(vec!["echo".into()]);
+    let mut gate = ApprovalGate::new(ApprovalPolicy::new(false, true), approval_rx)
+        .with_bash_allowlist(vec!["echo".into()]);
     let args = json!({"phase":"after", "label":"App", "screen":true,
         "command":"echo first", "during":"echo second"});
     assert!(

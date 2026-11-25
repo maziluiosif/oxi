@@ -206,7 +206,7 @@ fn render_markdown_impl(ui: &mut Ui, src: &str, base_dir: Option<&Path>, wrap_w:
             Event::Start(Tag::Heading { level, .. }) => {
                 render_heading(ui, wrap_w, level, &mut it);
             }
-            Event::Start(Tag::List(kind)) => render_list(ui, wrap_w, kind, 0, &mut it),
+            Event::Start(Tag::List(kind)) => render_list(ui, wrap_w, kind, 0, &mut it, &mut fence_idx),
             Event::Start(Tag::CodeBlock(kind)) => {
                 let lang = blocks::code_block_language(&kind);
                 let base = ui.id().with("md_fence").with(fence_idx).with(&lang);
@@ -214,7 +214,7 @@ fn render_markdown_impl(ui: &mut Ui, src: &str, base_dir: Option<&Path>, wrap_w:
                 render_fenced_block(ui, wrap_w, kind, &mut it, base);
             }
             Event::Start(Tag::BlockQuote(_)) => {
-                render_blockquote(ui, wrap_w, &mut it, src, quote_idx);
+                render_blockquote(ui, wrap_w, &mut it, Some((src, quote_idx)), &mut fence_idx);
                 quote_idx += 1;
             }
             Event::Start(Tag::HtmlBlock) => render_html_block(ui, wrap_w, &mut it),
@@ -280,6 +280,28 @@ fn render_markdown_impl(ui: &mut Ui, src: &str, base_dir: Option<&Path>, wrap_w:
     }
 }
 
+/// Block-level events that terminate an inline run inside a tight list item and must be
+/// handled by [`render_list`]'s item loop rather than swallowed by [`inline::render_inline_until`].
+pub(super) fn is_list_item_block_start(ev: &Event<'_>) -> bool {
+    matches!(
+        ev,
+        Event::Start(
+            Tag::Paragraph
+                | Tag::List(_)
+                | Tag::Heading { .. }
+                | Tag::CodeBlock(_)
+                | Tag::BlockQuote(_)
+                | Tag::Table(_)
+                | Tag::HtmlBlock
+                | Tag::MetadataBlock(_)
+                | Tag::FootnoteDefinition(_)
+                | Tag::DefinitionList
+                | Tag::DefinitionListTitle
+                | Tag::DefinitionListDefinition
+        ) | Event::Rule
+    )
+}
+
 /// `list_row_w`: width for this list’s rows — full column at depth 0, parent item **content** width
 /// when nested (see recursive call with `text_w`).
 fn render_list(
@@ -288,6 +310,7 @@ fn render_list(
     list_kind: Option<u64>,
     depth: u32,
     it: &mut ParserPeek<'_>,
+    fence_idx: &mut u32,
 ) {
     // Caller already consumed `Event::Start(Tag::List(..))`; next is `Item`.
     let mut num = list_kind.unwrap_or(1);
@@ -314,10 +337,16 @@ fn render_list(
         ui.add_space(-swap);
     }
 
+    let mut rendered_items = 0usize;
     while let Some(ev) = it.peek() {
         match ev {
             Event::Start(Tag::Item) => {
                 it.next();
+                if rendered_items > 0 {
+                    ui.add_space(LIST_GAP_AFTER_ITEM);
+                }
+                rendered_items += 1;
+
                 let bullet = if ordered {
                     let s = format!("{num}.");
                     num += 1;
@@ -334,6 +363,7 @@ fn render_list(
                         vec2(bullet_col, line_height_for_body_size(SZ_BODY)),
                         Layout::left_to_right(Align::Center),
                         |ui| {
+                            ui.set_min_width(bullet_col);
                             ui.label(
                                 RichText::new(bullet)
                                     .color(c_text_muted())
@@ -346,39 +376,77 @@ fn render_list(
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 1.0;
                         ui.set_width(text_w);
+                        let mut has_content = false;
                         loop {
                             match it.peek() {
                                 Some(Event::End(TagEnd::Item)) => {
                                     it.next();
                                     break;
                                 }
-                                Some(Event::Start(Tag::Paragraph)) => {
-                                    it.next();
-                                    inline::render_inline_until(
-                                        ui,
-                                        text_w,
-                                        it,
-                                        inline::InlineEnd::Paragraph,
-                                        InlineDensity::ListItem,
-                                    );
-                                }
-                                Some(Event::Start(Tag::List(nested))) => {
-                                    let k = *nested;
-                                    it.next();
-                                    // Nested lists are already inside the parent item's text column. Keep
-                                    // their width/indent relative to that column so list-in-list spacing is
-                                    // stable instead of accumulating the outer list's marker offset again.
-                                    render_list(ui, text_w, k, depth + 1, it);
-                                }
-                                Some(Event::Start(Tag::Heading { .. })) => {
-                                    if let Some(Event::Start(Tag::Heading { level, .. })) =
-                                        it.next()
-                                    {
-                                        render_heading(ui, text_w, level, it);
+                                Some(Event::End(TagEnd::List(_))) | None => break,
+                                Some(ev) if is_list_item_block_start(ev) => {
+                                    if has_content {
+                                        ui.add_space(4.0);
+                                    }
+                                    has_content = true;
+                                    match it.next() {
+                                        Some(Event::Start(Tag::Paragraph)) => {
+                                            inline::render_inline_until(
+                                                ui,
+                                                text_w,
+                                                it,
+                                                inline::InlineEnd::Paragraph,
+                                                InlineDensity::ListItem,
+                                            );
+                                        }
+                                        Some(Event::Start(Tag::List(nested))) => {
+                                            // Nested lists are already inside the parent item's
+                                            // text column. Keep their width/indent relative to
+                                            // that column so list-in-list spacing is stable
+                                            // instead of accumulating the outer list's marker
+                                            // offset again.
+                                            render_list(ui, text_w, nested, depth + 1, it, fence_idx);
+                                        }
+                                        Some(Event::Start(Tag::Heading { level, .. })) => {
+                                            render_heading(ui, text_w, level, it);
+                                        }
+                                        Some(Event::Start(Tag::CodeBlock(kind))) => {
+                                            let lang = blocks::code_block_language(&kind);
+                                            let base = ui
+                                                .id()
+                                                .with("md_fence")
+                                                .with(*fence_idx)
+                                                .with(&lang);
+                                            *fence_idx += 1;
+                                            render_fenced_block(ui, text_w, kind, it, base);
+                                        }
+                                        Some(Event::Start(Tag::BlockQuote(_))) => {
+                                            render_blockquote(ui, text_w, it, None, fence_idx);
+                                        }
+                                        Some(Event::Start(Tag::Table(alignments))) => {
+                                            render_table(ui, text_w, &alignments, it);
+                                        }
+                                        Some(Event::Start(Tag::HtmlBlock)) => {
+                                            render_html_block(ui, text_w, it);
+                                        }
+                                        Some(Event::Rule) => {
+                                            allocate_full_width_block(ui, text_w, |ui| {
+                                                ui.add_space(4.0);
+                                                ui.separator();
+                                                ui.add_space(6.0);
+                                            });
+                                        }
+                                        Some(Event::Start(tag)) => {
+                                            consume_until_end(it, tag.to_end());
+                                        }
+                                        _ => {}
                                     }
                                 }
-                                None => break,
-                                _ => {
+                                Some(_) => {
+                                    if has_content {
+                                        ui.add_space(4.0);
+                                    }
+                                    has_content = true;
                                     inline::render_inline_until(
                                         ui,
                                         text_w,
@@ -386,26 +454,28 @@ fn render_list(
                                         inline::InlineEnd::Item,
                                         InlineDensity::ListItem,
                                     );
-                                    break;
                                 }
                             }
                         }
                     });
                 });
-                ui.add_space(LIST_GAP_AFTER_ITEM);
             }
             Event::End(TagEnd::List(_)) => {
                 it.next();
-                if depth == 0 {
-                    let swap = PARA_GAP_BEFORE_NEXT_BLOCK - LIST_GAP_AFTER_ITEM;
-                    ui.add_space(swap);
-                }
                 break;
             }
             _ => {
                 it.next();
             }
         }
+    }
+
+    if depth == 0 {
+        if rendered_items > 0 {
+            ui.add_space(LIST_GAP_AFTER_ITEM);
+        }
+        let swap = PARA_GAP_BEFORE_NEXT_BLOCK - LIST_GAP_AFTER_ITEM;
+        ui.add_space(swap);
     }
 }
 
@@ -467,5 +537,283 @@ mod blockquote_source_tests {
     #[test]
     fn strips_only_one_marker_level() {
         assert_eq!(strip_quote_markers("> a\n> > b\n>c"), "a\n> b\nc");
+    }
+}
+
+#[cfg(test)]
+mod nested_list_tests {
+    use eframe::egui::{self, Pos2, RawInput, Rect};
+
+    #[derive(Debug)]
+    struct RenderedText {
+        text: String,
+        x: f32,
+        y: f32,
+    }
+
+    fn render_texts(markdown: &str) -> Vec<RenderedText> {
+        let ctx = egui::Context::default();
+        crate::theme::setup_style(&ctx);
+        let output = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(720.0, 2000.0))),
+                ..Default::default()
+            },
+            |ui| crate::markdown::render_markdown(ui, markdown),
+        );
+        let mut out = Vec::new();
+        fn collect(shapes: &[egui::Shape], out: &mut Vec<RenderedText>) {
+            for shape in shapes {
+                match shape {
+                    egui::Shape::Text(t) => out.push(RenderedText {
+                        text: t.galley.text().to_owned(),
+                        x: t.pos.x,
+                        y: t.pos.y,
+                    }),
+                    egui::Shape::Vec(inner) => collect(inner, out),
+                    _ => {}
+                }
+            }
+        }
+        for clipped in &output.shapes {
+            match &clipped.shape {
+                egui::Shape::Text(t) => out.push(RenderedText {
+                    text: t.galley.text().to_owned(),
+                    x: t.pos.x,
+                    y: t.pos.y,
+                }),
+                egui::Shape::Vec(inner) => collect(inner, &mut out),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn find_exact<'a>(items: &'a [RenderedText], needle: &str) -> &'a RenderedText {
+        items
+            .iter()
+            .find(|item| item.text == needle)
+            .unwrap_or_else(|| panic!("expected rendered text {needle:?}, got: {items:#?}"))
+    }
+
+    fn count_exact(items: &[RenderedText], needle: &str) -> usize {
+        items.iter().filter(|item| item.text == needle).count()
+    }
+
+    #[test]
+    fn nested_lists_preserve_all_items_markers_and_separation() {
+        let md = "\
+### Bug-uri reale / edge cases de reparat
+1. **Ștergerea unui chat Lead** — [sessions.rs](file:///Users/manu/Projects/oxi/src/app/sessions.rs#L470-L476)
+   - `delete_session` construiește cheia ACP manual.
+   - Dacă ștergi un chat Lead care are workeri activi, rămân orfane.
+2. **Quota nu se mai reîmprospătează** — [chat_status.rs](file:///Users/manu/Projects/oxi/src/app/chat_status.rs#L486-L524)
+   - `subscription_status` declanșează refresh doar pentru Lead.
+3. **Antigravity pool** — [quota.rs](file:///Users/manu/Projects/oxi/src/router/quota.rs#L904-L924)
+   - Fereastra Gemini are scope None.
+4. **Lead la 0% quota** — [routing.rs](file:///Users/manu/Projects/oxi/src/agent/runner/routing.rs#L379-L420)
+   - Încearcă mai întâi subprocesul epuizat.
+
+### Lipsuri UX
+5. **Înapoi la Lead** — [delegation.rs](file:///Users/manu/Projects/oxi/src/app/delegation.rs#L1387-L1555)
+   - Din Lead ai buton `Open`.
+6. **Indicator reroute** — [delegation.rs](file:///Users/manu/Projects/oxi/src/app/delegation.rs#L1398-L1436)
+   - Nu apare în UI.
+";
+
+        let texts = render_texts(md);
+
+        // Every outer ordered marker renders exactly once (no missing items, no misnumbered nested bullets).
+        for marker in ["1.", "2.", "3.", "4.", "5.", "6."] {
+            assert_eq!(
+                count_exact(&texts, marker),
+                1,
+                "marker {marker:?} should appear once, got: {texts:#?}"
+            );
+        }
+        // All 7 nested unordered bullets render with `•`.
+        assert_eq!(
+            count_exact(&texts, "•"),
+            7,
+            "expected 7 nested unordered bullets, got: {texts:#?}"
+        );
+
+        // Parent items are rendered intact and NOT glued to nested bullet text.
+        let item1 = find_exact(&texts, "Ștergerea unui chat Lead — sessions.rs");
+        let sub1a = find_exact(&texts, "delete_session construiește cheia ACP manual.");
+        let sub1b = find_exact(
+            &texts,
+            "Dacă ștergi un chat Lead care are workeri activi, rămân orfane.",
+        );
+        let item2 = find_exact(&texts, "Quota nu se mai reîmprospătează — chat_status.rs");
+        let sub2a = find_exact(
+            &texts,
+            "subscription_status declanșează refresh doar pentru Lead.",
+        );
+        let item3 = find_exact(&texts, "Antigravity pool — quota.rs");
+        let sub3a = find_exact(&texts, "Fereastra Gemini are scope None.");
+        let item4 = find_exact(&texts, "Lead la 0% quota — routing.rs");
+        let sub4a = find_exact(&texts, "Încearcă mai întâi subprocesul epuizat.");
+        let item5 = find_exact(&texts, "Înapoi la Lead — delegation.rs");
+        let sub5a = find_exact(&texts, "Din Lead ai buton Open.");
+        let item6 = find_exact(&texts, "Indicator reroute — delegation.rs");
+        let sub6a = find_exact(&texts, "Nu apare în UI.");
+
+        assert!(
+            texts
+                .iter()
+                .all(|t| !t.text.contains("sessions.rsdelete_session")
+                    && !t.text.contains("delegation.rsDin Lead")),
+            "nested bullet text must never glue onto parent link text"
+        );
+
+        // Top-to-bottom vertical ordering across all items and sub-items.
+        let ordered_y = [
+            item1.y, sub1a.y, sub1b.y, item2.y, sub2a.y, item3.y, sub3a.y, item4.y, sub4a.y,
+            item5.y, sub5a.y, item6.y, sub6a.y,
+        ];
+        for pair in ordered_y.windows(2) {
+            assert!(
+                pair[0] < pair[1],
+                "items must advance vertically: {ordered_y:?}"
+            );
+        }
+
+        // Nested bullets are indented strictly to the right of outer markers and text.
+        let m1 = find_exact(&texts, "1.");
+        let m2 = find_exact(&texts, "2.");
+        assert!(
+            (m2.y - item2.y).abs() < 6.0,
+            "marker `2.` (y={}) must sit on item 2 (y={}), not nested bullet 1b (y={})",
+            m2.y,
+            item2.y,
+            sub1b.y
+        );
+        let bullets: Vec<&RenderedText> = texts.iter().filter(|t| t.text == "•").collect();
+        for b in &bullets {
+            assert!(
+                b.x > m1.x,
+                "nested bullet x={} must be indented right of outer marker x={}",
+                b.x,
+                m1.x
+            );
+        }
+        assert!(
+            sub1a.x > item1.x && sub1b.x > item1.x && sub5a.x > item5.x,
+            "nested item text must be indented right of parent item text"
+        );
+    }
+
+    #[test]
+    fn deeply_nested_mixed_ordered_and_unordered_lists() {
+        let md = "\
+1. Level one first
+   - Level two alpha
+     1. Level three one
+     2. Level three two
+   - Level two beta
+2. Level one second
+   - Level two gamma
+     - Level three bullet
+       1. Level four ordered
+";
+        let texts = render_texts(md);
+
+        let l1_a = find_exact(&texts, "Level one first");
+        let l2_a = find_exact(&texts, "Level two alpha");
+        let l3_1 = find_exact(&texts, "Level three one");
+        let l3_2 = find_exact(&texts, "Level three two");
+        let l2_b = find_exact(&texts, "Level two beta");
+        let l1_b = find_exact(&texts, "Level one second");
+        let l2_c = find_exact(&texts, "Level two gamma");
+        let l3_b = find_exact(&texts, "Level three bullet");
+        let l4_1 = find_exact(&texts, "Level four ordered");
+
+        // Monotonic indentation by nesting depth.
+        assert!(l1_a.x < l2_a.x && l2_a.x < l3_1.x);
+        assert!((l3_1.x - l3_2.x).abs() < 1.0);
+        assert!((l2_a.x - l2_b.x).abs() < 1.0);
+        assert!((l1_a.x - l1_b.x).abs() < 1.0);
+        assert!(l1_b.x < l2_c.x && l2_c.x < l3_b.x && l3_b.x < l4_1.x);
+
+        // Correct marker counts: three `1.` (outer, level-3, level-4), two `2.` (outer, level-3), four `•`.
+        assert_eq!(count_exact(&texts, "1."), 3);
+        assert_eq!(count_exact(&texts, "2."), 2);
+        assert_eq!(count_exact(&texts, "•"), 4);
+
+        // Strict top-to-bottom vertical order.
+        let ys = [
+            l1_a.y, l2_a.y, l3_1.y, l3_2.y, l2_b.y, l1_b.y, l2_c.y, l3_b.y, l4_1.y,
+        ];
+        for pair in ys.windows(2) {
+            assert!(pair[0] < pair[1], "vertical order violated: {ys:?}");
+        }
+    }
+
+    #[test]
+    fn loose_nested_lists_and_multi_paragraph_items() {
+        let md = "\
+1. First paragraph
+
+   Second paragraph
+
+   - Loose child A
+
+   - Loose child B
+
+2. Outer sibling
+";
+        let texts = render_texts(md);
+        let p1 = find_exact(&texts, "First paragraph");
+        let p2 = find_exact(&texts, "Second paragraph");
+        let ca = find_exact(&texts, "Loose child A");
+        let cb = find_exact(&texts, "Loose child B");
+        let s2 = find_exact(&texts, "Outer sibling");
+
+        assert_eq!(count_exact(&texts, "1."), 1);
+        assert_eq!(count_exact(&texts, "2."), 1);
+        assert_eq!(count_exact(&texts, "•"), 2);
+        assert!(p1.y < p2.y && p2.y < ca.y && ca.y < cb.y && cb.y < s2.y);
+        assert!(ca.x > p1.x && cb.x > p1.x);
+    }
+
+    #[test]
+    fn tight_list_items_with_code_block_blockquote_tasks_and_empty_parent() {
+        let md = "\
+1. Parent with code
+   ```rust
+   let x = 42;
+   ```
+2. Parent with quote
+   > Quoted line
+3. Sibling after quote
+
+- [x] Done parent
+  - [ ] Pending child
+- [ ] Sibling task
+
+-
+  - Only nested child
+- After empty parent
+";
+        let texts = render_texts(md);
+        let p_code = find_exact(&texts, "Parent with code");
+        let code = find_exact(&texts, "let x = 42;");
+        let p_quote = find_exact(&texts, "Parent with quote");
+        let quote = find_exact(&texts, "Quoted line");
+        let sibling = find_exact(&texts, "Sibling after quote");
+        let done_parent = find_exact(&texts, "☑ Done parent");
+        let pending_child = find_exact(&texts, "☐ Pending child");
+        let sibling_task = find_exact(&texts, "☐ Sibling task");
+        let only_nested = find_exact(&texts, "Only nested child");
+        let after_empty = find_exact(&texts, "After empty parent");
+
+        assert_eq!(count_exact(&texts, "1."), 1);
+        assert_eq!(count_exact(&texts, "2."), 1);
+        assert_eq!(count_exact(&texts, "3."), 1);
+        assert!(p_code.y < code.y && code.y < p_quote.y && p_quote.y < quote.y && quote.y < sibling.y);
+        assert!(done_parent.y < pending_child.y && pending_child.y < sibling_task.y);
+        assert!(pending_child.x > done_parent.x);
+        assert!(only_nested.y < after_empty.y && only_nested.x > after_empty.x);
     }
 }

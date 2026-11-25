@@ -169,6 +169,11 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         return;
     }
 
+    if std::env::var_os("OXI_ORCHESTRATOR_REVIEW").is_some() {
+        review_orchestrator(rec);
+        return;
+    }
+
     if std::env::var_os("OXI_SUBAGENT_REVIEW").is_some() {
         review_subagent_chats(rec);
         return;
@@ -4643,4 +4648,117 @@ fn review_subagent_chats(rec: &mut Recorder<'_>) {
             rec.still(&format!("subagents-real-detail-{width}"));
         }
     }
+}
+
+/// Settings > Orchestrator and a lead chat with its workers above the composer
+/// (`OXI_ORCHESTRATOR_REVIEW=1`).
+fn review_orchestrator(rec: &mut Recorder<'_>) {
+    use crate::delegation::{Status, TaskState};
+    use crate::orchestrator::{Access, WorkerInfo};
+    use crate::settings::WorkerSlot;
+    {
+        let app = rec.app();
+        app.conv.settings_page.open = true;
+        app.conv.settings_page.tab = super::state::SettingsTab::Providers;
+        app.conv.settings_page.provider_tab = LlmProviderKind::Orchestrator;
+    }
+    rec.harness.run_steps(4);
+    rec.still("orchestrator-settings-default");
+    rec.app().conv.settings.orchestrator.workers = vec![
+        WorkerSlot {
+            provider: LlmProviderKind::CodexAcp,
+            model: "gpt-6.2-sol".into(),
+            note: "backend, tests".into(),
+            enabled: true,
+        },
+        WorkerSlot {
+            provider: LlmProviderKind::ClaudeCodeAcp,
+            model: "opus".into(),
+            note: "architecture, hard refactors".into(),
+            enabled: true,
+        },
+        WorkerSlot {
+            provider: LlmProviderKind::AntigravityAcp,
+            model: String::new(),
+            note: "UI, exploration".into(),
+            enabled: false,
+        },
+    ];
+    rec.harness.run_steps(4);
+    rec.scroll_by(-900.0);
+    rec.still("orchestrator-settings-team");
+    {
+        let app = rec.app();
+        app.conv.settings_page.open = false;
+        app.conv.settings_page.original = None;
+        app.set_active_session_provider(LlmProviderKind::Orchestrator);
+        app.active_session_mut().title = "Add CSV export".into();
+        app.active_session_mut().messages = vec![
+            message(MsgRole::User, "Add CSV export to the reports page, with tests", vec![]),
+            message(
+                MsgRole::Assistant,
+                "I split it in two: Codex builds the exporter and its tests, Claude adds the UI. They run in parallel in their own work trees; Codex reviews afterwards.",
+                vec![AssistantBlock::Answer(
+                    "I split it in two: Codex builds the exporter and its tests, Claude adds the UI. They run in parallel in their own work trees; Codex reviews afterwards.".into(),
+                )],
+            ),
+        ];
+        let lead = app.active_session_key();
+        let worker = |task: &str,
+                      provider: &str,
+                      model: &str,
+                      title: &str,
+                      state,
+                      own: bool,
+                      activity: Option<&str>| Status {
+            task: task.into(),
+            state,
+            provider: provider.into(),
+            model: model.into(),
+            title: title.into(),
+            chat: None,
+            worktree: own.then(|| format!("/tmp/{task}")),
+            result: None,
+            error: None,
+            worker: Some(WorkerInfo {
+                batch: "b".into(),
+                access: Access::Edit,
+                root: "/repo".into(),
+                cwd: if own {
+                    format!("/tmp/{task}")
+                } else {
+                    "/repo".into()
+                },
+                activity: activity.map(str::to_owned),
+                turns: 1,
+                ..Default::default()
+            }),
+        };
+        app.push_demo_worker(
+            lead,
+            worker(
+                "w1",
+                "codexacp",
+                "gpt-6.2-sol",
+                "CSV exporter + tests",
+                TaskState::Running,
+                true,
+                Some("Edit src/reports/csv.rs"),
+            ),
+        );
+        app.push_demo_worker(
+            lead,
+            worker(
+                "w2",
+                "claudecodeacp",
+                "opus",
+                "Export button",
+                TaskState::Completed,
+                true,
+                None,
+            ),
+        );
+    }
+    rec.harness.run_steps(4);
+    rec.still("orchestrator-lead-chat");
 }

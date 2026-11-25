@@ -50,7 +50,8 @@ impl Billing {
             | LlmProviderKind::MetaMuse
             | LlmProviderKind::AzureOpenAi
             | LlmProviderKind::CustomAnthropic
-            | LlmProviderKind::Router => Billing::PayPerUse,
+            | LlmProviderKind::Router
+            | LlmProviderKind::Orchestrator => Billing::PayPerUse,
         }
     }
 }

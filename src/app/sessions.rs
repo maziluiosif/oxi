@@ -465,14 +465,10 @@ impl OxiApp {
         let deleting_current_backend_session =
             session_file.as_deref() == self.flow.current_backend_session_file.as_deref();
 
-        // Tear down any Claude Code (ACP) subprocess bound to this session so it doesn't leak.
-        // Keyed the same way as `send_prompt_payload` in streaming.rs.
-        let acp_key = session_file.clone().unwrap_or_else(|| {
-            format!(
-                "mem:{}:{}",
-                delete_key.workspace_idx, delete_key.session_idx
-            )
-        });
+        // Tear down any ACP subprocess bound to this session so it doesn't leak.
+        let acp_key = self.acp_session_key(delete_key);
+        let deleting_lead = crate::orchestrator::Role::of_session_key(&acp_key)
+            == Some(crate::orchestrator::Role::Lead);
         self.acp.close(&acp_key);
 
         if let Some(session_file) = session_file.clone().filter(|f| crate::remote::is_remote(f)) {
@@ -558,6 +554,9 @@ impl OxiApp {
                 let new_active = self.active_workspace().sessions.len().saturating_sub(1);
                 self.active_workspace_mut().active = new_active;
             }
+        }
+        if deleting_lead {
+            self.cleanup_deleted_lead(&acp_key);
         }
         self.persist_active_session_selection();
         self.run_state_mut(self.active_session_key()).stream_error = None;

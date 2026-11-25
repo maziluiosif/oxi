@@ -185,10 +185,7 @@ fn a_relaunched_agent_gets_back_the_options_the_user_set() {
 #[test]
 fn approval_settings_cover_acp_tools_like_oxi_tools() {
     let off = ApprovalPolicy::disabled();
-    let on = ApprovalPolicy {
-        write_edit: true,
-        bash: true,
-    };
+    let on = ApprovalPolicy::new(true, true);
     for kind in ["read", "search", "fetch", "think"] {
         let (name, _) = permission_name_args(&json!({"kind":kind,"title":"x"}));
         assert!(!on.requires_approval(&name), "{kind} is read-only");
@@ -1565,10 +1562,7 @@ for line in sys.stdin:
         resources: vec![],
         event_tx: tx,
         approval_rx,
-        approval_policy: ApprovalPolicy {
-            write_edit: true,
-            bash: true,
-        },
+        approval_policy: ApprovalPolicy::new(true, true),
         bash_allowlist: vec![],
         allowed_tools: vec![],
         cancel: cancel.clone(),
@@ -2201,4 +2195,258 @@ fn cross_turn_tool_update_preserves_original_command_metadata() {
     assert_eq!(meta.kind, "execute");
     assert_eq!(meta.name.as_deref(), Some("run_command"));
     assert_eq!(meta.status, ToolStatus::Completed);
+}
+
+#[tokio::test]
+async fn handle_permission_respects_oxi_tool_confirmation_policy() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut child = Command::new(crate::agent::test_python_executable())
+        .args([
+            "-u",
+            "-c",
+            "import sys\nfor line in sys.stdin:\n sys.stdout.write(line)\n sys.stdout.flush()\n",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdin = Arc::new(AsyncMutex::new(child.stdin.take().unwrap()));
+    let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+
+    let perm_req = |id: u64, title: &str| PermReq {
+        id: json!(id),
+        params: json!({
+            "sessionId": "s1",
+            "toolCall": {
+                "toolCallId": format!("call-{id}"),
+                "title": title,
+                "kind": "other",
+                "rawInput": {}
+            },
+            "options": [
+                {"optionId": "allow-once", "kind": "allow_once", "name": "Allow"},
+                {"optionId": "reject-once", "kind": "reject_once", "name": "Reject"}
+            ]
+        }),
+        child_cancel: None,
+        withdrawn: None,
+    };
+
+    let mut settings = crate::settings::AppSettings::default();
+    settings
+        .oxi_tool_confirmation
+        .insert("spawn_workers".into(), false);
+    settings.oxi_tool_confirmation.insert("team".into(), true);
+    let policy = ApprovalPolicy::from_settings(&settings);
+
+    let (ev_tx, ev_rx) = channel();
+    let (appr_tx, mut appr_rx) = channel();
+    let mut bash_allowlist = Vec::new();
+    let mut allowed_tools = Vec::new();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut auto_approve = false;
+
+    // Toggled off (`spawn_workers`): auto-allows without sending an ApprovalRequest.
+    handle_permission(
+        &stdin,
+        ev_tx.clone(),
+        &mut appr_rx,
+        policy,
+        &mut bash_allowlist,
+        &mut allowed_tools,
+        false,
+        &cancel,
+        &mut auto_approve,
+        perm_req(1, "mcp__oxi__spawn_workers"),
+    )
+    .await;
+    let events = drain(&ev_rx);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ApprovalRequest { .. })),
+        "toggled-off oxi tool must not prompt: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ApprovalResolved))
+    );
+    let line = tokio::time::timeout(Duration::from_secs(5), stdout.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["id"], 1);
+    assert_eq!(reply["result"]["outcome"]["outcome"], "selected");
+    assert_eq!(reply["result"]["outcome"]["optionId"], "allow-once");
+
+    // Toggled on (`team`): emits ApprovalRequest and forwards the user's decision.
+    appr_tx.send(ApprovalDecision::Deny).unwrap();
+    handle_permission(
+        &stdin,
+        ev_tx.clone(),
+        &mut appr_rx,
+        policy,
+        &mut bash_allowlist,
+        &mut allowed_tools,
+        false,
+        &cancel,
+        &mut auto_approve,
+        perm_req(2, "mcp__oxi__team"),
+    )
+    .await;
+    let events = drain(&ev_rx);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ApprovalRequest { name, .. } if name == "team")),
+        "toggled-on oxi tool must prompt under its oxi tool name: {events:?}"
+    );
+    let line = tokio::time::timeout(Duration::from_secs(5), stdout.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["id"], 2);
+    assert_eq!(reply["result"]["outcome"]["outcome"], "selected");
+    assert_eq!(reply["result"]["outcome"]["optionId"], "reject-once");
+
+    // Default-on tool (`merge_worker`): prompts and allows when user approves.
+    appr_tx.send(ApprovalDecision::Approve).unwrap();
+    handle_permission(
+        &stdin,
+        ev_tx,
+        &mut appr_rx,
+        policy,
+        &mut bash_allowlist,
+        &mut allowed_tools,
+        false,
+        &cancel,
+        &mut auto_approve,
+        perm_req(3, "mcp__oxi__merge_worker"),
+    )
+    .await;
+    let events = drain(&ev_rx);
+    assert!(
+        events.iter().any(
+            |e| matches!(e, AgentEvent::ApprovalRequest { name, .. } if name == "merge_worker")
+        )
+    );
+    let line = tokio::time::timeout(Duration::from_secs(5), stdout.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["id"], 3);
+    assert_eq!(reply["result"]["outcome"]["outcome"], "selected");
+    assert_eq!(reply["result"]["outcome"]["optionId"], "allow-once");
+
+    drop(stdin);
+    let _ = child.wait().await;
+}
+
+#[tokio::test]
+async fn handle_permission_allows_read_only_bash_in_plan_mode_and_denies_mutations() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut child = Command::new(crate::agent::test_python_executable())
+        .args([
+            "-u",
+            "-c",
+            "import sys\nfor line in sys.stdin:\n sys.stdout.write(line)\n sys.stdout.flush()\n",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdin = Arc::new(AsyncMutex::new(child.stdin.take().unwrap()));
+    let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+
+    let bash_req = |id: u64, cmd: &str| PermReq {
+        id: json!(id),
+        params: json!({
+            "toolCall": {
+                "kind": "execute",
+                "title": "Run command",
+                "rawInput": { "CommandLine": cmd }
+            },
+            "options": [
+                { "optionId": "allow-once", "kind": "allow_once" },
+                { "optionId": "reject-once", "kind": "reject_once" }
+            ]
+        }),
+        child_cancel: None,
+        withdrawn: None,
+    };
+
+    let (ev_tx, ev_rx) = channel();
+    let (_appr_tx, mut appr_rx) = channel();
+    let mut bash_allowlist = Vec::new();
+    let mut allowed_tools = Vec::new();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let mut auto_approve = false;
+    let policy = ApprovalPolicy::new(true, true);
+
+    // Read-only search command in plan mode (e.g. Antigravity read-only worker): auto-allowed.
+    handle_permission(
+        &stdin,
+        ev_tx.clone(),
+        &mut appr_rx,
+        policy,
+        &mut bash_allowlist,
+        &mut allowed_tools,
+        true,
+        &cancel,
+        &mut auto_approve,
+        bash_req(10, "rg -n \"spawn_workers\" src/ --glob '!target/**'"),
+    )
+    .await;
+    let events = drain(&ev_rx);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ApprovalRequest { .. })),
+        "read-only bash in plan mode must not block on approval: {events:?}"
+    );
+    let line = tokio::time::timeout(Duration::from_secs(5), stdout.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["id"], 10);
+    assert_eq!(reply["result"]["outcome"]["optionId"], "allow-once");
+
+    // Mutating command in plan mode: auto-rejected.
+    handle_permission(
+        &stdin,
+        ev_tx,
+        &mut appr_rx,
+        policy,
+        &mut bash_allowlist,
+        &mut allowed_tools,
+        true,
+        &cancel,
+        &mut auto_approve,
+        bash_req(11, "rm -rf src/"),
+    )
+    .await;
+    let line = tokio::time::timeout(Duration::from_secs(5), stdout.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["id"], 11);
+    assert_eq!(reply["result"]["outcome"]["optionId"], "reject-once");
+
+    drop(stdin);
+    let _ = child.wait().await;
 }

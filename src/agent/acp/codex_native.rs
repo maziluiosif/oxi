@@ -1568,9 +1568,12 @@ async fn handle_server_request(
                 "cwd": req.params["cwd"],
                 "reason": req.params["reason"],
             });
-            let decision = if plan_mode {
-                Some(ApprovalDecision::Deny)
-            } else if *auto_approve
+            let decision =
+                if plan_mode && crate::agent::approval::bash_command_is_read_only(&command) {
+                    Some(ApprovalDecision::Approve)
+                } else if plan_mode {
+                    Some(ApprovalDecision::Deny)
+                } else if *auto_approve
                 || !approval_policy.requires_approval("bash")
                 || crate::agent::approval::tool_allowed("bash", allowed_tools)
                 || crate::agent::approval::bash_command_allowlisted(&command, bash_allowlist)
