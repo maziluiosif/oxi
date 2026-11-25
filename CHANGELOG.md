@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.48.0] - 2026-11-25
+
+### Added
+- **Diff editor:** Soft word wrap for long lines in split and inline diff views, matching VS Code's behavior.
+- **Patch view:** Word wrap support with proper selection handling across wrapped rows.
+
+### Changed
+- **Diff editor:** Wrap button now syncs with View > Word Wrap menu.
+- **Diff editor:** Split view lines align both sides by measured line heights to keep wrapped lines synchronized.
+
+### Fixed
+- **Diff editor:** Toggling wrap on or off now keeps your reading position instead of jumping to an unrelated line.
+- **Codex:** Launch npm-installed Codex on Windows by running codex.exe directly instead of the POSIX shim.
+
+
 ## [1.47.1] - 2026-11-25
 
 ### Fixed
@@ -1504,7 +1519,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming LLM responses, built-in workspace tools, per-workspace session
   persistence, configurable provider profiles, and OAuth for Codex.
 
-[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.47.1...HEAD
+[Unreleased]: https://github.com/maziluiosif/oxi/compare/v1.48.0...HEAD
+[1.48.0]: https://github.com/maziluiosif/oxi/compare/v1.47.1...v1.48.0
 [1.47.1]: https://github.com/maziluiosif/oxi/compare/v1.47.0...v1.47.1
 [1.47.0]: https://github.com/maziluiosif/oxi/compare/v1.46.0...v1.47.0
 [1.46.0]: https://github.com/maziluiosif/oxi/compare/v1.45.0...v1.46.0
