@@ -28,7 +28,10 @@ use crate::theme::*;
 use crate::ui::diff_view::{segment, toolbar_icon};
 
 use super::super::OxiApp;
-pub(crate) use decor::{Change, DiffDecor, PaneRows, Side, Underlay, ZoneText, apply_gaps, ruler};
+pub(crate) use decor::{
+    Alignment, Change, DiffDecor, LineGeometry, PaneRows, Side, Underlay, ZoneText, apply_gaps,
+    ruler,
+};
 pub(crate) use pane::PaneCache;
 
 const TOOLBAR_H: f32 = 32.0;
@@ -183,6 +186,27 @@ pub(crate) struct DocumentDiff {
     pub(super) right: PaneCache,
     /// Effective layout of the last frame (narrow editors fall back to inline).
     pub(super) inline: bool,
+    /// Whether the panes soft-wrap this frame (the editor's word wrap, in both layouts).
+    pub(super) wrap: bool,
+    /// Tells this diff's layouts apart from an earlier diff of the same document.
+    id: u64,
+    /// The space that lines the sides up, for the layout the editor (or the staged pane) last
+    /// made.
+    alignment: Arc<Alignment>,
+    /// Bumped whenever [`Self::alignment`] changes, so the panes keep their gapped layout
+    /// without comparing every gap each frame.
+    alignment_generation: u64,
+    /// The changes [`Self::alignment`] was computed from. On a keystroke frame these are newer
+    /// than the decor taken before the editor ran, and the alignment's spans are indexed by
+    /// them.
+    aligned_decor: Option<Arc<DiffDecor>>,
+    /// What [`Self::alignment`] of a staged diff was computed from.
+    alignment_key: u64,
+    /// The rows of each line of the editable side's last layout.
+    new_lines: Arc<LineGeometry>,
+    /// Inline view: how tall each base line is when shown removed, for the wrap width etc. the
+    /// key describes (NaN until measured).
+    zone_heights: (u64, Vec<f32>),
     /// Vertical scroll shared by the panes: the editor's offset as of this frame, or the
     /// read-only panes' own offset.
     pub(super) scroll_y: f32,
@@ -240,6 +264,17 @@ impl DocumentDiff {
             left: PaneCache::default(),
             right: PaneCache::default(),
             inline: false,
+            wrap: false,
+            id: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
+            alignment: Arc::default(),
+            alignment_generation: 0,
+            aligned_decor: None,
+            alignment_key: 0,
+            new_lines: Arc::default(),
+            zone_heights: (0, Vec::new()),
             scroll_y: 0.0,
             scroll_request: None,
             frame: DiffFrame::default(),
@@ -296,11 +331,141 @@ impl DocumentDiff {
         Some(decor)
     }
 
-    /// Changes whenever the editor's gaps could change without its text changing.
+    /// Changes whenever the editor's gaps could change without its text changing: the base,
+    /// the layout, or how the base pane's lines wrap.
     pub(crate) fn layout_key(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.version, self.inline, self.base.is_some()).hash(&mut hasher);
+        (
+            self.id,
+            self.version,
+            self.inline,
+            self.wrap,
+            self.base.is_some(),
+            self.left.lines_generation,
+        )
+            .hash(&mut hasher);
         hasher.finish() | 1
+    }
+
+    /// Line the editable side up with the base, for `galley`: the editor's fresh layout of
+    /// `text` (wrapped at `wrap_width`), without gaps. Kept for the base pane and the underlay
+    /// painted after it.
+    pub(crate) fn align_editor(
+        &mut self,
+        ui: &Ui,
+        text: &str,
+        galley: &egui::Galley,
+        row_h: f32,
+        wrap_width: f32,
+    ) -> Option<Arc<Alignment>> {
+        let decor = self.decor_for(text)?;
+        self.new_lines = Arc::new(LineGeometry::measure(galley, row_h));
+        let alignment = if self.inline {
+            self.inline_alignment(ui, &decor, wrap_width, row_h)
+        } else {
+            decor.align(&self.left.lines, &self.new_lines)
+        };
+        self.set_alignment(alignment);
+        self.aligned_decor = Some(decor);
+        Some(Arc::clone(&self.alignment))
+    }
+
+    /// [`Self::alignment`] for a staged diff, whose sides are both read-only panes.
+    fn align_staged(&mut self, ui: &Ui, decor: &Arc<DiffDecor>) {
+        let key = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (
+                self.version,
+                self.inline,
+                self.left.lines_generation,
+                self.right.lines_generation,
+                self.right.wrap_width.to_bits(),
+                // The removed lines' heights depend on these too (see `inline_alignment`).
+                crate::theme::fonts_generation(),
+                crate::theme::editor_wrap_indent(),
+                ui.ctx().pixels_per_point().to_bits(),
+            )
+                .hash(&mut hasher);
+            hasher.finish() | 1
+        };
+        if key == self.alignment_key {
+            return;
+        }
+        let alignment = if self.inline {
+            let (wrap_width, row_h) = (self.right.wrap_width, self.right.lines.row_h);
+            self.inline_alignment(ui, decor, wrap_width, row_h)
+        } else {
+            decor.align(&self.left.lines, &self.right.lines)
+        };
+        self.set_alignment(alignment);
+        self.aligned_decor = Some(Arc::clone(decor));
+        self.alignment_key = key;
+    }
+
+    /// The inline view's alignment, the removed lines wrapping at `wrap_width`. Their heights
+    /// are kept per base line, so an edit measures only the lines it newly removes.
+    fn inline_alignment(
+        &mut self,
+        ui: &Ui,
+        decor: &DiffDecor,
+        wrap_width: f32,
+        row_h: f32,
+    ) -> Alignment {
+        let font = code_font();
+        let key = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (
+                self.version,
+                wrap_width.to_bits(),
+                row_h.to_bits(),
+                crate::theme::fonts_generation(),
+                crate::theme::editor_wrap_indent(),
+                ui.ctx().pixels_per_point().to_bits(),
+            )
+                .hash(&mut hasher);
+            hasher.finish()
+        };
+        let (cached, heights) = &mut self.zone_heights;
+        if *cached != key {
+            *cached = key;
+            heights.clear();
+        }
+        ui.fonts_mut(|fonts| {
+            decor.inline_alignment(|line, text| {
+                if heights.len() <= line {
+                    heights.resize(line + 1, f32::NAN);
+                }
+                if heights[line].is_nan() {
+                    heights[line] =
+                        decor::zone_line_height(text, &font, wrap_width, row_h, |job| {
+                            fonts.layout_job(job)
+                        });
+                }
+                heights[line]
+            })
+        })
+    }
+
+    pub(crate) fn alignment(&self) -> Arc<Alignment> {
+        Arc::clone(&self.alignment)
+    }
+
+    /// Keeps the current alignment (and its generation) when `alignment` is the same: the
+    /// editor realigns every frame, mostly to the same result.
+    fn set_alignment(&mut self, alignment: Alignment) {
+        if *self.alignment != alignment {
+            self.alignment = Arc::new(alignment);
+            self.alignment_generation += 1;
+        }
+    }
+
+    /// The changes [`Self::alignment`] lines up, falling back to `decor` before any alignment.
+    pub(crate) fn aligned_decor(&self, decor: &Arc<DiffDecor>) -> Arc<DiffDecor> {
+        Arc::clone(self.aligned_decor.as_ref().unwrap_or(decor))
+    }
+
+    pub(crate) fn new_lines(&self) -> Arc<LineGeometry> {
+        Arc::clone(&self.new_lines)
     }
 
     pub(crate) fn base_text(&self) -> Option<&str> {
@@ -599,6 +764,8 @@ impl OxiApp {
         let body = Rect::from_min_max(pos2(full.left(), full.top() + TOOLBAR_H), full.max);
         let split_possible = body.width() - RULER_W >= MIN_SPLIT_WIDTH;
         let inline = self.conv.editor.diff_inline || !split_possible;
+        // Like VS Code, soft wrap follows the editor's setting, in both layouts.
+        let wrap = self.conv.settings.editor.word_wrap;
         let extension =
             super::support::language_for_path(&self.conv.editor.documents[index].path).to_owned();
         let ctx = ui.ctx().clone();
@@ -610,9 +777,8 @@ impl OxiApp {
             let Some(diff) = document.diff.as_mut() else {
                 return;
             };
-            if diff.inline != inline {
-                diff.inline = inline;
-            }
+            diff.inline = inline;
+            diff.wrap = wrap;
             if !diff.ready() {
                 None
             } else if diff.source.editable() {
@@ -673,7 +839,6 @@ impl OxiApp {
             );
             return;
         };
-        self.reveal_pending_change(index, &decor, body.height());
 
         let editable = self.conv.editor.documents[index]
             .diff
@@ -689,6 +854,25 @@ impl OxiApp {
             )
         };
 
+        // The sides are lined up by how tall their lines are laid out, so the read-only
+        // panes are measured before the editor (or the staged pane) lays itself out.
+        if let Some(diff) = self.conv.editor.documents[index].diff.as_mut() {
+            if let Some(old_rect) = old_rect {
+                let base = diff.base.clone().unwrap_or_default();
+                diff.base_job(&extension, &ctx);
+                let job = diff.base_job.as_ref().map(|(_, job)| job);
+                pane::measure(ui, old_rect, &base, diff.version, job, wrap, &mut diff.left);
+            }
+            if !editable {
+                let staged = diff.staged.clone().unwrap_or_default();
+                diff.staged_job(&extension, &ctx);
+                let job = diff.staged_job.as_ref().map(|(_, job)| job);
+                let rect = staged_pane_rect(new_rect);
+                pane::measure(ui, rect, &staged, diff.version, job, wrap, &mut diff.right);
+                diff.align_staged(ui, &decor);
+            }
+        }
+        self.reveal_pending_change(index, &decor, body.height());
         if editable {
             ui.scope_builder(UiBuilder::new().max_rect(new_rect), |ui| {
                 self.render_editor_body(ui);
@@ -696,6 +880,12 @@ impl OxiApp {
         } else {
             self.render_staged_pane(ui, index, new_rect, &decor, &extension, inline);
         }
+        // An edit the editor just laid out has newer changes than `decor`: the base pane and the
+        // block buttons go by the ones the alignment (and its spans) were built from.
+        let decor = match self.conv.editor.documents[index].diff.as_ref() {
+            Some(diff) => diff.aligned_decor(&decor),
+            None => decor,
+        };
         if let Some(old_rect) = old_rect {
             let document = &mut self.conv.editor.documents[index];
             let Some(diff) = document.diff.as_mut() else {
@@ -705,6 +895,8 @@ impl OxiApp {
             let version = diff.version;
             diff.base_job(&extension, &ctx);
             let scroll_y = diff.scroll_y;
+            let alignment = diff.alignment();
+            let alignment_generation = diff.alignment_generation;
             let output = pane::readonly_pane(
                 ui,
                 old_rect,
@@ -713,9 +905,12 @@ impl OxiApp {
                     text: &base,
                     text_version: version,
                     job: diff.base_job.as_ref().map(|(_, job)| job),
+                    wrap,
                     side: Side::Old,
                     inline: false,
                     decor: &decor,
+                    alignment: &alignment,
+                    alignment_generation,
                     zones: None,
                     scroll_y,
                 },
@@ -765,7 +960,9 @@ impl OxiApp {
         let base = diff.base.clone().unwrap_or_default();
         diff.staged_job(extension, &ctx);
         diff.base_job(extension, &ctx);
-        let pane_rect = Rect::from_min_max(rect.min, pos2(rect.right() - RULER_W, rect.bottom()));
+        let pane_rect = staged_pane_rect(rect);
+        let alignment = diff.alignment();
+        let wrap = diff.wrap;
         let output = pane::readonly_pane(
             ui,
             pane_rect,
@@ -774,13 +971,17 @@ impl OxiApp {
                 text: &staged,
                 text_version: diff.version,
                 job: diff.staged_job.as_ref().map(|(_, job)| job),
+                wrap,
                 side: Side::New,
                 inline,
                 decor,
+                alignment: &alignment,
+                alignment_generation: diff.alignment_generation,
                 zones: inline.then(|| ZoneText {
                     base: &base,
                     base_job: diff.base_job.as_ref().map(|(_, job)| job),
                     line_starts: &diff.base_starts,
+                    wrap_width: diff.right.wrap_width,
                 }),
                 scroll_y: diff.scroll_y,
             },
@@ -842,8 +1043,9 @@ impl OxiApp {
             let byte = line_start_byte(&document.content, line);
             self.conv.editor.navigation_target = Some((document.path.clone(), byte..byte));
         } else {
-            let font_h = crate::theme::editor_line_height();
-            let top = decor.changes[target].new_start as f32 * font_h;
+            let top = diff
+                .alignment
+                .change_top(target, &decor.changes[target], &diff.right.lines);
             diff.scroll_y = (top - viewport_h / 3.0).max(0.0);
         }
     }
@@ -961,6 +1163,17 @@ impl OxiApp {
             };
             if segment(ui, "Split", !inline, split_possible, split_hint).clicked() {
                 self.conv.editor.diff_inline = false;
+            }
+            ui.add_space(6.0);
+            // The editor's own word wrap (View > Word Wrap), as in VS Code's diff editor.
+            let word_wrap = self.conv.settings.editor.word_wrap;
+            let wrap_hint = if word_wrap {
+                "Stop wrapping long lines"
+            } else {
+                "Wrap long lines"
+            };
+            if segment(ui, "Wrap", word_wrap, true, wrap_hint).clicked() {
+                self.toggle_word_wrap();
             }
             ui.add_space(6.0);
             let has_changes = decor.is_some_and(|decor| !decor.changes.is_empty());
@@ -1261,6 +1474,11 @@ enum ToolbarAction {
     Jump(bool),
     /// Comment on the selected chars `(start, end)`, with the changes at that moment.
     CommentSelection((usize, usize), Vec<Change>),
+}
+
+/// The staged pane's part of the new side's `rect`: the overview ruler is right of it.
+fn staged_pane_rect(rect: Rect) -> Rect {
+    Rect::from_min_max(rect.min, pos2(rect.right() - RULER_W, rect.bottom()))
 }
 
 /// Byte offset where 0-based `line` starts (end of text past the last line).

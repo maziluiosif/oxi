@@ -38,17 +38,257 @@ impl Change {
 }
 
 /// Which text of the diff a pane shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Side {
     Old,
     New,
 }
 
-/// Blank rows inserted before logical line `line` (`line` may be the line count: after the end).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Blank space, `height` pixels tall, inserted before logical line `line` (`line` may be the
+/// line count: after the end).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Gap {
     pub line: usize,
-    pub rows: usize,
+    pub height: f32,
+}
+
+/// Which galley rows each logical line of a pane takes, measured without gaps. When no line
+/// soft-wraps, every line is one row and nothing is stored.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct LineGeometry {
+    /// Logical lines in the galley.
+    pub lines: usize,
+    /// First row of each line; empty when row `n` is line `n`.
+    first_rows: Vec<usize>,
+    /// Height of each line (all of its rows); empty when each is `row_h`.
+    heights: Vec<f32>,
+    pub row_h: f32,
+}
+
+impl LineGeometry {
+    /// Every line one row of `row_h`: a pane that doesn't wrap, or one not laid out yet.
+    pub fn unwrapped(lines: usize, row_h: f32) -> Self {
+        Self {
+            lines,
+            first_rows: Vec::new(),
+            heights: Vec::new(),
+            row_h,
+        }
+    }
+
+    /// The lines of `galley`, by where its rows really are: egui rounds row positions to
+    /// pixels, so the font's row height would drift from them line by line. `row_h` is only
+    /// for an empty galley.
+    pub fn measure(galley: &Galley, row_h: f32) -> Self {
+        let rows = &galley.rows;
+        let row_h = match rows.len() {
+            0 => row_h,
+            1 => rows[0].rect().height(),
+            n => (rows[n - 1].pos.y - rows[0].pos.y) / (n - 1) as f32,
+        };
+        // Every row but the last ends a line: nothing wraps.
+        if rows.iter().rev().skip(1).all(|row| row.ends_with_newline) {
+            return Self::unwrapped(rows.len(), row_h);
+        }
+        // Each row takes the space down to the next one.
+        let pitch = |index: usize| match rows.get(index + 1) {
+            Some(next) => next.pos.y - rows[index].pos.y,
+            None => rows[index].rect().height(),
+        };
+        let mut first_rows = Vec::with_capacity(rows.len());
+        let mut heights: Vec<f32> = Vec::with_capacity(rows.len());
+        for index in 0..rows.len() {
+            if index == 0 || rows[index - 1].ends_with_newline {
+                first_rows.push(index);
+                heights.push(0.0);
+            }
+            if let Some(height) = heights.last_mut() {
+                *height += pitch(index);
+            }
+        }
+        Self {
+            lines: first_rows.len(),
+            first_rows,
+            heights,
+            row_h,
+        }
+    }
+
+    /// Lines of `rows` rows each, as if laid out.
+    #[cfg(test)]
+    pub fn for_test(rows: Vec<usize>, row_h: f32) -> Self {
+        let mut first_rows = Vec::with_capacity(rows.len());
+        let mut next = 0;
+        for count in &rows {
+            first_rows.push(next);
+            next += count;
+        }
+        Self {
+            lines: rows.len(),
+            first_rows,
+            heights: rows.iter().map(|count| *count as f32 * row_h).collect(),
+            row_h,
+        }
+    }
+
+    pub fn wraps(&self) -> bool {
+        !self.heights.is_empty()
+    }
+
+    /// Height of `line`'s own rows.
+    pub fn height(&self, line: usize) -> f32 {
+        self.heights.get(line).copied().unwrap_or(self.row_h)
+    }
+
+    /// Height of the lines in `lines`.
+    fn lines_height(&self, lines: Range<usize>) -> f32 {
+        if self.wraps() {
+            lines.map(|line| self.height(line)).sum()
+        } else {
+            lines.len() as f32 * self.row_h
+        }
+    }
+
+    /// First galley row of `line`; past the last line, a row that doesn't exist.
+    pub fn first_row(&self, line: usize) -> usize {
+        if self.first_rows.is_empty() {
+            line
+        } else {
+            self.first_rows.get(line).copied().unwrap_or(usize::MAX)
+        }
+    }
+
+    /// The line galley row `row` belongs to.
+    pub fn line_of_row(&self, row: usize) -> usize {
+        if self.first_rows.is_empty() {
+            row
+        } else {
+            self.first_rows
+                .partition_point(|first| *first <= row)
+                .saturating_sub(1)
+        }
+    }
+}
+
+/// How the two sides of a diff line up, like VS Code's diff editor: wherever a line or a change
+/// is taller on one side (more lines, or lines that soft-wrap into more rows), the other side
+/// gets blank space after it. Every unchanged line, and every pair of changed lines, then starts
+/// at the same height on both sides.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct Alignment {
+    pub old: Vec<Gap>,
+    pub new: Vec<Gap>,
+    /// Each change's extent in galley coordinates, the same on both sides (split view only).
+    pub spans: Vec<(f32, f32)>,
+    /// Inline view: the height of each change's removed lines, as they wrap in its zone.
+    pub zones: Vec<Vec<f32>>,
+}
+
+impl Alignment {
+    pub fn gaps(&self, side: Side) -> &[Gap] {
+        match side {
+            Side::Old => &self.old,
+            Side::New => &self.new,
+        }
+    }
+
+    /// Galley y of the top of change `index` on the new side (`lines` is that side's geometry):
+    /// its span in the split view, its zone of removed lines inline.
+    pub fn change_top(&self, index: usize, change: &Change, lines: &LineGeometry) -> f32 {
+        if let Some(&(top, _)) = self.spans.get(index) {
+            return top;
+        }
+        let gaps: f32 = self
+            .new
+            .iter()
+            .take_while(|gap| gap.line < change.new_start)
+            .map(|gap| gap.height)
+            .sum();
+        lines.lines_height(0..change.new_start) + gaps
+    }
+
+    /// Height of removed line `k` of change `index` in its inline zone.
+    fn zone_line(&self, index: usize, k: usize, row_h: f32) -> f32 {
+        self.zones
+            .get(index)
+            .and_then(|heights| heights.get(k))
+            .copied()
+            .unwrap_or(row_h)
+    }
+
+    /// Height of change `index`'s whole inline zone (`lines` removed lines).
+    fn zone_height(&self, index: usize, lines: usize, row_h: f32) -> f32 {
+        match self.zones.get(index) {
+            Some(heights) if heights.len() == lines => heights.iter().sum(),
+            _ => lines as f32 * row_h,
+        }
+    }
+}
+
+/// Both sides' progress through [`DiffDecor::align`]: the next line and its top on each side.
+struct AlignWalk<'a> {
+    old: &'a LineGeometry,
+    new: &'a LineGeometry,
+    o: usize,
+    n: usize,
+    yo: f32,
+    yn: f32,
+    out: Alignment,
+}
+
+impl AlignWalk<'_> {
+    /// Move both sides past one line.
+    fn pair(&mut self) {
+        self.yo += self.old.height(self.o);
+        self.yn += self.new.height(self.n);
+        self.o += 1;
+        self.n += 1;
+    }
+
+    /// Move each side to its line `old` / `new`.
+    fn skip_to(&mut self, old: usize, new: usize) {
+        if old > self.o {
+            self.yo += self.old.lines_height(self.o..old);
+            self.o = old;
+        }
+        if new > self.n {
+            self.yn += self.new.lines_height(self.n..new);
+            self.n = new;
+        }
+    }
+
+    /// The next lines of both sides must start level: pad the side that is behind.
+    fn anchor(&mut self) {
+        fn push(gaps: &mut Vec<Gap>, line: usize, height: f32) {
+            match gaps.last_mut() {
+                Some(last) if last.line == line => last.height += height,
+                _ => gaps.push(Gap { line, height }),
+            }
+        }
+        // Less than a pixel apart gets no gap; the difference is kept, not dropped, so many
+        // small ones still add up to a gap later.
+        let behind = self.yo - self.yn;
+        if behind > 0.5 {
+            push(&mut self.out.new, self.n, behind);
+            self.yn = self.yo;
+        } else if behind < -0.5 {
+            push(&mut self.out.old, self.o, -behind);
+            self.yo = self.yn;
+        }
+    }
+
+    /// Unchanged lines up to old line `old` (new line `new`), aligned line by line when
+    /// either side wraps.
+    fn unchanged(&mut self, old: usize, new: usize) {
+        if self.old.wraps() || self.new.wraps() {
+            while self.o < old && self.n < new {
+                self.pair();
+                self.anchor();
+            }
+        }
+        self.skip_to(old, new);
+        self.anchor();
+    }
 }
 
 /// The changes from a base text to a new text.
@@ -83,30 +323,58 @@ impl DiffDecor {
         decor
     }
 
-    /// Gaps that align `side` with the other side (split), or that hold the removed lines
-    /// above the new ones (inline, new side only).
-    pub fn gaps(&self, side: Side, inline: bool) -> Vec<Gap> {
-        self.changes
-            .iter()
-            .filter_map(|change| {
-                let (old, new) = (change.old_lines.len(), change.new_lines.len());
-                let gap = match (side, inline) {
-                    (Side::New, true) => Gap {
-                        line: change.new_start,
-                        rows: old,
-                    },
-                    (Side::New, false) => Gap {
-                        line: change.new_start + new,
-                        rows: old.saturating_sub(new),
-                    },
-                    (Side::Old, _) => Gap {
-                        line: change.old_start + old,
-                        rows: new.saturating_sub(old),
-                    },
-                };
-                (gap.rows > 0).then_some(gap)
-            })
-            .collect()
+    /// Line both sides of the split view up (see [`Alignment`]), given how tall each side's
+    /// lines are laid out.
+    pub fn align(&self, old: &LineGeometry, new: &LineGeometry) -> Alignment {
+        let mut walk = AlignWalk {
+            old,
+            new,
+            o: 0,
+            n: 0,
+            yo: 0.0,
+            yn: 0.0,
+            out: Alignment::default(),
+        };
+        for change in &self.changes {
+            walk.unchanged(change.old_start, change.new_start);
+            let top = walk.yo.max(walk.yn);
+            // Changed lines pair up across the sides (their word highlights do too), so each
+            // pair starts level; the side with fewer lines is padded at the change's end.
+            for _ in 0..change.old_lines.len().min(change.new_lines.len()) {
+                walk.pair();
+                walk.anchor();
+            }
+            walk.skip_to(
+                change.old_start + change.old_lines.len(),
+                change.new_start + change.new_lines.len(),
+            );
+            walk.anchor();
+            walk.out.spans.push((top, walk.yo.max(walk.yn)));
+        }
+        walk.unchanged(old.lines.max(walk.o), new.lines.max(walk.n));
+        walk.out
+    }
+
+    /// The inline view's gaps: each change's removed lines above its new lines, removed line
+    /// `old` (0-based, with its text) taking `height(old, text)`.
+    pub fn inline_alignment(&self, mut height: impl FnMut(usize, &str) -> f32) -> Alignment {
+        let mut out = Alignment::default();
+        for change in &self.changes {
+            let heights: Vec<f32> = change
+                .old_lines
+                .iter()
+                .enumerate()
+                .map(|(k, text)| height(change.old_start + k, text))
+                .collect();
+            if !heights.is_empty() {
+                out.new.push(Gap {
+                    line: change.new_start,
+                    height: heights.iter().sum(),
+                });
+            }
+            out.zones.push(heights);
+        }
+        out
     }
 
     /// Whether 0-based `line` of `side` is one of the changed lines.
@@ -120,13 +388,13 @@ impl DiffDecor {
         }
     }
 
-    /// Old line numbers (1-based) of the removed lines shown inline, with their row centers.
+    /// Old line numbers (1-based) of the removed lines shown inline, with the centers of their
+    /// first rows.
     pub fn zone_numbers(&self, rows: &PaneRows<'_>, visible: egui::Rangef) -> Vec<(usize, f32)> {
         let mut out = Vec::new();
-        for change in &self.changes {
-            let top = rows.top(change.new_start) - change.old_lines.len() as f32 * rows.row_h;
-            for k in 0..change.old_lines.len() {
-                let y = top + (k as f32 + 0.5) * rows.row_h;
+        for (index, change) in self.changes.iter().enumerate() {
+            for (k, top, _) in rows.zone_lines(index, change) {
+                let y = top + 0.5 * rows.row_h;
                 if visible.contains(y) {
                     out.push((change.old_start + k + 1, y));
                 }
@@ -145,12 +413,17 @@ impl DiffDecor {
     }
 }
 
-/// Logical-line geometry of a diff pane's galley. Diff panes never wrap, so row `n` is line `n`.
+/// Logical-line geometry of a diff pane's (gapped) galley on screen.
 pub(crate) struct PaneRows<'a> {
     pub galley: &'a Galley,
     /// Screen position of the galley.
     pub origin: Pos2,
     pub row_h: f32,
+    /// The rows each line takes.
+    pub lines: &'a LineGeometry,
+    /// The pane's gaps and what they hold: the changes' extents (split view) or the removed
+    /// lines' heights (inline).
+    pub alignment: &'a Alignment,
 }
 
 impl PaneRows<'_> {
@@ -160,36 +433,61 @@ impl PaneRows<'_> {
             + self
                 .galley
                 .rows
-                .get(line)
+                .get(self.lines.first_row(line))
                 .map_or(self.galley.rect.bottom(), |row| row.pos.y)
     }
 
-    /// Screen span of `change` in a pane showing `side` (its lines plus the rows that align or
-    /// hold it).
-    pub fn span(&self, change: &Change, side: Side, inline: bool) -> (f32, f32) {
+    /// Screen span of change `index` in a pane showing `side` (its lines plus the space that
+    /// aligns or holds it).
+    pub fn span(&self, index: usize, change: &Change, side: Side, inline: bool) -> (f32, f32) {
+        if !inline && let Some(&(top, bottom)) = self.alignment.spans.get(index) {
+            return (self.origin.y + top, self.origin.y + bottom);
+        }
         let (old, new) = (change.old_lines.len(), change.new_lines.len());
-        let (top, rows) = match (side, inline) {
-            (Side::New, true) => (
-                self.top(change.new_start) - old as f32 * self.row_h,
-                old + new,
-            ),
-            (Side::New, false) if new == 0 => {
-                (self.top(change.new_start) - old as f32 * self.row_h, old)
-            }
-            (Side::New, false) => (self.top(change.new_start), change.rows()),
-            (Side::Old, _) if old == 0 => {
-                (self.top(change.old_start) - new as f32 * self.row_h, new)
-            }
-            (Side::Old, _) => (self.top(change.old_start), change.rows()),
+        if inline && side == Side::New {
+            // The zone of removed lines, then the new lines below it.
+            let start = self.top(change.new_start);
+            let top = start - self.alignment.zone_height(index, old, self.row_h);
+            let bottom = match new {
+                0 => start,
+                _ => {
+                    let last = change.new_start + new - 1;
+                    self.top(last) + self.lines.height(last)
+                }
+            };
+            return (top, bottom);
+        }
+        let (top, rows) = match side {
+            Side::New if new == 0 => (self.top(change.new_start) - old as f32 * self.row_h, old),
+            Side::New => (self.top(change.new_start), change.rows()),
+            Side::Old if old == 0 => (self.top(change.old_start) - new as f32 * self.row_h, new),
+            Side::Old => (self.top(change.old_start), change.rows()),
         };
         (top, top + rows as f32 * self.row_h)
+    }
+
+    /// Inline view: the removed lines of change `index` in its zone above the new lines, as
+    /// (k, top, height).
+    pub fn zone_lines<'b>(
+        &'b self,
+        index: usize,
+        change: &Change,
+    ) -> impl Iterator<Item = (usize, f32, f32)> + 'b {
+        let lines = change.old_lines.len();
+        let mut top =
+            self.top(change.new_start) - self.alignment.zone_height(index, lines, self.row_h);
+        (0..lines).map(move |k| {
+            let height = self.alignment.zone_line(index, k, self.row_h);
+            top += height;
+            (k, top - height, height)
+        })
     }
 }
 
 /// Insert `gaps` (sorted by line) into a galley whose first row is logical line `first`.
 /// A gap before `first` itself is left out: callers place such a galley at that line's top.
 /// `whole` galleys (starting at line 0) also grow by the gaps after their last line.
-pub(crate) fn apply_gaps(galley: &Galley, first: usize, gaps: &[Gap], row_h: f32) -> Arc<Galley> {
+pub(crate) fn apply_gaps(galley: &Galley, first: usize, gaps: &[Gap]) -> Arc<Galley> {
     let mut out = galley.clone();
     let mut next = gaps.partition_point(|gap| if first == 0 { false } else { gap.line <= first });
     let mut offset = 0.0;
@@ -199,16 +497,13 @@ pub(crate) fn apply_gaps(galley: &Galley, first: usize, gaps: &[Gap], row_h: f32
             line += 1;
         }
         while let Some(gap) = gaps.get(next).filter(|gap| gap.line <= line) {
-            offset += gap.rows as f32 * row_h;
+            offset += gap.height;
             next += 1;
         }
         row.pos.y += offset;
     }
     if first == 0 {
-        offset += gaps[next..]
-            .iter()
-            .map(|gap| gap.rows as f32 * row_h)
-            .sum::<f32>();
+        offset += gaps[next..].iter().map(|gap| gap.height).sum::<f32>();
     }
     out.rect.max.y += offset;
     out.mesh_bounds.max.y += offset;
@@ -231,6 +526,8 @@ pub(crate) struct ZoneText<'a> {
     pub base: &'a str,
     pub base_job: Option<&'a LayoutJob>,
     pub line_starts: &'a [usize],
+    /// The pane's wrap width (infinite when it doesn't wrap), for the removed lines too.
+    pub wrap_width: f32,
 }
 
 impl Underlay<'_> {
@@ -249,70 +546,63 @@ impl Underlay<'_> {
             Side::Old => (c_diff_del_bg(), c_diff_del_fg().gamma_multiply(0.3)),
             Side::New => (c_diff_add_bg(), c_diff_add_fg().gamma_multiply(0.3)),
         };
-        for change in &self.decor.changes {
-            let (top, bottom) = rows.span(change, self.side, self.inline);
+        let band = |top: f32, bottom: f32| Rect::from_x_y_ranges(self.clip.x_range(), top..=bottom);
+        // Line tints go under everything else.
+        let mut tints = Vec::new();
+        for (index, change) in self.decor.changes.iter().enumerate() {
+            let (top, bottom) = rows.span(index, change, self.side, self.inline);
             if bottom < visible.min || top > visible.max {
                 continue;
             }
             let (start, lines, words) = change.lines(self.side);
-            if !lines.is_empty() {
-                let line_rect = Rect::from_x_y_ranges(
-                    self.clip.x_range(),
-                    rows.top(start)..=rows.top(start) + lines.len() as f32 * rows.row_h,
-                );
-                out.push(Shape::rect_filled(line_rect, 0.0, fill));
-                for (k, ranges) in words.iter().enumerate() {
-                    let Some(row) = rows.galley.rows.get(start + k) else {
-                        break;
+            // One tint per run of lines with no filler between them.
+            let mut run: Option<(f32, f32)> = None;
+            for k in 0..lines.len() {
+                let line_top = rows.top(start + k);
+                let line_bottom = line_top + rows.lines.height(start + k);
+                run = match run {
+                    Some((run_top, run_bottom)) if line_top - run_bottom < 0.5 => {
+                        Some((run_top, line_bottom))
+                    }
+                    Some((run_top, run_bottom)) => {
+                        tints.push(Shape::rect_filled(band(run_top, run_bottom), 0.0, fill));
+                        Some((line_top, line_bottom))
+                    }
+                    None => Some((line_top, line_bottom)),
+                };
+                if line_bottom < visible.min || line_top > visible.max {
+                    continue;
+                }
+                if let Some(ranges) = words.get(k) {
+                    word_shapes(&mut out, rows, start + k, &lines[k], ranges, word_fill);
+                }
+                // Filler below a line where the other side is taller (more lines, or more
+                // wrapped rows), like VS Code's hatched alignment zones.
+                if !self.inline {
+                    let next = if k + 1 < lines.len() {
+                        rows.top(start + k + 1)
+                    } else {
+                        bottom
                     };
-                    let y = rows.top(start + k);
-                    for range in ranges {
-                        let text = &lines[k];
-                        let (a, b) = (
-                            text[..range.start.min(text.len())].chars().count(),
-                            text[..range.end.min(text.len())].chars().count(),
-                        );
-                        let x = rows.origin.x + row.pos.x;
-                        out.push(Shape::rect_filled(
-                            Rect::from_min_max(
-                                pos2(x + row.x_offset(CharIndex(a)), y),
-                                pos2(x + row.x_offset(CharIndex(b)), y + rows.row_h),
-                            ),
-                            0.0,
-                            word_fill,
-                        ));
+                    if next - line_bottom > 0.5 {
+                        hatch(&mut out, band(line_bottom, next));
                     }
                 }
             }
+            if let Some((run_top, run_bottom)) = run {
+                tints.push(Shape::rect_filled(band(run_top, run_bottom), 0.0, fill));
+            }
             if self.inline {
                 if let (Side::New, Some(zones)) = (self.side, &self.zones) {
-                    self.zone_shapes(&mut out, painter, rows, change, zones, font);
+                    self.zone_shapes(&mut out, painter, rows, (index, change), zones, font);
                 }
-            } else {
-                // Filler rows where the other side has more lines.
-                let gap = match self.side {
-                    Side::Old => change
-                        .new_lines
-                        .len()
-                        .saturating_sub(change.old_lines.len()),
-                    Side::New => change
-                        .old_lines
-                        .len()
-                        .saturating_sub(change.new_lines.len()),
-                };
-                if gap > 0 {
-                    let below = rows.top(start + lines.len());
-                    hatch(
-                        &mut out,
-                        Rect::from_x_y_ranges(
-                            self.clip.x_range(),
-                            below - gap as f32 * rows.row_h..=below,
-                        ),
-                    );
-                }
+            } else if lines.is_empty() {
+                // This side has none of the change's lines: all of it is filler.
+                hatch(&mut out, band(top, bottom));
             }
         }
-        out
+        tints.extend(out);
+        tints
     }
 
     /// The removed lines of `change`, above its new lines.
@@ -321,26 +611,26 @@ impl Underlay<'_> {
         out: &mut Vec<Shape>,
         painter: &Painter,
         rows: &PaneRows<'_>,
-        change: &Change,
+        (index, change): (usize, &Change),
         zones: &ZoneText<'_>,
         font: &FontId,
     ) {
         if change.old_lines.is_empty() {
             return;
         }
-        let top = rows.top(change.new_start) - change.old_lines.len() as f32 * rows.row_h;
+        let (top, _) = rows.span(index, change, Side::New, true);
+        let height = rows
+            .alignment
+            .zone_height(index, change.old_lines.len(), rows.row_h);
         out.push(Shape::rect_filled(
-            Rect::from_x_y_ranges(
-                self.clip.x_range(),
-                top..=top + change.old_lines.len() as f32 * rows.row_h,
-            ),
+            Rect::from_x_y_ranges(self.clip.x_range(), top..=top + height),
             0.0,
             c_diff_del_bg(),
         ));
         let x = rows.origin.x + rows.galley.rows.first().map_or(0.0, |row| row.pos.x);
-        for (k, text) in change.old_lines.iter().enumerate() {
-            let y = top + k as f32 * rows.row_h;
-            if y + rows.row_h < self.clip.top() || y > self.clip.bottom() || text.is_empty() {
+        for (k, y, height) in rows.zone_lines(index, change) {
+            let text = &change.old_lines[k];
+            if y + height < self.clip.top() || y > self.clip.bottom() || text.is_empty() {
                 continue;
             }
             let offset = zones
@@ -355,9 +645,82 @@ impl Underlay<'_> {
                 words,
                 c_diff_del_fg().gamma_multiply(0.3),
                 font,
+                zones.wrap_width,
             );
-            let galley = painter.layout_job(job);
+            let galley = painter.fonts_mut(|fonts| zone_galley(job, |job| fonts.layout_job(job)));
             out.push(Shape::galley(pos2(x, y), galley, c_text()));
+        }
+    }
+}
+
+/// A removed line of the inline view, wrapped (by `job`'s width) like the editor's lines.
+pub(crate) fn zone_galley(
+    job: LayoutJob,
+    mut lay_out: impl FnMut(LayoutJob) -> Arc<Galley>,
+) -> Arc<Galley> {
+    if job.wrap.max_width.is_finite() && editor_wrap_indent() {
+        super::super::line_layout::hanging_paragraph(job, &mut lay_out)
+    } else {
+        lay_out(job)
+    }
+}
+
+/// Height of a removed line of the inline view: one `row_h` per row it wraps into.
+pub(crate) fn zone_line_height(
+    text: &str,
+    font: &FontId,
+    wrap_width: f32,
+    row_h: f32,
+    lay_out: impl FnMut(LayoutJob) -> Arc<Galley>,
+) -> f32 {
+    if !wrap_width.is_finite() || text.is_empty() {
+        return row_h;
+    }
+    let galley = zone_galley(
+        line_job(text, None, &[], Color32::TRANSPARENT, font, wrap_width),
+        lay_out,
+    );
+    galley.rows.len().max(1) as f32 * row_h
+}
+
+/// Highlights of the changed `ranges` (bytes of `text`) of `line`, on each row it wraps into.
+fn word_shapes(
+    out: &mut Vec<Shape>,
+    rows: &PaneRows<'_>,
+    line: usize,
+    text: &str,
+    ranges: &[Range<usize>],
+    fill: Color32,
+) {
+    let chars = |byte: usize| text[..byte.min(text.len())].chars().count();
+    let ranges: Vec<(usize, usize)> = ranges
+        .iter()
+        .map(|range| (chars(range.start), chars(range.end)))
+        .collect();
+    // Chars of the line on the rows before this one.
+    let mut offset = 0;
+    for row in rows.galley.rows.iter().skip(rows.lines.first_row(line)) {
+        let count = row.row.char_count_excluding_newline().0;
+        let (x, y) = (rows.origin.x + row.pos.x, rows.origin.y + row.pos.y);
+        for &(a, b) in &ranges {
+            let (a, b) = (a.max(offset), b.min(offset + count));
+            if a < b {
+                out.push(Shape::rect_filled(
+                    Rect::from_min_max(
+                        pos2(x + row.x_offset(CharIndex(a - offset)), y),
+                        pos2(
+                            x + row.x_offset(CharIndex(b - offset)),
+                            y + row.rect().height(),
+                        ),
+                    ),
+                    0.0,
+                    fill,
+                ));
+            }
+        }
+        offset += count;
+        if row.ends_with_newline {
+            break;
         }
     }
 }
@@ -384,13 +747,14 @@ fn hatch(out: &mut Vec<Shape>, rect: Rect) {
 }
 
 /// One line's layout: syntax colors from `colored` (the whole text's job and the line's byte
-/// offset in it) and a background on `words`.
+/// offset in it) and a background on `words`, wrapped at `wrap_width`.
 pub(crate) fn line_job(
     text: &str,
     colored: Option<(&LayoutJob, usize)>,
     words: &[Range<usize>],
     word_bg: Color32,
     font: &FontId,
+    wrap_width: f32,
 ) -> LayoutJob {
     let len = text.len();
     let (sections, offset) = colored.map_or((&[][..], 0), |(job, offset)| {
@@ -413,7 +777,11 @@ pub(crate) fn line_job(
     cuts.dedup();
     let mut job = LayoutJob {
         wrap: TextWrapping {
-            max_width: f32::INFINITY,
+            max_width: if wrap_width.is_finite() {
+                wrap_width.round()
+            } else {
+                wrap_width
+            },
             ..Default::default()
         },
         ..Default::default()

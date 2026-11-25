@@ -137,8 +137,8 @@ impl OxiApp {
             .git_full_highlight_path
             .as_ref()
             .is_some_and(|path| path == &self.conv.editor.documents[index].path);
-        // Diff mode (see `diff_editor`): no soft wrap, rows inserted to align with the base,
-        // and an overview ruler instead of the minimap.
+        // Diff mode (see `diff_editor`): space inserted to line rows up with the base (soft wrap
+        // in both layouts), and an overview ruler instead of the minimap.
         let diff_mode = {
             let document = &mut self.conv.editor.documents[index];
             let revision = document.content_revision;
@@ -150,13 +150,14 @@ impl OxiApp {
                     let decor = diff.decor_at(revision, &document.content);
                     (
                         diff.inline,
+                        diff.wrap,
                         diff.layout_key(),
                         diff.scroll_request.take(),
                         decor,
                     )
                 })
         };
-        let diff_key = diff_mode.as_ref().map_or(0, |(_, key, _, _)| *key);
+        let diff_key = diff_mode.as_ref().map_or(0, |(_, _, key, _, _)| *key);
         // Folds follow edits made at the caret (see `folding::Folds::shift`); a diff never folds.
         let (hidden_lines, fold_generation) = {
             let document = &mut self.conv.editor.documents[index];
@@ -191,8 +192,11 @@ impl OxiApp {
                 .is_some_and(|range| range.contains(&line))
         };
         let diff_inline = diff_mode.as_ref().is_some_and(|(inline, ..)| *inline);
-        let diff_scroll_request = diff_mode.as_ref().and_then(|(_, _, request, _)| *request);
-        let diff_decor = diff_mode.and_then(|(_, _, _, decor)| decor);
+        let diff_wrap = diff_mode.as_ref().is_some_and(|(_, wrap, ..)| *wrap);
+        let diff_scroll_request = diff_mode
+            .as_ref()
+            .and_then(|(_, _, _, request, _)| *request);
+        let diff_decor = diff_mode.and_then(|(_, _, _, _, decor)| decor);
         // Review comments waiting to be sent, marked on the lines they cover.
         let comment_lines: Vec<(usize, usize, String)> = if diff_decor.is_some() {
             self.comments_on(&relative_path)
@@ -442,12 +446,10 @@ impl OxiApp {
                             .filter(|range| !range.is_empty());
                         let mut layouter =
                             |ui: &Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                                // Diff rows must stay aligned with the base's: no wrapping.
-                                let wrap_width = if diff_key != 0 || !word_wrap {
-                                    f32::INFINITY
-                                } else {
-                                    wrap_width
-                                };
+                                // A diff wraps with the editor's setting; gaps keep its rows
+                                // aligned with the base's however each side wraps.
+                                let wraps = if diff_key != 0 { diff_wrap } else { word_wrap };
+                                let wrap_width = if !wraps { f32::INFINITY } else { wrap_width };
                                 let wrap_width_bits = wrap_width.round().to_bits();
                                 // TextEdit only needs glyph geometry here; cache it before
                                 // egui's whole-LayoutJob hashing so selection-only frames are O(1).
@@ -492,14 +494,18 @@ impl OxiApp {
                                 let galley = match diff_slot
                                     .as_mut()
                                     .filter(|_| diff_key != 0)
-                                    .and_then(|diff| diff.decor_for(text.as_str()))
-                                {
-                                    Some(decor) => super::diff_editor::apply_gaps(
-                                        &galley,
-                                        0,
-                                        &decor.gaps(super::diff_editor::Side::New, diff_inline),
-                                        diff_row_height(&galley),
-                                    ),
+                                    .and_then(|diff| {
+                                        diff.align_editor(
+                                            ui,
+                                            text.as_str(),
+                                            &galley,
+                                            diff_row_height(&galley),
+                                            wrap_width,
+                                        )
+                                    }) {
+                                    Some(alignment) => {
+                                        super::diff_editor::apply_gaps(&galley, 0, &alignment.new)
+                                    }
                                     None => galley,
                                 };
                                 if allow_layout_cache {
@@ -1207,10 +1213,17 @@ impl OxiApp {
                         if let Some(decor) = &diff_decor
                             && let Some(diff) = document.diff.as_mut()
                         {
+                            // The changes the text was just laid out with, which the alignment's
+                            // spans are indexed by (newer than `diff_decor` after a keystroke).
+                            let decor = &diff.aligned_decor(decor);
+                            let new_lines = diff.new_lines();
+                            let alignment = diff.alignment();
                             let rows = super::diff_editor::PaneRows {
                                 galley: &output.galley,
                                 origin: output.galley_pos,
                                 row_h: diff_row_height(&output.galley),
+                                lines: &new_lines,
+                                alignment: &alignment,
                             };
                             let clip = egui::Rect::from_x_y_ranges(
                                 ui.clip_rect().x_range(),
@@ -1226,6 +1239,7 @@ impl OxiApp {
                                     base: diff.base_text().unwrap_or_default(),
                                     base_job: diff.cached_base_job(),
                                     line_starts: diff.base_starts(),
+                                    wrap_width: output.galley.job.wrap.max_width,
                                 }),
                             }
                             .paint(
@@ -1236,8 +1250,14 @@ impl OxiApp {
                             diff.frame.new_spans = decor
                                 .changes
                                 .iter()
-                                .map(|change| {
-                                    rows.span(change, super::diff_editor::Side::New, diff_inline)
+                                .enumerate()
+                                .map(|(index, change)| {
+                                    rows.span(
+                                        index,
+                                        change,
+                                        super::diff_editor::Side::New,
+                                        diff_inline,
+                                    )
                                 })
                                 .collect();
                             diff.frame.new_clip = clip;
@@ -1388,20 +1408,26 @@ impl OxiApp {
 
                         // TextEdit's geometry is transparent; paint the syntax galley, which
                         // covers only a window of lines, at that window's first row.
-                        let syntax_origin = output.galley_pos
-                            + egui::vec2(
-                                0.0,
-                                syntax_window::line_top(&output.galley, syntax_lines.start),
-                            );
-                        let visible_galley = match &diff_decor {
-                            Some(decor) => super::diff_editor::apply_gaps(
-                                &visible_galley,
-                                syntax_lines.start,
-                                &decor.gaps(super::diff_editor::Side::New, diff_inline),
-                                diff_row_height(&output.galley),
-                            ),
-                            None => visible_galley,
-                        };
+                        let mut window_top =
+                            syntax_window::line_top(&output.galley, syntax_lines.start);
+                        let visible_galley =
+                            match document.diff.as_ref().filter(|_| diff_decor.is_some()) {
+                                Some(diff) => {
+                                    // From line 0, `apply_gaps` keeps the gap above that line
+                                    // (a change at the top of the file), so the window goes at
+                                    // the galley's top rather than below that gap.
+                                    if syntax_lines.start == 0 {
+                                        window_top = 0.0;
+                                    }
+                                    super::diff_editor::apply_gaps(
+                                        &visible_galley,
+                                        syntax_lines.start,
+                                        &diff.alignment().new,
+                                    )
+                                }
+                                None => visible_galley,
+                            };
+                        let syntax_origin = output.galley_pos + egui::vec2(0.0, window_top);
                         ui.painter().with_clip_rect(viewport_clip).galley(
                             syntax_origin,
                             visible_galley,
@@ -1902,6 +1928,8 @@ impl OxiApp {
                     .diff
                     .as_ref()
                     .map(|diff| {
+                        // `new_spans` follows the changes the editor last aligned.
+                        let decor = diff.aligned_decor(decor);
                         diff.frame
                             .new_spans
                             .iter()

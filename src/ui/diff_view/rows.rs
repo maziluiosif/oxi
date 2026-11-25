@@ -14,14 +14,26 @@ pub(super) fn row_file(row: Row) -> Option<usize> {
     }
 }
 
+/// The rows of `model`. `line_rows(file, item, pane)` is how many rows a line wraps into in
+/// `pane` (0 / 1: split left / right, 2: inline); a split row is as tall as its taller side.
 pub(super) fn build_rows(
     model: &DiffModel,
     split: bool,
     collapse: bool,
     expanded: &HashSet<(usize, usize)>,
     collapsed_files: &HashSet<usize>,
+    line_rows: &mut dyn FnMut(usize, usize, usize) -> usize,
 ) -> RowLayout {
     let line_h = line_height();
+    let mut row_h = |row: Row| match row {
+        Row::Split { file, left, right } => {
+            let left = left.map_or(0, |item| line_rows(file, item, 0));
+            let right = right.map_or(0, |item| line_rows(file, item, 1));
+            left.max(right).max(1) as f32 * line_h
+        }
+        Row::Inline { file, item } => line_rows(file, item, 2).max(1) as f32 * line_h,
+        _ => line_h,
+    };
     let mut out = RowLayout::default();
     let push = |out: &mut RowLayout, row: Row, h: f32| {
         out.rows.push(row);
@@ -84,7 +96,8 @@ pub(super) fn build_rows(
                         && !expanded.contains(&(f, fold_start));
                     if fold {
                         for item in start..fold_start {
-                            push(&mut out, line_row(item), line_h);
+                            let row = line_row(item);
+                            push(&mut out, row, row_h(row));
                         }
                         push(
                             &mut out,
@@ -96,11 +109,13 @@ pub(super) fn build_rows(
                             BAND_H,
                         );
                         for item in fold_end..i {
-                            push(&mut out, line_row(item), line_h);
+                            let row = line_row(item);
+                            push(&mut out, row, row_h(row));
                         }
                     } else {
                         for item in start..i {
-                            push(&mut out, line_row(item), line_h);
+                            let row = line_row(item);
+                            push(&mut out, row, row_h(row));
                         }
                     }
                 }
@@ -116,19 +131,17 @@ pub(super) fn build_rows(
                     let change_y = out.total;
                     if split {
                         for k in 0..(mid - start).max(i - mid) {
-                            push(
-                                &mut out,
-                                Row::Split {
-                                    file: f,
-                                    left: (start + k < mid).then_some(start + k),
-                                    right: (mid + k < i).then_some(mid + k),
-                                },
-                                line_h,
-                            );
+                            let row = Row::Split {
+                                file: f,
+                                left: (start + k < mid).then_some(start + k),
+                                right: (mid + k < i).then_some(mid + k),
+                            };
+                            push(&mut out, row, row_h(row));
                         }
                     } else {
                         for item in start..i {
-                            push(&mut out, Row::Inline { file: f, item }, line_h);
+                            let row = Row::Inline { file: f, item };
+                            push(&mut out, row, row_h(row));
                         }
                     }
                     out.changes.push(Change {

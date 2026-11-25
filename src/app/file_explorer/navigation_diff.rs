@@ -77,11 +77,12 @@ impl OxiApp {
         // Asked per row and frame: a remote file is assumed to be there.
         let remote = crate::vfs::is_remote(&root);
         let can_open = |path: &str| remote || root.join(path).is_file();
+        let wrap = self.conv.settings.editor.word_wrap;
         self.conv
             .diff_view
             .git
             .as_mut()?
-            .show(ui, &source, &can_open, block_actions)
+            .show(ui, &source, &can_open, block_actions, wrap)
     }
 
     pub(crate) fn apply_diff_action(&mut self, action: crate::ui::diff_view::DiffAction) {
@@ -89,6 +90,10 @@ impl OxiApp {
             crate::ui::diff_view::DiffAction::OpenFile { path, line } => (path, line),
             crate::ui::diff_view::DiffAction::Block { action, block } => {
                 self.apply_git_block(action, block);
+                return;
+            }
+            crate::ui::diff_view::DiffAction::ToggleWrap => {
+                self.toggle_word_wrap();
                 return;
             }
         };

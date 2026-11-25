@@ -30,7 +30,7 @@ mod evidence_card;
 mod file_explorer;
 mod pull_requests;
 mod stash;
-pub(crate) use file_explorer::{search_json, workspace_file_list};
+pub(crate) use file_explorer::{hanging_paragraph, search_json, workspace_file_list};
 mod focus_mode;
 mod fork;
 mod frame_stats;
