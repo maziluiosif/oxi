@@ -61,6 +61,17 @@ fn render_gallery() {
     run_gallery(&mut rec);
 }
 
+/// Renders the extra staged README screenshots (Orchestrator and Evidence mode) into
+/// `OXI_DEMO_STILLS` in the exact same stage style as `record_demo`.
+#[test]
+#[ignore = "renders staged Orchestrator and Evidence screenshots; set OXI_DEMO_STILLS"]
+fn render_readme_extras() {
+    let stills = PathBuf::from(std::env::var("OXI_DEMO_STILLS").expect("OXI_DEMO_STILLS"));
+    let mut rec = setup(Some(stills), None, Vec::new());
+    render_orchestrator_stage(&mut rec);
+    render_evidence_stage(&mut rec);
+}
+
 /// A fresh sample project, throwaway home and seeded app. With `video`, frames are composed on
 /// the stage (with `chapters` on its rail) and encoded there, paced to `FPS`.
 fn setup(
@@ -435,7 +446,15 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         }
     }
     // The same moment in every theme (stills only, not part of the video).
-    for theme in ["mariana", "sublime", "midnight", "zed", "light", "dark"] {
+    for theme in [
+        "antigravity",
+        "mariana",
+        "sublime",
+        "midnight",
+        "zed",
+        "light",
+        "dark",
+    ] {
         crate::theme::apply_theme(&rec.harness.ctx, theme);
         rec.harness.run_steps(3);
         rec.still(&format!("theme-{theme}"));
@@ -1546,7 +1565,7 @@ fn tour(rec: &mut Recorder<'_>) {
     rec.chapter(
         1,
         "Or use the subscription you already pay for",
-        "Claude Code, Codex and Cursor over ACP, ChatGPT sign-in, or any OpenAI-compatible API.",
+        "Claude Code, Codex, Antigravity, Cursor, Copilot, ChatGPT sign-in, or any API.",
     );
     rec.hold(3.4);
     rec.still("providers-acp");
@@ -1636,8 +1655,11 @@ fn tour(rec: &mut Recorder<'_>) {
     rec.app()
         .request(crate::git::GitOp::Stage(vec!["stats.py".into()]));
     rec.hold(0.8);
-    if let Some(heading) = rec.label_center("Message") {
-        rec.move_pointer(heading + egui::vec2(60.0, 32.0), 0.7);
+    if let Some(button) = rec
+        .label_center("Commit")
+        .or_else(|| rec.label_center("Stage all & Commit"))
+    {
+        rec.move_pointer(button + egui::vec2(30.0, -44.0), 0.7);
         rec.click();
     }
     for word in "Fix median() for even-length input".split_inclusive(' ') {
@@ -1645,7 +1667,10 @@ fn tour(rec: &mut Recorder<'_>) {
         rec.hold(0.08);
     }
     rec.hold(0.6);
-    if let Some(button) = rec.label_center("Commit") {
+    if let Some(button) = rec
+        .label_center("Commit")
+        .or_else(|| rec.label_center("Stage all & Commit"))
+    {
         rec.move_pointer(button, 0.6);
         rec.click();
     }
@@ -1717,12 +1742,20 @@ fn tour(rec: &mut Recorder<'_>) {
     rec.chapter(
         6,
         "Make it yours",
-        "Five themes, your own MCP servers, keyless web search and local voice dictation.",
+        "Seven themes, your own MCP servers, keyless web search and local voice dictation.",
     );
-    for theme in ["light", "midnight", "sublime", "dark", "mariana"] {
+    for theme in [
+        "light",
+        "midnight",
+        "sublime",
+        "mariana",
+        "zed",
+        "dark",
+        "antigravity",
+    ] {
         rec.crossfade(0.3);
         crate::theme::apply_theme(&rec.harness.ctx, theme);
-        rec.hold(1.25);
+        rec.hold(1.1);
         rec.still(&format!("theme-{theme}"));
     }
 
@@ -1810,6 +1843,20 @@ impl Recorder<'_> {
         image
             .save(dir.join(format!("{name}.png")))
             .expect("save still");
+    }
+
+    /// Save the current screen composed onto the product stage as `stage-{name}.png`.
+    fn staged_still(&mut self, name: &str, title: &str, subtitle: &str) {
+        let Some(dir) = self.stills.clone() else {
+            return;
+        };
+        self.harness.step();
+        let mut image = self.harness.render().expect("render still");
+        paint_traffic_lights(&mut image);
+        let staged = stage::compose_still(&image, title, subtitle, Vec::new(), None);
+        staged
+            .save(dir.join(format!("stage-{name}.png")))
+            .expect("save staged still");
     }
 
     /// Time `frames` UI frames of the current app state and print mean/p50/max.
@@ -4761,4 +4808,327 @@ fn review_orchestrator(rec: &mut Recorder<'_>) {
     }
     rec.harness.run_steps(4);
     rec.still("orchestrator-lead-chat");
+}
+
+/// Staged README screenshot of Orchestrator mode: a lead chat orchestrating Codex and Claude
+/// Code workers in parallel git worktrees.
+fn render_orchestrator_stage(rec: &mut Recorder<'_>) {
+    use crate::delegation::{Status, TaskState};
+    use crate::orchestrator::{Access, WorkerInfo};
+    use crate::settings::WorkerSlot;
+    {
+        let app = rec.app();
+        app.conv.settings_page.open = false;
+        app.conv.settings_page.original = None;
+        app.conv.settings.orchestrator.lead_provider = LlmProviderKind::ClaudeCodeAcp;
+        app.conv.settings.orchestrator.lead_model = "opus".into();
+        app.conv.settings.orchestrator.workers = vec![
+            WorkerSlot {
+                provider: LlmProviderKind::CodexAcp,
+                model: "gpt-5.4".into(),
+                note: "backend, tests".into(),
+                enabled: true,
+            },
+            WorkerSlot {
+                provider: LlmProviderKind::ClaudeCodeAcp,
+                model: "opus".into(),
+                note: "architecture, UI".into(),
+                enabled: true,
+            },
+            WorkerSlot {
+                provider: LlmProviderKind::AntigravityAcp,
+                model: String::new(),
+                note: "exploration, verification".into(),
+                enabled: true,
+            },
+        ];
+        app.set_active_session_provider(LlmProviderKind::Orchestrator);
+        app.active_session_mut().title = "Add CSV export".into();
+        let summary = "I split this across two parallel workers, each in its own git worktree:\n\n\
+            - **Codex (`gpt-5.4`)** — implementing `write_csv()` and unit tests in `src/reports/csv.rs`\n\
+            - **Claude (`opus`)** — adding the Export CSV button and download action to the reports toolbar\n\n\
+            Once Codex finishes, I'll bring both worktrees back and verify the full test suite.";
+        app.active_session_mut().messages = vec![
+            message(
+                MsgRole::User,
+                "Add CSV export to the reports page, with tests",
+                vec![],
+            ),
+            message(
+                MsgRole::Assistant,
+                summary,
+                vec![
+                    AssistantBlock::Thinking(
+                        "The CSV serializer and the toolbar button touch separate files, so I can run Codex and Claude in parallel worktrees."
+                            .into(),
+                    ),
+                    AssistantBlock::Answer(summary.into()),
+                ],
+            ),
+        ];
+        let lead = app.active_session_key();
+        let worker = |task: &str,
+                      provider: &str,
+                      model: &str,
+                      title: &str,
+                      state,
+                      own: bool,
+                      activity: Option<&str>| Status {
+            task: task.into(),
+            state,
+            provider: provider.into(),
+            model: model.into(),
+            title: title.into(),
+            chat: None,
+            worktree: own.then(|| format!("/tmp/oxi-worktree-{task}")),
+            result: None,
+            error: None,
+            worker: Some(WorkerInfo {
+                batch: "b".into(),
+                access: Access::Edit,
+                root: "/repo".into(),
+                cwd: if own {
+                    format!("/tmp/oxi-worktree-{task}")
+                } else {
+                    "/repo".into()
+                },
+                activity: activity.map(str::to_owned),
+                turns: 1,
+                ..Default::default()
+            }),
+        };
+        app.push_demo_worker(
+            lead,
+            worker(
+                "w1",
+                "codexacp",
+                "gpt-5.4",
+                "CSV exporter + tests",
+                TaskState::Running,
+                true,
+                Some("Edit src/reports/csv.rs"),
+            ),
+        );
+        app.push_demo_worker(
+            lead,
+            worker(
+                "w2",
+                "claudecodeacp",
+                "opus",
+                "Export button",
+                TaskState::Completed,
+                true,
+                None,
+            ),
+        );
+    }
+    rec.harness.run_steps(6);
+    rec.staged_still(
+        "orchestrator",
+        "Orchestrate a team of agents",
+        "One lead plans and runs workers in parallel, each in its own git worktree.",
+    );
+}
+
+/// Synthetic fallback UI mockup for Evidence mode captures when headless Chrome is unavailable.
+fn write_synthetic_login_mockup(path: &Path, show_error: bool) {
+    let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([250, 250, 247, 255]));
+    let fill_rect = |img: &mut image::RgbaImage, x0: u32, y0: u32, w: u32, h: u32, c: [u8; 4]| {
+        for y in y0..(y0 + h).min(img.height()) {
+            for x in x0..(x0 + w).min(img.width()) {
+                img.put_pixel(x, y, image::Rgba(c));
+            }
+        }
+    };
+    let stroke_rect = |img: &mut image::RgbaImage, x0: u32, y0: u32, w: u32, h: u32, c: [u8; 4]| {
+        fill_rect(img, x0, y0, w, 2, c);
+        fill_rect(img, x0, y0 + h.saturating_sub(2), w, 2, c);
+        fill_rect(img, x0, y0, 2, h, c);
+        fill_rect(img, x0 + w.saturating_sub(2), y0, 2, h, c);
+    };
+    // Title bar block
+    fill_rect(&mut img, 48, 44, 108, 20, [34, 38, 46, 255]);
+    // Email input
+    fill_rect(&mut img, 48, 88, 280, 38, [255, 255, 255, 255]);
+    stroke_rect(&mut img, 48, 88, 280, 38, [204, 204, 204, 255]);
+    fill_rect(&mut img, 60, 103, 140, 8, [96, 104, 118, 255]);
+    // Password input
+    fill_rect(&mut img, 48, 138, 280, 38, [255, 255, 255, 255]);
+    let pw_border = if show_error {
+        [221, 51, 51, 255]
+    } else {
+        [204, 204, 204, 255]
+    };
+    stroke_rect(&mut img, 48, 138, 280, 38, pw_border);
+    for i in 0..7 {
+        fill_rect(&mut img, 62 + i * 14, 154, 6, 6, [55, 62, 74, 255]);
+    }
+    // Optional inline error bar
+    let btn_y = if show_error {
+        fill_rect(&mut img, 48, 188, 240, 12, [221, 51, 51, 255]);
+        214
+    } else {
+        190
+    };
+    // Sign in button
+    fill_rect(&mut img, 48, btn_y, 96, 36, [226, 106, 44, 255]);
+    fill_rect(&mut img, 70, btn_y + 14, 52, 8, [255, 255, 255, 255]);
+    img.save(path).expect("save synthetic mockup");
+}
+
+/// Staged README screenshot of Evidence mode: before/after captures, a passing check, and
+/// proven claims inside the evidence report card.
+fn render_evidence_stage(rec: &mut Recorder<'_>) {
+    use crate::evidence::{Claim, EvidenceItem, EvidenceReport, ItemKind, Origin, Phase};
+    let dir = rec.project.join(".evidence-stage");
+    std::fs::create_dir_all(&dir).unwrap();
+    let page = |error: &str| {
+        format!(
+            "<html><body style=\"font-family:-apple-system,sans-serif;background:#fafaf7;margin:0;padding:48px\">\
+             <h2 style=\"margin:0 0 20px\">Sign in</h2>\
+             <input placeholder=\"Email\" value=\"ana@example.com\" style=\"display:block;width:280px;padding:10px;margin-bottom:10px;border:1px solid #ccc;border-radius:8px\">\
+             <input type=password value=\"hunter2\" style=\"display:block;width:280px;padding:10px;margin-bottom:10px;border:1px solid {};border-radius:8px\">{}\
+             <button style=\"padding:10px 20px;border:0;border-radius:8px;background:#e26a2c;color:white\">Sign in</button></body></html>",
+            if error.is_empty() { "#ccc" } else { "#d33" },
+            error
+        )
+    };
+    let shoot = |name: &str, html: String, show_error: bool| -> PathBuf {
+        let file = dir.join(format!("{name}.html"));
+        std::fs::write(&file, html).unwrap();
+        let out = dir.join(format!("{name}.png"));
+        match crate::evidence::capture::url(
+            &format!("file://{}", file.display()),
+            &out,
+            640,
+            360,
+            500,
+        ) {
+            Ok(captured) => captured.file,
+            Err(_) => {
+                write_synthetic_login_mockup(&out, show_error);
+                out
+            }
+        }
+    };
+    let before = shoot("before", page(""), false);
+    let after = shoot(
+        "after",
+        page(
+            "<p style=\"color:#d33;margin:0 0 12px;font-size:14px\">Wrong password. Try again or reset it.</p>",
+        ),
+        true,
+    );
+    let item = |id: &str, kind, phase, label: &str, file: Option<&Path>| EvidenceItem {
+        workspace: None,
+        id: id.into(),
+        kind,
+        phase,
+        label: label.into(),
+        origin: Origin::Oxi,
+        file: file.map(|f| f.to_string_lossy().into_owned()),
+        preview: None,
+        fresh: false,
+        source: "Chrome headless · http://localhost:5173/login".into(),
+        command: None,
+        cwd: Some(rec.project.to_string_lossy().into_owned()),
+        exit_code: None,
+        timed_out: false,
+        output: String::new(),
+        duration_ms: 0,
+    };
+    let mut check = item("e3", ItemKind::Check, Phase::Check, "Unit tests", None);
+    check.command = Some("npm test -- login".into());
+    check.exit_code = Some(0);
+    check.duration_ms = 4_210;
+    check.output = "PASS src/login.test.ts\n  ✓ shows an inline error on a wrong password (41 ms)\n\nTests: 1 passed, 1 total".into();
+    let report = EvidenceReport {
+        stale: false,
+        workspace: None,
+        turn: "evidence-stage".into(),
+        requested: true,
+        submitted: true,
+        summary: "A wrong password now shows an inline error under the field instead of failing silently.".into(),
+        items: vec![
+            item("e1", ItemKind::Image, Phase::Before, "Login page, wrong password", Some(&before)),
+            item("e2", ItemKind::Image, Phase::After, "Login page, wrong password", Some(&after)),
+            check,
+        ],
+        claims: vec![
+            Claim {
+                text: "A wrong password shows an inline error under the field".into(),
+                evidence: vec!["e2".into(), "e3".into()],
+            },
+            Claim {
+                text: "Existing email and sign-in layout remain intact".into(),
+                evidence: vec!["e1".into(), "e2".into()],
+            },
+        ],
+    };
+    let publish_claude_options = |rec: &mut Recorder<'_>| {
+        let app = rec.app();
+        {
+            let cfg = app
+                .conv
+                .settings
+                .provider_mut(LlmProviderKind::ClaudeCodeAcp);
+            cfg.model_id = "opus".into();
+            cfg.effort = "high".into();
+        }
+        app.set_active_session_provider(LlmProviderKind::ClaudeCodeAcp);
+        let key = app.active_session_key();
+        let session_key = app.acp_session_key(key);
+        let command = app.conv.settings.active_config().effective_acp_command();
+        crate::agent::acp::config_options::publish(
+            &session_key,
+            &command,
+            &json!([
+                {
+                    "id": "mode", "name": "Mode", "category": "mode", "type": "select",
+                    "currentValue": "acceptEdits",
+                    "options": [{"value": "acceptEdits", "name": "Accept edits"}]
+                },
+                {
+                    "id": "model", "name": "Model", "category": "model", "type": "select",
+                    "currentValue": "opus",
+                    "options": [{"value": "opus", "name": "Opus"}]
+                },
+                {
+                    "id": "effort", "name": "Effort", "category": "thought_level", "type": "select",
+                    "currentValue": "high",
+                    "options": [{"value": "high", "name": "High"}]
+                }
+            ]),
+        );
+    };
+    {
+        let app = rec.app();
+        app.new_chat();
+        app.conv.sidebar.open = true;
+    }
+    publish_claude_options(rec);
+    {
+        let app = rec.app();
+        let key = app.active_session_key();
+        app.run_state_mut(key).evidence_mode.set(true);
+    }
+    rec.begin_turn("Show an error when the password is wrong");
+    rec.send(AgentEvent::TextDelta(
+        "Done. The login form now shows an inline error when the password is wrong.".into(),
+    ));
+    rec.send(AgentEvent::Evidence(Box::new(report)));
+    rec.finish_turn();
+    rec.harness.run_steps(2);
+    publish_claude_options(rec);
+    // Image decoding runs on loader threads; let it land.
+    for _ in 0..30 {
+        rec.harness.run_steps(2);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    rec.harness.run_steps(6);
+    rec.staged_still(
+        "evidence",
+        "Verify every change with Evidence mode",
+        "Before/after captures and checks run by oxi, cited in a proof report.",
+    );
 }
