@@ -147,7 +147,7 @@ impl OxiApp {
                     .color(c_text()),
             )
             .on_hover_text(
-                "Reads ~/.codex/auth.json only to query the ChatGPT usage windows for Codex (ACP).",
+                "Reads ~/.codex/auth.json only to query the ChatGPT usage windows for Codex.",
             );
             crate::ui::chrome::toggle(ui,
                 &mut router.read_antigravity_usage,

@@ -48,7 +48,8 @@ pub fn claim(session_key: &str) {
         .retain(|key| key != session_key);
 }
 
-fn announce(session_key: &str) {
+/// Tell the UI `session_key` holds a turn its agent started on its own.
+pub(super) fn announce(session_key: &str) {
     {
         let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
         if pending.iter().any(|key| key == session_key) {
@@ -150,6 +151,14 @@ impl Held {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(id.into(), u["canStop"].as_bool() == Some(true));
+        } else if kind == "async_task_progress"
+            && let (Some(id), Some(can_stop)) = (u["asyncTaskId"].as_str(), u["canStop"].as_bool())
+        {
+            // Native Claude workflows are only ever seen through progress snapshots.
+            self.controls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.into(), can_stop);
         }
         kind.starts_with("async_task_")
             || kind == "subagent_state_update"

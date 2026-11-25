@@ -175,9 +175,9 @@ impl LlmProviderKind {
             LlmProviderKind::Ollama => "Ollama",
             LlmProviderKind::LocalHf => "Local HF",
             LlmProviderKind::RemoteHf => "Remote HF",
-            LlmProviderKind::ClaudeCodeAcp => "Claude Code (ACP)",
+            LlmProviderKind::ClaudeCodeAcp => "Claude Code",
             LlmProviderKind::CursorAcp => "Cursor (ACP)",
-            LlmProviderKind::CodexAcp => "Codex (ACP)",
+            LlmProviderKind::CodexAcp => "Codex",
             LlmProviderKind::MuseCodeAcp => "Muse Code (ACP)",
             LlmProviderKind::CopilotAcp => "GitHub Copilot (ACP)",
             LlmProviderKind::OpenCodeAcp => "OpenCode (ACP)",
@@ -440,12 +440,16 @@ impl ProviderConfig {
         None
     }
 
-    /// Default command line for launching an ACP agent subprocess. Uses the actively-maintained
-    /// adapter (the older `@zed-industries/claude-code-acp` is deprecated and pins older model
-    /// versions).
-    pub const DEFAULT_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/claude-agent-acp";
+    /// Default command line for Claude Code (official native `claude` CLI over stream-json).
+    pub const DEFAULT_ACP_COMMAND: &'static str = "claude";
+    /// Legacy npm ACP adapter command, kept so existing chats resume seamlessly on upgrade.
+    pub const LEGACY_CLAUDE_ACP_COMMAND: &'static str =
+        "npx -y @agentclientprotocol/claude-agent-acp";
     pub const DEFAULT_CURSOR_ACP_COMMAND: &'static str = "agent acp";
-    pub const DEFAULT_CODEX_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/codex-acp";
+    /// Default command line for Codex (official native `codex app-server` over stdio JSON-RPC).
+    pub const DEFAULT_CODEX_ACP_COMMAND: &'static str = "codex app-server";
+    /// Legacy npm ACP adapter command, kept so existing chats resume seamlessly on upgrade.
+    pub const LEGACY_CODEX_ACP_COMMAND: &'static str = "npx -y @agentclientprotocol/codex-acp";
     /// Scoped package: the unscoped `muse-acp` on npm is an unrelated project.
     pub const DEFAULT_MUSE_ACP_COMMAND: &'static str = "npx -y @brokkai/muse-acp";
     /// The Copilot CLI is its own ACP server; `--acp` serves it over stdio.

@@ -1290,7 +1290,7 @@ fn review_dialogs(rec: &mut Recorder<'_>) {
         rec.harness.run_steps(4);
         rec.still(&format!("dialog-import-{theme}"));
         // The agent list opens above the dialog, and picking from it leaves the dialog open.
-        let pos = rec.label_center("Claude Code (ACP)").expect("agent picker");
+        let pos = rec.label_center("Claude Code").expect("agent picker");
         rec.harness.event(Event::PointerMoved(pos));
         for pressed in [true, false] {
             rec.harness.event(Event::PointerButton {

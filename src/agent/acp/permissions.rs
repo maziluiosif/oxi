@@ -170,7 +170,7 @@ async fn handle_elicitation(
 }
 
 /// Poll the approval back-channel until a decision arrives or the wait is called off.
-async fn wait_decision(
+pub(super) async fn wait_decision(
     rx: &mut StdReceiver<ApprovalDecision>,
     cancel: &Arc<AtomicBool>,
     child_cancel: Option<&AtomicBool>,

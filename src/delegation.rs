@@ -452,7 +452,7 @@ mod tests {
         .unwrap();
         app.join().unwrap();
         let task = started.split_whitespace().nth(2).unwrap().to_string();
-        assert!(started.contains("on Codex (ACP)"), "{started}");
+        assert!(started.contains("on Codex"), "{started}");
 
         let mut status = read_status(&dir, &task).unwrap();
         assert!(

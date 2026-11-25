@@ -67,7 +67,29 @@ impl OxiApp {
                             &mut self.conv.settings.provider_mut(kind).acp_command,
                             default_command,
                         );
-                        if kind == LlmProviderKind::AntigravityAcp {
+                        if kind == LlmProviderKind::ClaudeCodeAcp {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(
+                                    "Uses your installed `claude` CLI directly over its official \
+                                     stream-json protocol (no Node ACP wrapper). Leave blank for \
+                                     `claude`, or enter an ACP command to override.",
+                                )
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
+                            );
+                        } else if kind == LlmProviderKind::CodexAcp {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(
+                                    "Uses your installed `codex` CLI directly over `codex \
+                                     app-server` (native steering, live model/effort switching, \
+                                     and thread resume). Leave blank for `codex app-server`.",
+                                )
+                                .size(FS_TINY)
+                                .color(c_text_muted()),
+                            );
+                        } else if kind == LlmProviderKind::AntigravityAcp {
                             ui.add_space(6.0);
                             ui.label(
                                 RichText::new(

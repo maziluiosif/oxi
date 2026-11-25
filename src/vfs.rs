@@ -131,10 +131,6 @@ pub fn modified(path: &Path) -> Option<SystemTime> {
     metadata(path).ok()?.modified
 }
 
-pub fn is_dir(path: &Path) -> bool {
-    metadata(path).is_ok_and(|m| m.is_dir)
-}
-
 pub fn is_file(path: &Path) -> bool {
     metadata(path).is_ok_and(|m| m.is_file)
 }
@@ -260,11 +256,11 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
     op(path, "remove_file", None)
 }
 
-pub fn remove_dir(path: &Path) -> io::Result<()> {
+pub fn remove_dir_all(path: &Path) -> io::Result<()> {
     if !is_remote(path) {
-        return std::fs::remove_dir(path);
+        return std::fs::remove_dir_all(path);
     }
-    op(path, "remove_dir", None)
+    op(path, "remove_dir_all", None)
 }
 
 /// `std::fs::canonicalize`, except a remote path stays as it is (the server resolves it).

@@ -275,6 +275,7 @@ pub enum FileOperation {
     NewFolder(PathBuf),
     Rename(PathBuf),
     Delete(PathBuf),
+    DeleteFolder(PathBuf),
 }
 
 pub struct EditorDocument {

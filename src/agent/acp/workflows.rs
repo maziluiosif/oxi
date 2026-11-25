@@ -149,18 +149,9 @@ pub(super) fn watch(handles: &ConnHandles, cwd: &Path, command: &str) {
     if !command.to_ascii_lowercase().contains("claude") || !safe_id(&handles.session_id) {
         return;
     }
-    let Some(home) = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|p| p.join(".claude")))
-    else {
+    let Some(dir) = workflow_session_dir(cwd, &handles.session_id) else {
         return;
     };
-    let slug: String = cwd
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let dir = home.join("projects").join(slug).join(&handles.session_id);
     let handles = handles.clone();
     tokio::spawn(async move {
         let mut reader = Reader::default();
@@ -189,6 +180,79 @@ pub(super) fn watch(handles: &ConnHandles, cwd: &Path, command: &str) {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
+}
+
+/// Watch Claude Code's workflow journal/transcripts for a native `claude` connection.
+pub(super) fn watch_native(
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    session_id: String,
+    cwd: &Path,
+    held: std::sync::Arc<super::autonomous::Held>,
+    event_tx: std::sync::Arc<
+        tokio::sync::Mutex<Option<std::sync::mpsc::Sender<crate::agent::events::AgentEvent>>>,
+    >,
+) {
+    if !safe_id(&session_id) {
+        return;
+    }
+    let Some(dir) = workflow_session_dir(cwd, &session_id) else {
+        return;
+    };
+    tokio::spawn(async move {
+        let mut reader = Reader::default();
+        while alive.load(std::sync::atomic::Ordering::SeqCst) {
+            let root = session_id.clone();
+            let dir = dir.clone();
+            let read = tokio::task::spawn_blocking(move || {
+                let updates = reader.poll(&dir, &root);
+                (reader, updates)
+            })
+            .await;
+            let Ok((next, updates)) = read else {
+                return;
+            };
+            reader = next;
+            for mut params in updates {
+                mark_native_stoppable(&mut params);
+                held.note_child(&params);
+                let tx = event_tx.lock().await;
+                if let Some(tx) = tx.as_ref() {
+                    let _ = tx.send(crate::agent::events::AgentEvent::Delegated {
+                        root: session_id.clone(),
+                        params,
+                    });
+                } else {
+                    held.hold(&params);
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
+/// A native `claude` connection stops a workflow with the `stop_task` control request, so its
+/// workflow tasks are stoppable; the agents inside a workflow are not individually.
+fn mark_native_stoppable(params: &mut Value) {
+    let update = &mut params["update"];
+    if update["sessionUpdate"] == "async_task_progress" && update["taskType"] == "workflow" {
+        update["canStop"] = json!(true);
+    }
+}
+
+pub(super) fn claude_project_dir(cwd: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|p| p.join(".claude")))?;
+    let slug: String = cwd
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    Some(home.join("projects").join(slug))
+}
+
+fn workflow_session_dir(cwd: &Path, session_id: &str) -> Option<PathBuf> {
+    Some(claude_project_dir(cwd)?.join(session_id))
 }
 
 #[cfg(test)]
@@ -275,6 +339,35 @@ mod tests {
             std::os::unix::fs::symlink(std::env::temp_dir(), dir.join("escape")).unwrap();
             assert!(contained(&dir.canonicalize().unwrap(), &dir.join("escape")).is_none());
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_workflows_are_stoppable_but_their_agents_are_not() {
+        let dir = crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-workflow-stop", "d");
+        std::fs::create_dir_all(dir.join("workflows")).unwrap();
+        std::fs::write(dir.join("workflows/wf-run.json"), json!({"runId":"wf-run","taskId":"btask0001","status":"running","workflowName":"Review",
+            "workflowProgress":[{"agentId":"a1","label":"Audit","state":"running"}]}).to_string()).unwrap();
+        let held = super::super::autonomous::Held::new("mem:stop-test");
+        let mut chats = crate::model::delegated::DelegatedChats::default();
+        for mut value in Reader::default().poll(&dir, "root") {
+            mark_native_stoppable(&mut value);
+            held.note_child(&value);
+            chats.apply("root", &value);
+        }
+        assert!(held.can_cancel("btask0001"));
+        assert!(!held.can_cancel("workflow/wf-run/a1"));
+        let task = chats.chats.iter().find(|c| c.id == "btask0001").unwrap();
+        assert!(
+            task.capabilities["cancel"].is_object(),
+            "the workflow shows Stop"
+        );
+        let agent = chats
+            .chats
+            .iter()
+            .find(|c| c.id == "workflow/wf-run/a1")
+            .unwrap();
+        assert!(!agent.capabilities["cancel"].is_object());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

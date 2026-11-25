@@ -142,6 +142,23 @@ pub(super) fn lookup(key: &str, command_line: &str, cwd: &Path) -> Option<String
     lookup_in(&store_path(), key, command_line, cwd)
 }
 
+/// Look up a persisted session id under `command_line`, falling back to legacy launch commands
+/// (e.g. an older ACP adapter command whose native session id is reusable by the official CLI).
+pub(super) fn lookup_with_fallbacks(
+    key: &str,
+    command_line: &str,
+    cwd: &Path,
+    fallbacks: &[&str],
+) -> Option<String> {
+    let path = store_path();
+    if let Some(id) = lookup_in(&path, key, command_line, cwd) {
+        return Some(id);
+    }
+    fallbacks
+        .iter()
+        .find_map(|legacy| lookup_in(&path, key, legacy, cwd))
+}
+
 /// Bind an agent session id to this oxi session, replacing that agent's previous binding.
 pub(super) fn remember(key: &str, command_line: &str, cwd: &Path, session_id: &str) {
     remember_in(&store_path(), key, command_line, cwd, session_id)

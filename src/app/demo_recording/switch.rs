@@ -145,7 +145,7 @@ fn switch_clip(rec: &mut Recorder<'_>) {
     rec.hold(0.4);
     rec.type_text("codex", 1);
     rec.hold(0.3);
-    if let Some(item) = rec.label_center("Codex (ACP)") {
+    if let Some(item) = rec.label_center("Codex") {
         rec.move_pointer(item, 0.6);
         rec.hold(0.2);
         // Only the press is drawn: picking through the menu would also launch the real agent
