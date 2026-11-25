@@ -110,7 +110,7 @@ fn selected_text_stays_in_one_pane() {
         "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,3 @@\n keep one\n-old two\n+new two\n keep three\n",
     );
     let view = slot.as_mut().unwrap();
-    view.ensure_layout(true);
+    view.ensure_layout(true, &egui::Context::default());
     let first = (0..view.layout.rows.len())
         .find(|&row| view.pane_line(row, 1).is_some())
         .unwrap();
@@ -149,7 +149,14 @@ fn split_rows_pair_changes_and_fold_long_unchanged_runs() {
     }
     text.push_str("+tail\n");
     let model = parse(&text);
-    let layout = build_rows(&model, true, true, &HashSet::new(), &HashSet::new());
+    let layout = build_rows(
+        &model,
+        true,
+        true,
+        &HashSet::new(),
+        &HashSet::new(),
+        &mut |_, _, _| 1,
+    );
     let folds: Vec<_> = layout
         .rows
         .iter()
@@ -172,7 +179,14 @@ fn split_rows_pair_changes_and_fold_long_unchanged_runs() {
     }));
     assert_eq!(layout.changes.len(), 2);
     let expanded = HashSet::from([(0, 0)]);
-    let layout = build_rows(&model, true, true, &expanded, &HashSet::new());
+    let layout = build_rows(
+        &model,
+        true,
+        true,
+        &expanded,
+        &HashSet::new(),
+        &mut |_, _, _| 1,
+    );
     assert_eq!(
         layout
             .rows
@@ -181,4 +195,96 @@ fn split_rows_pair_changes_and_fold_long_unchanged_runs() {
             .count(),
         1
     );
+}
+
+#[test]
+fn wrapped_rows_take_the_taller_side() {
+    let model = parse("--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n keep\n-old\n+new\n end\n");
+    // Old line `old` (item 1) wraps into three rows, new line `new` (item 2) into two.
+    let mut line_rows = |_: usize, item: usize, pane: usize| match (item, pane) {
+        (1, _) => 3,
+        (2, _) => 2,
+        _ => 1,
+    };
+    let layout = build_rows(
+        &model,
+        true,
+        false,
+        &HashSet::new(),
+        &HashSet::new(),
+        &mut line_rows,
+    );
+    let h = line_height();
+    assert_eq!(layout.ys, [0.0, h, 4.0 * h]);
+    assert_eq!(layout.total, 5.0 * h);
+    assert_eq!((layout.changes[0].y, layout.changes[0].h), (h, 3.0 * h));
+    // Inline, each line takes its own rows.
+    let layout = build_rows(
+        &model,
+        false,
+        false,
+        &HashSet::new(),
+        &HashSet::new(),
+        &mut line_rows,
+    );
+    assert_eq!(layout.ys, [0.0, h, 4.0 * h, 6.0 * h]);
+}
+
+#[test]
+fn rewrapping_keeps_the_same_point_of_the_top_row_in_view() {
+    let model = parse("--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n keep\n-old\n+new\n end\n");
+    let layout = |rows: usize| {
+        build_rows(
+            &model,
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &mut |_, item, _| if item == 0 { rows } else { 1 },
+        )
+    };
+    let h = line_height();
+    let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    // Half way into the second row (`old`), below a first row that then wraps into three.
+    let unwrapped = layout(1);
+    let (row, fraction) = unwrapped.anchor(1.5 * h).unwrap();
+    assert!(row == 1 && close(fraction, 0.5));
+    assert!(close(
+        layout(3).anchored_y((row, fraction)).unwrap(),
+        3.5 * h
+    ));
+    // Inside a wrapped row, the same fraction of it.
+    let (row, fraction) = layout(3).anchor(1.5 * h).unwrap();
+    assert!(row == 0 && close(fraction, 0.5));
+    assert!(close(unwrapped.anchored_y((0, 0.5)).unwrap(), 0.5 * h));
+    assert_eq!(unwrapped.anchored_y((9, 0.0)), None);
+}
+
+#[test]
+fn selection_covers_each_row_a_line_wraps_into() {
+    let ctx = egui::Context::default();
+    let mut galley = None;
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        let job = LayoutJob::simple(
+            "alpha beta gamma delta epsilon zeta".to_owned(),
+            code_font(),
+            Color32::WHITE,
+            f32::INFINITY,
+        );
+        galley = Some(super::paint::line_galley(ui.ctx(), job, Some(80.0), 20.0));
+    });
+    let galley = galley.unwrap();
+    assert!(galley.rows.len() > 2);
+    // Rows sit one line height apart.
+    assert!((galley.rows[1].pos.y - galley.rows[0].pos.y - 20.0).abs() < 0.01);
+    // From the middle of the first row on past the line's end: every row, the last one
+    // with the newline.
+    let spans = super::paint::selection_spans(&galley, 3, usize::MAX, 20.0);
+    assert_eq!(spans.len(), galley.rows.len());
+    assert!(spans[0].1 > 0.0);
+    assert!(spans[1].1 <= galley.rows[1].pos.x + 0.01);
+    let last = galley.rows.last().unwrap();
+    assert!(spans.last().unwrap().2 > last.pos.x + last.rect().width());
+    // Within the first row only.
+    assert_eq!(super::paint::selection_spans(&galley, 0, 2, 20.0).len(), 1);
 }

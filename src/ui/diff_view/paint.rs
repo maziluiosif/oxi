@@ -9,6 +9,7 @@ impl DiffView {
         source: &str,
         split_possible: bool,
         can_open: &dyn Fn(&str) -> bool,
+        wrap: bool,
     ) -> Option<DiffAction> {
         let mut action = None;
         ui.spacing_mut().item_spacing.x = 6.0;
@@ -73,6 +74,15 @@ impl DiffView {
             };
             if segment(ui, "Split", !inline, split_possible, split_hint).clicked() {
                 self.inline = false;
+            }
+            ui.add_space(6.0);
+            let wrap_hint = if wrap {
+                "Stop wrapping long lines"
+            } else {
+                "Wrap long lines"
+            };
+            if segment(ui, "Wrap", wrap, true, wrap_hint).clicked() {
+                action = Some(DiffAction::ToggleWrap);
             }
             if self.layout.foldable {
                 ui.add_space(6.0);
@@ -269,20 +279,39 @@ impl DiffView {
                 }
                 Row::Split { file, left, right } => {
                     let half = (width / 2.0).floor();
-                    let left_rect = Rect::from_min_size(rect.min, vec2(half, line_h));
+                    let left_rect = Rect::from_min_size(rect.min, vec2(half, rect.height()));
                     let right_rect = Rect::from_min_max(
                         pos2(rect.left() + half + 1.0, rect.top()),
                         rect.right_bottom(),
                     );
-                    for (side, item, pane) in [(0, left, left_rect), (1, right, right_rect)] {
+                    for (side, item, column) in [(0, left, left_rect), (1, right, right_rect)] {
                         let f = &self.model.files[file];
                         let Some(line) = item.and_then(|i| f.line(i)) else {
-                            paint_hatch(&painter, pane);
+                            paint_hatch(&painter, column);
                             if self.selection.is_some_and(|sel| sel.pane == side) {
                                 selection_runs.push(Vec::new());
                             }
                             continue;
                         };
+                        let galley = line_job(f, line, side)
+                            .map(|job| line_galley(ui.ctx(), job, self.wrap_width(side), line_h));
+                        // The line's own rows; below them, space where the other side wraps
+                        // into more (hatched within a change, like VS Code's filler).
+                        let own_h =
+                            galley.as_ref().map_or(1, |g| g.rows.len().max(1)) as f32 * line_h;
+                        let pane = Rect::from_min_size(
+                            column.min,
+                            vec2(column.width(), own_h.min(column.height())),
+                        );
+                        if column.bottom() - pane.bottom() > 0.5 && line.kind != Kind::Context {
+                            paint_hatch(
+                                &painter,
+                                Rect::from_x_y_ranges(
+                                    column.x_range(),
+                                    pane.bottom()..=column.bottom(),
+                                ),
+                            );
+                        }
                         let number = if side == 0 { line.old_no } else { line.new_no };
                         paint_line_chrome(&painter, pane, line.kind, &[number], numbers_w);
                         let open = (side == 1 && f.new_path.as_deref().is_some_and(can_open))
@@ -292,9 +321,8 @@ impl DiffView {
                         }
                         let text_left = pane.left() + numbers_w + 2.0 * GUTTER_PAD + SIGN_W;
                         self.place_line_text(
-                            ui,
                             (index, side),
-                            line_job(f, line, side),
+                            galley,
                             line.text.chars().count(),
                             pane,
                             text_left,
@@ -311,7 +339,7 @@ impl DiffView {
                 Row::Inline { file, item } => {
                     let f = &self.model.files[file];
                     let Some(line) = f.line(item) else { continue };
-                    let pane = Rect::from_min_size(rect.min, vec2(width, line_h));
+                    let pane = Rect::from_min_size(rect.min, vec2(width, rect.height()));
                     let inline_numbers = 2.0 * numbers_w + 8.0;
                     paint_line_chrome(
                         &painter,
@@ -330,10 +358,11 @@ impl DiffView {
                     }
                     let side = usize::from(line.kind != Kind::Removed);
                     let text_left = pane.left() + inline_numbers + 2.0 * GUTTER_PAD + SIGN_W;
+                    let galley = line_job(f, line, side)
+                        .map(|job| line_galley(ui.ctx(), job, self.wrap_width(2), line_h));
                     self.place_line_text(
-                        ui,
                         (index, 2),
-                        line_job(f, line, side),
+                        galley,
                         line.text.chars().count(),
                         pane,
                         text_left,
@@ -388,59 +417,66 @@ impl DiffView {
         action
     }
 
-    /// Queue one line's text for painting and add its selected span to the selection shape.
+    /// Queue one line's text (laid out by [`line_galley`]) for painting and add its selected
+    /// span, on each row it wraps into, to the selection shape.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn place_line_text(
         &self,
-        ui: &Ui,
         (row, pane_index): (usize, usize),
-        job: Option<LayoutJob>,
+        galley: Option<Arc<egui::Galley>>,
         chars: usize,
         pane: Rect,
         text_left: f32,
         texts: &mut Vec<(Arc<egui::Galley>, egui::Pos2, Rect)>,
         selection_runs: &mut Vec<Vec<Rect>>,
     ) {
-        let galley = job.map(|job| ui.painter().layout_job(job));
         let x = text_left - self.scroll_x;
+        let line_h = line_height();
         if let Some(sel) = self.selection.filter(|sel| sel.pane == pane_index) {
             let (start, end) = sel.sorted();
             if start != end && (start.0..=end.0).contains(&row) {
-                let x_of = |col: usize| {
-                    galley
-                        .as_ref()
-                        .map_or(0.0, |g| g.pos_from_cursor(CCursor::new(col)).min.x)
-                };
                 let from = if row == start.0 {
                     start.1.min(chars)
                 } else {
                     0
                 };
-                let left = x_of(from);
-                let right = if row == end.0 {
-                    x_of(end.1.min(chars))
+                // Past the end, the selection takes the newline too (drawn half a row wide,
+                // like the editor's newline marker).
+                let to = if row == end.0 {
+                    end.1.min(chars)
                 } else {
-                    // Past the end, like the editor's newline marker.
-                    galley.as_ref().map_or(0.0, |g| g.size().x) + pane.height() * 0.5
+                    usize::MAX
                 };
-                if right > left {
+                let spans = match &galley {
+                    Some(galley) => selection_spans(galley, from, to, line_h),
+                    None if to > 0 => vec![(0, 0.0, line_h * 0.5)],
+                    None => Vec::new(),
+                };
+                if spans.is_empty() {
+                    selection_runs.push(Vec::new());
+                }
+                for (visual_row, left, right) in spans {
+                    let top = pane.top() + visual_row as f32 * line_h;
                     selection_runs
                         .last_mut()
                         .expect("never empty")
                         .push(Rect::from_min_max(
-                            pos2(x + left, pane.top()),
-                            pos2(x + right, pane.bottom()),
+                            pos2(x + left, top),
+                            pos2(x + right, top + line_h),
                         ));
-                } else {
-                    selection_runs.push(Vec::new());
                 }
             }
         }
         if let Some(galley) = galley {
-            let pos = pos2(x, pane.center().y - galley.size().y / 2.0);
+            let pos = pos2(x, pane.top());
             let clip = Rect::from_min_max(pos2(text_left, pane.top()), pane.max);
             texts.push((galley, pos, clip));
         }
+    }
+
+    /// The wrap width of `pane` this frame, if wrapping.
+    pub(super) fn wrap_width(&self, pane: usize) -> Option<f32> {
+        self.wrap.map(|widths| widths[pane])
     }
 
     /// Buttons for the block under the pointer, over the top right of its first visible row.
@@ -735,12 +771,14 @@ pub(super) fn paint_line_chrome(
     } else {
         fg.gamma_multiply(0.75)
     };
+    // On the line's first row: its wrapped rows go unnumbered.
+    let y = pane.top() + line_height().min(pane.height()) / 2.0;
     let mut x = pane.left() + GUTTER_PAD;
     for number in numbers {
         x += numbers_w;
         if let Some(n) = number {
             painter.text(
-                pos2(x, pane.center().y),
+                pos2(x, y),
                 Align2::RIGHT_CENTER,
                 n.to_string(),
                 code_font(),
@@ -755,7 +793,7 @@ pub(super) fn paint_line_chrome(
         Kind::Context => return,
     };
     painter.text(
-        pos2(x - 8.0 + GUTTER_PAD + SIGN_W / 2.0, pane.center().y),
+        pos2(x - 8.0 + GUTTER_PAD + SIGN_W / 2.0, y),
         Align2::CENTER_CENTER,
         sign,
         code_font(),
@@ -994,6 +1032,79 @@ pub(super) fn line_job(file: &DiffFile, line: &Line, side: usize) -> Option<Layo
         );
     }
     Some(job)
+}
+
+/// A line's layout: wrapped at `wrap_width` (like the editor, with its hanging indent), each
+/// row centered in a `line_h` slot so rows sit `line_h` apart.
+pub(super) fn line_galley(
+    ctx: &egui::Context,
+    mut job: LayoutJob,
+    wrap_width: Option<f32>,
+    line_h: f32,
+) -> Arc<egui::Galley> {
+    job.wrap.max_width = wrap_width.unwrap_or(f32::INFINITY);
+    let galley = ctx.fonts_mut(|fonts| {
+        let mut lay_out = |job| fonts.layout_job(job);
+        if wrap_width.is_some() && editor_wrap_indent() {
+            crate::app::hanging_paragraph(job, &mut lay_out)
+        } else {
+            lay_out(job)
+        }
+    });
+    let mut spaced = (*galley).clone();
+    let mut rect = Rect::NOTHING;
+    let mut mesh_bounds = Rect::NOTHING;
+    for (k, placed) in spaced.rows.iter_mut().enumerate() {
+        placed.pos.y = k as f32 * line_h + (line_h - placed.rect().height()) / 2.0;
+        rect |= placed.rect();
+        mesh_bounds |= placed.visuals.mesh_bounds.translate(placed.pos.to_vec2());
+    }
+    spaced.rect = rect;
+    spaced.mesh_bounds = mesh_bounds;
+    Arc::new(spaced)
+}
+
+/// Whether `text` surely fits in `width` on one row: monospace ASCII without tabs is measured
+/// by counting, anything else is left to layout.
+pub(super) fn fits_unwrapped(text: &str, width: f32, ctx: &egui::Context) -> bool {
+    if !text.is_ascii() || text.contains('\t') {
+        return false;
+    }
+    let char_w = ctx.fonts_mut(|f| f.glyph_width(&code_font(), '0'));
+    text.len() as f32 * char_w < width - 1.0
+}
+
+/// The selected part of each row of `galley` for chars `from..to` (`usize::MAX`: on past the
+/// end of the line), as (row, left, right) in the galley's coordinates.
+pub(super) fn selection_spans(
+    galley: &egui::Galley,
+    from: usize,
+    to: usize,
+    line_h: f32,
+) -> Vec<(usize, f32, f32)> {
+    let mut out = Vec::new();
+    let mut offset = 0;
+    let last = galley.rows.len().saturating_sub(1);
+    for (k, placed) in galley.rows.iter().enumerate() {
+        let count = placed.char_count_excluding_newline().0;
+        let (a, b) = (from.max(offset), to.min(offset + count));
+        // The selection goes on past this row: to its end (or the line's, plus the newline).
+        let on = to > offset + count;
+        if a < b || (on && a <= offset + count) {
+            let x_of = |char: usize| placed.pos.x + placed.x_offset(CharIndex(char - offset));
+            let left = x_of(a.min(offset + count));
+            let right = match (on, k == last) {
+                (true, true) => placed.pos.x + placed.rect().width() + line_h * 0.5,
+                (true, false) => placed.pos.x + placed.rect().width(),
+                _ => x_of(b),
+            };
+            if right > left {
+                out.push((k, left, right));
+            }
+        }
+        offset += count;
+    }
+    out
 }
 
 pub(crate) fn segment(

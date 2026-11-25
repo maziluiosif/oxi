@@ -300,8 +300,9 @@ pub struct EditorDocument {
     /// Cached minimap silhouette, rebuilt only when the content or palette changes so
     /// idle and scrolling frames no longer rescan the whole file.
     pub minimap_cache: Option<super::file_explorer::MinimapGeometry>,
-    /// Width used by the previous editor layout. A width change re-anchors the scroll
-    /// position to `viewport_anchor_line` so soft wrapping cannot move the document.
+    /// Width the previous editor layout wrapped at (infinite unwrapped). A change, from a resize
+    /// or from toggling wrap, re-anchors the scroll position to `viewport_anchor_line` so soft
+    /// wrapping cannot move the document.
     pub viewport_width_bits: Option<u32>,
     /// First logical source line visible in the editor viewport on the previous frame.
     pub viewport_anchor_line: usize,

@@ -42,6 +42,7 @@ pub(crate) use code_navigation::CodeNavState;
 pub(crate) use editor_commands::chord_pending;
 pub(crate) use file_picker::{PickerCache, PickerOutline, workspace_file_list};
 pub(crate) use find_replace::{FIND_FIELD_ID, FindCache};
+pub(crate) use line_layout::hanging_paragraph;
 pub(crate) use minimap::MinimapGeometry;
 pub(crate) use multi_cursor::DocumentView;
 #[cfg(test)]
