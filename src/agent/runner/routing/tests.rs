@@ -366,7 +366,10 @@ async fn acp_failover_replays_progress_preserves_permissions_and_stops_safely() 
     // When a worker's assigned subscription hits quota mid-turn, it fails over to another
     // enabled subscription on the orchestrator team regardless of its specialization note.
     let (events, second_prompt) = run_case("worker_quota", false, false, false).await;
-    assert!(!second_prompt.is_empty(), "worker should fail over to Claude");
+    assert!(
+        !second_prompt.is_empty(),
+        "worker should fail over to Claude"
+    );
     assert!(
         events
             .iter()

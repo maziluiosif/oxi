@@ -180,11 +180,8 @@ pub(super) fn render_blockquote(
                                 }
                                 Event::Start(Tag::CodeBlock(kind)) => {
                                     let lang = code_block_language(&kind);
-                                    let base = ui
-                                        .id()
-                                        .with("quote_fence")
-                                        .with(*fence_idx)
-                                        .with(&lang);
+                                    let base =
+                                        ui.id().with("quote_fence").with(*fence_idx).with(&lang);
                                     *fence_idx += 1;
                                     render_fenced_block(ui, inner_w, kind, it, base);
                                 }

@@ -1528,7 +1528,8 @@ fn parse_system_report(text: &str) -> SystemReportView {
     let mut single_who: Option<String> = None;
 
     for line in lines {
-        if line == "Worker output for the lead to review. Each quoted report comes from the named worker."
+        if line
+            == "Worker output for the lead to review. Each quoted report comes from the named worker."
         {
             continue;
         }
@@ -1665,7 +1666,10 @@ mod answer_render_tests {
         assert_eq!(view.title, "Delegated task finished · Codex");
         assert!(view.all_completed);
         assert!(!view.any_failed);
-        assert_eq!(view.body_markdown, "Task d1 (Codex): completed.\n\nReport:\nAll good.");
+        assert_eq!(
+            view.body_markdown,
+            "Task d1 (Codex): completed.\n\nReport:\nAll good."
+        );
     }
 
     #[test]

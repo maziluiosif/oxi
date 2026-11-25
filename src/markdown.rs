@@ -206,7 +206,9 @@ fn render_markdown_impl(ui: &mut Ui, src: &str, base_dir: Option<&Path>, wrap_w:
             Event::Start(Tag::Heading { level, .. }) => {
                 render_heading(ui, wrap_w, level, &mut it);
             }
-            Event::Start(Tag::List(kind)) => render_list(ui, wrap_w, kind, 0, &mut it, &mut fence_idx),
+            Event::Start(Tag::List(kind)) => {
+                render_list(ui, wrap_w, kind, 0, &mut it, &mut fence_idx)
+            }
             Event::Start(Tag::CodeBlock(kind)) => {
                 let lang = blocks::code_block_language(&kind);
                 let base = ui.id().with("md_fence").with(fence_idx).with(&lang);
@@ -405,7 +407,14 @@ fn render_list(
                                             // that column so list-in-list spacing is stable
                                             // instead of accumulating the outer list's marker
                                             // offset again.
-                                            render_list(ui, text_w, nested, depth + 1, it, fence_idx);
+                                            render_list(
+                                                ui,
+                                                text_w,
+                                                nested,
+                                                depth + 1,
+                                                it,
+                                                fence_idx,
+                                            );
                                         }
                                         Some(Event::Start(Tag::Heading { level, .. })) => {
                                             render_heading(ui, text_w, level, it);
@@ -811,7 +820,9 @@ mod nested_list_tests {
         assert_eq!(count_exact(&texts, "1."), 1);
         assert_eq!(count_exact(&texts, "2."), 1);
         assert_eq!(count_exact(&texts, "3."), 1);
-        assert!(p_code.y < code.y && code.y < p_quote.y && p_quote.y < quote.y && quote.y < sibling.y);
+        assert!(
+            p_code.y < code.y && code.y < p_quote.y && p_quote.y < quote.y && quote.y < sibling.y
+        );
         assert!(done_parent.y < pending_child.y && pending_child.y < sibling_task.y);
         assert!(pending_child.x > done_parent.x);
         assert!(only_nested.y < after_empty.y && only_nested.x > after_empty.x);

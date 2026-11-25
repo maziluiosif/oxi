@@ -801,7 +801,10 @@ mod tests {
             LlmProviderKind::OpenCodeAcp,
         ] {
             app.conv.settings.orchestrator.lead_provider = lead;
-            assert!(app.should_poll_quota(), "lead {lead:?} should poll team quota");
+            assert!(
+                app.should_poll_quota(),
+                "lead {lead:?} should poll team quota"
+            );
         }
 
         // Router also polls when any probe is enabled.

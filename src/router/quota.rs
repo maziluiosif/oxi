@@ -107,9 +107,7 @@ impl QuotaSnapshot {
             return true;
         }
         let applicable_exhausted = self.windows.iter().any(|w| {
-            w.applies_to(model)
-                && w.resets_at.is_none_or(|t| t > now)
-                && w.used_pct >= 99.0
+            w.applies_to(model) && w.resets_at.is_none_or(|t| t > now) && w.used_pct >= 99.0
         });
         if applicable_exhausted {
             return true;
@@ -980,15 +978,14 @@ fn antigravity_limit_reached(windows: &[UsageWindow]) -> bool {
 fn antigravity_family_scope(family: &str, multi_group: bool) -> (String, Option<String>) {
     let lower = family.to_ascii_lowercase();
     if lower.contains("claude") || lower.contains("gpt") || lower.contains("third") {
-        let (label, scope) = if (lower.contains("claude") && lower.contains("gpt"))
-            || lower.contains("third")
-        {
-            ("Claude/GPT", "claude|gpt")
-        } else if lower.contains("claude") {
-            ("Claude", "claude")
-        } else {
-            ("GPT", "gpt")
-        };
+        let (label, scope) =
+            if (lower.contains("claude") && lower.contains("gpt")) || lower.contains("third") {
+                ("Claude/GPT", "claude|gpt")
+            } else if lower.contains("claude") {
+                ("Claude", "claude")
+            } else {
+                ("GPT", "gpt")
+            };
         return (label.into(), Some(scope.into()));
     }
     if lower.contains("argon") {

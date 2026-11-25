@@ -660,9 +660,8 @@ impl OxiApp {
                     {
                         reroute_index += 1;
                         if w.rerouted_from.is_none() {
-                            w.rerouted_from = Some(
-                                crate::app::composer::composer_provider_label(k).to_string(),
-                            );
+                            w.rerouted_from =
+                                Some(crate::app::composer::composer_provider_label(k).to_string());
                         }
                         w.provider = fallback.provider.clone();
                         w.model = fallback.model.clone();
@@ -1064,10 +1063,7 @@ impl OxiApp {
             }
         }
         self.conv.delegations.retain(|t| {
-            !t.parent_deleted
-                || t.cleanup.is_some()
-                || t.discard_pending
-                || t.prep_rx.is_some()
+            !t.parent_deleted || t.cleanup.is_some() || t.discard_pending || t.prep_rx.is_some()
         });
     }
 
@@ -2139,7 +2135,10 @@ mod tests {
         assert_eq!(status.provider, "openai");
         assert_eq!(status.model, "fallback-model");
         assert_eq!(
-            status.worker.as_ref().and_then(|w| w.rerouted_from.as_deref()),
+            status
+                .worker
+                .as_ref()
+                .and_then(|w| w.rerouted_from.as_deref()),
             Some("Claude")
         );
 
@@ -2547,8 +2546,7 @@ mod tests {
 
     #[test]
     fn deleting_lead_chat_cancels_running_worker_and_cleans_up_worktree_and_records() {
-        let root =
-            crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-delete-lead", "d");
+        let root = crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-delete-lead", "d");
         let (mut app, lead, dir) = test_lead(&root);
         git(&root, &["init", "-q"]);
         git(&root, &["config", "user.name", "Oxi Test"]);
@@ -2601,7 +2599,9 @@ mod tests {
             "persisted worker records should be removed on lead deletion"
         );
         assert_eq!(
-            crate::delegation::read_status(&dir, "orphan").unwrap().state,
+            crate::delegation::read_status(&dir, "orphan")
+                .unwrap()
+                .state,
             TaskState::Cancelled,
             "running worker should be cancelled on lead deletion"
         );
@@ -2615,10 +2615,7 @@ mod tests {
             "worker records should not be recreated after cleanup finishes"
         );
         assert!(
-            app.conv
-                .workspaces
-                .iter()
-                .all(|w| w.root_path != wt_str),
+            app.conv.workspaces.iter().all(|w| w.root_path != wt_str),
             "worktree workspace should be removed"
         );
 
@@ -2634,7 +2631,9 @@ mod tests {
 
         // Create a worker chat whose turn ended with only a failed tool call and no Answer text.
         let mut session = OxiApp::blank_session("Read-only probe");
-        session.messages.push(crate::model::ChatMessage::user("inspect", &[]));
+        session
+            .messages
+            .push(crate::model::ChatMessage::user("inspect", &[]));
         let mut reply = crate::model::ChatMessage::streaming_assistant(None);
         reply.blocks.push(AssistantBlock::Tool {
             tool_call_id: "t1".into(),
@@ -2656,7 +2655,9 @@ mod tests {
         reply.finish_streaming();
         session.messages.push(reply);
         session.session_file = Some("worker-empty.jsonl".into());
-        app.conv.workspaces[lead.workspace_idx].sessions.push(session);
+        app.conv.workspaces[lead.workspace_idx]
+            .sessions
+            .push(session);
 
         let mut task = DelegatedTask {
             dir: dir.clone(),

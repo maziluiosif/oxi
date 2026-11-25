@@ -1890,10 +1890,11 @@ async fn handle_control_request(
             let bash_read_only = effective_name == "bash"
                 && crate::agent::approval::bash_command_arg(&effective_args)
                     .is_some_and(crate::agent::approval::bash_command_is_read_only);
-            let decision =
-                if plan_mode && (is_claude_plan_file_edit(tool_name, &input) || bash_read_only) {
-                    Some(ApprovalDecision::Approve)
-                } else if plan_mode && !is_read_only && !oxi_read_only && tool_name != "ExitPlanMode" {
+            let decision = if plan_mode
+                && (is_claude_plan_file_edit(tool_name, &input) || bash_read_only)
+            {
+                Some(ApprovalDecision::Approve)
+            } else if plan_mode && !is_read_only && !oxi_read_only && tool_name != "ExitPlanMode" {
                 Some(ApprovalDecision::Deny)
             } else if *auto_approve
                 || is_computer_use_tool(tool_name)

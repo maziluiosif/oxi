@@ -365,7 +365,12 @@ fn normalized_program(program: &str) -> Option<&str> {
     if !program.contains('/') {
         return Some(program);
     }
-    for prefix in ["/bin/", "/usr/bin/", "/usr/local/bin/", "/opt/homebrew/bin/"] {
+    for prefix in [
+        "/bin/",
+        "/usr/bin/",
+        "/usr/local/bin/",
+        "/opt/homebrew/bin/",
+    ] {
         if let Some(name) = program.strip_prefix(prefix)
             && !name.is_empty()
             && !name.contains('/')
