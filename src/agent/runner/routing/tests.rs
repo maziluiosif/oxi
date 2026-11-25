@@ -1,7 +1,5 @@
 use super::*;
 
-static QUOTA_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 const ADAPTER: &str = r#"
 import json, sys
 from pathlib import Path
@@ -346,7 +344,7 @@ async fn run_case(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acp_failover_replays_progress_preserves_permissions_and_stops_safely() {
-    let _quota_guard = QUOTA_TEST_LOCK.lock().await;
+    let _quota_guard = crate::router::quota::TEST_LOCK.lock().await;
     // Provider directives in user/worker text never reroute the lead or a worker.
     for mode in ["lead", "worker", "solo"] {
         let (events, second_prompt) = run_case(mode, false, false, false).await;
@@ -673,7 +671,7 @@ async fn acp_failover_replays_progress_preserves_permissions_and_stops_safely() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lead_skips_exhausted_provider_without_launching_it() {
-    let _quota_guard = QUOTA_TEST_LOCK.lock().await;
+    let _quota_guard = crate::router::quota::TEST_LOCK.lock().await;
     crate::secrets::use_mock_store();
     for kind in [LlmProviderKind::CodexAcp, LlmProviderKind::ClaudeCodeAcp] {
         crate::router::quota::clear_cooldown(kind);

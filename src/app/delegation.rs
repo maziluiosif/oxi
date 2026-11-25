@@ -2096,6 +2096,7 @@ mod tests {
         use crate::router::quota::{QuotaSnapshot, UsageWindow};
         use crate::settings::{LlmProviderKind, WorkerSlot};
 
+        let _quota_guard = crate::router::quota::TEST_LOCK.blocking_lock();
         let root =
             crate::fsutil::unique_temp_path(&std::env::temp_dir(), "oxi-quota-fallback", "d");
         let (mut app, _, dir) = test_lead(&root);

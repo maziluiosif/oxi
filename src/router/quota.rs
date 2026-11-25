@@ -156,6 +156,12 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Held by every test that changes the process-wide board (snapshots, cooldowns), so a test's
+/// "this provider is exhausted" setup is not cleared by another test running in parallel.
+/// Async tests `.lock().await` it; plain tests use `blocking_lock()`.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[cfg(test)]
 pub fn set_snapshot_for_tests(kind: LlmProviderKind, snap: QuotaSnapshot) {
     with_board(|b| {
