@@ -56,14 +56,19 @@ pub enum LlmProviderKind {
     /// Not a backend: picks one of the other configured providers (and a model + effort) per
     /// turn. Its `model_id` holds the routing strategy. See `crate::router`.
     Router,
+    /// Not a backend: the user talks to one lead agent (see `AppSettings::orchestrator`), which
+    /// hands work to worker agents on the user's other providers and merges their changes. See
+    /// `crate::orchestrator`.
+    Orchestrator,
 }
 
 impl LlmProviderKind {
     /// Order here drives the provider pill-tab order in Settings → Providers. Ollama and
     /// LM Studio lead the list since they're the local/self-hosted runtimes oxi is built
     /// around; the hosted API providers follow.
-    pub const ALL: [LlmProviderKind; 20] = [
+    pub const ALL: [LlmProviderKind; 21] = [
         LlmProviderKind::Router,
+        LlmProviderKind::Orchestrator,
         LlmProviderKind::LocalHf,
         LlmProviderKind::RemoteHf,
         LlmProviderKind::Ollama,
@@ -110,7 +115,16 @@ impl LlmProviderKind {
             LlmProviderKind::OpenCodeAcp => "opencodeacp",
             LlmProviderKind::AntigravityAcp => "antigravityacp",
             LlmProviderKind::Router => "router",
+            LlmProviderKind::Orchestrator => "orchestrator",
         }
+    }
+
+    /// Picks other providers instead of talking to a backend itself.
+    pub fn is_pseudo(self) -> bool {
+        matches!(
+            self,
+            LlmProviderKind::Router | LlmProviderKind::Orchestrator
+        )
     }
 
     pub fn is_acp(self) -> bool {
@@ -157,7 +171,8 @@ impl LlmProviderKind {
             | LlmProviderKind::AntigravityAcp
             | LlmProviderKind::CopilotAcp
             | LlmProviderKind::OpenCodeAcp
-            | LlmProviderKind::Router => "",
+            | LlmProviderKind::Router
+            | LlmProviderKind::Orchestrator => "",
         }
     }
 
@@ -183,6 +198,7 @@ impl LlmProviderKind {
             LlmProviderKind::OpenCodeAcp => "OpenCode (ACP)",
             LlmProviderKind::AntigravityAcp => "Antigravity (ACP)",
             LlmProviderKind::Router => "Router (auto)",
+            LlmProviderKind::Orchestrator => "Orchestrator",
         }
     }
 
@@ -210,6 +226,7 @@ impl LlmProviderKind {
             | LlmProviderKind::CopilotAcp
             | LlmProviderKind::OpenCodeAcp => "default",
             LlmProviderKind::Router => "balanced",
+            LlmProviderKind::Orchestrator => "lead",
         }
     }
 
@@ -877,7 +894,7 @@ mod tests {
             assert!(!kind.label().is_empty());
             assert!(!kind.default_model_id().is_empty());
             // ACP providers launch subprocesses and the Router delegates; neither has a URL.
-            if !ProviderConfig::new(kind).is_acp() && kind != LlmProviderKind::Router {
+            if !ProviderConfig::new(kind).is_acp() && !kind.is_pseudo() {
                 assert!(!kind.default_base_url().is_empty());
             }
         }

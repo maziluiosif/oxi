@@ -112,7 +112,7 @@ pub fn rank(input: &DecideInput<'_>) -> (Vec<Scored>, Vec<Rejected>) {
     .min(5);
 
     for &kind in input.configured {
-        if kind == LlmProviderKind::Router || excluded.contains(&kind) {
+        if kind.is_pseudo() || excluded.contains(&kind) {
             continue;
         }
         if input.http_only && kind.is_acp() {
@@ -488,6 +488,29 @@ mod tests {
             signals,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn pseudo_providers_are_never_ranked() {
+        let s = settings();
+        let (ranked, _) = rank(&DecideInput {
+            settings: &s,
+            strategy: RouterStrategy::Balanced,
+            profile: &profile(Tier::Light),
+            configured: &[
+                LlmProviderKind::Router,
+                LlmProviderKind::Orchestrator,
+                LlmProviderKind::Ollama,
+            ],
+            previous: None,
+            exclude: &[],
+            http_only: false,
+            signals: &Signals::default(),
+        });
+        assert_eq!(
+            ranked.iter().map(|r| r.kind).collect::<Vec<_>>(),
+            [LlmProviderKind::Ollama]
+        );
     }
 
     const ALL: &[LlmProviderKind] = &[

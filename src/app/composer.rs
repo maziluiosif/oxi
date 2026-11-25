@@ -88,6 +88,7 @@ pub(crate) fn composer_provider_label(kind: crate::settings::LlmProviderKind) ->
         OpenCodeAcp => "OpenCode",
         AntigravityAcp => "Antigravity",
         Router => "Router",
+        Orchestrator => "Orchestrator",
     }
 }
 
@@ -376,6 +377,7 @@ impl OxiApp {
                 self.render_task_panel(ui);
                 self.render_plan_ready_bar(ui);
                 self.render_interrupted_notice(ui);
+                self.render_worker_lead_bar(ui);
                 self.render_delegations(ui);
                 self.render_worktree_setup(ui);
                 self.render_review_comments(ui);

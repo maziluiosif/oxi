@@ -925,13 +925,7 @@ mod integration_tests {
         approval_tx.send(ApprovalDecision::Approve).unwrap();
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut gate = ApprovalGate::new(
-            ApprovalPolicy {
-                write_edit: true,
-                bash: true,
-            },
-            approval_rx,
-        );
+        let mut gate = ApprovalGate::new(ApprovalPolicy::new(true, true), approval_rx);
         let env = ToolEnv {
             enabled: vec![true; ALL_TOOL_NAMES.len()],
             web_search_url: String::new(),
@@ -1125,13 +1119,7 @@ mod integration_tests {
         approval_tx.send(ApprovalDecision::Deny).unwrap();
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut gate = ApprovalGate::new(
-            ApprovalPolicy {
-                write_edit: true,
-                bash: true,
-            },
-            approval_rx,
-        );
+        let mut gate = ApprovalGate::new(ApprovalPolicy::new(true, true), approval_rx);
         let env = ToolEnv {
             enabled: vec![true; ALL_TOOL_NAMES.len()],
             web_search_url: String::new(),
@@ -1292,13 +1280,7 @@ mod integration_tests {
         let (tx, rx) = mpsc::channel::<AgentEvent>();
         let (_approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut gate = ApprovalGate::new(
-            ApprovalPolicy {
-                write_edit: true,
-                bash: true,
-            },
-            approval_rx,
-        );
+        let mut gate = ApprovalGate::new(ApprovalPolicy::new(true, true), approval_rx);
         let env = ToolEnv {
             enabled: vec![true; ALL_TOOL_NAMES.len()],
             web_search_url: String::new(),
@@ -1422,13 +1404,7 @@ mod integration_tests {
         let (tx, rx) = mpsc::channel::<AgentEvent>();
         let (_approval_tx, approval_rx) = mpsc::channel::<ApprovalDecision>();
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut gate = ApprovalGate::new(
-            ApprovalPolicy {
-                write_edit: true,
-                bash: true,
-            },
-            approval_rx,
-        );
+        let mut gate = ApprovalGate::new(ApprovalPolicy::new(true, true), approval_rx);
         let env = ToolEnv {
             enabled: vec![true; ALL_TOOL_NAMES.len()],
             web_search_url: String::new(),

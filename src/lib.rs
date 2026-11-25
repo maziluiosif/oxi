@@ -32,6 +32,7 @@ mod merge3;
 mod model;
 mod oauth;
 mod open_buffers;
+mod orchestrator;
 mod os_open;
 mod remote;
 mod router;

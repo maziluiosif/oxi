@@ -106,6 +106,7 @@ pub(super) fn oxi_tool_name(s: &str) -> Option<&'static str> {
         ])
         .chain(crate::evidence::tools::NAMES)
         .chain(crate::delegation::NAMES)
+        .chain(crate::orchestrator::NAMES)
         .find(|tool| {
             s.strip_suffix(tool)
                 .and_then(|rest| rest.strip_suffix(['_', '.', '/', ':']))
@@ -183,6 +184,20 @@ fn delegation_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(crate::delegation::DIR_ENV).map(std::path::PathBuf::from)
 }
 
+/// The chat's part in an orchestration (see [`crate::orchestrator`]), from its mailbox's name.
+fn orchestrator_role() -> Option<crate::orchestrator::Role> {
+    delegation_dir().and_then(|d| crate::orchestrator::Role::of_dir(&d))
+}
+
+/// `delegate_task` and friends: for plain chats. A lead has its own tools; a worker none.
+fn offers_delegation() -> bool {
+    delegation_dir().is_some() && orchestrator_role().is_none()
+}
+
+fn offers_orchestration() -> bool {
+    orchestrator_role() == Some(crate::orchestrator::Role::Lead)
+}
+
 fn instructions() -> String {
     let mut text = String::from(
         "oxi shows the todo_write checklist live above the user's composer. \
@@ -199,11 +214,15 @@ fn instructions() -> String {
         text.push(' ');
         text.push_str(crate::evidence::tools::INSTRUCTIONS);
     }
-    if delegation_dir().is_some() {
+    if offers_delegation() {
         text.push_str(
             " delegate_task hands a task to another agent (another provider or model) through \
              oxi; its report comes back to this chat.",
         );
+    }
+    if offers_orchestration() {
+        text.push(' ');
+        text.push_str(crate::orchestrator::INSTRUCTIONS);
     }
     text
 }
@@ -280,16 +299,37 @@ fn handle(msg: &Value) -> Option<Value> {
                 tools.push(super::learned_rules::definition());
                 tools.extend(crate::evidence::tools::definitions());
             }
-            if delegation_dir().is_some() {
-                tools.extend(crate::delegation::tool_definitions().iter().map(|def| {
-                    json!({
-                        "name": def["function"]["name"],
-                        "description": def["function"]["description"],
-                        "inputSchema": def["function"]["parameters"],
-                    })
-                }));
+            let as_mcp = |def: &Value| {
+                json!({
+                    "name": def["function"]["name"],
+                    "description": def["function"]["description"],
+                    "inputSchema": def["function"]["parameters"],
+                })
+            };
+            if offers_delegation() {
+                tools.extend(crate::delegation::tool_definitions().iter().map(as_mcp));
+            }
+            if offers_orchestration() {
+                tools.extend(crate::orchestrator::tool_definitions().iter().map(as_mcp));
             }
             json!({ "tools": tools })
+        }
+        "tools/call"
+            if msg["params"]["name"]
+                .as_str()
+                .is_some_and(|name| crate::orchestrator::NAMES.contains(&name)) =>
+        {
+            let name = msg["params"]["name"].as_str().unwrap_or_default();
+            let dir = delegation_dir().filter(|_| offers_orchestration());
+            let (text, is_error) = match crate::orchestrator::call(
+                dir.as_deref(),
+                name,
+                &msg["params"]["arguments"],
+            ) {
+                Ok(text) => (text, false),
+                Err(e) => (e, true),
+            };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
         }
         "tools/call"
             if msg["params"]["name"]
@@ -297,7 +337,7 @@ fn handle(msg: &Value) -> Option<Value> {
                 .is_some_and(|name| crate::delegation::NAMES.contains(&name)) =>
         {
             let name = msg["params"]["name"].as_str().unwrap_or_default();
-            let dir = delegation_dir();
+            let dir = delegation_dir().filter(|_| offers_delegation());
             let (text, is_error) =
                 match crate::delegation::call(dir.as_deref(), name, &msg["params"]["arguments"]) {
                     Ok(text) => (text, false),

@@ -4,7 +4,10 @@ use crate::settings::LlmProviderKind;
 
 /// Provider groups keep selectors skimmable.
 pub(in crate::app) const PROVIDER_GROUPS: &[(&str, &[LlmProviderKind])] = &[
-    ("Automatic", &[LlmProviderKind::Router]),
+    (
+        "Automatic",
+        &[LlmProviderKind::Router, LlmProviderKind::Orchestrator],
+    ),
     (
         "Local / self-hosted",
         &[
@@ -83,6 +86,9 @@ pub(super) fn provider_blurb(kind: LlmProviderKind) -> &'static str {
         }
         LlmProviderKind::AntigravityAcp => {
             "Drive Google Antigravity through its official native Agent Client Protocol server."
+        }
+        LlmProviderKind::Orchestrator => {
+            "Talk to one lead agent; it hands work to agents on your other subscriptions, in parallel work trees when several edit, follows them and merges their changes."
         }
         LlmProviderKind::Router => {
             "Picks a provider, model and effort per turn from the ones you configured, using subscription quota, spend and task difficulty."

@@ -28,6 +28,18 @@ impl OxiApp {
         queued: QueuedSend,
         skip_autocompact: bool,
     ) {
+        if queued.images.is_empty()
+            && queued.texts.is_empty()
+            && crate::orchestrator::is_worker_report(&queued.text)
+        {
+            if self.chat_is_busy(key) || self.setup_holding_agent(key.workspace_idx).is_some() {
+                self.run_state_mut(key).queued.push_front(queued);
+                self.persist_queue(key);
+            } else {
+                self.start_delegated_prompt(key, &queued.text);
+            }
+            return;
+        }
         let draft = self.take_composer_payload_raw();
         self.conv.composer.input = queued.text;
         self.conv.composer.pending_images = queued.images;
@@ -94,7 +106,11 @@ impl OxiApp {
             return;
         };
         run.steer_pending.push(item.text.clone());
-        inbox.push(super::mentions::expand_at_mentions(&item.text, &cwd));
+        if crate::orchestrator::is_worker_report(&item.text) {
+            inbox.push(item.text);
+        } else {
+            inbox.push(super::mentions::expand_at_mentions(&item.text, &cwd));
+        }
     }
 
     /// Take a message handed to the running turn back into the queue, if the agent has not
@@ -501,6 +517,9 @@ impl QueuedSend {
 
     /// One-line label for the queue row.
     pub(crate) fn preview(&self) -> String {
+        if crate::delegation::is_report_message(&self.text) {
+            return crate::ui::messages::system_report_title(&self.text);
+        }
         let line = self
             .text
             .lines()

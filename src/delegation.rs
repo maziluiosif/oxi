@@ -26,6 +26,12 @@ pub const DELEGATE: &str = "delegate_task";
 pub const STATUS: &str = "task_status";
 pub const CANCEL: &str = "task_cancel";
 pub const NAMES: [&str; 3] = [DELEGATE, STATUS, CANCEL];
+
+/// Whether `text` is a synthetic completion report delivered back to a chat by oxi
+/// (either an orchestrator worker batch or a plain delegated task).
+pub fn is_report_message(text: &str) -> bool {
+    crate::orchestrator::is_worker_report(text) || text.starts_with("[Delegated task] ")
+}
 /// How long `delegate_task` waits for the app to take the request.
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Longest `task_status` may wait for a task to end.
@@ -49,12 +55,66 @@ pub fn root() -> PathBuf {
     crate::app_dirs::data_dir().join("delegation")
 }
 
-/// The mailbox of the chat whose agent session key is `session_key`, owned by this process.
+/// The mailbox of the chat whose agent session key is `session_key`, owned by this process. An
+/// orchestrator lead's or worker's mailbox name ends in its role (see
+/// [`crate::orchestrator::Role`]), which tells oxi's MCP server which tools to offer.
 pub fn dir_for(session_key: &str) -> PathBuf {
+    let hash = session_hash(session_key);
+    let role = crate::orchestrator::Role::of_session_key(session_key)
+        .map(|r| format!("-{}", r.slug()))
+        .unwrap_or_default();
+    root().join(format!("{}-{hash}{role}", std::process::id()))
+}
+
+fn session_hash(key: &str) -> String {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(session_key.as_bytes());
-    let hash: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
-    root().join(format!("{}-{hash}", std::process::id()))
+    Sha256::digest(key.as_bytes())[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The open file owns the direct editing turn across all lead chats and app windows. A
+/// process exit releases the OS lock. Keep the lock file so every contender locks the same inode.
+pub fn reserve_checkout(checkout: &Path) -> Result<Option<std::fs::File>, String> {
+    let dir = crate::app_dirs::data_dir().join("worker-checkouts");
+    try_lease(&dir, &session_hash(&checkout.to_string_lossy()))
+}
+
+pub fn reserve_lead(parent: &str) -> Result<Option<std::fs::File>, String> {
+    try_lease(&worker_records(parent), "owner")
+}
+
+fn try_lease(dir: &Path, name: &str) -> Result<Option<std::fs::File>, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join(name))
+        .map_err(|e| e.to_string())?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => {
+            Err(format!("Could not acquire worker reservation: {e}"))
+        }
+    }
+}
+
+/// Durable handoff state, independent of the process that serves the lead's mailbox.
+pub fn worker_records(parent: &str) -> PathBuf {
+    crate::app_dirs::data_dir()
+        .join("worker-records")
+        .join(session_hash(parent))
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorkerRecord {
+    pub status: Status,
+    #[serde(default)]
+    pub delivered: bool,
 }
 
 /// Mailboxes of processes that no longer run (their folder is named after the process id).
@@ -88,6 +148,26 @@ pub enum Request {
         worktree: bool,
     },
     Cancel {
+        task: String,
+    },
+    /// An orchestrator lead starts workers (see [`crate::orchestrator`]), all at once so oxi can
+    /// tell whether several of them edit files and need work trees of their own.
+    Spawn {
+        batch: String,
+        workers: Vec<crate::orchestrator::WorkerRequest>,
+    },
+    /// A follow-up for a worker, in its own chat.
+    Message {
+        task: String,
+        text: String,
+        reply: u64,
+    },
+    Merge {
+        task: String,
+        reply: u64,
+    },
+    /// Remove a worker's work tree: its changes were merged, or are not wanted.
+    Discard {
         task: String,
     },
 }
@@ -131,28 +211,31 @@ pub struct Status {
     pub result: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// Orchestrator workers only (see [`crate::orchestrator`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<crate::orchestrator::WorkerInfo>,
 }
 
-fn requests_dir(dir: &Path) -> PathBuf {
+pub(crate) fn requests_dir(dir: &Path) -> PathBuf {
     dir.join("requests")
 }
 
-fn status_path(dir: &Path, task: &str) -> PathBuf {
+pub(crate) fn status_path(dir: &Path, task: &str) -> PathBuf {
     dir.join("status").join(format!("{task}.json"))
 }
 
 /// Marks that the parent read a finished task's result itself.
-fn fetched_path(dir: &Path, task: &str) -> PathBuf {
+pub(crate) fn fetched_path(dir: &Path, task: &str) -> PathBuf {
     dir.join("status").join(format!("{task}.fetched"))
 }
 
-fn safe_task_id(task: &str) -> bool {
+pub(crate) fn safe_task_id(task: &str) -> bool {
     !task.is_empty()
         && task.len() <= 40
         && task.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -193,10 +276,12 @@ pub fn take_requests(dir: &Path) -> Vec<Request> {
     files
         .into_iter()
         .filter_map(|path| {
-            let request = std::fs::read(&path)
+            let taken = path.with_extension("processing");
+            std::fs::rename(&path, &taken).ok()?;
+            let request = std::fs::read(&taken)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(taken);
             request
         })
         .collect()
@@ -293,7 +378,7 @@ pub fn call(dir: Option<&Path>, name: &str, args: &Value) -> Result<String, Stri
     }
 }
 
-fn string_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn string_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args[key].as_str().map(str::trim).filter(|s| !s.is_empty())
 }
 
@@ -375,7 +460,7 @@ fn cancel(dir: &Path, args: &Value) -> Result<String, String> {
     Ok(format!("Asked oxi to stop task {task}."))
 }
 
-fn now_millis() -> u128 {
+pub(crate) fn now_millis() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -437,6 +522,7 @@ mod tests {
                             worktree: None,
                             result: None,
                             error: None,
+                            worker: None,
                         },
                     );
                     return;

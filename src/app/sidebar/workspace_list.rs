@@ -421,6 +421,18 @@ impl OxiApp {
             if sidebar_changed || self.conv.workspaces[wi].sessions.get(si).is_none() {
                 return true;
             }
+            // An orchestrator worker's chat shows above its lead's composer instead.
+            let open_here =
+                wi == self.conv.active_workspace && si == self.conv.workspaces[wi].active;
+            if !open_here
+                && self.hidden_worker_chat(
+                    self.conv.workspaces[wi].sessions[si]
+                        .session_file
+                        .as_deref(),
+                )
+            {
+                continue;
+            }
             let exceptional = self.sidebar_session_needs_visibility(wi, si, ui.ctx());
             if !searching
                 && !self.conv.sidebar.history

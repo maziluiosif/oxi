@@ -354,6 +354,7 @@ fn resolve_fetch_key(cfg: &ProviderConfig) -> Result<String, String> {
         | LlmProviderKind::AntigravityAcp
         | LlmProviderKind::CopilotAcp
         | LlmProviderKind::OpenCodeAcp
-        | LlmProviderKind::Router => Ok(String::new()),
+        | LlmProviderKind::Router
+        | LlmProviderKind::Orchestrator => Ok(String::new()),
     }
 }

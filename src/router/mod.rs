@@ -100,6 +100,9 @@ pub fn helper_config(
     cfg: crate::settings::ProviderConfig,
     input_chars: usize,
 ) -> crate::settings::ProviderConfig {
+    if cfg.provider == LlmProviderKind::Orchestrator {
+        return crate::orchestrator::lead_config(settings);
+    }
     if cfg.provider != LlmProviderKind::Router {
         return cfg;
     }
@@ -107,7 +110,7 @@ pub fn helper_config(
     // Helpers only use HTTP providers. Avoid ACP installation/PATH discovery on the UI thread.
     let configured: Vec<_> = LlmProviderKind::ALL
         .into_iter()
-        .filter(|kind| !kind.is_acp() && *kind != LlmProviderKind::Router)
+        .filter(|kind| !kind.is_acp() && !kind.is_pseudo())
         .filter(|kind| settings.provider_is_configured(*kind, &oauth))
         .collect();
     let profile = classify::TaskProfile {
@@ -204,4 +207,22 @@ fn message_chars(m: &ChatMessage) -> usize {
                 } => args_summary.as_deref().map_or(0, str::len) + output.len(),
             })
             .sum::<usize>()
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+
+    #[test]
+    fn orchestrator_helpers_use_the_effective_lead_and_model() {
+        let mut s = AppSettings::default();
+        s.orchestrator.lead_provider = LlmProviderKind::OpenAi;
+        s.orchestrator.lead_model = "test-model".into();
+        let cfg = helper_config(&s, s.provider(LlmProviderKind::Orchestrator).clone(), 100);
+        assert_eq!(cfg.provider, LlmProviderKind::OpenAi);
+        assert_eq!(cfg.model_id, "test-model");
+        s.orchestrator.lead_provider = LlmProviderKind::Router;
+        let cfg = helper_config(&s, s.provider(LlmProviderKind::Orchestrator).clone(), 100);
+        assert!(!cfg.provider.is_pseudo());
+    }
 }

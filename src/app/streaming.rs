@@ -243,7 +243,7 @@ impl OxiApp {
             .rev()
             .filter_map(|m| m.route.as_deref())
             .map(|r| r.provider)
-            .find(|p| *p != current && *p != crate::settings::LlmProviderKind::Router)
+            .find(|p| *p != current && !p.is_pseudo())
     }
 
     /// After a failed turn, switch the chat to `kind` and ask it to finish the request. Unlike
@@ -420,7 +420,7 @@ impl OxiApp {
             _ => {}
         }
 
-        self.ensure_session_config(key);
+        let session_config = self.ensure_session_config(key);
         // Don't send into a session whose history is mid-compaction.
         if self.compaction_active_for(key) {
             self.notify_composer("Context is being compacted — try again in a moment.");
@@ -431,13 +431,9 @@ impl OxiApp {
         // ACP agents compact their own context, which oxi's transcript summary can't shrink.
         if !skip_autocompact
             && self.conv.compaction.is_none()
-            && !self.ensure_session_config(key).provider.is_acp()
+            && let provider = session_config.effective_config(&self.conv.settings)
+            && !provider.is_acp()
         {
-            let config = self.ensure_session_config(key);
-            let mut provider = self.conv.settings.provider(config.provider).clone();
-            provider.model_id = config.model_id;
-            provider.effort = config.effort;
-            provider.context_window = config.context_window;
             let max_tokens =
                 provider.effective_context_window(self.conv.settings.context_window_default);
             let est_tokens = self.estimated_session_context_tokens(key);
@@ -496,12 +492,6 @@ impl OxiApp {
         self.conv.composer.input.clear();
         self.conv.transcript.scroll_to_bottom_once = true;
 
-        {
-            let run = self.run_state_mut(key);
-            run.begin_waiting_response();
-            run.stream_error = None;
-        }
-
         // Expand @path mentions into attached file/folder context for the agent.
         let cwd = PathBuf::from(&self.conv.workspaces[key.workspace_idx].root_path);
         let remote = self.is_remote_key(key);
@@ -511,13 +501,33 @@ impl OxiApp {
         } else {
             super::mentions::expand_at_mentions(&text, &cwd)
         };
-        self.run_state_mut(key).last_user_prompt = Some(text.clone());
+        self.start_prompt(key, &text, &expanded, &user_attachments);
+    }
+
+    /// Submit a worker report or lead follow-up directly, without interpreting composer commands or attaching files.
+    pub(super) fn start_delegated_prompt(&mut self, key: SessionKey, text: &str) {
+        self.ensure_session_loaded(key);
+        self.reload_session_if_changed(key);
+        self.start_prompt(key, text, text, &[]);
+    }
+
+    fn start_prompt(
+        &mut self,
+        key: SessionKey,
+        text: &str,
+        expanded: &str,
+        user_attachments: &[UserAttachment],
+    ) {
+        let run = self.run_state_mut(key);
+        run.begin_waiting_response();
+        run.stream_error = None;
+        run.last_user_prompt = Some(text.to_owned());
         // The previous cache remains only a candidate for this run. Removing it before the
         // initial save prevents a crash from persisting an advanced transcript with stale wire.
         let wire_candidate = self.session_mut_by_key(key).wire_cache.take();
-        self.materialize_prompt(key, &expanded, &user_attachments);
+        self.materialize_prompt(key, expanded, user_attachments);
         let root_path = self.conv.workspaces[key.workspace_idx].root_path.clone();
-        if remote {
+        if self.is_remote_key(key) {
             // The server saves the chat when the turn starts.
         } else if let Err(e) =
             session_store::save_session_messages(&root_path, self.session_mut_by_key(key))
@@ -631,12 +641,27 @@ impl OxiApp {
         }
     }
 
+    fn worker_plan_mode(&mut self, key: SessionKey, config: &crate::model::SessionConfig) -> bool {
+        let run = self.run_state_mut(key);
+        run.plan_mode |=
+            config.lead.is_some() && config.worker_access == crate::orchestrator::Access::ReadOnly;
+        run.plan_mode
+    }
+
     pub(crate) fn send_prompt_payload(
         &mut self,
         key: SessionKey,
         wire_candidate: Option<crate::model::WireCache>,
     ) -> Result<(), String> {
+        let mut session_config = self.ensure_session_config(key);
+        if session_config.lead.is_some() {
+            self.admit_worker_turn(key)?;
+        }
+        let plan_mode = self.worker_plan_mode(key, &session_config);
         if self.is_remote_key(key) {
+            if session_config.provider == crate::settings::LlmProviderKind::Orchestrator {
+                self.notify_composer(crate::orchestrator::SOLO_NOTICE);
+            }
             return self.start_remote_turn(key);
         }
         let cwd = PathBuf::from(self.conv.workspaces[key.workspace_idx].root_path.trim());
@@ -648,8 +673,17 @@ impl OxiApp {
             s.messages[..s.messages.len() - 1].to_vec()
         };
         let mut settings = self.conv.settings.clone();
-        let session_config = self.ensure_session_config(key);
         session_config.apply_to_settings(&mut settings);
+        let lead_chat = session_config.provider == crate::settings::LlmProviderKind::Orchestrator;
+        if lead_chat {
+            // The lead answers; its team and tools come from the chat's mailbox.
+            crate::orchestrator::apply_lead(&mut settings);
+            let lead = settings.active_config();
+            session_config.provider = lead.provider;
+            session_config.model_id = lead.model_id.clone();
+            session_config.effort = lead.effort.clone();
+            self.write_orchestrator_team(key, &settings);
+        }
         // Under the Router the real target arrives with `AgentEvent::Routed`; a directly chosen
         // model is recorded on the reply now.
         let direct =
@@ -677,8 +711,11 @@ impl OxiApp {
         // from the `mem:` key (used while warming a brand-new chat) to its file path, so retire
         // the now-orphaned warm subprocess to avoid leaking an idle Claude Code process.
         if session_file.is_some() {
-            self.acp
-                .close(&format!("mem:{}:{}", key.workspace_idx, key.session_idx));
+            let warm = self.acp_key_with_role(
+                key,
+                format!("mem:{}:{}", key.workspace_idx, key.session_idx),
+            );
+            self.acp.close(&warm);
         }
         let acp_session_key = self.acp_session_key(key);
         let (tx, rx) = relay_waking_ui(self.conv.git_ctx.clone());
@@ -688,7 +725,6 @@ impl OxiApp {
             crate::agent::tools::TurnUndoJournal::default(),
         ));
         self.run_state_mut(key).undo_journal = Some(undo_journal.clone());
-        let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
         let evidence_mode = self.run_state_mut(key).evidence_mode.clone();
         self.run_state_mut(key).last_turn_planned = plan_mode;
         // What the turn starts goes on disk, so a restart can tell what was lost with it.
@@ -909,6 +945,17 @@ impl OxiApp {
             session.config = loaded.config;
             session.wire_cache = wire;
         }
+        if self
+            .session_by_key(key)
+            .config
+            .as_ref()
+            .is_some_and(|c| c.lead.is_some())
+            && let Err(e) = self.admit_worker_turn(key)
+        {
+            self.acp.close(&acp_session_key);
+            self.run_state_mut(key).stream_error = Some(e);
+            return;
+        }
         let session = self.session_mut_by_key(key);
         session.messages_loaded = true;
         // The agent that ran last is the one still attached to the chat.
@@ -929,13 +976,14 @@ impl OxiApp {
         let mut settings = self.conv.settings.clone();
         let session_config = self.ensure_session_config(key);
         session_config.apply_to_settings(&mut settings);
+        crate::orchestrator::apply_lead(&mut settings);
         let (tx, rx) = relay_waking_ui(self.conv.git_ctx.clone());
         let (approval_tx, approval_rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let undo_journal = Arc::new(std::sync::Mutex::new(
             crate::agent::tools::TurnUndoJournal::default(),
         ));
-        let plan_mode = self.run_state(key).is_some_and(|r| r.plan_mode);
+        let plan_mode = self.worker_plan_mode(key, &session_config);
         let run = crate::agent::AcpAttachRun {
             settings,
             acp: self.acp.clone(),
@@ -960,9 +1008,23 @@ impl OxiApp {
 
     /// Key of the chat's ACP agent subprocess: its session file, or a synthetic id while unsaved.
     pub(crate) fn acp_session_key(&self, key: SessionKey) -> String {
-        match &self.session_by_key(key).session_file {
+        let base = match &self.session_by_key(key).session_file {
             Some(path) => path.clone(),
             None => format!("mem:{}:{}", key.workspace_idx, key.session_idx),
+        };
+        self.acp_key_with_role(key, base)
+    }
+
+    /// An orchestrator lead's or worker's agent session is its own (see
+    /// [`crate::orchestrator::Role`]): its key carries the role.
+    pub(crate) fn acp_key_with_role(&self, key: SessionKey, base: String) -> String {
+        use crate::orchestrator::Role;
+        match self.session_by_key(key).config.as_ref() {
+            Some(c) if c.lead.is_some() => Role::Worker.session_key(&base),
+            Some(c) if c.provider == crate::settings::LlmProviderKind::Orchestrator => {
+                Role::Lead.session_key(&base)
+            }
+            _ => base,
         }
     }
 

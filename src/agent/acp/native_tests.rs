@@ -926,10 +926,7 @@ for line in sys.stdin:
         resources: Vec::new(),
         event_tx: ev_tx,
         approval_rx: ap_rx,
-        approval_policy: ApprovalPolicy {
-            write_edit: true,
-            bash: true,
-        },
+        approval_policy: ApprovalPolicy::new(true, true),
         bash_allowlist: Vec::new(),
         allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),
@@ -1193,10 +1190,7 @@ for line in sys.stdin:
         resources: Vec::new(),
         event_tx: ev_tx,
         approval_rx: ap_rx,
-        approval_policy: ApprovalPolicy {
-            write_edit: true,
-            bash: true,
-        },
+        approval_policy: ApprovalPolicy::new(true, true),
         bash_allowlist: Vec::new(),
         allowed_tools: Vec::new(),
         cancel: Arc::new(AtomicBool::new(false)),

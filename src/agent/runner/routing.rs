@@ -193,15 +193,6 @@ fn acp_fallback_order(active: LlmProviderKind, chat: &[ChatMessage]) -> Vec<LlmP
     order
 }
 
-/// Is `kind` known to be out of quota right now (cooling down after a quota error, or its
-/// usage probe says the limit is hit)?
-fn out_of_quota(kind: LlmProviderKind, model: &str) -> bool {
-    use crate::router::quota;
-    quota::cooldown_left(kind).is_some()
-        || quota::snapshot(kind)
-            .is_some_and(|s| s.limit_reached || s.used_pct_for(model).is_some_and(|p| p >= 99.0))
-}
-
 /// Next agent for a turn picked in the composer: only ACP agents that are set up here, enabled
 /// for the Router, not out of quota, and without an API key in oxi's settings (which would bill
 /// it pay-per-use instead of the subscription). Keeps each agent's own model and effort.
@@ -211,12 +202,20 @@ async fn acp_fallback(
     exclude: &[LlmProviderKind],
 ) -> Result<RouteNote, String> {
     let _ = tokio::time::timeout(PROBE_BUDGET, crate::router::quota::refresh(settings, true)).await;
+    acp_fallback_inner(settings, chat, exclude).await
+}
+
+async fn acp_fallback_inner(
+    settings: &AppSettings,
+    chat: &[ChatMessage],
+    exclude: &[LlmProviderKind],
+) -> Result<RouteNote, String> {
     for kind in acp_fallback_order(settings.active_provider, chat) {
         let cfg = settings.provider(kind);
         if exclude.contains(&kind)
             || !settings.router.prefs(kind).enabled
             || !cfg.api_key.trim().is_empty()
-            || out_of_quota(kind, &cfg.model_id)
+            || crate::router::quota::is_exhausted(kind, &cfg.model_id)
             || !crate::agent::acp::is_ready(cfg).await
         {
             continue;
@@ -226,20 +225,154 @@ async fn acp_fallback(
     Err("No other agent is set up with quota left.".into())
 }
 
+/// Next ACP agent for an orchestrator lead whose subscription is exhausted: first checks
+/// enabled orchestrator team ACP members (most quota left first), then falls back to any
+/// eligible ACP agent via [`acp_fallback_inner`].
+async fn lead_fallback(
+    settings: &AppSettings,
+    chat: &[ChatMessage],
+    exclude: &[LlmProviderKind],
+) -> Result<RouteNote, String> {
+    let _ = tokio::time::timeout(PROBE_BUDGET, crate::router::quota::refresh(settings, true)).await;
+    let custom = !settings.orchestrator.workers.is_empty();
+    let slots: Vec<(LlmProviderKind, String)> = if custom {
+        settings
+            .orchestrator
+            .workers
+            .iter()
+            .filter(|s| s.enabled && s.provider.is_acp() && !s.provider.is_pseudo())
+            .map(|s| (s.provider, s.model.trim().to_string()))
+            .collect()
+    } else {
+        acp_fallback_order(settings.active_provider, chat)
+            .into_iter()
+            .filter(|k| !k.is_pseudo() && settings.router.prefs(*k).enabled)
+            .map(|k| (k, String::new()))
+            .collect()
+    };
+    let mut candidates: Vec<(usize, f64, LlmProviderKind, String, String)> = Vec::new();
+    for (idx, (kind, slot_model)) in slots.into_iter().enumerate() {
+        if exclude.contains(&kind) {
+            continue;
+        }
+        let cfg = settings.provider(kind);
+        let model = if slot_model.is_empty() {
+            cfg.model_id.trim().to_string()
+        } else {
+            slot_model
+        };
+        if (!custom && !cfg.api_key.trim().is_empty())
+            || crate::router::quota::is_exhausted(kind, &model)
+            || !crate::agent::acp::is_ready(cfg).await
+        {
+            continue;
+        }
+        let used = crate::router::quota::snapshot(kind)
+            .and_then(|s| s.used_pct_for(&model))
+            .unwrap_or(50.0);
+        candidates.push((idx, used, kind, model, cfg.effort.clone()));
+    }
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    if let Some((_, _, kind, model, effort)) = candidates.into_iter().next() {
+        return Ok(RouteNote::direct(kind, &model, &effort));
+    }
+    acp_fallback_inner(settings, chat, exclude).await
+}
+
+/// Providers belonging to the orchestrator team (enabled worker slots, or all configured ACP
+/// agents enabled in Router prefs when the team list is empty).
+fn worker_candidates(settings: &AppSettings) -> Vec<LlmProviderKind> {
+    if !settings.orchestrator.workers.is_empty() {
+        let mut out = Vec::new();
+        for s in &settings.orchestrator.workers {
+            if s.enabled && !s.provider.is_pseudo() && !out.contains(&s.provider) {
+                out.push(s.provider);
+            }
+        }
+        return out;
+    }
+    let oauth = crate::oauth::load_oauth_store();
+    LlmProviderKind::ALL
+        .into_iter()
+        .filter(|&k| {
+            k.is_acp()
+                && !k.is_pseudo()
+                && settings.router.prefs(k).enabled
+                && settings.provider_is_configured(k, &oauth)
+        })
+        .collect()
+}
+
+/// Next agent for an orchestrator worker whose subscription hit a quota limit: picks another
+/// enabled member of the orchestrator team with quota left (most quota left first), ignoring
+/// specialization notes. Never picks a provider excluded from or disabled in the team.
+async fn worker_fallback(
+    settings: &AppSettings,
+    exclude: &[LlmProviderKind],
+) -> Result<RouteNote, String> {
+    let _ = tokio::time::timeout(PROBE_BUDGET, crate::router::quota::refresh(settings, true)).await;
+    let oauth = crate::oauth::load_oauth_store();
+    let custom = !settings.orchestrator.workers.is_empty();
+    let slots: Vec<(LlmProviderKind, String)> = if custom {
+        settings
+            .orchestrator
+            .workers
+            .iter()
+            .filter(|s| s.enabled && !s.provider.is_pseudo())
+            .map(|s| (s.provider, s.model.trim().to_string()))
+            .collect()
+    } else {
+        LlmProviderKind::ALL
+            .into_iter()
+            .filter(|k| k.is_acp() && !k.is_pseudo() && settings.router.prefs(*k).enabled)
+            .map(|k| (k, String::new()))
+            .collect()
+    };
+    let mut candidates: Vec<(usize, f64, LlmProviderKind, String, String)> = Vec::new();
+    for (idx, (kind, slot_model)) in slots.into_iter().enumerate() {
+        if exclude.contains(&kind) {
+            continue;
+        }
+        let cfg = settings.provider(kind);
+        let model = if slot_model.is_empty() {
+            cfg.model_id.trim().to_string()
+        } else {
+            slot_model
+        };
+        if crate::router::quota::is_exhausted(kind, &model) {
+            continue;
+        }
+        if kind.is_acp() {
+            if !custom && !cfg.api_key.trim().is_empty() {
+                continue;
+            }
+            if !crate::agent::acp::is_ready(cfg).await {
+                continue;
+            }
+        } else if !settings.provider_is_configured(kind, &oauth) {
+            continue;
+        }
+        let used = crate::router::quota::snapshot(kind)
+            .and_then(|s| s.used_pct_for(&model))
+            .unwrap_or(50.0);
+        candidates.push((idx, used, kind, model, cfg.effort.clone()));
+    }
+    candidates.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    if let Some((_, _, kind, model, effort)) = candidates.into_iter().next() {
+        return Ok(RouteNote::direct(kind, &model, &effort));
+    }
+    Err("No other orchestrator team agent has quota left.".into())
+}
+
 /// Seconds until `kind` has quota again: past its cooldown and every exhausted usage window
 /// for `model`. `None` when quota is not what keeps it out (or nobody knows when it resets).
 fn quota_back_in(kind: LlmProviderKind, model: &str) -> Option<u64> {
     use crate::router::quota;
     let now = quota::now_secs();
-    let m = model.to_ascii_lowercase();
     let window = quota::snapshot(kind).and_then(|s| {
         s.windows
             .iter()
-            .filter(|w| {
-                w.model_scope
-                    .as_ref()
-                    .is_none_or(|s| m.contains(s.as_str()))
-            })
+            .filter(|w| w.applies_to(model))
             .filter(|w| w.used_pct >= 99.0)
             .filter_map(|w| w.resets_at.filter(|t| *t > now).map(|t| t - now))
             .max()
@@ -263,7 +396,7 @@ fn router_candidates(settings: &AppSettings, direct: bool) -> Vec<LlmProviderKin
     let oauth = crate::oauth::load_oauth_store();
     LlmProviderKind::ALL
         .into_iter()
-        .filter(|&k| k != LlmProviderKind::Router && (!direct || k.is_acp()))
+        .filter(|&k| !k.is_pseudo() && (!direct || k.is_acp()))
         .filter(|&k| settings.router.prefs(k).enabled && settings.provider_is_configured(k, &oauth))
         .collect()
 }
@@ -299,11 +432,28 @@ fn quota_wait_notice(secs: u64) -> String {
     )
 }
 
+fn turn_directive(
+    role: Option<crate::orchestrator::Role>,
+    last: Option<&crate::model::ChatMessage>,
+) -> Option<crate::router::preference::Preference> {
+    if role.is_some() {
+        return None;
+    }
+    last.and_then(|m| crate::router::preference::parse(&m.text))
+}
+
 pub fn spawn_agent_run(
     executor: &AgentExecutor,
-    request: AgentRunRequest,
+    mut request: AgentRunRequest,
     tx: Sender<AgentEvent>,
 ) -> tokio::task::JoinHandle<()> {
+    use crate::orchestrator::Role;
+    let mut role = Role::of_session_key(&request.acp_session_key);
+    if request.settings.active_provider == LlmProviderKind::Orchestrator {
+        // SSH/headless runs the lead on an ordinary session key without desktop team tools.
+        crate::orchestrator::apply_lead(&mut request.settings);
+        role = role.or(Some(Role::Lead));
+    }
     let active = request.settings.active_provider;
     // A chat pinned to one provider still honours "use Claude" in the current message, for
     // that turn only and without failover; older directives never override the picker.
@@ -312,16 +462,19 @@ pub fn spawn_agent_run(
         .iter()
         .rev()
         .find(|m| m.role == MsgRole::User);
-    let directive = last.and_then(|m| crate::router::preference::parse(&m.text));
+    let directive = turn_directive(role, last);
     // Only Codex can generate images, so such a turn must go there; a provider named in the
     // same message still wins, but an older "from now on" preference does not.
     let image_task = active == LlmProviderKind::Router
         && directive.is_none()
         && last.is_some_and(|m| crate::router::preference::wants_image_generation(&m.text));
-    // An agent picked in the composer runs as is, but may hand the turn to another ACP agent
-    // when its quota runs out.
+    // An agent picked in the composer (or assigned to an orchestrator worker) runs as is,
+    // but may hand the turn to another eligible agent when its quota runs out.
     let mut direct = false;
-    let preference = if image_task {
+    let preference = if role == Some(Role::Worker) {
+        direct = true;
+        None
+    } else if image_task {
         Some(crate::router::preference::Preference {
             provider: LlmProviderKind::CodexAcp,
             persistent: false,
@@ -331,7 +484,7 @@ pub fn spawn_agent_run(
         crate::router::preference::for_chat(&request.chat_for_history)
     } else {
         match directive {
-            Some(p) if p.provider != active && p.provider != LlmProviderKind::Router => {
+            Some(p) if p.provider != active && !p.provider.is_pseudo() => {
                 Some(crate::router::preference::Preference {
                     persistent: false,
                     exclusive: true,
@@ -356,9 +509,31 @@ pub fn spawn_agent_run(
     executor.clone().spawn(async move {
         let base = request.settings.clone();
         let mut waited = std::time::Duration::ZERO;
+        let mut chat = request.chat_for_history.clone();
+        let mut tried = Vec::new();
         let (profile, mut note) = if direct {
             let cfg = base.active_config();
-            (None, RouteNote::direct(active, &cfg.model_id, &cfg.effort))
+            let mut note = RouteNote::direct(active, &cfg.model_id, &cfg.effort);
+            if role == Some(Role::Lead)
+                && base.router.failover
+                && crate::router::quota::is_exhausted(active, &cfg.model_id)
+            {
+                let exclude = [active];
+                let selected = tokio::select! {
+                    result = lead_fallback(&base, &chat, &exclude) => result,
+                    _ = wait_for_router_cancel(&request.cancel) => {
+                        let _ = tx.send(AgentEvent::Finished(AgentOutcome::Cancelled));
+                        return;
+                    }
+                };
+                if let Ok(mut fallback) = selected {
+                    fallback.failover_from =
+                        Some(format!("{}: usage limit reached", active.label()));
+                    tried.push(active);
+                    note = fallback;
+                }
+            }
+            (None, note)
         } else {
             let route = async {
                 let mut classification_settings = base.clone();
@@ -398,8 +573,6 @@ pub fn spawn_agent_run(
                 }
             }
         };
-        let mut chat = request.chat_for_history.clone();
-        let mut tried = Vec::new();
         let mut attempts = 0;
         let mut unavailable = Vec::new();
         loop {
@@ -412,8 +585,8 @@ pub fn spawn_agent_run(
             attempts += 1;
             let mut settings = base.clone();
             crate::router::apply(&mut settings, &note);
-            // The composer pick is already recorded on the reply.
-            if !direct || attempts > 1 {
+            // The composer pick is already recorded on the reply unless we failed over.
+            if !direct || attempts > 1 || note.failover_from.is_some() {
                 let _ = tx.send(AgentEvent::Routed(Box::new(note.clone())));
             }
             if attempts > 1 {
@@ -433,7 +606,7 @@ pub fn spawn_agent_run(
                     chat_for_history: chat.clone(),
                     approval_rx,
                     cancel: request.cancel.clone(),
-                    wire_candidate: (attempts == 1)
+                    wire_candidate: (attempts == 1 && note.failover_from.is_none())
                         .then(|| request.wire_candidate.clone())
                         .flatten(),
                     chars_per_token: request.chars_per_token,
@@ -490,8 +663,9 @@ pub fn spawn_agent_run(
             };
             let quota = crate::router::quota::is_quota_error(error);
             // A replacement that failed before doing anything (not signed in, say) is skipped.
-            let unusable = attempts > 1 && progress.is_empty();
-            if !base.router.failover
+            let unusable = (attempts > 1 || note.failover_from.is_some()) && progress.is_empty();
+            let allow_failover = base.router.failover || role == Some(Role::Worker);
+            if !allow_failover
                 || preference.is_some_and(|p| p.exclusive)
                 || !(quota || unusable)
                 || !progress.safe_to_transfer()
@@ -552,6 +726,10 @@ pub fn spawn_agent_run(
                     }
                     match &profile {
                         Some(profile) => choose(&base, &chat, profile, &tried, None, "").await,
+                        None if role == Some(Role::Worker) => worker_fallback(&base, &tried).await,
+                        None if role == Some(Role::Lead) => {
+                            lead_fallback(&base, &chat, &tried).await
+                        }
                         None => acp_fallback(&base, &chat, &tried).await,
                     }
                 };
@@ -566,7 +744,11 @@ pub fn spawn_agent_run(
                 }
                 // Everything is out of quota: wait for the first reset, then start over.
                 let mut waiting_on = tried.clone();
-                waiting_on.extend(router_candidates(&base, direct));
+                if role == Some(Role::Worker) {
+                    waiting_on.extend(worker_candidates(&base));
+                } else {
+                    waiting_on.extend(router_candidates(&base, direct));
+                }
                 waiting_on.retain(|k| !unavailable.contains(k));
                 let resumed = tokio::select! {
                     resumed = wait_for_quota(&base, &waiting_on, &mut waited, &tx) => resumed,
@@ -596,6 +778,21 @@ pub fn spawn_agent_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_ordinary_chats_honor_provider_directives() {
+        for text in [
+            "foloseste claude sa repari problemele",
+            "use codex to review",
+        ] {
+            let user = ChatMessage::user(text, &[]);
+            for key in ["chat#lead", "chat#worker"] {
+                let role = crate::orchestrator::Role::of_session_key(key);
+                assert!(turn_directive(role, Some(&user)).is_none());
+            }
+            assert!(turn_directive(None, Some(&user)).is_some());
+        }
+    }
+
     #[test]
     fn replacement_tool_ids_do_not_overwrite_the_previous_attempt() {
         let event = AgentEvent::ToolStart {

@@ -112,6 +112,12 @@ const ENTRIES: &[Entry] = &[
     ),
     (
         SettingsTab::Agent,
+        "Ask before oxi tools",
+        "Ask before oxi tools",
+        "oxi tools confirmation approval permission mcp orchestrator delegation notes chat evidence",
+    ),
+    (
+        SettingsTab::Agent,
         "Limits",
         "Max tool calls per run",
         "limit loop",
@@ -368,6 +374,30 @@ const PROVIDER_ENTRIES: &[ProviderEntry] = &[
         "ssh remote host tunnel",
     ),
     (
+        Some(LlmProviderKind::Orchestrator),
+        "Lead",
+        "Lead agent",
+        "orchestrator lead model main agent",
+    ),
+    (
+        Some(LlmProviderKind::Orchestrator),
+        "Lead",
+        "Workers at once",
+        "orchestrator parallel workers limit",
+    ),
+    (
+        Some(LlmProviderKind::Orchestrator),
+        "Team",
+        "Team",
+        "orchestrator workers subscriptions models notes",
+    ),
+    (
+        Some(LlmProviderKind::Orchestrator),
+        "Tool confirmations",
+        "Tool confirmations",
+        "orchestrator approval permission confirmation oxi tools spawn_workers merge_worker message_worker stop_worker worker_status worker_diff team",
+    ),
+    (
         Some(LlmProviderKind::Router),
         "How it decides",
         "Default routing strategy",
@@ -453,6 +483,29 @@ pub(super) fn search(query: &str) -> Vec<SettingsHit> {
                 },
             },
         ));
+    }
+    for info in crate::settings::OXI_TOOLS {
+        let page = tab_title(SettingsTab::Agent);
+        let group = info.group.label();
+        let haystack = format!(
+            "{} {} {} Ask before oxi tools confirmation approval permission mcp {}",
+            info.name, info.description, group, page
+        )
+        .to_lowercase();
+        if matches(&haystack) {
+            hits.push((
+                rank(info.name, &terms),
+                SettingsHit {
+                    label: info.name,
+                    page,
+                    card: Some(group),
+                    target: SettingsTarget::Page {
+                        tab: SettingsTab::Agent,
+                        card: Some(info.name),
+                    },
+                },
+            ));
+        }
     }
     for kind in LlmProviderKind::ALL {
         let label = kind.label();
@@ -540,6 +593,7 @@ fn kind_keywords(kind: LlmProviderKind) -> &'static str {
         LlmProviderKind::CodexAcp | LlmProviderKind::GptCodex => "openai chatgpt gpt",
         LlmProviderKind::AntigravityAcp => "google gemini agy acp agent subscription",
         LlmProviderKind::Router => "auto routing quota",
+        LlmProviderKind::Orchestrator => "lead team workers parallel agents worktree delegate",
         _ => "",
     }
 }
@@ -594,5 +648,53 @@ mod tests {
         }
         assert!(search("   ").is_empty());
         assert!(search("no such setting zzz").is_empty());
+    }
+
+    #[test]
+    fn finds_oxi_tool_confirmation_settings_and_individual_tools() {
+        for query in ["oxi tools", "confirmation", "approval"] {
+            assert!(
+                search(query).iter().any(|hit| matches!(
+                    hit.target,
+                    SettingsTarget::Page {
+                        tab: SettingsTab::Agent,
+                        card: Some("Ask before oxi tools"),
+                    }
+                )),
+                "{query}"
+            );
+        }
+        for tool in [
+            "spawn_workers",
+            "merge_worker",
+            "todo_write",
+            "delegate_task",
+        ] {
+            assert!(
+                search(tool).iter().any(|hit| {
+                    hit.label == tool
+                        && matches!(
+                            hit.target,
+                            SettingsTarget::Page {
+                                tab: SettingsTab::Agent,
+                                card: Some(c),
+                            } if c == tool
+                        )
+                }),
+                "{tool}"
+            );
+        }
+        for query in ["orchestrator", "confirmation", "spawn_workers"] {
+            assert!(
+                search(query).iter().any(|hit| matches!(
+                    hit.target,
+                    SettingsTarget::Provider {
+                        kind: Some(LlmProviderKind::Orchestrator),
+                        card: Some("Tool confirmations"),
+                    }
+                )),
+                "{query}"
+            );
+        }
     }
 }

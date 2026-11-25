@@ -459,6 +459,8 @@ mod tests {
             model_id: "anthropic/claude-sonnet-5".into(),
             effort: "high".into(),
             context_window: Some(200_000),
+            lead: Some("lead.jsonl#lead".into()),
+            worker_access: crate::orchestrator::Access::ReadOnly,
         };
         let mut session = Session {
             delegated: Default::default(),

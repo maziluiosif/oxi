@@ -107,9 +107,12 @@ impl AppSettings {
                     && !config.base_url.contains("YOUR_DEPLOYMENT")
             }
             LlmProviderKind::Router => LlmProviderKind::ALL.into_iter().any(|candidate| {
-                candidate != LlmProviderKind::Router
-                    && self.provider_is_configured(candidate, oauth)
+                !candidate.is_pseudo() && self.provider_is_configured(candidate, oauth)
             }),
+            LlmProviderKind::Orchestrator => {
+                let lead = self.orchestrator.lead_provider;
+                !lead.is_pseudo() && self.provider_is_configured(lead, oauth)
+            }
             LlmProviderKind::CustomAnthropic => {
                 has_profile_key(kind)
                     || env_key("CUSTOM_ANTHROPIC_API_KEY")
@@ -136,6 +139,19 @@ impl AppSettings {
             .get(root.to_string_lossy().trim())
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Which of oxi's own tools ask before they run (see [`Self::oxi_tool_confirmation`]).
+    pub fn oxi_tool_confirm(&self) -> crate::settings::OxiToolConfirm {
+        crate::settings::OxiToolConfirm::resolve(
+            &self.oxi_tool_confirmation,
+            self.require_write_edit_approval,
+        )
+    }
+
+    /// Whether oxi's own tool `name` asks before it runs.
+    pub fn oxi_tool_asks(&self, name: &str) -> bool {
+        self.oxi_tool_confirm().asks(name).unwrap_or(false)
     }
 
     /// Let `tool` run without asking in the workspace at `root`. Returns whether it was new.
