@@ -85,6 +85,17 @@ impl TempIndex {
         let real = PathBuf::from(real.trim());
         if real.is_file() {
             std::fs::copy(&real, &path).map_err(|e| e.to_string())?;
+            // Keep the real index's modification time. Git trusts a cached stat only for files
+            // older than the index; a copy stamped "now" would hide a same-size edit made in
+            // the same second as the checkout (racy git), dropping it from the snapshot.
+            let modified = std::fs::metadata(&real).and_then(|m| m.modified());
+            if let Ok(modified) = modified {
+                std::fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .and_then(|f| f.set_modified(modified))
+                    .map_err(|e| e.to_string())?;
+            }
         }
         Ok(Self(path))
     }
@@ -367,6 +378,42 @@ mod tests {
         git(&root, &["add", "-A"]);
         git(&root, &["commit", "-q", "-m", "init"]);
         TempRepo(root)
+    }
+
+    /// A same-size edit made in the second a work tree was checked out is still seen when the
+    /// snapshot comes later (racy git): the throwaway index keeps the real one's age. Only
+    /// Linux shows the bug: `fs::copy` on macOS keeps the modification time by itself.
+    #[test]
+    fn a_same_size_edit_right_after_checkout_is_not_missed() {
+        let main = repo();
+        let wt = TempRepo(crate::fsutil::unique_temp_path(
+            &std::env::temp_dir(),
+            "oxi-handoff",
+            "wt",
+        ));
+        let wt_arg = wt.0.to_string_lossy().into_owned();
+        // Start early in a second, so the checkout and the edit below share it.
+        let since_epoch = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+        };
+        while since_epoch().subsec_millis() > 300 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        git(
+            &main.0,
+            &["worktree", "add", "-q", "--detach", &wt_arg, "HEAD"],
+        );
+        std::fs::write(wt.0.join("a.txt"), "ONE\ntwo\nthree\n").unwrap();
+        // Whole-second stat checks on every platform, as git builds without nanoseconds do.
+        git(&wt.0, &["config", "core.checkStat", "minimal"]);
+        // The snapshot's index copy is made a second later.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let tree = tree_of(&wt.0).unwrap();
+        let shown = run(&wt.0, &["cat-file", "-p", &format!("{tree}:a.txt")], None);
+        let _ = run(&main.0, &["worktree", "remove", "--force", &wt_arg], None);
+        assert_eq!(shown.unwrap(), "ONE\ntwo\nthree\n");
     }
 
     #[test]
