@@ -194,7 +194,11 @@ impl OxiApp {
                 c_text_muted(),
             )
         });
-        let badge_w = if needs_you > 0 { 12.0 } else { 0.0 }
+        // Pinned projects keep a quiet pin at the right edge: with no section labels, it is
+        // what sets them apart from the rest.
+        let pin_badge = pinned;
+        let badge_w = if pin_badge { 14.0 } else { 0.0 }
+            + if needs_you > 0 { 12.0 } else { 0.0 }
             + if running_hidden > 0 {
                 16.0 + count_galley.as_ref().map_or(0.0, |g| g.size().x + 2.0)
             } else {
@@ -277,6 +281,16 @@ impl OxiApp {
         if !show_actions && badge_w > 0.0 {
             let cy = rect.center().y;
             let mut x = rect.right() - 6.0;
+            if pin_badge {
+                ui.painter().text(
+                    egui::pos2(x, cy),
+                    egui::Align2::RIGHT_CENTER,
+                    ICON_PIN,
+                    FontId::new(FS_TINY, icon_font()),
+                    c_text_faint(),
+                );
+                x -= 14.0;
+            }
             if needs_you > 0 {
                 ui.painter()
                     .circle_filled(egui::pos2(x - 3.5, cy), 3.5, c_accent());
@@ -1044,6 +1058,7 @@ impl OxiApp {
                 );
                 if crate::ui::chrome::ghost_button(ui, "Clear", false).clicked() {
                     self.conv.sidebar.search.clear();
+                    self.conv.sidebar.search_open = false;
                 }
             });
             ui.add_space(4.0);

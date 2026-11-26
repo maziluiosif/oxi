@@ -428,6 +428,8 @@ impl OxiApp {
         });
         let goto_chat =
             ctx.input(|i| i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::O));
+        let search_chats =
+            ctx.input(|i| i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::E));
         // Ctrl+1…9 (⌃ on macOS, where ⌘1…9 picks editor tabs) opens the nth sidebar project.
         // A pending Cmd/Ctrl+K chord owns the digit (Ctrl+K Ctrl+1 folds, off macOS).
         let project_digit = if super::file_explorer::chord_pending(ctx) {
@@ -460,6 +462,9 @@ impl OxiApp {
         }
         if goto_chat && pickers_free {
             self.open_file_picker_with("#");
+        }
+        if search_chats && pickers_free {
+            self.open_sidebar_search();
         }
         if let Some(n) = project_digit
             && pickers_free

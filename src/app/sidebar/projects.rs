@@ -310,15 +310,33 @@ impl OxiApp {
         }
     }
 
-    /// Small caps section title ("Pinned", "Projects"). It is also a drop target: a project
-    /// dropped on it goes to the top of that section. The Projects header carries the workspace actions.
+    /// Where the unpinned projects start: a hairline under the pinned ones (nothing when none
+    /// are pinned). While a project is dragged the hairline takes drops for the top of the
+    /// unpinned projects; it keeps its height, so rows don't jump when a drag starts.
+    pub(super) fn render_sidebar_section_break(&mut self, ui: &mut Ui, after_pinned: bool) -> bool {
+        if !after_pinned {
+            return false;
+        }
+        let (rect, target) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 2.0 * SPACE_XS + 1.0),
+            Sense::hover(),
+        );
+        ui.painter().hline(
+            egui::Rangef::new(rect.left() + 6.0, rect.right() - 6.0),
+            rect.center().y,
+            Stroke::new(1.0, c_border_subtle()),
+        );
+        self.project_drop_target(ui, &target, rect.center().y, false, ProjectSlot::Start)
+    }
+
+    /// Small caps section title, shown as "Pinned · Drop here to pin" while a project is
+    /// dragged and none is pinned yet: the drop target that pins it.
     pub(super) fn render_sidebar_section_header(
         &mut self,
         ui: &mut Ui,
         label: &str,
         hint: Option<&str>,
         pinned: bool,
-        actions: bool,
     ) -> bool {
         ui.add_space(SPACE_XS);
         let row = ui.horizontal(|ui| {
@@ -332,11 +350,6 @@ impl OxiApp {
             );
             if let Some(hint) = hint {
                 ui.label(RichText::new(hint).size(FS_TINY).color(c_text_faint()));
-            }
-            if actions {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    self.render_add_project_actions(ui);
-                });
             }
         });
         let rect = row.response.rect;
@@ -559,86 +572,6 @@ impl OxiApp {
                         );
                     });
             });
-    }
-
-    /// Right-aligned workspace actions on the Projects header: add a folder, connect to a
-    /// remote host, start a general chat. A narrow sidebar folds the last two into "···".
-    fn render_add_project_actions(&mut self, ui: &mut Ui) {
-        let narrow_sidebar = ui.available_width() < 195.0;
-        ui.spacing_mut().item_spacing.x = 2.0;
-        if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, 22.0, false)
-            .on_hover_text(
-                "Add a project folder. Each workspace has its own chats; \
-                 tools run with that folder as cwd.",
-            )
-            .clicked()
-        {
-            self.open_workspace_folder();
-        }
-        if narrow_sidebar {
-            let more_id = ui.id().with("sidebar_projects_more");
-            let open = egui::Popup::is_id_open(ui.ctx(), more_id);
-            let (rect, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
-            resp.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    ui.is_enabled(),
-                    "More workspace actions",
-                )
-            });
-            let resp = resp
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text("More workspace actions");
-            let radius = CornerRadius::same(RADIUS_CHIP);
-            if open || resp.hovered() || resp.has_focus() {
-                ui.painter().rect_filled(
-                    rect,
-                    radius,
-                    if open { c_row_active() } else { c_row_hover() },
-                );
-            }
-            crate::ui::chrome::keyboard_focus_ring(ui, &resp, radius);
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "···",
-                FontId::proportional(FS_TINY),
-                if open || resp.hovered() {
-                    c_accent()
-                } else {
-                    c_text_muted()
-                },
-            );
-            egui::Popup::from_toggle_button_response(&resp)
-                .id(more_id)
-                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                .show(|ui| {
-                    if ui.button("Connect to remote host (SSH)…").clicked() {
-                        self.open_remote_dialog();
-                        ui.close();
-                    }
-                    if ui.button("New general chat").clicked() {
-                        self.new_general_chat();
-                        ui.close();
-                    }
-                });
-        } else {
-            if crate::ui::chrome::icon_button_plain(ui, ICON_SERVER, 22.0, false)
-                .on_hover_text(
-                    "Connect to a remote host: open a folder on another machine over SSH; \
-                     its oxi server runs the agents there.",
-                )
-                .clicked()
-            {
-                self.open_remote_dialog();
-            }
-            if crate::ui::chrome::icon_button_plain(ui, ICON_GLOBE, 22.0, false)
-                .on_hover_text("New general chat: not about any project, run in ~/oxi-general")
-                .clicked()
-            {
-                self.new_general_chat();
-            }
-        }
     }
 }
 

@@ -23,97 +23,12 @@ impl OxiApp {
         self.poll_sidebar_branches(ui.ctx());
         self.sidebar_follow_active_project();
 
-        // Primary action first, with its shortcut, like Antigravity's "+ New Conversation".
-        let new_chat = crate::ui::chrome::flat_button_icon(
-            ui,
-            ICON_PLUS,
-            "New chat",
-            FS_SMALL,
-            egui::vec2(ui.available_width(), CONTROL_HEIGHT),
-            c_text_strong(),
-        )
-        .on_hover_text("Start a new chat in the active workspace");
-        if new_chat.rect.width() >= 170.0 {
-            let key = if cfg!(target_os = "macos") {
-                "⌘N"
-            } else {
-                "Ctrl+N"
-            };
-            let galley = ui.painter().layout_job(crate::ui::chrome::shortcut_job(
-                key,
-                FS_TINY,
-                c_text_faint(),
-            ));
-            let pos = egui::pos2(
-                new_chat.rect.right() - 8.0 - galley.size().x,
-                new_chat.rect.center().y - galley.size().y * 0.5,
-            );
-            ui.painter().galley(pos, galley, c_text_faint());
+        // One row on top: the toolbar, or the search field in its place while searching.
+        if self.conv.sidebar.search_open || !self.conv.sidebar.search.is_empty() {
+            self.render_sidebar_search(ui);
+        } else {
+            self.render_sidebar_toolbar(ui);
         }
-        if new_chat.clicked() {
-            self.new_chat();
-        }
-        new_chat.context_menu(|ui| {
-            if ui
-                .button("New general chat")
-                .on_hover_text("A chat that isn't about any project, run in ~/oxi-general")
-                .clicked()
-            {
-                self.new_general_chat();
-            }
-            if ui
-                .button("New chat side by side")
-                .on_hover_text("Open a new chat next to this one, e.g. to ask a second agent")
-                .clicked()
-            {
-                self.new_chat_split();
-            }
-            if ui
-                .button("New work tree chat side by side")
-                .on_hover_text(
-                    "Start the same project in a work tree next to this chat, e.g. to give the task to a second agent",
-                )
-                .clicked()
-            {
-                self.start_worktree_split();
-            }
-        });
-        ui.add_space(SPACE_SM);
-
-        // Full-width quiet search field (with inline clear when active).
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.set_height(CONTROL_HEIGHT);
-            let clear_w = if self.conv.sidebar.search.is_empty() {
-                0.0
-            } else {
-                22.0
-            };
-            let search_w = (ui.available_width()
-                - clear_w
-                - if clear_w > 0.0 {
-                    ui.spacing().item_spacing.x
-                } else {
-                    0.0
-                })
-            .max(48.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(search_w, CONTROL_HEIGHT),
-                Layout::left_to_right(Align::Center),
-                |ui| {
-                    ui.set_width(search_w);
-                    let _ = sidebar_text_field(ui, &mut self.conv.sidebar.search, "Search chats…");
-                },
-            );
-            if clear_w > 0.0
-                && crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, clear_w, false)
-                    .on_hover_text("Clear chat search")
-                    .clicked()
-            {
-                self.conv.sidebar.search.clear();
-            }
-        });
-
         ui.add_space(SPACE_SM);
 
         if let Some(notice) = self.conv.sidebar.notice.clone() {
@@ -168,6 +83,197 @@ impl OxiApp {
         // again from content made Conversations report a subtly different size than Explorer.
     }
 
+    /// New chat (its shortcut, and a menu of the other ways to start one), then search and
+    /// add project. Antigravity's "+ New Conversation" in one row with its neighbours.
+    fn render_sidebar_toolbar(&mut self, ui: &mut Ui) {
+        const CHEVRON_W: f32 = 18.0;
+        const GAP: f32 = 2.0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            ui.set_height(CONTROL_HEIGHT);
+            // New chat takes only what its label (and shortcut, when there is room) needs;
+            // its menu sits right next to it, search and add project at the far end.
+            let key = shortcut_text("⌘N", "Ctrl+N");
+            let shortcut = ui.painter().layout_job(crate::ui::chrome::shortcut_job(
+                key,
+                FS_TINY,
+                c_text_faint(),
+            ));
+            let label_w = |text: &str, font: FontId| {
+                ui.painter()
+                    .layout_no_wrap(text.to_owned(), font, c_text_strong())
+                    .rect
+                    .width()
+            };
+            // The padding, gap and glyph of `flat_button_icon`, plus the label.
+            let natural_w = 8.0
+                + label_w(ICON_PLUS, FontId::new(FS_SMALL, icon_font()))
+                + 5.0
+                + label_w("New chat", FontId::proportional(FS_SMALL))
+                + 8.0;
+            let shortcut_w = 10.0 + shortcut.size().x;
+            let rest_w = CHEVRON_W + 2.0 * CONTROL_HEIGHT + 3.0 * GAP;
+            let show_shortcut = natural_w + shortcut_w + rest_w <= ui.available_width();
+            let new_w = natural_w + if show_shortcut { shortcut_w } else { 0.0 };
+            let new_chat = crate::ui::chrome::flat_button_icon(
+                ui,
+                ICON_PLUS,
+                "New chat",
+                FS_SMALL,
+                egui::vec2(new_w, CONTROL_HEIGHT),
+                c_text_strong(),
+            )
+            .on_hover_text("Start a new chat in the active workspace");
+            if show_shortcut {
+                let pos = egui::pos2(
+                    new_chat.rect.right() - 8.0 - shortcut.size().x,
+                    new_chat.rect.center().y - shortcut.size().y * 0.5,
+                );
+                ui.painter().galley(pos, shortcut, c_text_faint());
+            }
+            if new_chat.clicked() {
+                self.new_chat();
+            }
+            new_chat.context_menu(|ui| self.render_new_chat_menu(ui));
+
+            let more = menu_toggle(
+                ui,
+                egui::vec2(CHEVRON_W, CONTROL_HEIGHT),
+                ICON_ANGLE_DOWN,
+                "More ways to start a chat",
+            );
+            egui::Popup::from_toggle_button_response(&more)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| self.render_new_chat_menu(ui));
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                let add_id = ui.id().with("sidebar_add_project");
+                let add_open = egui::Popup::is_id_open(ui.ctx(), add_id);
+                let add = crate::ui::chrome::icon_button_plain(
+                    ui,
+                    ICON_FOLDER_PLUS,
+                    CONTROL_HEIGHT,
+                    add_open,
+                )
+                .on_hover_text("Add a project: a folder here, or one on another machine");
+                egui::Popup::from_toggle_button_response(&add)
+                    .id(add_id)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        if ui
+                            .button("Open folder…")
+                            .on_hover_text(
+                                "Add a project folder. Each project has its own chats; \
+                                 tools run with that folder as cwd.",
+                            )
+                            .clicked()
+                        {
+                            self.open_workspace_folder();
+                            ui.close();
+                        }
+                        if ui
+                            .button("Connect to remote host (SSH)…")
+                            .on_hover_text(
+                                "Open a folder on another machine over SSH; \
+                                 its oxi server runs the agents there.",
+                            )
+                            .clicked()
+                        {
+                            self.open_remote_dialog();
+                            ui.close();
+                        }
+                    });
+
+                let search_key = shortcut_text("⇧⌘E", "Ctrl+Shift+E");
+                let search =
+                    crate::ui::chrome::icon_button_plain(ui, ICON_SEARCH, CONTROL_HEIGHT, false);
+                search.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Search chats")
+                });
+                if search
+                    .on_hover_text(format!("Search chats ({search_key})"))
+                    .clicked()
+                {
+                    self.open_sidebar_search();
+                }
+            });
+        });
+    }
+
+    /// The other ways to start a chat, under New chat's chevron and its right-click menu.
+    fn render_new_chat_menu(&mut self, ui: &mut Ui) {
+        if ui
+            .button("New general chat")
+            .on_hover_text("A chat that isn't about any project, run in ~/oxi-general")
+            .clicked()
+        {
+            self.new_general_chat();
+            ui.close();
+        }
+        if ui
+            .button("New chat side by side")
+            .on_hover_text("Open a new chat next to this one, e.g. to ask a second agent")
+            .clicked()
+        {
+            self.new_chat_split();
+            ui.close();
+        }
+        if ui
+            .button("New work tree chat side by side")
+            .on_hover_text(
+                "Start the same project in a work tree next to this chat, e.g. to give the task to a second agent",
+            )
+            .clicked()
+        {
+            self.start_worktree_split();
+            ui.close();
+        }
+    }
+
+    /// Shows the chat search in the toolbar's place and focuses it (the search button, or the
+    /// Search Chats shortcut from anywhere).
+    pub(crate) fn open_sidebar_search(&mut self) {
+        self.conv.sidebar.open = true;
+        self.conv.sidebar.mode = super::state::SidebarMode::Chats;
+        self.conv.sidebar.search_open = true;
+        self.conv.sidebar.focus_search = true;
+    }
+
+    /// The search field standing in for the toolbar. Escape or its close button clears the
+    /// query and brings the toolbar back; so does leaving the field empty.
+    fn render_sidebar_search(&mut self, ui: &mut Ui) {
+        const GAP: f32 = 2.0;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            ui.set_height(CONTROL_HEIGHT);
+            let search_w = (ui.available_width() - CONTROL_HEIGHT - GAP).max(48.0);
+            let field = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(search_w, CONTROL_HEIGHT),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.set_width(search_w);
+                        sidebar_text_field(ui, &mut self.conv.sidebar.search, "Search chats…")
+                    },
+                )
+                .inner;
+            if std::mem::take(&mut self.conv.sidebar.focus_search) {
+                field.request_focus();
+            }
+            let escaped = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let closed =
+                crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, CONTROL_HEIGHT, false)
+                    .on_hover_text("Close search (Esc)")
+                    .clicked();
+            let left_empty = field.lost_focus() && self.conv.sidebar.search.trim().is_empty();
+            if escaped || closed || left_empty {
+                self.conv.sidebar.search.clear();
+                self.conv.sidebar.search_open = false;
+            }
+        });
+    }
+
     fn render_sidebar_session_list(&mut self, ui: &mut Ui) {
         // Workspace headers sit a step above the chat rows' default size, matching
         // the app-wide type scale (theme.rs) so it still tracks the UI density zoom.
@@ -202,15 +308,15 @@ impl OxiApp {
         let tops = self.sidebar_projects();
         let dragging = egui::DragAndDrop::has_payload_of_type::<ProjectDrag>(ui.ctx());
         let any_pinned = tops.iter().any(|&wi| self.project_is_pinned(wi));
-        // Sections: "Pinned" (only when something is pinned, or as a drop target while a
-        // project is dragged), then "Projects", which holds the workspace actions.
-        let mut in_pinned = false;
-        if any_pinned || dragging {
-            let hint = (!any_pinned).then_some("Drop here to pin");
-            if self.render_sidebar_section_header(ui, "Pinned", hint, true, false) {
-                return;
-            }
-            in_pinned = true;
+        // No section titles: pinned projects come first, each with a pin, and a hairline
+        // ends them. Rows take drops above and below them for their own part; only pinning
+        // the first project needs a strip of its own, shown while a project is dragged.
+        let in_pinned = any_pinned || dragging;
+        if dragging
+            && !any_pinned
+            && self.render_sidebar_section_header(ui, "Pinned", Some("Drop here to pin"), true)
+        {
+            return;
         }
         let mut projects_header = false;
         // The active project's header row and where its block ends, for the sticky copy.
@@ -220,7 +326,7 @@ impl OxiApp {
                 if in_pinned && self.render_project_drop_end(ui, true) {
                     return;
                 }
-                if self.render_sidebar_section_header(ui, "Projects", None, false, true) {
+                if self.render_sidebar_section_break(ui, in_pinned) {
                     return;
                 }
                 projects_header = true;
@@ -272,7 +378,7 @@ impl OxiApp {
             if in_pinned && self.render_project_drop_end(ui, true) {
                 return;
             }
-            if self.render_sidebar_section_header(ui, "Projects", None, false, true) {
+            if self.render_sidebar_section_break(ui, in_pinned) {
                 return;
             }
         }
@@ -419,6 +525,46 @@ impl OxiApp {
 }
 
 /// The entry after (or before) `current` in `order`, wrapping; `None` with nothing to move to.
+/// `mac` on macOS, `other` elsewhere: a shortcut as the platform writes it.
+fn shortcut_text(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        mac
+    } else {
+        other
+    }
+}
+
+/// A narrow icon button that opens a menu, highlighted while its menu is open.
+fn menu_toggle(ui: &mut Ui, size: egui::Vec2, icon: &str, label: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let radius = CornerRadius::same(RADIUS_CHIP);
+    if open || resp.hovered() || resp.has_focus() {
+        ui.painter().rect_filled(
+            rect,
+            radius,
+            if open { c_row_active() } else { c_row_hover() },
+        );
+    }
+    crate::ui::chrome::keyboard_focus_ring(ui, &resp, radius);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        FontId::new(FS_TINY, icon_font()),
+        if open || resp.hovered() {
+            c_accent()
+        } else {
+            c_text_muted()
+        },
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(label)
+}
+
 fn cycled(order: &[usize], current: usize, back: bool) -> Option<usize> {
     if order.len() < 2 {
         return None;

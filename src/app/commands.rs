@@ -490,6 +490,7 @@ fn build_menus() -> Vec<MenuSpec> {
                 editor(keys("Go to Symbol in File…", cmd(), Key::R)),
                 c(keys("Go to Symbol in Workspace…", cmd_shift(), Key::R)),
                 c(keys("Go to Chat…", cmd_shift(), Key::O)),
+                c(keys("Search Chats…", cmd_shift(), Key::E)),
                 c(run("Go to Project…", GotoProject)),
                 editor(goto_line),
                 Separator,

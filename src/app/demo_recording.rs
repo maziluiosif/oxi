@@ -3554,12 +3554,70 @@ fn review_project_sidebar(rec: &mut Recorder<'_>) {
             app.sidebar_offscreen_activity()
         );
     }
-    for label in ["Needs you · 2", "Running · 1", "Pinned", "Projects"] {
+    for label in ["Needs you · 2", "Running · 1"] {
         assert!(
             rec.harness.query_all_by_label(label).count() > 0,
             "visible: {label}"
         );
     }
+    // No section titles: a pin and a hairline set the pinned projects apart.
+    for label in ["Pinned", "Projects"] {
+        assert_eq!(
+            rec.harness.query_all_by_label(label).count(),
+            0,
+            "no section title: {label}"
+        );
+    }
+
+    // The search field stands in for the toolbar: its button or the shortcut opens it,
+    // Escape clears it and brings the toolbar back.
+    assert_eq!(rec.harness.query_all_by_label("Search chats…").count(), 0);
+    rec.harness.get_by_label("Search chats").click();
+    rec.harness.run_steps(3);
+    assert!(
+        rec.app().conv.sidebar.search_open,
+        "search button opens the field"
+    );
+    assert_eq!(
+        rec.harness
+            .query_all_by_label("More ways to start a chat")
+            .count(),
+        0
+    );
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    assert!(
+        !rec.app().conv.sidebar.search_open,
+        "Escape closes the field"
+    );
+    rec.harness.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::E,
+    );
+    rec.harness.run_steps(3);
+    assert!(
+        rec.app().conv.sidebar.search_open,
+        "the shortcut opens the field"
+    );
+    rec.harness.event(egui::Event::Text("api".into()));
+    rec.harness.run_steps(3);
+    assert_eq!(rec.app().conv.sidebar.search, "api", "the field has focus");
+    rec.still("projects-search");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    assert!(!rec.app().conv.sidebar.search_open);
+    assert!(
+        rec.app().conv.sidebar.search.is_empty(),
+        "Escape clears the query"
+    );
+    rec.harness
+        .get_by_label("More ways to start a chat")
+        .click();
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_all_by_label("New general chat").count() > 0);
+    rec.still("projects-new-chat-menu");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
     assert!(
         rec.harness
             .query_all_by_label(&format!("Project mirror/{name}"))
@@ -3614,6 +3672,8 @@ fn review_project_sidebar(rec: &mut Recorder<'_>) {
     }
     rec.harness.run_steps(2);
     rec.still("projects-dragging");
+    // With a project pinned, a drag adds no headers: the rows stay where they were.
+    assert_eq!(rec.harness.query_all_by_label("Pinned").count(), 0);
     rec.harness.event(egui::Event::PointerButton {
         pos: target,
         button: egui::PointerButton::Primary,

@@ -718,6 +718,11 @@ pub struct SidebarState {
     pub width: f32,
     pub mode: SidebarMode,
     pub search: String,
+    /// The search field stands in for the toolbar row (New chat, search, add project). It
+    /// stays up while `search` holds a query.
+    pub search_open: bool,
+    /// Focus the search field on its next frame (its button or the Search Chats shortcut).
+    pub focus_search: bool,
     pub history: bool,
     pub history_project: Option<String>,
     pub history_days: Option<i64>,
