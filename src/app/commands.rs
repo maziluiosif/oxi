@@ -42,6 +42,7 @@ pub(crate) enum AppAction {
     ToggleSplitMirror,
     CloseSplit,
     CloseAllEditorTabs,
+    GotoProject,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -489,6 +490,7 @@ fn build_menus() -> Vec<MenuSpec> {
                 editor(keys("Go to Symbol in File…", cmd(), Key::R)),
                 c(keys("Go to Symbol in Workspace…", cmd_shift(), Key::R)),
                 c(keys("Go to Chat…", cmd_shift(), Key::O)),
+                c(run("Go to Project…", GotoProject)),
                 editor(goto_line),
                 Separator,
                 editor(keys("Go to Definition", Modifiers::NONE, Key::F12)),
@@ -755,6 +757,7 @@ impl OxiApp {
             AppAction::FocusSplitPane => self.focus_split_partner(),
             AppAction::ToggleSplitMirror => self.toggle_split_mirror(),
             AppAction::CloseSplit => self.close_split(),
+            AppAction::GotoProject => self.open_file_picker_with("%"),
         }
     }
 

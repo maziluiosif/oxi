@@ -390,13 +390,9 @@ impl OxiApp {
                 si,
                 remove_worktree,
             } => {
-                // Sessions can only be deleted from the active workspace (the sidebar
-                // enforces this); guard anyway in case state moved under the modal.
-                if wi == self.conv.active_workspace {
-                    self.delete_session(si);
-                    if remove_worktree {
-                        self.remove_worktree(wi, worktree);
-                    }
+                self.delete_session_in(wi, si);
+                if remove_worktree {
+                    self.remove_worktree(wi, worktree);
                 }
             }
             ConfirmAction::DeleteWorkspace {

@@ -160,6 +160,8 @@ pub const ICON_MIC: &str = "\u{f130}";
 pub const ICON_EXTERNAL: &str = "\u{f08e}";
 /// Trash — delete / discard actions (`nf-fa-trash`).
 pub const ICON_TRASH: &str = "\u{f1f8}";
+/// Thumbtack — pinned chats and projects in the sidebar (`nf-fa-thumb_tack`).
+pub const ICON_PIN: &str = "\u{f08d}";
 /// Folder plus — "add workspace" (`nf-md-folder-plus`).
 pub const ICON_FOLDER_PLUS: &str = "\u{f0257}";
 /// Closed folder — folded workspace row in the sidebar (`nf-md-folder`).

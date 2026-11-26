@@ -260,7 +260,8 @@ fn render_shortcuts(ui: &mut Ui) {
     } else {
         format!("F7 / {shift}F7")
     };
-    let shortcuts: [(String, &str); 40] = [
+    let project_digits = if mac { "⌃1…9" } else { "Ctrl+1…9" };
+    let shortcuts: [(String, &str); 41] = [
         (format!("{cmd}N"), "New chat"),
         (format!("{cmd},"), "Settings"),
         (format!("{cmd}."), "Stop the running reply"),
@@ -283,6 +284,10 @@ fn render_shortcuts(ui: &mut Ui) {
         ),
         ("Hold Space".into(), "Dictate (when voice is on)"),
         (format!("{cmd}B"), "Show or hide chats"),
+        (
+            project_digits.into(),
+            "Open the 1st…9th project in the sidebar",
+        ),
         (format!("{cmd}E"), "Show or hide the file explorer"),
         (format!("{cmd}{shift}B"), "Show or hide source control"),
         (terminal, "Show or hide the terminal"),

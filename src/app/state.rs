@@ -729,6 +729,15 @@ pub struct SidebarState {
     pub rename_draft: String,
     /// Sidebar search results per chat, keyed by `(workspace_idx, session_idx)`.
     pub search_cache: std::collections::HashMap<(usize, usize), SidebarSearchHit>,
+    /// Root of the project the sidebar last saw active, to fold it when the user switches away
+    /// (`AppSettings::sidebar_focus_active_project`).
+    pub focused_project: Option<String>,
+    /// Per project root, the checkout root (the project itself or one of its work trees) last
+    /// open in it, so opening the project returns there. Noted on leaving; not saved.
+    pub last_checkout: std::collections::HashMap<String, String>,
+    /// Per workspace, chats its folded row hides this frame: (need you, running). Filled once
+    /// per frame with the "Needs you" / "Running" lists, read by the folded rows' badges.
+    pub hidden_activity: std::collections::HashMap<usize, (usize, usize)>,
 }
 
 /// Workspace file explorer tree.

@@ -658,6 +658,46 @@ pub fn c_row_hover() -> Color32 {
     }
 }
 
+/// Colors identifying projects in the sidebar (folder glyphs, tags on chats listed outside
+/// their project): eight clearly different hues, lighter for dark themes and deeper for light.
+/// [`project_tag_slot`] picks a project's preferred one.
+pub fn project_tag_colors() -> [Color32; 8] {
+    const DARK: [Color32; 8] = [
+        rgb(0x6c, 0xa6, 0xe8), // blue
+        rgb(0x6c, 0xc4, 0x8a), // green
+        rgb(0xe0, 0xb2, 0x5c), // amber
+        rgb(0xb4, 0x8c, 0xe6), // purple
+        rgb(0x4f, 0xc1, 0xc0), // teal
+        rgb(0xe5, 0x7f, 0x9a), // rose
+        rgb(0xe2, 0x92, 0x5b), // orange
+        rgb(0xa8, 0xc7, 0x66), // lime
+    ];
+    const LIGHT: [Color32; 8] = [
+        rgb(0x2f, 0x6f, 0xb8),
+        rgb(0x2e, 0x8a, 0x55),
+        rgb(0xa8, 0x74, 0x0f),
+        rgb(0x7a, 0x4f, 0xc2),
+        rgb(0x1e, 0x87, 0x86),
+        rgb(0xb8, 0x44, 0x66),
+        rgb(0xb8, 0x5e, 0x1f),
+        rgb(0x6b, 0x8a, 0x1f),
+    ];
+    if active_palette().dark_base {
+        DARK
+    } else {
+        LIGHT
+    }
+}
+
+/// The index in [`project_tag_colors`] a project root prefers: FNV-1a of the path, stable
+/// across runs and platforms (unlike `DefaultHasher`).
+pub fn project_tag_slot(root_path: &str) -> usize {
+    let hash = root_path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    (hash % 8) as usize
+}
+
 /// High-contrast primary send/action circle fill (crisp near-white on dark themes, dark ink on
 /// light themes), giving the composer's primary CTA Antigravity's unmistakable visual weight.
 pub fn c_send_bg() -> Color32 {

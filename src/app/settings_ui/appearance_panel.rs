@@ -185,6 +185,15 @@ impl OxiApp {
                     )
                 },
             );
+            setting_switch(
+                ui,
+                &mut self.conv.settings.sidebar_focus_active_project,
+                "Collapse other projects when switching",
+                Some(
+                    "Opening a chat in another project folds the one you left in the sidebar. \
+                     Its running and waiting chats stay listed at the top.",
+                ),
+            );
         });
 
         settings_section(ui, "While agents work", None, |ui| {

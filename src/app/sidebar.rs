@@ -1,6 +1,8 @@
 //! Sidebar: workspace list, session rows, search.
 
+mod inbox;
 pub(super) mod navigation;
+mod projects;
 mod workspace_list;
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
@@ -12,12 +14,14 @@ use crate::theme::*;
 use crate::ui::chrome::sidebar_text_field;
 
 use super::OxiApp;
+use projects::{ProjectDrag, ProjectSlot};
 
 impl OxiApp {
     /// Sidebar list and controls.
     pub(crate) fn render_sidebar(&mut self, ui: &mut Ui) {
         ui.set_min_width(ui.max_rect().width());
         self.poll_sidebar_branches(ui.ctx());
+        self.sidebar_follow_active_project();
 
         // Primary action first, with its shortcut, like Antigravity's "+ New Conversation".
         let new_chat = crate::ui::chrome::flat_button_icon(
@@ -112,100 +116,6 @@ impl OxiApp {
 
         ui.add_space(SPACE_SM);
 
-        // "Projects" section header with right-aligned workspace actions (Antigravity-style).
-        let narrow_sidebar = ui.available_width() < 195.0;
-        ui.horizontal(|ui| {
-            ui.set_height(SIDEBAR_HEADER_H);
-            ui.spacing_mut().item_spacing.x = 2.0;
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("Projects")
-                    .size(FS_TINY)
-                    .color(c_sidebar_section()),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                if crate::ui::chrome::icon_button_plain(ui, ICON_FOLDER_PLUS, 22.0, false)
-                    .on_hover_text(
-                        "Add a project folder. Each workspace has its own chats; \
-                         tools run with that folder as cwd.",
-                    )
-                    .clicked()
-                {
-                    self.open_workspace_folder();
-                }
-                if narrow_sidebar {
-                    let more_id = ui.id().with("sidebar_projects_more");
-                    let open = egui::Popup::is_id_open(ui.ctx(), more_id);
-                    let (rect, resp) =
-                        ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::click());
-                    resp.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            ui.is_enabled(),
-                            "More workspace actions",
-                        )
-                    });
-                    let resp = resp
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("More workspace actions");
-                    let radius = CornerRadius::same(RADIUS_CHIP);
-                    if open || resp.hovered() || resp.has_focus() {
-                        ui.painter().rect_filled(
-                            rect,
-                            radius,
-                            if open { c_row_active() } else { c_row_hover() },
-                        );
-                    }
-                    crate::ui::chrome::keyboard_focus_ring(ui, &resp, radius);
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "···",
-                        FontId::proportional(FS_TINY),
-                        if open || resp.hovered() {
-                            c_accent()
-                        } else {
-                            c_text_muted()
-                        },
-                    );
-                    egui::Popup::from_toggle_button_response(&resp)
-                        .id(more_id)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .show(|ui| {
-                            if ui.button("Connect to remote host (SSH)…").clicked() {
-                                self.open_remote_dialog();
-                                ui.close();
-                            }
-                            if ui.button("New general chat").clicked() {
-                                self.new_general_chat();
-                                ui.close();
-                            }
-                        });
-                } else {
-                    if crate::ui::chrome::icon_button_plain(ui, ICON_SERVER, 22.0, false)
-                        .on_hover_text(
-                            "Connect to a remote host: open a folder on another machine over SSH; \
-                             its oxi server runs the agents there.",
-                        )
-                        .clicked()
-                    {
-                        self.open_remote_dialog();
-                    }
-                    if crate::ui::chrome::icon_button_plain(ui, ICON_GLOBE, 22.0, false)
-                        .on_hover_text(
-                            "New general chat: not about any project, run in ~/oxi-general",
-                        )
-                        .clicked()
-                    {
-                        self.new_general_chat();
-                    }
-                }
-            });
-        });
-
-        ui.add_space(SPACE_XS);
-
         if let Some(notice) = self.conv.sidebar.notice.clone() {
             if crate::ui::chrome::dismissible_notice(ui, "sidebar_notice", &notice) {
                 self.conv.sidebar.notice = None;
@@ -216,8 +126,8 @@ impl OxiApp {
         if self.conv.sidebar.history {
             self.render_sidebar_history_filters(ui);
         }
-        // Reserve room for the bottom footer (History + Settings).
-        let footer_h = 66.0;
+        // Reserve room for the bottom footer (History).
+        let footer_h = 14.0 + CONTROL_HEIGHT;
         ScrollArea::vertical()
             .id_salt("sidebar_main_scroll")
             .max_height((ui.available_height() - footer_h).max(40.0))
@@ -226,6 +136,7 @@ impl OxiApp {
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
+        self.render_project_drag_preview(ui.ctx());
 
         ui.add_space(6.0);
         crate::ui::chrome::hairline(ui);
@@ -250,19 +161,8 @@ impl OxiApp {
         {
             self.conv.sidebar.history = !history;
         }
-        if crate::ui::chrome::flat_button_icon(
-            ui,
-            ICON_SETTINGS,
-            "Settings",
-            FS_SMALL,
-            egui::vec2(ui.available_width(), CONTROL_HEIGHT),
-            c_text_muted(),
-        )
-        .on_hover_text("Settings (Cmd/Ctrl+,)")
-        .clicked()
-        {
-            self.toggle_settings_page();
-        }
+        // No Settings entry here: the status bar's gear is always there, even with the
+        // sidebar hidden, and a second one only added a row.
 
         // The outer sidebar allocation already owns the full fixed width/height. Expanding
         // again from content made Conversations report a subtly different size than Explorer.
@@ -272,7 +172,6 @@ impl OxiApp {
         // Workspace headers sit a step above the chat rows' default size, matching
         // the app-wide type scale (theme.rs) so it still tracks the UI density zoom.
         let q = self.conv.sidebar.search.trim().to_lowercase();
-        let mut sidebar_changed = false;
 
         if self.conv.no_workspace && self.conv.workspaces.len() == 1 {
             ui.add_space(12.0);
@@ -293,17 +192,38 @@ impl OxiApp {
             }
             return;
         }
-        if q.is_empty() && self.render_sidebar_running(ui) {
+        // History unfolds every list, so the sections would only repeat rows shown below;
+        // the badges still need this frame's counts either way.
+        let show_inbox = q.is_empty() && !self.conv.sidebar.history;
+        if self.render_sidebar_inbox(ui, show_inbox) {
             return;
         }
-        let order = sidebar_workspace_order(&self.conv.workspaces);
-        for &(wi, parent) in &order {
-            if sidebar_changed {
+        let order = self.sidebar_order();
+        let tops = self.sidebar_projects();
+        let dragging = egui::DragAndDrop::has_payload_of_type::<ProjectDrag>(ui.ctx());
+        let any_pinned = tops.iter().any(|&wi| self.project_is_pinned(wi));
+        // Sections: "Pinned" (only when something is pinned, or as a drop target while a
+        // project is dragged), then "Projects", which holds the workspace actions.
+        let mut in_pinned = false;
+        if any_pinned || dragging {
+            let hint = (!any_pinned).then_some("Drop here to pin");
+            if self.render_sidebar_section_header(ui, "Pinned", hint, true, false) {
                 return;
             }
-            // Linked checkouts are drawn by their parent, right under its header.
-            if parent.is_some() || (self.conv.no_workspace && wi == 0) {
-                continue;
+            in_pinned = true;
+        }
+        let mut projects_header = false;
+        // The active project's header row and where its block ends, for the sticky copy.
+        let mut sticky = None;
+        for &wi in &tops {
+            if !projects_header && !self.project_is_pinned(wi) {
+                if in_pinned && self.render_project_drop_end(ui, true) {
+                    return;
+                }
+                if self.render_sidebar_section_header(ui, "Projects", None, false, true) {
+                    return;
+                }
+                projects_header = true;
             }
             // Orchestrator workers' work trees show with their lead chat instead.
             let children: Vec<usize> = order
@@ -325,122 +245,42 @@ impl OxiApp {
             {
                 continue;
             }
-            sidebar_changed = self.render_sidebar_workspace(ui, wi, None, false, &q, &children);
-        }
-    }
-
-    /// Chats working (or waiting for approval) in any workspace, above the workspaces, so work
-    /// running elsewhere stays one click away. Shown when it adds something: two or more of
-    /// them, or one outside the open workspace. Returns whether the selection changed.
-    fn render_sidebar_running(&mut self, ui: &mut Ui) -> bool {
-        let mut chats = Vec::new();
-        for (wi, workspace) in self.conv.workspaces.iter().enumerate() {
-            for si in 0..workspace.sessions.len() {
-                let approval = self
-                    .run_state(self.session_key(wi, si))
-                    .is_some_and(|run| run.pending_approval.is_some());
-                if approval || self.session_row_is_running(wi, si) {
-                    chats.push((wi, si, approval));
-                }
+            let top = ui.cursor().min;
+            let width = ui.available_width();
+            if self.render_sidebar_workspace(ui, wi, None, false, &q, &children) {
+                return;
             }
-        }
-        let active = self.conv.active_workspace;
-        if chats.len() < 2 && chats.iter().all(|&(wi, ..)| wi == active) {
-            return false;
-        }
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(format!("Running · {}", chats.len()))
-                    .size(FS_TINY)
-                    .color(c_sidebar_section()),
+            // The header row takes drops above it; the chats under an unfolded project take
+            // drops after it, so it never has to be folded first.
+            let chats = egui::Rect::from_min_max(
+                top + egui::vec2(0.0, 1.0 + SIDEBAR_ROW_H),
+                egui::pos2(top.x + width, ui.cursor().min.y),
             );
-        });
-        ui.add_space(2.0);
-        let mut open = None;
-        for &(wi, si, approval) in &chats {
-            let title = sidebar_session_title_display(&self.conv.workspaces[wi].sessions[si].title);
-            let place = std::path::Path::new(&self.conv.workspaces[wi].root_path)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let selected = wi == active && si == self.conv.workspaces[wi].active;
-            const RUNNING_ROW_H: f32 = SIDEBAR_ROW_H;
-            let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), RUNNING_ROW_H),
-                Sense::click(),
-            );
-            let hovered = ui.rect_contains_pointer(rect) || response.has_focus();
-            if hovered {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            if dragging && chats.height() > 4.0 && self.project_drop_after_block(ui, wi, chats) {
+                return;
             }
-            let fill = if selected {
-                c_row_active()
-            } else if hovered {
-                c_row_hover()
-            } else {
-                Color32::TRANSPARENT
-            };
-            let radius = CornerRadius::same(RADIUS_ROW);
-            ui.painter().rect_filled(rect, radius, fill);
-            if selected {
-                ui.painter().rect_stroke(
-                    rect,
-                    radius,
-                    Stroke::new(1.0, c_border()),
-                    egui::StrokeKind::Inside,
+            if self.sidebar_top_project(self.conv.active_workspace) == wi {
+                // `render_sidebar_workspace` leads with 1px of space before the header row.
+                let header = egui::Rect::from_min_size(
+                    top + egui::vec2(0.0, 1.0),
+                    egui::vec2(width, SIDEBAR_ROW_H),
                 );
+                sticky = Some((wi, header, ui.cursor().min.y));
             }
-            crate::ui::chrome::keyboard_focus_ring(ui, &response, radius);
-            let inner = rect.shrink2(egui::vec2(8.0, 2.0));
-            ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if approval {
-                        ui.label(
-                            RichText::new(ICON_WARNING)
-                                .font(FontId::new(FS_TINY, icon_font()))
-                                .color(c_accent()),
-                        );
-                    } else {
-                        small_spinner(ui);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(&place).size(FS_TINY).color(c_text_faint()));
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(&title).size(FS_SMALL).color(if selected {
-                                        c_text_strong()
-                                    } else {
-                                        c_text()
-                                    }),
-                                )
-                                .truncate()
-                                .selectable(false),
-                            );
-                        });
-                    });
-                });
-            });
-            let hover_text = if approval {
-                format!("{title} — {place}\nWaiting for your approval")
-            } else {
-                format!("{title} — {place}")
-            };
-            if response.on_hover_text(hover_text).clicked() {
-                open = Some((wi, si));
+        }
+        if !projects_header {
+            if in_pinned && self.render_project_drop_end(ui, true) {
+                return;
             }
-            ui.add_space(2.0);
+            if self.render_sidebar_section_header(ui, "Projects", None, false, true) {
+                return;
+            }
         }
-        ui.add_space(6.0);
-        if let Some((wi, si)) = open {
-            self.close_subagent(ui.ctx());
-            self.select_session_in_workspace(wi, si);
-            return true;
+        self.render_project_drop_end(ui, false);
+        self.project_drag_autoscroll(ui);
+        if let Some((wi, header, block_bottom)) = sticky {
+            self.render_sticky_project_header(ui, wi, header, block_bottom);
         }
-        false
     }
 
     /// Linked checkout `wi` of workspace `parent`, indented under it with a tree guide.
@@ -454,7 +294,7 @@ impl OxiApp {
         let parent_folded = self.conv.workspaces[parent].sidebar_folded
             && q.is_empty()
             && !self.conv.sidebar.history;
-        if parent_folded && !self.sidebar_workspace_has_active_chats(wi, ui.ctx()) {
+        if parent_folded && !self.sidebar_workspace_has_kept_chats(wi) {
             return false;
         }
         let mut sidebar_changed = false;
@@ -568,6 +408,7 @@ impl OxiApp {
         let order: Vec<usize> = sidebar_session_order(workspace)
             .into_iter()
             .map(|(si, _)| si)
+            .filter(|&si| !self.sidebar_hides_placeholder(wi, si))
             .collect();
         let Some(next) = cycled(&order, workspace.active, back) else {
             return;
@@ -618,35 +459,6 @@ fn sidebar_session_order(ws: &super::state::Workspace) -> Vec<(usize, SidebarGro
     order
 }
 
-/// Display linked checkouts immediately after their main workspace, without changing
-/// persisted indices (running sessions and pending actions use those indices).
-fn sidebar_workspace_order(workspaces: &[super::state::Workspace]) -> Vec<(usize, Option<usize>)> {
-    let parents: Vec<_> = workspaces
-        .iter()
-        .map(|ws| {
-            ws.worktree.as_ref().and_then(|info| {
-                workspaces.iter().position(|candidate| {
-                    candidate.worktree.is_none()
-                        && std::path::Path::new(&candidate.root_path).starts_with(&info.main_root)
-                })
-            })
-        })
-        .collect();
-    let mut order = Vec::with_capacity(workspaces.len());
-    for (wi, parent) in parents.iter().enumerate() {
-        if parent.is_some() {
-            continue;
-        }
-        order.push((wi, None));
-        for (child, child_parent) in parents.iter().enumerate() {
-            if *child_parent == Some(wi) {
-                order.push((child, Some(wi)));
-            }
-        }
-    }
-    order
-}
-
 #[cfg(test)]
 mod cycle_tests {
     use super::cycled;
@@ -659,64 +471,5 @@ mod cycle_tests {
         assert_eq!(cycled(&order, 1, false), Some(2), "wraps to the top");
         assert_eq!(cycled(&order, 2, true), Some(1), "wraps to the bottom");
         assert_eq!(cycled(&[0], 0, false), None, "nothing to switch to");
-    }
-}
-
-#[cfg(test)]
-mod worktree_sidebar_tests {
-    use super::super::state::Workspace;
-    use super::*;
-    use crate::git::worktree::WorktreeInfo;
-
-    fn workspace(root: &str, main_root: Option<&str>) -> Workspace {
-        Workspace {
-            root_path: root.into(),
-            sessions: Vec::new(),
-            active: 0,
-            sidebar_folded: false,
-            pinned: Vec::new(),
-            archived: Vec::new(),
-            folded_groups: Vec::new(),
-            worktree: main_root.map(|main| WorktreeInfo {
-                branch: "oxi/task".into(),
-                main_root: main.into(),
-                main_branch: "dev".into(),
-            }),
-        }
-    }
-
-    #[test]
-    fn linked_workspaces_follow_their_parent_without_changing_indices() {
-        let workspaces = vec![
-            workspace("/repo-a", None),
-            workspace("/repo-b", None),
-            workspace("/trees/b", Some("/repo-b")),
-            workspace("/trees/a-one", Some("/repo-a")),
-            workspace("/trees/a-two", Some("/repo-a")),
-        ];
-        assert_eq!(
-            sidebar_workspace_order(&workspaces),
-            vec![
-                (0, None),
-                (3, Some(0)),
-                (4, Some(0)),
-                (1, None),
-                (2, Some(1)),
-            ]
-        );
-    }
-
-    #[test]
-    fn subfolder_parents_and_orphan_worktrees_remain_accessible() {
-        let workspaces = vec![
-            workspace("/trees/orphan", Some("/unopened")),
-            workspace("/repo-extra", None),
-            workspace("/trees/child", Some("/repo")),
-            workspace("/repo/src", None),
-        ];
-        assert_eq!(
-            sidebar_workspace_order(&workspaces),
-            vec![(0, None), (1, None), (3, None), (2, Some(3)),]
-        );
     }
 }
