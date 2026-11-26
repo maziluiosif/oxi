@@ -110,6 +110,10 @@ use permissions::{PermReq, handle_permission};
 
 #[path = "acp/reaper.rs"]
 mod reaper;
+/// Serializes tests that start live ACP agents with tests that read the process-wide registry
+/// of them (`any_background_tools`); run in parallel, the readers see the other tests' agents.
+#[cfg(test)]
+pub(crate) static LIVE_REGISTRY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub use reaper::{
     BackgroundTool, any_background_tools, background_tools, has_background_tools, is_live,
     live_count, set_policy as set_reap_policy,
