@@ -743,6 +743,13 @@ pub struct SidebarState {
     /// Per workspace, chats its folded row hides this frame: (need you, running). Filled once
     /// per frame with the "Needs you" / "Running" lists, read by the folded rows' badges.
     pub hidden_activity: std::collections::HashMap<usize, (usize, usize)>,
+    /// Scroll the open chat's row into view on the sidebar's next frame: set when a shortcut
+    /// steps to another chat or project, so the sidebar follows.
+    pub reveal_active: bool,
+    /// Stops the last sidebar frame drew, top to bottom, so tests can check that
+    /// `sidebar_stops` walks the same rows.
+    #[cfg(test)]
+    pub drawn_stops: Vec<super::sidebar::stepping::SidebarStop>,
 }
 
 /// Workspace file explorer tree.

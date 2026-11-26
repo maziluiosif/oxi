@@ -426,6 +426,9 @@ impl OxiApp {
                 .retain(|event| !matches!(event, egui::Event::Key { key: Key::Tab, .. }));
             Some(i.modifiers.shift)
         });
+        // Tab-style switching (⌥⌘← / → through the sidebar's chats and folded projects). While a
+        // document shows, `handle_editor_tab_keys` has already taken these keys for its tabs.
+        let sidebar_step = ctx.input_mut(super::sidebar::stepping::take_sidebar_step);
         let goto_chat =
             ctx.input(|i| i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::O));
         let search_chats =
@@ -459,6 +462,12 @@ impl OxiApp {
             } else {
                 self.cycle_chat(back);
             }
+        }
+        if let Some(step) = sidebar_step
+            && pickers_free
+        {
+            let back = step == super::sidebar::stepping::SidebarStep::Previous;
+            self.step_sidebar(ctx, back);
         }
         if goto_chat && pickers_free {
             self.open_file_picker_with("#");

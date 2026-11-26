@@ -40,14 +40,7 @@ impl OxiApp {
             "Project"
         };
         let searching_all = !q.is_empty() || self.conv.sidebar.history;
-        let own_folded = if checkout_row {
-            self.conv.workspaces[wi]
-                .folded_groups
-                .iter()
-                .any(|key| key == "checkout")
-        } else {
-            self.conv.workspaces[wi].sidebar_folded
-        };
+        let own_folded = self.sidebar_row_own_folded(wi, checkout_row);
         let folded = !searching_all && (own_folded || parent_folded);
         // The project holding the open chat gets the accent bar; the open checkout or work
         // tree under it gets the strongest branch text.
@@ -636,7 +629,7 @@ impl OxiApp {
                 }
             }
             if !other.is_empty() && !folded {
-                let id = ui.id().with(("other_worktrees", wi));
+                let id = super::stepping::other_worktrees_id(wi);
                 let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(id, || false));
                 if sidebar_quiet_link(
                     ui,
@@ -669,51 +662,31 @@ impl OxiApp {
             if sidebar_changed || self.conv.workspaces[wi].sessions.get(si).is_none() {
                 return true;
             }
-            if self.sidebar_hides_placeholder(wi, si) {
-                continue;
-            }
-            // An orchestrator worker's chat shows above its lead's composer instead.
-            let open_here =
-                wi == self.conv.active_workspace && si == self.conv.workspaces[wi].active;
-            if !open_here
-                && self.hidden_worker_chat(
-                    self.conv.workspaces[wi].sessions[si]
-                        .session_file
-                        .as_deref(),
-                )
-            {
-                continue;
-            }
-            // Folded: only the open chat stays; its running and waiting neighbours are listed
-            // under "Needs you" / "Running" at the top instead.
-            let exceptional = if folded {
-                self.sidebar_session_kept_when_folded(wi, si)
-            } else {
-                self.sidebar_session_needs_visibility(wi, si, ui.ctx())
-            };
-            if !searching
-                && !self.conv.sidebar.history
-                && ((!matches!(group, SidebarGroup::Pinned | SidebarGroup::Today) || folded)
-                    && !exceptional)
-            {
-                if !folded && group == SidebarGroup::Older {
+            match self.sidebar_session_listing(wi, si, group, folded, q, ui.ctx()) {
+                Listing::Listed => {}
+                Listing::Older => {
                     hidden_older_sessions += 1;
+                    continue;
                 }
-                continue;
-            }
-            if self.conv.sidebar.history && !self.sidebar_session_in_history_period(wi, si) {
-                continue;
-            }
-            if searching && !self.session_matches_search(wi, si, q) {
-                continue;
+                Listing::Hidden => continue,
             }
             visible_sessions += 1;
+            #[cfg(test)]
+            self.conv
+                .sidebar
+                .drawn_stops
+                .push(super::stepping::SidebarStop::Chat(self.session_key(wi, si)));
+            // A shortcut just opened this chat: lay it out even off screen, to scroll to it.
+            let reveal = self.conv.sidebar.reveal_active
+                && wi == self.conv.active_workspace
+                && si == active_si;
             // Rows are all the same height: once one has been measured, a row scrolled out
             // of view only reserves its space. Long histories otherwise cost a full layout
             // of every row on every frame (~1.5 ms at 400 chats).
             // Search results show an excerpt under some rows, so they are laid out in full.
             if let Some(advance) = row_advance
                 && !searching
+                && !reveal
                 && self.conv.sidebar.renaming_session != Some((wi, si))
                 && !ui.is_rect_visible(egui::Rect::from_min_size(
                     ui.cursor().min,
@@ -755,6 +728,10 @@ impl OxiApp {
                         let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
                         let (rect, response) =
                             ui.allocate_exact_size(egui::vec2(row_w, row_outer_h), Sense::click());
+                        if reveal {
+                            ui.scroll_to_rect(rect, None);
+                            self.conv.sidebar.reveal_active = false;
+                        }
                         response.widget_info(|| {
                             egui::WidgetInfo::selected(
                                 egui::WidgetType::SelectableLabel,

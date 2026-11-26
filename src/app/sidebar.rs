@@ -3,6 +3,7 @@
 mod inbox;
 pub(super) mod navigation;
 mod projects;
+pub(super) mod stepping;
 mod workspace_list;
 
 use eframe::egui::scroll_area::ScrollBarVisibility;
@@ -15,6 +16,7 @@ use crate::ui::chrome::sidebar_text_field;
 
 use super::OxiApp;
 use projects::{ProjectDrag, ProjectSlot};
+use stepping::Listing;
 
 impl OxiApp {
     /// Sidebar list and controls.
@@ -51,6 +53,8 @@ impl OxiApp {
             .show(ui, |ui| {
                 self.render_sidebar_session_list(ui);
             });
+        // Drawn this frame, or not listed at all (filtered out by the search).
+        self.conv.sidebar.reveal_active = false;
         self.render_project_drag_preview(ui.ctx());
 
         ui.add_space(6.0);
@@ -278,6 +282,8 @@ impl OxiApp {
         // Workspace headers sit a step above the chat rows' default size, matching
         // the app-wide type scale (theme.rs) so it still tracks the UI density zoom.
         let q = self.conv.sidebar.search.trim().to_lowercase();
+        #[cfg(test)]
+        self.conv.sidebar.drawn_stops.clear();
 
         if self.conv.no_workspace && self.conv.workspaces.len() == 1 {
             ui.add_space(12.0);
@@ -353,8 +359,21 @@ impl OxiApp {
             }
             let top = ui.cursor().min;
             let width = ui.available_width();
+            #[cfg(test)]
+            let drawn_before = self.conv.sidebar.drawn_stops.len();
             if self.render_sidebar_workspace(ui, wi, None, false, &q, &children) {
                 return;
+            }
+            // A project row with no chats under it is a stop of its own (`sidebar_stops`).
+            #[cfg(test)]
+            if q.is_empty()
+                && !self.conv.sidebar.history
+                && self.conv.sidebar.drawn_stops.len() == drawn_before
+            {
+                self.conv
+                    .sidebar
+                    .drawn_stops
+                    .push(stepping::SidebarStop::Project(wi));
             }
             // The header row takes drops above it; the chats under an unfolded project take
             // drops after it, so it never has to be folded first.
@@ -397,9 +416,7 @@ impl OxiApp {
         parent: usize,
         q: &str,
     ) -> bool {
-        let parent_folded = self.conv.workspaces[parent].sidebar_folded
-            && q.is_empty()
-            && !self.conv.sidebar.history;
+        let parent_folded = self.sidebar_worktree_parent_folded(parent, q);
         if parent_folded && !self.sidebar_workspace_has_kept_chats(wi) {
             return false;
         }

@@ -261,7 +261,12 @@ fn render_shortcuts(ui: &mut Ui) {
         format!("F7 / {shift}F7")
     };
     let project_digits = if mac { "⌃1…9" } else { "Ctrl+1…9" };
-    let shortcuts: [(String, &str); 41] = [
+    let step_chat = if mac {
+        "⌥⌘→ / ←"
+    } else {
+        "Ctrl+PgDn / PgUp"
+    };
+    let shortcuts: [(String, &str); 42] = [
         (format!("{cmd}N"), "New chat"),
         (format!("{cmd},"), "Settings"),
         (format!("{cmd}."), "Stop the running reply"),
@@ -287,6 +292,10 @@ fn render_shortcuts(ui: &mut Ui) {
         (
             project_digits.into(),
             "Open the 1st…9th project in the sidebar",
+        ),
+        (
+            step_chat.into(),
+            "Next / previous chat or folded project in the sidebar (editor tab while a file shows)",
         ),
         (format!("{cmd}E"), "Show or hide the file explorer"),
         (format!("{cmd}{shift}B"), "Show or hide source control"),

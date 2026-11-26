@@ -246,6 +246,13 @@ fn build_menus() -> Vec<MenuSpec> {
         ctrl.plus(Modifiers::ALT)
     };
     let jump = if MAC { ctrl } else { Modifiers::ALT };
+    // Tab-style switching: the editors' and browsers' tab keys walk the sidebar's chats and
+    // folded projects (see `sidebar::stepping`).
+    let (step_chat, next_chat, previous_chat) = if MAC {
+        (cmd().plus(Modifiers::ALT), Key::ArrowRight, Key::ArrowLeft)
+    } else {
+        (cmd(), Key::PageDown, Key::PageUp)
+    };
     let move_line = if MAC { cmd().plus(ctrl) } else { cmd_shift() };
     let bracket = if MAC { ctrl } else { cmd() };
     // Ctrl+G is Find Next outside macOS; Go to Line is `:` in the picker there.
@@ -523,6 +530,8 @@ fn build_menus() -> Vec<MenuSpec> {
                     Modifiers::CTRL.plus(Modifiers::SHIFT),
                     Key::Tab,
                 )),
+                c(keys("Next Chat in Sidebar", step_chat, next_chat)),
+                c(keys("Previous Chat in Sidebar", step_chat, previous_chat)),
                 Separator,
                 c(keys("Stop Response", cmd(), Key::Period)),
                 Separator,
@@ -606,8 +615,14 @@ pub(crate) fn shortcut_label(modifiers: Modifiers, key: Key) -> String {
         Key::Num0 => "0",
         Key::ArrowUp if MAC => "↑",
         Key::ArrowDown if MAC => "↓",
+        Key::ArrowLeft if MAC => "←",
+        Key::ArrowRight if MAC => "→",
         Key::ArrowUp => "Up",
         Key::ArrowDown => "Down",
+        Key::ArrowLeft => "Left",
+        Key::ArrowRight => "Right",
+        Key::PageUp => "PgUp",
+        Key::PageDown => "PgDn",
         other => other.name(),
     });
     label

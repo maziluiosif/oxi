@@ -40,8 +40,12 @@ impl OxiApp {
             if self.sidebar_chats_expanded(wi, &parents) {
                 continue;
             }
-            for si in 0..workspace.sessions.len() {
+            for (si, session) in workspace.sessions.iter().enumerate() {
                 if self.sidebar_session_kept_when_folded(wi, si) {
+                    continue;
+                }
+                // An orchestrator worker's chat shows above its lead's composer instead.
+                if self.hidden_worker_chat(session.session_file.as_deref()) {
                     continue;
                 }
                 let run = self.run_state(self.session_key(wi, si));
@@ -99,6 +103,13 @@ impl OxiApp {
                 );
             });
             for item in list {
+                #[cfg(test)]
+                self.conv
+                    .sidebar
+                    .drawn_stops
+                    .push(super::stepping::SidebarStop::Chat(
+                        self.session_key(item.wi, item.si),
+                    ));
                 if self.render_inbox_row(ui, item) {
                     open = Some((item.wi, item.si));
                 }
