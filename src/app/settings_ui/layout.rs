@@ -93,6 +93,7 @@ impl OxiApp {
                     || cur.ui_font != orig.ui_font
                     || cur.mono_font != orig.mono_font
                     || cur.chat_column_max_width != orig.chat_column_max_width
+                    || cur.sidebar_focus_active_project != orig.sidebar_focus_active_project
                     || cur.notify_in_background != orig.notify_in_background
                     || cur.keep_awake_while_working != orig.keep_awake_while_working
                     || cur.steer_follow_ups != orig.steer_follow_ups

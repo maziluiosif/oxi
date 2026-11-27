@@ -188,6 +188,17 @@ pub struct AppSettings {
     /// Launching from a project folder adds it at runtime even if missing here.
     #[serde(default)]
     pub workspaces: Vec<WorkspaceEntry>,
+    /// Project roots pinned to the top of the sidebar, in their sidebar order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned_projects: Vec<String>,
+    /// Manual sidebar order of projects (root paths), set by dragging or "Move up/down".
+    /// Projects missing here follow in the order they were added. Display only: chats keep
+    /// addressing workspaces by their index in `workspaces`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub project_order: Vec<String>,
+    /// Collapse the previously active project in the sidebar when switching to another one.
+    #[serde(default = "default_true")]
+    pub sidebar_focus_active_project: bool,
     /// Last active workspace root path, used to reopen the conversation the user last had open.
     #[serde(default)]
     pub last_active_workspace_root_path: Option<String>,
@@ -407,6 +418,9 @@ impl Default for AppSettings {
             commit_msg_system_prompt: default_commit_msg_system_prompt(),
             auto_title_chats: default_auto_title_chats(),
             workspaces: Vec::new(),
+            pinned_projects: Vec::new(),
+            project_order: Vec::new(),
+            sidebar_focus_active_project: true,
             last_active_workspace_root_path: None,
             last_active_session_file: None,
             dictation: DictationSettings::default(),

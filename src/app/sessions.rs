@@ -246,6 +246,20 @@ impl OxiApp {
                 folded_groups: w.folded_groups.clone(),
             })
             .collect();
+        // A removed project drops its pin and slot, so re-adding it starts unpinned at the end.
+        let open: std::collections::HashSet<&str> = self
+            .conv
+            .workspaces
+            .iter()
+            .map(|w| w.root_path.as_str())
+            .collect();
+        let settings = &mut self.conv.settings;
+        settings
+            .pinned_projects
+            .retain(|root| open.contains(root.as_str()));
+        settings
+            .project_order
+            .retain(|root| open.contains(root.as_str()));
         self.sync_active_session_to_settings();
         if let Err(e) = self.conv.settings.save() {
             self.run_state_mut(self.active_session_key()).stream_error =
@@ -382,11 +396,23 @@ impl OxiApp {
         {
             return;
         }
+        // The server renames a remote chat on its own copy, so its history needn't be here.
+        if self.is_remote_key(key) {
+            self.remote_rename_chat(key, title);
+            return;
+        }
+        // Saving writes the whole transcript: a chat that was never opened isn't loaded yet,
+        // and saving it as it stands would replace its history with nothing.
+        self.ensure_session_loaded(key);
+        let session = &self.active_workspace().sessions[idx];
+        if session.session_file.is_some() && !session.messages_loaded {
+            self.conv.sidebar.notice =
+                Some("Could not rename the chat: its history isn't loaded yet.".into());
+            return;
+        }
         self.active_workspace_mut().sessions[idx].title = title;
         let root_path = self.active_workspace().root_path.clone();
-        if self.is_remote_key(key) {
-            self.remote_save_session(key);
-        } else if let Err(e) = session_store::save_session_messages(
+        if let Err(e) = session_store::save_session_messages(
             &root_path,
             &mut self.active_workspace_mut().sessions[idx],
         ) {
@@ -447,10 +473,12 @@ impl OxiApp {
         }
     }
 
-    pub(crate) fn delete_session(&mut self, idx: usize) {
+    /// Delete chat `idx` of the active workspace. False when it stays: out of range, or
+    /// answering a turn.
+    pub(crate) fn delete_session(&mut self, idx: usize) -> bool {
         let active_key = self.active_session_key();
         if idx >= self.active_workspace().sessions.len() {
-            return;
+            return false;
         }
         let deleting_last_session = self.active_workspace().sessions.len() == 1;
         let delete_key = self.session_key(active_key.workspace_idx, idx);
@@ -458,7 +486,7 @@ impl OxiApp {
             .run_state(delete_key)
             .is_some_and(|state| state.waiting_response)
         {
-            return;
+            return false;
         }
 
         let session_file = self.active_workspace().sessions[idx].session_file.clone();
@@ -560,6 +588,7 @@ impl OxiApp {
         }
         self.persist_active_session_selection();
         self.run_state_mut(self.active_session_key()).stream_error = None;
+        true
     }
 
     /// Removes a workspace from the sidebar. Doesn't touch its files on disk (chats
@@ -678,4 +707,52 @@ pub(crate) fn clipboard_image_png() -> Result<Option<Vec<u8>>, String> {
         ));
     }
     Ok(Some(bytes))
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::super::state::Workspace;
+    use super::OxiApp;
+    use crate::model::ChatMessage;
+
+    #[test]
+    fn renaming_a_chat_that_was_never_opened_keeps_its_saved_history() {
+        crate::secrets::use_mock_store();
+        let dir =
+            std::env::temp_dir().join(format!("oxi-rename-unopened-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let mut app = OxiApp::new();
+        app.conv.workspaces = vec![Workspace {
+            root_path: root.clone(),
+            sessions: ["Open", "Unopened"]
+                .iter()
+                .map(|t| OxiApp::blank_session(*t))
+                .collect(),
+            active: 0,
+            sidebar_folded: false,
+            pinned: vec![],
+            archived: Vec::new(),
+            folded_groups: vec![],
+            worktree: None,
+        }];
+        app.conv.active_workspace = 0;
+        app.conv.no_workspace = false;
+        app.flow.sessions.clear();
+        let session = &mut app.conv.workspaces[0].sessions[1];
+        session.messages.push(ChatMessage::user("keep me", &[]));
+        crate::session_store::save_session_messages(&root, session).unwrap();
+        // As listed at startup: known on disk, history not read yet.
+        session.messages.clear();
+        session.messages_loaded = false;
+        let file = session.session_file.clone().unwrap();
+
+        app.rename_session(1, "Renamed".into());
+
+        assert_eq!(app.conv.workspaces[0].sessions[1].title, "Renamed");
+        let saved = crate::session_store::load_session_messages(&file).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].text, "keep me");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

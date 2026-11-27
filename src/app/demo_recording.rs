@@ -164,6 +164,10 @@ fn run_gallery(rec: &mut Recorder<'_>) {
         review_worktree_sidebar(rec);
         return;
     }
+    if std::env::var_os("OXI_PROJECT_SIDEBAR_REVIEW").is_some() {
+        review_project_sidebar(rec);
+        return;
+    }
 
     if std::env::var_os("OXI_CHAT_NAV_REVIEW").is_some() {
         review_chat_navigation(rec);
@@ -3459,6 +3463,397 @@ fn review_acp_ui(rec: &mut Recorder<'_>) {
     }
 }
 
+/// Project sections, pins, the cross-project "Needs you" / "Running" lists and drag to
+/// reorder, on the real sidebar with several projects in different states.
+fn review_project_sidebar(rec: &mut Recorder<'_>) {
+    use super::state::{PendingApproval, Workspace};
+    rec.harness.set_pixels_per_point(1.0);
+    rec.harness.set_size(egui::vec2(1100.0, 720.0));
+    let base = rec.project.parent().unwrap().to_path_buf();
+    let name = rec
+        .project
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let add = |rec: &mut Recorder<'_>, dir: std::path::PathBuf, titles: &[&str], folded| {
+        std::fs::create_dir_all(&dir).unwrap();
+        let sessions = titles
+            .iter()
+            .map(|title| {
+                let mut session = OxiApp::blank_session(*title);
+                session.title = (*title).into();
+                session.messages = vec![message(MsgRole::User, title, vec![])];
+                session
+            })
+            .collect();
+        rec.app().conv.workspaces.push(Workspace {
+            root_path: dir.to_string_lossy().into_owned(),
+            sessions,
+            active: 0,
+            sidebar_folded: folded,
+            pinned: Vec::new(),
+            archived: Vec::new(),
+            folded_groups: Vec::new(),
+            worktree: None,
+        });
+        rec.app().conv.workspaces.len() - 1
+    };
+    let blog = add(
+        rec,
+        base.join("blog"),
+        &["Draft the release notes post", "Fix RSS dates"],
+        true,
+    );
+    let api = add(
+        rec,
+        base.join("api-server"),
+        &[
+            "Add rate limiting",
+            "Migrate to axum 0.8",
+            "Profile the slow query",
+        ],
+        true,
+    );
+    // Same folder name as the demo project: both get their parent folder to tell them apart.
+    let twin = add(
+        rec,
+        base.join("mirror").join(&name),
+        &["Compare configs"],
+        true,
+    );
+    {
+        let app = rec.app();
+        // api-server: one chat waiting for approval, one running; blog: a finished reply.
+        let key = app.session_key(api, 0);
+        // A real approval always waits inside a turn; idle run states are pruned.
+        app.run_state_mut(key).begin_waiting_response();
+        app.run_state_mut(key).pending_approval = Some(PendingApproval {
+            name: "bash".into(),
+            summary: "cargo test".into(),
+            allow_prefix: None,
+            elicitation: None,
+        });
+        let mut reply = message(MsgRole::Assistant, "", vec![]);
+        reply.streaming = true;
+        app.conv.workspaces[api].sessions[1].messages.push(reply);
+        let key = app.session_key(blog, 1);
+        app.run_state_mut(key).completion_unseen = true;
+        let api_root = app.conv.workspaces[api].root_path.clone();
+        app.conv.settings.pinned_projects = vec![api_root];
+    }
+    rec.harness.run_steps(6);
+    rec.still("projects-initial");
+    {
+        let app = rec.app();
+        println!(
+            "SIDEBAR open={} mode_chats={} active={} activity={:?}",
+            app.conv.sidebar.open,
+            app.conv.sidebar.mode == super::state::SidebarMode::Chats,
+            app.conv.active_workspace,
+            app.sidebar_offscreen_activity()
+        );
+    }
+    for label in ["Needs you · 2", "Running · 1"] {
+        assert!(
+            rec.harness.query_all_by_label(label).count() > 0,
+            "visible: {label}"
+        );
+    }
+    // No section titles: a pin and a hairline set the pinned projects apart.
+    for label in ["Pinned", "Projects"] {
+        assert_eq!(
+            rec.harness.query_all_by_label(label).count(),
+            0,
+            "no section title: {label}"
+        );
+    }
+
+    // The search field stands in for the toolbar: its button or the shortcut opens it,
+    // Escape clears it and brings the toolbar back.
+    assert_eq!(rec.harness.query_all_by_label("Search chats…").count(), 0);
+    rec.harness.get_by_label("Search chats").click();
+    rec.harness.run_steps(3);
+    assert!(
+        rec.app().conv.sidebar.search_open,
+        "search button opens the field"
+    );
+    assert_eq!(
+        rec.harness
+            .query_all_by_label("More ways to start a chat")
+            .count(),
+        0
+    );
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    assert!(
+        !rec.app().conv.sidebar.search_open,
+        "Escape closes the field"
+    );
+    rec.harness.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::E,
+    );
+    rec.harness.run_steps(3);
+    assert!(
+        rec.app().conv.sidebar.search_open,
+        "the shortcut opens the field"
+    );
+    rec.harness.event(egui::Event::Text("api".into()));
+    rec.harness.run_steps(3);
+    assert_eq!(rec.app().conv.sidebar.search, "api", "the field has focus");
+    rec.still("projects-search");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    assert!(!rec.app().conv.sidebar.search_open);
+    assert!(
+        rec.app().conv.sidebar.search.is_empty(),
+        "Escape clears the query"
+    );
+    rec.harness
+        .get_by_label("More ways to start a chat")
+        .click();
+    rec.harness.run_steps(3);
+    assert!(rec.harness.query_all_by_label("New general chat").count() > 0);
+    rec.still("projects-new-chat-menu");
+    rec.harness.key_press(egui::Key::Escape);
+    rec.harness.run_steps(3);
+    assert!(
+        rec.harness
+            .query_all_by_label(&format!("Project mirror/{name}"))
+            .count()
+            > 0,
+        "same-named projects show their parent folder"
+    );
+    for width in [250.0, 320.0] {
+        for scale in [1.0, 1.5] {
+            rec.harness.set_pixels_per_point(scale);
+            rec.app().conv.sidebar.width = width;
+            rec.harness.run_steps(4);
+            rec.still(&format!("projects-{width}-{scale}"));
+        }
+    }
+    rec.harness.set_pixels_per_point(1.0);
+    rec.app().conv.sidebar.width = 280.0;
+    rec.harness.run_steps(3);
+    crate::theme::apply_theme(&rec.harness.ctx, "light");
+    rec.harness.run_steps(3);
+    rec.still("projects-light");
+    crate::theme::apply_theme(&rec.harness.ctx, "dark");
+    rec.harness.run_steps(3);
+
+    // Hovering a project shows its actions in place of the folded summary.
+    rec.harness.get_by_label("Project api-server").hover();
+    rec.harness.run_steps(3);
+    rec.still("projects-hover");
+
+    // Drag "blog" above the demo project.
+    let from = rec.harness.get_by_label("Project blog").rect().center();
+    let to_label = format!(
+        "Project {}",
+        crate::theme::workspace_sidebar_label(&rec.project.to_string_lossy())
+    );
+    let to = rec.harness.get_by_label(&to_label).rect();
+    let target = egui::pos2(to.center().x, to.top() + 3.0);
+    rec.harness.event(egui::Event::PointerMoved(from));
+    rec.harness.step();
+    rec.harness.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    rec.harness.step();
+    for i in 1..=8 {
+        let t = i as f32 / 8.0;
+        rec.harness
+            .event(egui::Event::PointerMoved(from + (target - from) * t));
+        rec.harness.step();
+    }
+    rec.harness.run_steps(2);
+    rec.still("projects-dragging");
+    // With a project pinned, a drag adds no headers: the rows stay where they were.
+    assert_eq!(rec.harness.query_all_by_label("Pinned").count(), 0);
+    rec.harness.event(egui::Event::PointerButton {
+        pos: target,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    rec.harness.run_steps(4);
+    let app = rec.app();
+    let order: Vec<String> = app
+        .sidebar_order()
+        .into_iter()
+        .filter(|(_, parent)| parent.is_none())
+        .map(|(wi, _)| crate::theme::workspace_sidebar_label(&app.conv.workspaces[wi].root_path))
+        .collect();
+    println!("PROJECT ORDER after drag: {order:?}");
+    assert_eq!(
+        app.conv.settings.project_order.first(),
+        Some(&app.conv.workspaces[blog].root_path),
+        "blog dropped at the top of Projects"
+    );
+    rec.still("projects-dropped");
+
+    // Clicking a project opens it, which folds the one left behind.
+    let first = 0;
+    assert!(!rec.app().conv.workspaces[first].sidebar_folded);
+    rec.harness.get_by_label("Project blog").click();
+    rec.harness.run_steps(3);
+    assert_eq!(
+        rec.app().conv.active_workspace,
+        blog,
+        "clicking a project opens it"
+    );
+    // The row and its title label both carry the title.
+    rec.harness
+        .query_all_by_label("Draft the release notes post")
+        .next()
+        .unwrap()
+        .click();
+    rec.harness.run_steps(4);
+    assert_eq!(rec.app().conv.active_workspace, blog);
+    assert!(
+        rec.app().conv.workspaces[first].sidebar_folded,
+        "left project folds"
+    );
+    assert!(
+        !rec.app().conv.workspaces[blog].sidebar_folded,
+        "new project unfolds"
+    );
+    let _ = twin;
+    rec.still("projects-switched");
+
+    // The chevron folds a project without opening it.
+    let api_folded = rec.app().conv.workspaces[api].sidebar_folded;
+    rec.harness.get_by_label("Project api-server").hover();
+    rec.harness.run_steps(3);
+    let fold_label = format!("{} api-server", if api_folded { "Unfold" } else { "Fold" });
+    rec.harness.get_by_label(&fold_label).click();
+    rec.harness.run_steps(3);
+    assert_eq!(rec.app().conv.workspaces[api].sidebar_folded, !api_folded);
+    assert_eq!(
+        rec.app().conv.active_workspace,
+        blog,
+        "folding does not switch"
+    );
+    rec.still("projects-chevron-folded");
+    // Clicking the open project folds or unfolds it, since there is nowhere to go.
+    let blog_folded = rec.app().conv.workspaces[blog].sidebar_folded;
+    rec.harness.get_by_label("Project blog").click();
+    rec.harness.run_steps(3);
+    assert_eq!(rec.app().conv.workspaces[blog].sidebar_folded, !blog_folded);
+    rec.harness.get_by_label("Project blog").click();
+    rec.harness.run_steps(3);
+
+    // Many chats in the open project: scrolled past its row, a sticky copy stays on top.
+    {
+        let app = rec.app();
+        for i in 1..=24 {
+            let mut session = OxiApp::blank_session(format!("Note {i}"));
+            session.messages = vec![message(MsgRole::User, "note", vec![])];
+            app.conv.workspaces[blog].sessions.push(session);
+        }
+    }
+    rec.harness.set_size(egui::vec2(1100.0, 560.0));
+    rec.harness.run_steps(3);
+    assert_eq!(
+        rec.harness
+            .query_all_by_label("Scroll to project blog")
+            .count(),
+        0,
+        "no sticky row while the project row is on screen"
+    );
+    let over_sidebar =
+        rec.harness.get_by_label("Project blog").rect().center() + egui::vec2(0.0, 80.0);
+    rec.harness.event(egui::Event::PointerMoved(over_sidebar));
+    for _ in 0..6 {
+        rec.harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -120.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        rec.harness.step();
+    }
+    rec.harness.run_steps(4);
+    rec.still("projects-sticky");
+    assert!(
+        rec.harness
+            .query_all_by_label("Scroll to project blog")
+            .count()
+            > 0,
+        "sticky project row while its chats scroll"
+    );
+    rec.harness.get_by_label("Scroll to project blog").click();
+    rec.harness.run_steps(6);
+    rec.still("projects-sticky-clicked");
+
+    // Ctrl+1 opens the first project in the sidebar: the pinned api-server.
+    rec.harness
+        .key_press_modifiers(egui::Modifiers::CTRL, egui::Key::Num1);
+    rec.harness.run_steps(4);
+    assert_eq!(
+        rec.app().conv.active_workspace,
+        api,
+        "Ctrl+1 opens api-server"
+    );
+
+    // Dropping a project onto an unfolded project's chats puts it after that project.
+    let from = rec
+        .harness
+        .get_by_label(&format!("Project mirror/{name}"))
+        .rect()
+        .center();
+    let target = rec
+        .harness
+        .query_all_by_label("Add rate limiting")
+        .next()
+        .unwrap()
+        .rect()
+        .center();
+    rec.harness.event(egui::Event::PointerMoved(from));
+    rec.harness.step();
+    rec.harness.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    rec.harness.step();
+    for i in 1..=8 {
+        let t = i as f32 / 8.0;
+        rec.harness
+            .event(egui::Event::PointerMoved(from + (target - from) * t));
+        rec.harness.step();
+    }
+    rec.harness.run_steps(2);
+    rec.still("projects-drop-after-block");
+    rec.harness.event(egui::Event::PointerButton {
+        pos: target,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    rec.harness.run_steps(4);
+    let app = rec.app();
+    let pins = &app.conv.settings.pinned_projects;
+    println!("PINS after block drop: {pins:?}");
+    assert_eq!(
+        pins.get(1),
+        Some(&app.conv.workspaces[twin].root_path),
+        "dropped right after api-server, inside Pinned"
+    );
+
+    // "Go to Project…" lists projects with their Ctrl+N shortcuts.
+    rec.app().open_file_picker_with("%");
+    rec.harness.run_steps(4);
+    rec.still("projects-goto");
+    rec.app().cancel_file_picker();
+    rec.harness.run_steps(2);
+}
+
 /// Real sidebar rendering with linked checkouts, in the isolated gallery process.
 /// Split view: two chats side by side, "Send to both", swapping focus by clicking the other
 /// pane, and a general chat.
@@ -3552,7 +3947,7 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     let root = rec.project.to_string_lossy().into_owned();
     let worktree_action = format!(
         "New worktree for {}",
-        crate::theme::workspace_sidebar_label(&root)
+        crate::theme::workspace_short_label(&root)
     );
     // Exercise the daily list and full history using the actual rendered sidebar.
     for (title, pinned, archived, today) in [
@@ -3790,7 +4185,7 @@ fn review_worktree_sidebar(rec: &mut Recorder) {
     rec.still("worktree-created");
 
     // Right-click targets the checkout under the pointer, even with another one active.
-    let project_label = format!("Project {}", crate::theme::workspace_sidebar_label(&root));
+    let project_label = format!("Project {}", crate::theme::workspace_short_label(&root));
     rec.harness.get_by_label(&project_label).click_secondary();
     rec.harness.run_steps(3);
     assert!(

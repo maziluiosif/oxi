@@ -42,6 +42,7 @@ pub(crate) enum AppAction {
     ToggleSplitMirror,
     CloseSplit,
     CloseAllEditorTabs,
+    GotoProject,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -245,6 +246,13 @@ fn build_menus() -> Vec<MenuSpec> {
         ctrl.plus(Modifiers::ALT)
     };
     let jump = if MAC { ctrl } else { Modifiers::ALT };
+    // Tab-style switching: the editors' and browsers' tab keys walk the sidebar's chats and
+    // folded projects (see `sidebar::stepping`).
+    let (step_chat, next_chat, previous_chat) = if MAC {
+        (cmd().plus(Modifiers::ALT), Key::ArrowRight, Key::ArrowLeft)
+    } else {
+        (cmd(), Key::PageDown, Key::PageUp)
+    };
     let move_line = if MAC { cmd().plus(ctrl) } else { cmd_shift() };
     let bracket = if MAC { ctrl } else { cmd() };
     // Ctrl+G is Find Next outside macOS; Go to Line is `:` in the picker there.
@@ -489,6 +497,8 @@ fn build_menus() -> Vec<MenuSpec> {
                 editor(keys("Go to Symbol in File…", cmd(), Key::R)),
                 c(keys("Go to Symbol in Workspace…", cmd_shift(), Key::R)),
                 c(keys("Go to Chat…", cmd_shift(), Key::O)),
+                c(keys("Search Chats…", cmd_shift(), Key::E)),
+                c(run("Go to Project…", GotoProject)),
                 editor(goto_line),
                 Separator,
                 editor(keys("Go to Definition", Modifiers::NONE, Key::F12)),
@@ -520,6 +530,8 @@ fn build_menus() -> Vec<MenuSpec> {
                     Modifiers::CTRL.plus(Modifiers::SHIFT),
                     Key::Tab,
                 )),
+                c(keys("Next Chat in Sidebar", step_chat, next_chat)),
+                c(keys("Previous Chat in Sidebar", step_chat, previous_chat)),
                 Separator,
                 c(keys("Stop Response", cmd(), Key::Period)),
                 Separator,
@@ -603,8 +615,14 @@ pub(crate) fn shortcut_label(modifiers: Modifiers, key: Key) -> String {
         Key::Num0 => "0",
         Key::ArrowUp if MAC => "↑",
         Key::ArrowDown if MAC => "↓",
+        Key::ArrowLeft if MAC => "←",
+        Key::ArrowRight if MAC => "→",
         Key::ArrowUp => "Up",
         Key::ArrowDown => "Down",
+        Key::ArrowLeft => "Left",
+        Key::ArrowRight => "Right",
+        Key::PageUp => "PgUp",
+        Key::PageDown => "PgDn",
         other => other.name(),
     });
     label
@@ -755,6 +773,7 @@ impl OxiApp {
             AppAction::FocusSplitPane => self.focus_split_partner(),
             AppAction::ToggleSplitMirror => self.toggle_split_mirror(),
             AppAction::CloseSplit => self.close_split(),
+            AppAction::GotoProject => self.open_file_picker_with("%"),
         }
     }
 

@@ -12,15 +12,15 @@ impl OxiApp {
         q: &str,
         worktrees: &[usize],
     ) -> bool {
-        const FS_WORKSPACE: f32 = FS_SMALL;
         let mut sidebar_changed = false;
         let checkout_row = parent == Some(wi);
         let project_header = parent.is_none();
         let is_main = self.conv.workspaces[wi].worktree.is_none();
+        let root_path = self.conv.workspaces[wi].root_path.clone();
         // Work trees need a repository; the general chats folder never is one.
         let can_worktree = project_header
             && is_main
-            && !crate::app_dirs::is_general_chats_dir(&self.conv.workspaces[wi].root_path)
+            && !crate::app_dirs::is_general_chats_dir(&root_path)
             && !self.is_remote_workspace(wi);
         let remote_status = self.remote_status(wi);
         let active_si = self.conv.workspaces[wi].active;
@@ -30,7 +30,7 @@ impl OxiApp {
             Some(_) if parent.is_some() => self.sidebar_branch_label(wi),
             Some(info) => crate::app::worktrees::worktree_label(info),
             None if checkout_row => self.sidebar_branch_label(wi),
-            None => workspace_sidebar_label(&self.conv.workspaces[wi].root_path),
+            None => self.sidebar_project_label(wi),
         };
         let kind = if !is_main {
             "Worktree"
@@ -40,26 +40,54 @@ impl OxiApp {
             "Project"
         };
         let searching_all = !q.is_empty() || self.conv.sidebar.history;
-        let own_folded = if checkout_row {
-            self.conv.workspaces[wi]
-                .folded_groups
-                .iter()
-                .any(|key| key == "checkout")
-        } else {
-            self.conv.workspaces[wi].sidebar_folded
-        };
+        let own_folded = self.sidebar_row_own_folded(wi, checkout_row);
         let folded = !searching_all && (own_folded || parent_folded);
+        // The project holding the open chat gets the accent bar; the open checkout or work
+        // tree under it gets the strongest branch text.
+        let active_project =
+            project_header && self.sidebar_top_project(self.conv.active_workspace) == wi;
+        let active_checkout = !project_header && wi == self.conv.active_workspace;
+        let pinned = project_header && self.project_is_pinned(wi);
+        // A repository without work trees shows its branch as a tag on the project row,
+        // instead of a nested checkout row that costs a whole level.
+        let branch_tag = if project_header && is_main && worktrees.is_empty() {
+            self.conv
+                .sidebar
+                .branches
+                .values
+                .get(&root_path)
+                .cloned()
+                .flatten()
+        } else {
+            None
+        };
+        // A folded row summarizes the chats it hides: (need you, running).
+        let (needs_you, running_hidden) = if folded {
+            let hidden = &self.conv.sidebar.hidden_activity;
+            std::iter::once(wi)
+                .chain(worktrees.iter().copied().filter(|_| project_header))
+                .filter_map(|w| hidden.get(&w))
+                .fold((0, 0), |(needs, running), &(n, r)| (needs + n, running + r))
+        } else {
+            (0, 0)
+        };
         ui.add_space(1.0);
 
         const ROW_H: f32 = SIDEBAR_ROW_H;
-        const PLUS_W: f32 = 22.0;
+        const ACTION_W: f32 = 22.0;
         const GLYPH_W: f32 = 18.0;
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::hover());
+        // Project rows drag to reorder; a click opens the project, the leading chevron folds it.
+        let sense = if project_header {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        };
         let response = ui.interact(
             rect,
             egui::Id::new(("sidebar_workspace_row", wi, checkout_row)),
-            Sense::click(),
+            sense,
         );
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
@@ -68,23 +96,64 @@ impl OxiApp {
                 format!("{kind} {root_label}"),
             )
         });
-        // `rect_contains_pointer` instead of `response.hovered()`: the in-place "+"
-        // below steals hover from the row response, which would flicker the fill.
+        let dragging_any = egui::DragAndDrop::has_payload_of_type::<ProjectDrag>(ui.ctx());
+        if project_header && response.drag_started() {
+            egui::DragAndDrop::set_payload(
+                ui.ctx(),
+                ProjectDrag {
+                    root: root_path.clone(),
+                    label: root_label.clone(),
+                },
+            );
+        }
+        let dragging_this = egui::DragAndDrop::payload::<ProjectDrag>(ui.ctx())
+            .is_some_and(|drag| drag.root == root_path);
+        // `rect_contains_pointer` instead of `response.hovered()`: the in-place actions
+        // below steal hover from the row response, which would flicker the fill.
         let row_hovered = ui.rect_contains_pointer(rect)
             || response.has_focus()
             || response.context_menu_opened();
-        if row_hovered {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        if (row_hovered && !dragging_any) || dragging_this {
+            if !dragging_any {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
             ui.painter()
                 .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_hover());
         }
-        if !is_main && wi == self.conv.active_workspace && !row_hovered {
+        if active_project {
+            let bar = egui::Rect::from_min_size(
+                rect.left_top() + egui::vec2(0.0, 5.0),
+                egui::vec2(2.0, rect.height() - 10.0),
+            );
             ui.painter()
-                .rect_filled(rect, CornerRadius::same(RADIUS_ROW), c_row_active());
+                .rect_filled(bar, CornerRadius::same(1), c_accent());
         }
-        // Leading glyph: branch for worktrees, folder for projects; chevron on hover.
+        // Leading glyph: branch for checkouts, folder (in the project's color) for projects;
+        // on hover it turns into the fold chevron, its own click target so the rest of the row
+        // can open the project.
         let remote = self.is_remote_workspace(wi);
-        let glyph = match (row_hovered, folded) {
+        let show_actions = row_hovered && !dragging_any;
+        let fold_rect = egui::Rect::from_min_max(
+            rect.left_top(),
+            egui::pos2(rect.left() + 4.0 + GLYPH_W + 2.0, rect.bottom()),
+        );
+        let fold_toggle = show_actions.then(|| {
+            let toggle = ui.interact(
+                fold_rect,
+                ui.id().with(("ws_fold", wi, checkout_row)),
+                Sense::click(),
+            );
+            toggle.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    ui.is_enabled(),
+                    format!("{} {root_label}", if folded { "Unfold" } else { "Fold" }),
+                )
+            });
+            toggle
+        });
+        let fold_hovered = fold_toggle.as_ref().is_some_and(egui::Response::hovered);
+        let glyph = match (show_actions, folded) {
             (false, _) if !is_main || checkout_row => ICON_BRANCH,
             (true, true) => ICON_CHEVRON_RIGHT,
             (true, false) => ICON_ANGLE_DOWN,
@@ -92,17 +161,46 @@ impl OxiApp {
             (false, true) => ICON_FOLDER,
             (false, false) => ICON_FOLDER_OPEN,
         };
+        let glyph_color = if fold_hovered {
+            c_text_strong()
+        } else if show_actions {
+            c_text_muted()
+        } else if project_header {
+            self.sidebar_project_color(wi)
+        } else if active_checkout {
+            c_accent()
+        } else {
+            c_sidebar_section()
+        };
         ui.painter().text(
             egui::pos2(rect.left() + 4.0 + GLYPH_W * 0.5, rect.center().y),
             egui::Align2::CENTER_CENTER,
             glyph,
             FontId::new(FS_TINY, icon_font()),
-            c_sidebar_section(),
+            glyph_color,
         );
-        let actions_reserve = if row_hovered {
-            PLUS_W * if can_worktree { 2.0 } else { 1.0 } + 2.0
+        let n_actions = 1 + usize::from(can_worktree) + usize::from(project_header);
+        let count_galley = (running_hidden > 1).then(|| {
+            ui.painter().layout_no_wrap(
+                running_hidden.to_string(),
+                FontId::proportional(FS_TINY),
+                c_text_muted(),
+            )
+        });
+        // Pinned projects keep a quiet pin at the right edge: with no section labels, it is
+        // what sets them apart from the rest.
+        let pin_badge = pinned;
+        let badge_w = if pin_badge { 14.0 } else { 0.0 }
+            + if needs_you > 0 { 12.0 } else { 0.0 }
+            + if running_hidden > 0 {
+                16.0 + count_galley.as_ref().map_or(0.0, |g| g.size().x + 2.0)
+            } else {
+                0.0
+            };
+        let actions_reserve = if show_actions {
+            ACTION_W * n_actions as f32 + 2.0
         } else {
-            4.0
+            badge_w + 4.0
         };
         let label_rect = egui::Rect::from_min_max(
             egui::pos2(rect.left() + 4.0 + GLYPH_W + 4.0, rect.top()),
@@ -110,37 +208,53 @@ impl OxiApp {
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(label_rect), |ui| {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                // A remote workspace: its folder name, then the host in muted type.
+                let style = ui.style().clone();
                 let mut job = egui::text::LayoutJob::default();
+                let mut append = |text: RichText| {
+                    text.append_to(
+                        &mut job,
+                        &style,
+                        egui::FontSelection::Default,
+                        Align::Center,
+                    );
+                };
+                // A remote workspace: its folder name, then the host in muted type.
                 let (name, host) = match root_label.split_once(" · ") {
                     Some((name, host)) if remote => (name, Some(host)),
                     _ => (root_label.as_str(), None),
                 };
-                strong_rich(
-                    name,
-                    FS_WORKSPACE,
-                    if remote_status.is_some() {
+                if project_header {
+                    let color = if remote_status.is_some() {
                         c_text_faint()
+                    } else if active_project {
+                        c_text_strong()
                     } else {
                         c_text()
-                    },
-                )
-                .append_to(
-                    &mut job,
-                    ui.style(),
-                    egui::FontSelection::Default,
-                    Align::Center,
-                );
+                    };
+                    append(strong_rich(name, FS_SMALL, color));
+                } else {
+                    // Branches read as code: small monospace, quieter than the project.
+                    append(RichText::new(name).font(FontId::monospace(FS_TINY)).color(
+                        if active_checkout {
+                            c_text_strong()
+                        } else {
+                            c_text_muted()
+                        },
+                    ));
+                }
+                if let Some(branch) = &branch_tag {
+                    append(
+                        RichText::new(format!("  {branch}"))
+                            .font(FontId::monospace(FS_TINY))
+                            .color(c_text_faint()),
+                    );
+                }
                 if let Some(host) = host {
-                    RichText::new(format!("  {host}"))
-                        .size(FS_TINY)
-                        .color(c_text_faint())
-                        .append_to(
-                            &mut job,
-                            ui.style(),
-                            egui::FontSelection::Default,
-                            Align::Center,
-                        );
+                    append(
+                        RichText::new(format!("  {host}"))
+                            .size(FS_TINY)
+                            .color(c_text_faint()),
+                    );
                 }
                 let label = ui.add(
                     egui::Label::new(job)
@@ -155,68 +269,106 @@ impl OxiApp {
         });
         crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
 
-        let mut worktree_hovered = false;
-        if can_worktree && row_hovered {
-            let action_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.right() - PLUS_W * 2.0 - 2.0, rect.top()),
-                egui::pos2(rect.right() - PLUS_W - 2.0, rect.bottom()),
-            );
-            let action = ui
-                .interact(
-                    action_rect,
-                    ui.id().with(("ws_worktree", wi)),
-                    Sense::click(),
-                )
-                .on_hover_text("New worktree chat — create an isolated branch and start chatting");
-            action.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    ui.is_enabled(),
-                    format!("New worktree for {root_label}"),
-                )
-            });
-            if action.clicked() {
-                self.start_worktree_chat(wi);
-                sidebar_changed = true;
+        // Folded summary at the right edge: accent dot for chats that need you, spinner and
+        // count for running ones. The hover actions take its place.
+        if !show_actions && badge_w > 0.0 {
+            let cy = rect.center().y;
+            let mut x = rect.right() - 6.0;
+            if pin_badge {
+                ui.painter().text(
+                    egui::pos2(x, cy),
+                    egui::Align2::RIGHT_CENTER,
+                    ICON_PIN,
+                    FontId::new(FS_TINY, icon_font()),
+                    c_text_faint(),
+                );
+                x -= 14.0;
             }
-            worktree_hovered = action.hovered();
-            ui.painter().text(
-                action_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                ICON_BRANCH,
-                FontId::new(FS_TINY, icon_font()),
-                if worktree_hovered {
-                    c_accent()
-                } else {
-                    c_text_muted()
-                },
-            );
+            if needs_you > 0 {
+                ui.painter()
+                    .circle_filled(egui::pos2(x - 3.5, cy), 3.5, c_accent());
+                x -= 12.0;
+            }
+            if running_hidden > 0 {
+                if let Some(galley) = count_galley {
+                    let width = galley.size().x;
+                    ui.painter().galley(
+                        egui::pos2(x - width, cy - galley.size().y * 0.5),
+                        galley,
+                        c_text_muted(),
+                    );
+                    x -= width + 2.0;
+                }
+                paint_spinner(
+                    ui,
+                    egui::Rect::from_center_size(egui::pos2(x - 6.0, cy), egui::vec2(11.0, 11.0)),
+                    c_text_muted(),
+                );
+            }
         }
-        // Hover-only "+" at the right edge, painted + interacted in place (never
-        // allocated) so its appearance can't shift the layout.
-        let mut plus_hovered = false;
-        let mut plus_clicked = false;
-        if row_hovered {
-            let plus_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.right() - PLUS_W - 2.0, rect.top()),
-                egui::pos2(rect.right() - 2.0, rect.bottom()),
-            );
-            let plus_resp = ui
-                .interact(plus_rect, ui.id().with(("ws_plus", wi)), Sense::click())
-                .on_hover_text("New chat in this workspace (Cmd/Ctrl+N)");
-            plus_hovered = plus_resp.hovered();
-            plus_clicked = plus_resp.clicked();
-            ui.painter().text(
-                plus_rect.center(),
-                egui::Align2::CENTER_CENTER,
+
+        // Hover-only actions at the right edge ("+", work tree, pin), painted and interacted
+        // in place (never allocated) so their appearance can't shift the layout.
+        let action_rect = |slot: usize| {
+            egui::Rect::from_min_max(
+                egui::pos2(
+                    rect.right() - 2.0 - ACTION_W * (slot + 1) as f32,
+                    rect.top(),
+                ),
+                egui::pos2(rect.right() - 2.0 - ACTION_W * slot as f32, rect.bottom()),
+            )
+        };
+        let mut action_hovered = fold_hovered;
+        let fold_clicked = fold_toggle.as_ref().is_some_and(egui::Response::clicked);
+        if let Some(toggle) = fold_toggle {
+            toggle.on_hover_text(if folded { "Show chats" } else { "Hide chats" });
+        }
+        let (mut plus_clicked, mut worktree_clicked, mut pin_clicked) = (false, false, false);
+        if show_actions {
+            let mut slot = 0;
+            let plus = row_action(
+                ui,
+                action_rect(slot),
+                ui.id().with(("ws_plus", wi)),
                 ICON_PLUS,
-                FontId::new(FS_TINY, icon_font()),
-                if plus_hovered {
-                    c_accent()
-                } else {
-                    c_text_faint()
-                },
+                false,
+                &format!("New chat in {root_label}"),
+                "New chat in this workspace (Cmd/Ctrl+N)",
             );
+            slot += 1;
+            action_hovered |= plus.hovered();
+            plus_clicked = plus.clicked();
+            if can_worktree {
+                let action = row_action(
+                    ui,
+                    action_rect(slot),
+                    ui.id().with(("ws_worktree", wi)),
+                    ICON_BRANCH,
+                    false,
+                    &format!("New worktree for {root_label}"),
+                    "New worktree chat — create an isolated branch and start chatting",
+                );
+                slot += 1;
+                action_hovered |= action.hovered();
+                worktree_clicked = action.clicked();
+            }
+            if project_header {
+                let pin = row_action(
+                    ui,
+                    action_rect(slot),
+                    ui.id().with(("ws_pin", wi)),
+                    ICON_PIN,
+                    pinned,
+                    &format!("{} {root_label}", if pinned { "Unpin" } else { "Pin" }),
+                    if pinned {
+                        "Unpin project"
+                    } else {
+                        "Pin project to the top of the sidebar"
+                    },
+                );
+                action_hovered |= pin.hovered();
+                pin_clicked = pin.clicked();
+            }
         }
         if plus_clicked {
             if wi != self.conv.active_workspace {
@@ -226,7 +378,33 @@ impl OxiApp {
                 self.new_chat();
                 sidebar_changed = true;
             }
-        } else if response.clicked() && !plus_hovered && !worktree_hovered {
+        } else if worktree_clicked {
+            self.start_worktree_chat(wi);
+            sidebar_changed = true;
+        } else if pin_clicked {
+            self.set_project_pinned(wi, !pinned);
+            sidebar_changed = true;
+        } else if response.clicked()
+            && !action_hovered
+            && !self.sidebar_row_is_open(wi, project_header)
+        {
+            if remote_status.is_some() {
+                self.retry_remote(wi);
+            }
+            // Opening a project goes to its last chat; a work tree or checkout row opens that
+            // checkout. Panels that follow the open project (files, source control) follow.
+            if project_header {
+                self.switch_to_project(wi);
+            } else {
+                self.select_workspace(wi);
+                if self.conv.active_workspace == wi {
+                    self.reveal_chat_view();
+                    self.focus_active_view_next_frame();
+                }
+            }
+            sidebar_changed = true;
+        } else if fold_clicked || (response.clicked() && !action_hovered) {
+            // The chevron folds; so does clicking the row that is already open.
             if remote_status.is_some() {
                 self.retry_remote(wi);
             }
@@ -245,19 +423,56 @@ impl OxiApp {
             }
             self.sync_workspaces_to_settings();
         }
+        // Dropping another project here puts it above this one, or below a folded one when
+        // released over its lower half (an unfolded project's chats follow its row).
+        if project_header && !dragging_this && !sidebar_changed {
+            let after = folded
+                && ui
+                    .ctx()
+                    .pointer_interact_pos()
+                    .is_some_and(|pos| pos.y > rect.center().y);
+            let (line_y, slot) = if after {
+                (rect.bottom() + 0.5, ProjectSlot::After(root_path.clone()))
+            } else {
+                (rect.top() - 0.5, ProjectSlot::Before(root_path.clone()))
+            };
+            if self.project_drop_target(ui, &response, line_y, pinned, slot) {
+                return true;
+            }
+        }
         let ws_running = (0..n_sessions).any(|si| self.session_row_is_running(wi, si));
         let worktree = self.conv.workspaces[wi].worktree.clone();
-        let response = if let Some(info) = &worktree {
-            response.on_hover_text(format!(
+        let mut tip = match &worktree {
+            Some(info) => format!(
                 "Worktree · {}\nProject: {}\nMerge into: {}\nFolder: {}\nRight-click for merge and removal",
-                info.branch, info.main_root.display(), info.main_branch,
-                self.conv.workspaces[wi].root_path,
-            ))
-        } else {
+                info.branch,
+                info.main_root.display(),
+                info.main_branch,
+                root_path,
+            ),
+            None if project_header => root_path.clone(),
+            None => String::new(),
+        };
+        if needs_you + running_hidden > 0 {
+            let mut parts = Vec::new();
+            if needs_you > 0 {
+                parts.push(format!("{needs_you} need you"));
+            }
+            if running_hidden > 0 {
+                parts.push(format!("{running_hidden} running"));
+            }
+            tip.push_str(&format!("\n{}", parts.join(" · ")));
+        }
+        if project_header {
+            tip.push_str("\nClick to open · drag to reorder · right-click to pin or move");
+        }
+        let response = if tip.is_empty() || dragging_any {
             response
+        } else {
+            response.on_hover_text(tip)
         };
         response.context_menu(|ui| {
-            sidebar_menu_heading(ui, kind, &root_label, &self.conv.workspaces[wi].root_path);
+            sidebar_menu_heading(ui, kind, &root_label, &root_path);
             if ui.button("New chat here").clicked() {
                 self.select_workspace(wi);
                 if self.conv.active_workspace == wi {
@@ -282,7 +497,7 @@ impl OxiApp {
                         .conv
                         .settings
                         .worktree_setup_scripts
-                        .contains_key(&self.conv.workspaces[wi].root_path);
+                        .contains_key(&root_path);
                     if ui
                         .button(if has_setup {
                             "Edit work tree setup…"
@@ -346,6 +561,32 @@ impl OxiApp {
             if checkout_row {
                 return;
             }
+            if project_header {
+                ui.separator();
+                if ui
+                    .button(if pinned { "Unpin project" } else { "Pin project" })
+                    .on_hover_text("Pinned projects stay in their own section at the top")
+                    .clicked()
+                {
+                    self.set_project_pinned(wi, !pinned);
+                    ui.close();
+                }
+                let (prev, next) = self.project_neighbours(wi);
+                let moves = [
+                    ("Move up", prev.clone().map(ProjectSlot::Before)),
+                    ("Move down", next.map(ProjectSlot::After)),
+                    ("Move to top", prev.map(|_| ProjectSlot::Start)),
+                ];
+                for (label, slot) in moves {
+                    let enabled = slot.is_some();
+                    if ui.add_enabled(enabled, egui::Button::new(label)).clicked()
+                        && let Some(slot) = slot
+                    {
+                        self.place_project(&root_path, pinned, slot);
+                        ui.close();
+                    }
+                }
+            }
             ui.separator();
             let label = if worktree.is_some() { "Close worktree in sidebar" } else { "Remove workspace" };
             let resp = ui.add_enabled(!ws_running, egui::Button::new(label));
@@ -363,17 +604,11 @@ impl OxiApp {
         if sidebar_changed {
             return true;
         }
-        // A repository contains its main checkout and its linked checkouts at one level.
-        let has_branch = self
-            .conv
-            .sidebar
-            .branches
-            .values
-            .get(&self.conv.workspaces[wi].root_path)
-            .is_some_and(|branch| branch.is_some());
-        if project_header && is_main && (has_branch || !worktrees.is_empty()) {
-            // Folding keeps only checkouts with an open, running or attention chat.
-            if !folded || self.sidebar_workspace_has_active_chats(wi, ui.ctx()) {
+        // A repository with work trees lists its main checkout and its linked checkouts at one
+        // level; without work trees its chats sit right under the project row.
+        if project_header && is_main && !worktrees.is_empty() {
+            // Folding keeps only checkouts with the open chat.
+            if !folded || self.sidebar_workspace_has_kept_chats(wi) {
                 ui.push_id(("main_checkout", wi), |ui| {
                     ui.horizontal(|ui| {
                         ui.add_space(16.0);
@@ -394,12 +629,18 @@ impl OxiApp {
                 }
             }
             if !other.is_empty() && !folded {
-                let open = crate::ui::chrome::disclosure_row(
+                let id = super::stepping::other_worktrees_id(wi);
+                let mut open = ui.data_mut(|d| *d.get_persisted_mut_or_insert_with(id, || false));
+                if sidebar_quiet_link(
                     ui,
-                    ui.id().with(("other_worktrees", wi)),
                     &format!("Other worktrees · {}", other.len()),
-                    false,
-                );
+                    Some(open),
+                )
+                .clicked()
+                {
+                    open = !open;
+                    ui.data_mut(|d| d.insert_persisted(id, open));
+                }
                 if open {
                     for child in other {
                         if !sidebar_changed {
@@ -410,8 +651,8 @@ impl OxiApp {
             }
             return sidebar_changed;
         }
-        // Folding hides the normal chat list. The chat currently open in the main view,
-        // in-progress chats, and chats that need attention remain visible.
+        // Folding hides the normal chat list; the chat currently open in the main view stays.
+        // Unfolded, in-progress chats and chats that need attention stay visible too.
         let mut visible_sessions = 0usize;
         let mut hidden_older_sessions = 0usize;
         let mut row_advance: Option<f32> = None;
@@ -421,42 +662,31 @@ impl OxiApp {
             if sidebar_changed || self.conv.workspaces[wi].sessions.get(si).is_none() {
                 return true;
             }
-            // An orchestrator worker's chat shows above its lead's composer instead.
-            let open_here =
-                wi == self.conv.active_workspace && si == self.conv.workspaces[wi].active;
-            if !open_here
-                && self.hidden_worker_chat(
-                    self.conv.workspaces[wi].sessions[si]
-                        .session_file
-                        .as_deref(),
-                )
-            {
-                continue;
-            }
-            let exceptional = self.sidebar_session_needs_visibility(wi, si, ui.ctx());
-            if !searching
-                && !self.conv.sidebar.history
-                && ((!matches!(group, SidebarGroup::Pinned | SidebarGroup::Today) || folded)
-                    && !exceptional)
-            {
-                if !folded && group == SidebarGroup::Older {
+            match self.sidebar_session_listing(wi, si, group, folded, q, ui.ctx()) {
+                Listing::Listed => {}
+                Listing::Older => {
                     hidden_older_sessions += 1;
+                    continue;
                 }
-                continue;
-            }
-            if self.conv.sidebar.history && !self.sidebar_session_in_history_period(wi, si) {
-                continue;
-            }
-            if searching && !self.session_matches_search(wi, si, q) {
-                continue;
+                Listing::Hidden => continue,
             }
             visible_sessions += 1;
+            #[cfg(test)]
+            self.conv
+                .sidebar
+                .drawn_stops
+                .push(super::stepping::SidebarStop::Chat(self.session_key(wi, si)));
+            // A shortcut just opened this chat: lay it out even off screen, to scroll to it.
+            let reveal = self.conv.sidebar.reveal_active
+                && wi == self.conv.active_workspace
+                && si == active_si;
             // Rows are all the same height: once one has been measured, a row scrolled out
             // of view only reserves its space. Long histories otherwise cost a full layout
             // of every row on every frame (~1.5 ms at 400 chats).
             // Search results show an excerpt under some rows, so they are laid out in full.
             if let Some(advance) = row_advance
                 && !searching
+                && !reveal
                 && self.conv.sidebar.renaming_session != Some((wi, si))
                 && !ui.is_rect_visible(egui::Rect::from_min_size(
                     ui.cursor().min,
@@ -498,6 +728,10 @@ impl OxiApp {
                         let row_outer_h = ROW_INNER_H + ROW_VMARGIN * 2.0;
                         let (rect, response) =
                             ui.allocate_exact_size(egui::vec2(row_w, row_outer_h), Sense::click());
+                        if reveal {
+                            ui.scroll_to_rect(rect, None);
+                            self.conv.sidebar.reveal_active = false;
+                        }
                         response.widget_info(|| {
                             egui::WidgetInfo::selected(
                                 egui::WidgetType::SelectableLabel,
@@ -546,13 +780,10 @@ impl OxiApp {
                         };
                         let radius = CornerRadius::same(RADIUS_ROW);
                         ui.painter().rect_filled(rect, radius, fill);
-                        if selected && !needs_attention {
-                            ui.painter().rect_stroke(
-                                rect,
-                                radius,
-                                Stroke::new(1.0, c_border()),
-                                egui::StrokeKind::Inside,
-                            );
+                        // Selection is a fill plus a short accent bar, never bold type,
+                        // so the open chat can't be mistaken for a project or branch header.
+                        if selected {
+                            paint_selection_bar(ui, rect);
                         }
                         crate::ui::chrome::keyboard_focus_ring(ui, &response, radius);
                         if needs_attention {
@@ -774,57 +1005,73 @@ impl OxiApp {
             }
         }
         if hidden_older_sessions > 0 && !folded && !searching && !self.conv.sidebar.history {
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-                let label = format!(
-                    "Show {hidden_older_sessions} older chat{}…",
-                    if hidden_older_sessions == 1 { "" } else { "s" }
-                );
-                let resp = ui
-                    .add(
-                        egui::Label::new(RichText::new(label).size(FS_TINY).color(c_text_faint()))
-                            .sense(Sense::click())
-                            .selectable(false),
-                    )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("Open History filtered to this project");
-                if resp.clicked() {
-                    self.conv.sidebar.history = true;
-                    let project_root = match parent {
-                        Some(pi) => self.conv.workspaces[pi].root_path.clone(),
-                        None => self.conv.workspaces[wi].root_path.clone(),
-                    };
-                    self.conv.sidebar.history_project = Some(project_root);
-                    self.conv.sidebar.history_days = None;
-                }
-            });
+            let label = format!(
+                "Show {hidden_older_sessions} older chat{}…",
+                if hidden_older_sessions == 1 { "" } else { "s" }
+            );
+            if sidebar_quiet_link(ui, &label, None)
+                .on_hover_text("Open History filtered to this project")
+                .clicked()
+            {
+                self.conv.sidebar.history = true;
+                let project_root = match parent {
+                    Some(pi) => self.conv.workspaces[pi].root_path.clone(),
+                    None => self.conv.workspaces[wi].root_path.clone(),
+                };
+                self.conv.sidebar.history_project = Some(project_root);
+                self.conv.sidebar.history_days = None;
+            }
             ui.add_space(2.0);
         }
-        // A folded workspace with no exceptional rows is intentionally just its header;
-        // "No recent chats" would otherwise make folding look as if the workspace were empty.
-        // An empty work tree is just its header too: it sits under its repository, where a
-        // line per empty work tree only adds noise.
-        let empty_worktree = self.conv.workspaces[wi].worktree.is_some() && q.is_empty();
-        if visible_sessions == 0
-            && hidden_older_sessions == 0
-            && !empty_worktree
-            && (!folded || !q.is_empty())
-        {
+        // A project with no chats to list is just its header: its open/closed folder already
+        // says whether it is unfolded. Only an empty search explains itself, with a way out.
+        if visible_sessions == 0 && hidden_older_sessions == 0 && searching {
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
-                let msg = if q.is_empty() {
-                    "No recent chats"
-                } else {
-                    "No chats found"
-                };
-                ui.label(RichText::new(msg).size(FS_TINY).color(c_text_muted()));
-                if !q.is_empty() && crate::ui::chrome::ghost_button(ui, "Clear", false).clicked() {
+                ui.label(
+                    RichText::new("No chats found")
+                        .size(FS_TINY)
+                        .color(c_text_muted()),
+                );
+                if crate::ui::chrome::ghost_button(ui, "Clear", false).clicked() {
                     self.conv.sidebar.search.clear();
+                    self.conv.sidebar.search_open = false;
                 }
             });
             ui.add_space(4.0);
         }
         sidebar_changed
+    }
+
+    /// Whether clicking this project, checkout or work tree row would land where you already
+    /// are: the open chat is in the project (or one of its work trees), or in that checkout.
+    fn sidebar_row_is_open(&self, wi: usize, project_header: bool) -> bool {
+        if project_header {
+            self.sidebar_top_project(self.conv.active_workspace) == wi
+        } else {
+            self.conv.active_workspace == wi
+        }
+    }
+
+    /// Every project holds at least one chat, so one with none saved gets an unsaved, empty
+    /// "New chat" stand-in. Listing it under every project only adds a row that opens an empty
+    /// chat; it shows once it is the open chat, or once it has a draft or messages.
+    pub(in crate::app) fn sidebar_hides_placeholder(&self, wi: usize, si: usize) -> bool {
+        let session = &self.conv.workspaces[wi].sessions[si];
+        let untouched = session.session_file.is_none()
+            && session.messages.is_empty()
+            && session.input_text.trim().is_empty()
+            && session.pending_images.is_empty()
+            && session.pending_texts.is_empty();
+        if !untouched {
+            return false;
+        }
+        let key = self.session_key(wi, si);
+        let open = key == self.active_session_key() || self.split_partner_peek() == Some(key);
+        let busy = self
+            .run_state(key)
+            .is_some_and(|state| state.waiting_response);
+        !open && !busy
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -857,7 +1104,13 @@ impl OxiApp {
             // Space is always reserved for the time label so the title never
             // reflows; when hidden the delete button is painted over that
             // same slot instead.
-            let time_label = if hide_time {
+            let ws = &self.conv.workspaces[wi];
+            // A pinned chat is kept on purpose; its age ("328d") is only noise.
+            let pinned = ws.sessions[si]
+                .session_file
+                .as_ref()
+                .is_some_and(|file| ws.pinned.contains(file));
+            let time_label = if hide_time || (pinned && !running) {
                 None
             } else if running {
                 self.stream_started_at_for(wi, si)
@@ -904,13 +1157,9 @@ impl OxiApp {
                         egui::vec2(lead_w, ROW_INNER_H),
                         egui::Layout::left_to_right(Align::Center),
                         |ui| {
-                            let pinned = self.conv.workspaces[wi].sessions[si]
-                                .session_file
-                                .as_ref()
-                                .is_some_and(|file| self.conv.workspaces[wi].pinned.contains(file));
                             if pinned && !has_error && !needs_approval && !completion_unseen {
                                 ui.label(
-                                    RichText::new("\u{f08d}")
+                                    RichText::new(ICON_PIN)
                                         .font(FontId::new(FS_TINY, icon_font()))
                                         .color(c_text_muted()),
                                 )
@@ -966,20 +1215,21 @@ impl OxiApp {
                         // layers, especially when the hover-only delete action overlapped it.
                         if !q.is_empty() && find_ignore_case(&title, q).is_some() {
                             let (font, color) = if selected {
-                                (FontId::new(FS_SMALL, strong_font()), c_text_strong())
+                                (FontId::proportional(FS_SMALL), c_text_strong())
                             } else {
                                 (FontId::proportional(FS_SMALL), c_text_muted())
                             };
                             let job = search_highlight_job(&title, q, font, color);
                             ui.add(Label::new(job).truncate().halign(Align::LEFT));
                         } else {
-                            let title_text = if selected {
-                                strong_rich(title.as_str(), FS_SMALL, c_text_strong())
-                            } else {
+                            let title_text =
                                 RichText::new(title.as_str())
                                     .size(FS_SMALL)
-                                    .color(c_text_muted())
-                            };
+                                    .color(if selected {
+                                        c_text_strong()
+                                    } else {
+                                        c_text_muted()
+                                    });
                             ui.add(Label::new(title_text).truncate().halign(Align::LEFT));
                         }
                     },
@@ -999,6 +1249,57 @@ impl OxiApp {
             }
         });
     }
+}
+
+/// A quiet link row under a project's chats ("Show 4 older chats…", "Other worktrees · 2"):
+/// small faint text that only brightens on hover, so it never reads as a section header.
+/// `open` adds a disclosure chevron.
+fn sidebar_quiet_link(ui: &mut Ui, label: &str, open: Option<bool>) -> egui::Response {
+    const INDENT: f32 = 12.0;
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), Sense::click());
+    response.widget_info(|| match open {
+        Some(open) => egui::WidgetInfo::selected(
+            egui::WidgetType::CollapsingHeader,
+            ui.is_enabled(),
+            open,
+            label,
+        ),
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Link, ui.is_enabled(), label),
+    });
+    let hovered = response.hovered() || response.has_focus();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    crate::ui::chrome::keyboard_focus_ring(ui, &response, CornerRadius::same(RADIUS_ROW));
+    let ink = if hovered {
+        c_text_muted()
+    } else {
+        c_text_faint()
+    };
+    let mut x = rect.left() + INDENT;
+    if let Some(open) = open {
+        ui.painter().text(
+            egui::pos2(x, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            if open {
+                ICON_ANGLE_DOWN
+            } else {
+                ICON_CHEVRON_RIGHT
+            },
+            FontId::new(FS_TINY - 2.5, icon_font()),
+            ink,
+        );
+        x += 11.0;
+    }
+    ui.painter().text(
+        egui::pos2(x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(FS_TINY),
+        ink,
+    );
+    response
 }
 
 /// Inline rename field for a sidebar chat row. `Some(true)` commits on Enter,
@@ -1029,13 +1330,17 @@ fn session_rename_field(ui: &mut Ui, rect: egui::Rect, draft: &mut String) -> Op
         resp.request_focus();
     }
     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-    if enter {
-        Some(true)
-    } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) || resp.lost_focus() {
-        Some(false)
-    } else {
-        None
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if !(enter || escape || resp.lost_focus()) {
+        return None;
     }
+    // Take the key the field let go on, or the approval card drawn later this frame reads
+    // it as Approve / Deny.
+    ui.input_mut(|i| {
+        i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+    });
+    Some(enter)
 }
 
 /// Keep the origin visible even when the menu covers the clicked row.
@@ -1093,6 +1398,36 @@ mod tests {
         harness.run_steps(3);
         press(&mut harness, egui::Key::Escape);
         assert_eq!(harness.state().1, Some(false));
+    }
+
+    /// What the approval card, drawn after the sidebar, would see of the key that ended the
+    /// rename: it answers only when no field has focus.
+    #[test]
+    fn the_key_that_ends_a_rename_does_not_reach_widgets_drawn_later() {
+        for key in [egui::Key::Enter, egui::Key::Escape] {
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(240.0, 60.0))
+                .build_ui_state(
+                    |ui, state: &mut (String, Option<bool>, bool)| {
+                        if state.1.is_none() {
+                            let rect =
+                                egui::Rect::from_min_size(ui.cursor().min, egui::vec2(200.0, 24.0));
+                            state.1 = session_rename_field(ui, rect, &mut state.0);
+                        }
+                        let free = !ui.ctx().egui_wants_keyboard_input();
+                        let pressed = ui.input(|i| {
+                            i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
+                        });
+                        state.2 |= free && pressed;
+                    },
+                    ("Old title".to_string(), None, false),
+                );
+            harness.run_steps(3);
+            harness.key_press(key);
+            harness.step();
+            assert!(harness.state().1.is_some(), "{key:?} should end the rename");
+            assert!(!harness.state().2, "{key:?} leaked past the rename field");
+        }
     }
 }
 
@@ -1168,4 +1503,43 @@ mod search_highlight_tests {
         assert_eq!(find_ignore_case("abc", ""), None);
         assert_eq!(find_ignore_case("xx İstanbul", "i̇st"), Some(3..7));
     }
+}
+
+/// A hover-only icon action on a sidebar row, painted and interacted in place.
+fn row_action(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    id: egui::Id,
+    icon: &str,
+    on: bool,
+    label: &str,
+    tooltip: &str,
+) -> egui::Response {
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    let hovered = response.hovered();
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        FontId::new(FS_TINY, icon_font()),
+        if hovered || on {
+            c_accent()
+        } else {
+            c_text_faint()
+        },
+    );
+    response.on_hover_text(tooltip)
+}
+
+/// The selected chat's marker: a 2px accent bar inset at the row's left edge.
+pub(super) fn paint_selection_bar(ui: &Ui, rect: egui::Rect) {
+    let bar = egui::Rect::from_min_size(
+        rect.left_top() + egui::vec2(1.0, 6.0),
+        egui::vec2(2.0, (rect.height() - 12.0).max(4.0)),
+    );
+    ui.painter()
+        .rect_filled(bar, CornerRadius::same(1), c_accent());
 }

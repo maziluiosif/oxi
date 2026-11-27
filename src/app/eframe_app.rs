@@ -426,8 +426,20 @@ impl OxiApp {
                 .retain(|event| !matches!(event, egui::Event::Key { key: Key::Tab, .. }));
             Some(i.modifiers.shift)
         });
+        // Tab-style switching (⌥⌘← / → through the sidebar's chats and folded projects). While a
+        // document shows, `handle_editor_tab_keys` has already taken these keys for its tabs.
+        let sidebar_step = ctx.input_mut(super::sidebar::stepping::take_sidebar_step);
         let goto_chat =
             ctx.input(|i| i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::O));
+        let search_chats =
+            ctx.input(|i| i.modifiers.matches_exact(cmd_shift) && i.key_pressed(Key::E));
+        // Ctrl+1…9 (⌃ on macOS, where ⌘1…9 picks editor tabs) opens the nth sidebar project.
+        // A pending Cmd/Ctrl+K chord owns the digit (Ctrl+K Ctrl+1 folds, off macOS).
+        let project_digit = if super::file_explorer::chord_pending(ctx) {
+            None
+        } else {
+            ctx.input_mut(take_project_digit)
+        };
         let distraction_free = ctx.input(|i| {
             if cfg!(target_os = "macos") {
                 i.modifiers.matches_exact(cmd_shift.plus(Modifiers::CTRL)) && i.key_pressed(Key::F)
@@ -451,8 +463,23 @@ impl OxiApp {
                 self.cycle_chat(back);
             }
         }
+        if let Some(step) = sidebar_step
+            && pickers_free
+        {
+            let back = step == super::sidebar::stepping::SidebarStep::Previous;
+            self.step_sidebar(ctx, back);
+        }
         if goto_chat && pickers_free {
             self.open_file_picker_with("#");
+        }
+        if search_chats && pickers_free {
+            self.open_sidebar_search();
+        }
+        if let Some(n) = project_digit
+            && pickers_free
+            && let Some(&wi) = self.sidebar_projects().get(n - 1)
+        {
+            self.switch_to_project(wi);
         }
 
         if new_chat {
@@ -627,4 +654,41 @@ impl OxiApp {
             self.focus_active_view_next_frame();
         }
     }
+}
+
+/// Takes a Ctrl+digit press (Ctrl alone: no Alt, which is AltGr on Windows, nor Shift or Cmd)
+/// out of the input and returns its digit, 1…9. The physical key decides, so layouts that type
+/// digits with Shift (AZERTY) still work.
+pub(crate) fn take_project_digit(input: &mut egui::InputState) -> Option<usize> {
+    let digit = |key: Key| {
+        Some(match key {
+            Key::Num1 => 1,
+            Key::Num2 => 2,
+            Key::Num3 => 3,
+            Key::Num4 => 4,
+            Key::Num5 => 5,
+            Key::Num6 => 6,
+            Key::Num7 => 7,
+            Key::Num8 => 8,
+            Key::Num9 => 9,
+            _ => return None,
+        })
+    };
+    let pressed = |event: &egui::Event| match event {
+        egui::Event::Key {
+            key,
+            physical_key,
+            pressed: true,
+            modifiers,
+            ..
+        } if modifiers.ctrl && !modifiers.alt && !modifiers.shift && !modifiers.mac_cmd => {
+            digit(physical_key.unwrap_or(*key))
+        }
+        _ => None,
+    };
+    let position = input
+        .events
+        .iter()
+        .position(|event| pressed(event).is_some())?;
+    pressed(&input.events.remove(position))
 }

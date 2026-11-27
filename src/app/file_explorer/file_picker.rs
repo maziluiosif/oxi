@@ -31,6 +31,8 @@ enum PickerTarget {
         workspace_idx: usize,
         session_idx: usize,
     },
+    /// A sidebar project, by workspace index.
+    Project(usize),
 }
 
 /// Goto Symbol entries of one file: outline symbols with their 1-based line numbers.
@@ -129,6 +131,7 @@ const NO_MATCHES: &[&str] = &[
     "No matching symbols",
     "No matching commands",
     "No matching chats",
+    "No matching projects",
 ];
 
 impl OxiApp {
@@ -396,7 +399,7 @@ impl OxiApp {
     fn cached_picker_entries(&mut self, root: &Path, query: &str) -> Arc<Vec<PickerEntry>> {
         // A few dozen commands, ordered by recent use, or the chats: cheap, and not worth a
         // cache key (chat titles and recency change under it).
-        if query.starts_with('>') || query.starts_with('#') {
+        if query.starts_with('>') || query.starts_with('#') || query.starts_with('%') {
             return Arc::new(self.picker_entries(root, query));
         }
         let origin = self
@@ -448,6 +451,9 @@ impl OxiApp {
         }
         if let Some(chat_query) = query.strip_prefix('#') {
             return self.chat_entries(chat_query.trim_start());
+        }
+        if let Some(project_query) = query.strip_prefix('%') {
+            return self.project_entries(project_query.trim_start());
         }
         if self.conv.editor.file_picker_project_symbols {
             let Some(symbols) = self.conv.editor.code_nav.project_symbols.clone() else {
@@ -711,6 +717,54 @@ impl OxiApp {
             .collect()
     }
 
+    /// Projects in sidebar order (pinned first), each with its Ctrl+N shortcut; with an empty
+    /// query the open project is left out, so Enter goes to the next one.
+    fn project_entries(&self, query: &str) -> Vec<PickerEntry> {
+        use crate::app::commands::shortcut_label;
+        let active = self.sidebar_top_project(self.conv.active_workspace);
+        let mut ranked: Vec<_> = self
+            .sidebar_projects()
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, wi)| !query.is_empty() || wi != active)
+            .filter_map(|(slot, wi)| {
+                let label = self.sidebar_project_label(wi);
+                let score = if query.is_empty() {
+                    0
+                } else {
+                    fuzzy_path_score(&label, query)?
+                };
+                Some((score, slot, wi, label))
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        let digits = [
+            egui::Key::Num1,
+            egui::Key::Num2,
+            egui::Key::Num3,
+            egui::Key::Num4,
+            egui::Key::Num5,
+            egui::Key::Num6,
+            egui::Key::Num7,
+            egui::Key::Num8,
+            egui::Key::Num9,
+        ];
+        ranked
+            .into_iter()
+            .map(|(_, slot, wi, label)| PickerEntry {
+                primary_matches: fuzzy_match_positions(&label, query),
+                primary: label,
+                secondary: self.conv.workspaces[wi].root_path.clone(),
+                secondary_matches: Vec::new(),
+                trailing: digits
+                    .get(slot)
+                    .map(|&key| shortcut_label(egui::Modifiers::CTRL, key))
+                    .unwrap_or_default(),
+                target: Some(PickerTarget::Project(wi)),
+            })
+            .collect()
+    }
+
     /// Close the palette and run command `index` as if its keys were pressed where the user
     /// was: focus goes back to what had it before the palette, or to the editor for an editor
     /// command.
@@ -738,7 +792,7 @@ impl OxiApp {
     /// every frame.
     fn preview_picker_target(&mut self, target: &PickerTarget) {
         let (path, range) = match target {
-            PickerTarget::Command(_) | PickerTarget::Chat { .. } => {
+            PickerTarget::Command(_) | PickerTarget::Chat { .. } | PickerTarget::Project(_) => {
                 if self.conv.editor.file_picker_preview.is_some() {
                     self.clear_file_picker_preview();
                 }
@@ -799,12 +853,20 @@ impl OxiApp {
             self.focus_active_view_next_frame();
             return;
         }
+        if let PickerTarget::Project(wi) = target {
+            self.cancel_file_picker();
+            self.conv.editor.file_picker_return_focus = None;
+            self.switch_to_project(wi);
+            return;
+        }
         let origin = self.conv.editor.file_picker_origin.take();
         self.conv.editor.file_picker_previewed = None;
         self.preview_picker_target(&target);
         let path = match &target {
             PickerTarget::File { path, .. } | PickerTarget::Location { path, .. } => path.clone(),
-            PickerTarget::Command(_) | PickerTarget::Chat { .. } => return,
+            PickerTarget::Command(_) | PickerTarget::Chat { .. } | PickerTarget::Project(_) => {
+                return;
+            }
         };
         if let Some((target_path, range)) = self.conv.editor.file_picker_previewed.take() {
             self.conv.editor.navigation_target = Some((target_path, range));
@@ -844,6 +906,8 @@ impl OxiApp {
             2
         } else if query.starts_with('#') {
             3
+        } else if query.starts_with('%') {
+            4
         } else {
             usize::from(self.conv.editor.file_picker_project_symbols || query.starts_with('@'))
         };

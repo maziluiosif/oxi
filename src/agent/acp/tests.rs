@@ -2041,6 +2041,9 @@ for line in sys.stdin:
 
 #[test]
 fn antigravity_background_command_is_tracked_across_end_turn_until_wakeup_completes_it() {
+    let _live = crate::agent::acp::LIVE_REGISTRY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let dir = std::env::temp_dir().join(format!("oxi-acp-agy-bg-{}", rand::random::<u64>()));
     std::fs::create_dir_all(&dir).unwrap();
     let script = dir.join("agent.py");

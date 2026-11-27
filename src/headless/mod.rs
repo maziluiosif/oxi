@@ -327,6 +327,9 @@ struct Server {
     tx: Sender<Input>,
     settings: AppSettings,
     settings_mtime: Option<SystemTime>,
+    /// Keeps settings a test set in memory: other tests write the shared settings file.
+    #[cfg(test)]
+    keep_settings: bool,
     executor: AgentExecutor,
     tunnels: crate::compute::TunnelManager,
     acp: crate::agent::acp::AcpManager,
@@ -365,6 +368,8 @@ impl Server {
         Self {
             tx,
             settings_mtime: settings_mtime(),
+            #[cfg(test)]
+            keep_settings: false,
             settings,
             executor,
             tunnels: crate::compute::TunnelManager::spawn(),
@@ -389,6 +394,10 @@ impl Server {
 
     /// Pick up settings changed in the app (keys, providers, approvals) since the last turn.
     fn refresh_settings(&mut self) {
+        #[cfg(test)]
+        if self.keep_settings {
+            return;
+        }
         let mtime = settings_mtime();
         if mtime != self.settings_mtime {
             self.settings = AppSettings::load();
@@ -2545,6 +2554,7 @@ for line in sys.stdin:
         let (tx, rx) = mpsc::channel();
         let mut server = Server::new(tx.clone(), AgentExecutor::new().unwrap(), false);
         let kind = LlmProviderKind::ClaudeCodeAcp;
+        server.keep_settings = true;
         server.settings.active_provider = kind;
         server.settings.provider_mut(kind).acp_command = format!(
             "{} {}",

@@ -507,6 +507,28 @@ pub fn format_relative_time(t: std::time::SystemTime) -> String {
     format!("{}d", h / 24)
 }
 
+/// The project's folder name alone (`oxi` instead of `Projects/oxi`), as the breadcrumb and
+/// the sidebar show it. Remote projects add their host.
+pub fn workspace_short_label(root_path: &str) -> String {
+    if crate::app_dirs::is_general_chats_dir(root_path) {
+        return "General".to_string();
+    }
+    if let Some((host, path)) = crate::remote::split(root_path) {
+        let trimmed = path.trim_end_matches('/');
+        let name = trimmed
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(trimmed);
+        return format!("{name} · {host}");
+    }
+    std::path::Path::new(root_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| workspace_sidebar_label(root_path))
+}
+
 /// Short label for a workspace root path (last two path segments, e.g. `owner/repo`).
 pub fn workspace_sidebar_label(root_path: &str) -> String {
     if let Some((host, path)) = crate::remote::split(root_path) {

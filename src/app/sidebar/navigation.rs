@@ -118,13 +118,38 @@ impl OxiApp {
             })
     }
 
-    pub(super) fn sidebar_workspace_has_active_chats(
-        &self,
-        wi: usize,
-        ctx: &egui::Context,
-    ) -> bool {
+    /// Rows a folded list still draws: the chat open in the main view or beside it, and one
+    /// being renamed. Running and waiting chats of a folded list move to the sidebar's
+    /// "Needs you" and "Running" sections instead (see `sidebar_offscreen_activity`).
+    pub(super) fn sidebar_session_kept_when_folded(&self, wi: usize, si: usize) -> bool {
+        let key = self.session_key(wi, si);
+        key == self.active_session_key()
+            || self.split_partner_peek() == Some(key)
+            || self.conv.sidebar.renaming_session == Some((wi, si))
+    }
+
+    pub(super) fn sidebar_workspace_has_kept_chats(&self, wi: usize) -> bool {
         (0..self.conv.workspaces[wi].sessions.len())
-            .any(|si| self.sidebar_session_needs_visibility(wi, si, ctx))
+            .any(|si| self.sidebar_session_kept_when_folded(wi, si))
+    }
+
+    /// Whether workspace `wi`'s chat list is unfolded in the sidebar: neither its project nor
+    /// its own row (a work tree, or the main checkout beside work trees) is folded. Search and
+    /// History unfold everything, but this answers for the daily list.
+    pub(super) fn sidebar_chats_expanded(&self, wi: usize, parents: &[Option<usize>]) -> bool {
+        let workspaces = &self.conv.workspaces;
+        match parents.get(wi).copied().flatten() {
+            Some(parent) => !workspaces[parent].sidebar_folded && !workspaces[wi].sidebar_folded,
+            None => {
+                let has_worktrees = parents.contains(&Some(wi));
+                !workspaces[wi].sidebar_folded
+                    && !(has_worktrees
+                        && workspaces[wi]
+                            .folded_groups
+                            .iter()
+                            .any(|key| key == "checkout"))
+            }
+        }
     }
 
     pub(super) fn sidebar_workspace_has_recent_chats(
@@ -135,8 +160,9 @@ impl OxiApp {
         sidebar_session_order(&self.conv.workspaces[wi])
             .iter()
             .any(|&(si, group)| {
-                matches!(group, SidebarGroup::Pinned | SidebarGroup::Today)
-                    || self.sidebar_session_needs_visibility(wi, si, ctx)
+                !self.sidebar_hides_placeholder(wi, si)
+                    && (matches!(group, SidebarGroup::Pinned | SidebarGroup::Today)
+                        || self.sidebar_session_needs_visibility(wi, si, ctx))
             })
             || wi == self.conv.active_workspace
     }
@@ -154,7 +180,8 @@ impl OxiApp {
     pub(super) fn render_sidebar_history_filters(&mut self, ui: &mut Ui) {
         ui.label(strong_rich("History", FS_SMALL, c_text_strong()));
         ui.add_space(4.0);
-        let projects: Vec<_> = sidebar_workspace_order(&self.conv.workspaces)
+        let projects: Vec<_> = self
+            .sidebar_order()
             .into_iter()
             .filter(|(_, parent)| parent.is_none())
             .map(|(wi, _)| self.conv.workspaces[wi].root_path.clone())

@@ -265,7 +265,7 @@ impl OxiApp {
         );
 
         let ws_root = self.active_workspace().root_path.clone();
-        let ws_name = header_workspace_name(&ws_root);
+        let ws_name = workspace_short_label(&ws_root);
         let session_title = sidebar_session_title_display(&self.active_session().title);
         let find_open = self.conv.transcript.find.is_some();
         let split_open = self.conv.split.is_some();
@@ -588,27 +588,6 @@ impl OxiApp {
         ui.painter()
             .vline(boundary_x, sep_rect.y_range(), Stroke::new(1.0, col));
     }
-}
-
-/// Short single-segment project name for the top breadcrumb (`oxi` instead of `Projects/oxi`).
-fn header_workspace_name(root_path: &str) -> String {
-    if crate::app_dirs::is_general_chats_dir(root_path) {
-        return "General".to_string();
-    }
-    if let Some((host, path)) = crate::remote::split(root_path) {
-        let trimmed = path.trim_end_matches('/');
-        let name = trimmed
-            .rsplit('/')
-            .next()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(trimmed);
-        return format!("{name} · {host}");
-    }
-    std::path::Path::new(root_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| workspace_sidebar_label(root_path))
 }
 
 pub(super) fn paint_composer_scrim(ui: &mut Ui, rect: egui::Rect) {

@@ -571,6 +571,7 @@ impl OxiApp {
             return;
         }
         self.capture_active_session_config();
+        self.remember_project_checkout();
         self.conv.sidebar.notice = None;
         self.conv
             .editor
@@ -624,6 +625,7 @@ impl OxiApp {
         self.capture_active_session_config();
         self.conv.sidebar.notice = None;
         if workspace_changed {
+            self.remember_project_checkout();
             self.conv
                 .editor
                 .documents
@@ -930,6 +932,10 @@ mod keep_awake_tests {
 
     #[test]
     fn working_covers_running_turns_but_not_one_waiting_for_approval() {
+        // Other tests' live ACP agents count as working through the shared registry.
+        let _live = crate::agent::acp::LIVE_REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::secrets::use_mock_store();
         let mut app = OxiApp::new();
         app.flow.sessions.clear();
@@ -961,6 +967,10 @@ mod keep_awake_tests {
 
     #[test]
     fn background_subagents_count_until_they_stop_or_wait_for_approval() {
+        // Other tests' live ACP agents count as working through the shared registry.
+        let _live = crate::agent::acp::LIVE_REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::secrets::use_mock_store();
         let mut app = OxiApp::new();
         app.flow.sessions.clear();

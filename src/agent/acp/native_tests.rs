@@ -1590,6 +1590,9 @@ fn claude_native_live_smoke() {
 #[cfg(unix)]
 #[test]
 fn claude_background_command_stays_running_and_its_followup_turn_is_attached() {
+    let _live = crate::agent::acp::LIVE_REGISTRY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let dir = TempDir::new("oxi-claude-bg");
     let script = r#"#!/usr/bin/env python3
 import sys, json, threading, time
