@@ -805,7 +805,7 @@ impl OxiApp {
                             ) {
                                 Some(true) => {
                                     let draft = self.conv.sidebar.rename_draft.clone();
-                                    self.rename_session_in(wi, si, draft);
+                                    self.rename_session(si, draft);
                                     self.conv.sidebar.renaming_session = None;
                                     sidebar_changed = true;
                                 }
@@ -878,7 +878,7 @@ impl OxiApp {
                                         ui.close();
                                     }
                                 }
-                                if !running {
+                                if wi == self.conv.active_workspace && !running {
                                     if ui.button("Rename chat").clicked() {
                                         self.conv.sidebar.renaming_session = Some((wi, si));
                                         self.conv.sidebar.rename_draft =
@@ -907,7 +907,7 @@ impl OxiApp {
                             // trash button interacted below overlaps this rect and
                             // would otherwise steal hover from the row response,
                             // flickering show/hide every other frame.
-                            let can_delete = !running;
+                            let can_delete = wi == self.conv.active_workspace && !running;
                             let show_trash = can_delete && ui.rect_contains_pointer(rect);
                             self.render_session_row_inner(
                                 ui,
@@ -1330,13 +1330,17 @@ fn session_rename_field(ui: &mut Ui, rect: egui::Rect, draft: &mut String) -> Op
         resp.request_focus();
     }
     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-    if enter {
-        Some(true)
-    } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) || resp.lost_focus() {
-        Some(false)
-    } else {
-        None
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if !(enter || escape || resp.lost_focus()) {
+        return None;
     }
+    // Take the key the field let go on, or the approval card drawn later this frame reads
+    // it as Approve / Deny.
+    ui.input_mut(|i| {
+        i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+        i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+    });
+    Some(enter)
 }
 
 /// Keep the origin visible even when the menu covers the clicked row.
@@ -1394,6 +1398,36 @@ mod tests {
         harness.run_steps(3);
         press(&mut harness, egui::Key::Escape);
         assert_eq!(harness.state().1, Some(false));
+    }
+
+    /// What the approval card, drawn after the sidebar, would see of the key that ended the
+    /// rename: it answers only when no field has focus.
+    #[test]
+    fn the_key_that_ends_a_rename_does_not_reach_widgets_drawn_later() {
+        for key in [egui::Key::Enter, egui::Key::Escape] {
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(240.0, 60.0))
+                .build_ui_state(
+                    |ui, state: &mut (String, Option<bool>, bool)| {
+                        if state.1.is_none() {
+                            let rect =
+                                egui::Rect::from_min_size(ui.cursor().min, egui::vec2(200.0, 24.0));
+                            state.1 = session_rename_field(ui, rect, &mut state.0);
+                        }
+                        let free = !ui.ctx().egui_wants_keyboard_input();
+                        let pressed = ui.input(|i| {
+                            i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)
+                        });
+                        state.2 |= free && pressed;
+                    },
+                    ("Old title".to_string(), None, false),
+                );
+            harness.run_steps(3);
+            harness.key_press(key);
+            harness.step();
+            assert!(harness.state().1.is_some(), "{key:?} should end the rename");
+            assert!(!harness.state().2, "{key:?} leaked past the rename field");
+        }
     }
 }
 

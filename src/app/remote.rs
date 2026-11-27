@@ -1103,6 +1103,28 @@ impl OxiApp {
         }
     }
 
+    /// Rename a remote chat on its server, which holds the history this side may not have
+    /// loaded; the server's `title` event then reaches every client showing it.
+    pub(crate) fn remote_rename_chat(&mut self, key: SessionKey, title: String) {
+        let Some((host, chat, root)) = self.remote_chat(key) else {
+            return;
+        };
+        if let Some(client) = self.remote.connected(&host) {
+            let pending = client.request(
+                "chat.rename",
+                json!({"root": root, "chat": chat, "title": &title}),
+            );
+            self.session_mut_by_key(key).title = title;
+            self.remote
+                .asked
+                .push((Asked::Action("Could not rename the chat"), pending));
+        } else {
+            self.conv.sidebar.notice = Some(format!(
+                "Not connected to {host}; the chat keeps its name there."
+            ));
+        }
+    }
+
     pub(crate) fn remote_delete_chat(&mut self, root: &str, file: &str) {
         let Some((host, chat)) = crate::remote::split(file) else {
             return;

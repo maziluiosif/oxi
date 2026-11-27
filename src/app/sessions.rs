@@ -5,7 +5,7 @@ use std::process::Command;
 
 use eframe::egui;
 
-use super::state::{SessionKey, Workspace};
+use super::state::Workspace;
 use crate::session_store;
 use crate::theme::{MAX_IMAGE_ATTACHMENT_BYTES, MAX_PENDING_IMAGES};
 
@@ -385,44 +385,36 @@ impl OxiApp {
     }
 
     pub(crate) fn rename_session(&mut self, idx: usize, new_title: String) {
-        self.rename_session_in(self.conv.active_workspace, idx, new_title);
-    }
-
-    /// Rename chat `idx` of project `wi`, which need not be the active one.
-    pub(crate) fn rename_session_in(&mut self, wi: usize, idx: usize, new_title: String) {
         let title = new_title.trim().to_string();
-        if title.is_empty()
-            || self
-                .conv
-                .workspaces
-                .get(wi)
-                .is_none_or(|ws| idx >= ws.sessions.len())
-        {
+        if title.is_empty() || idx >= self.active_workspace().sessions.len() {
             return;
         }
-        let key = self.session_key(wi, idx);
+        let key = self.session_key(self.conv.active_workspace, idx);
         if self
             .run_state(key)
             .is_some_and(|state| state.waiting_response)
         {
             return;
         }
-        // Saving writes the whole transcript: a chat in another project may not be loaded yet,
+        // The server renames a remote chat on its own copy, so its history needn't be here.
+        if self.is_remote_key(key) {
+            self.remote_rename_chat(key, title);
+            return;
+        }
+        // Saving writes the whole transcript: a chat that was never opened isn't loaded yet,
         // and saving it as it stands would replace its history with nothing.
         self.ensure_session_loaded(key);
-        let session = &self.conv.workspaces[wi].sessions[idx];
+        let session = &self.active_workspace().sessions[idx];
         if session.session_file.is_some() && !session.messages_loaded {
             self.conv.sidebar.notice =
                 Some("Could not rename the chat: its history isn't loaded yet.".into());
             return;
         }
-        self.conv.workspaces[wi].sessions[idx].title = title;
-        let root_path = self.conv.workspaces[wi].root_path.clone();
-        if self.is_remote_key(key) {
-            self.remote_save_session(key);
-        } else if let Err(e) = session_store::save_session_messages(
+        self.active_workspace_mut().sessions[idx].title = title;
+        let root_path = self.active_workspace().root_path.clone();
+        if let Err(e) = session_store::save_session_messages(
             &root_path,
-            &mut self.conv.workspaces[wi].sessions[idx],
+            &mut self.active_workspace_mut().sessions[idx],
         ) {
             self.run_state_mut(self.active_session_key()).stream_error =
                 Some(format!("Rename chat: {e}"));
@@ -481,10 +473,12 @@ impl OxiApp {
         }
     }
 
-    pub(crate) fn delete_session(&mut self, idx: usize) {
+    /// Delete chat `idx` of the active workspace. False when it stays: out of range, or
+    /// answering a turn.
+    pub(crate) fn delete_session(&mut self, idx: usize) -> bool {
         let active_key = self.active_session_key();
         if idx >= self.active_workspace().sessions.len() {
-            return;
+            return false;
         }
         let deleting_last_session = self.active_workspace().sessions.len() == 1;
         let delete_key = self.session_key(active_key.workspace_idx, idx);
@@ -492,7 +486,7 @@ impl OxiApp {
             .run_state(delete_key)
             .is_some_and(|state| state.waiting_response)
         {
-            return;
+            return false;
         }
 
         let session_file = self.active_workspace().sessions[idx].session_file.clone();
@@ -594,92 +588,7 @@ impl OxiApp {
         }
         self.persist_active_session_selection();
         self.run_state_mut(self.active_session_key()).stream_error = None;
-    }
-
-    /// Delete chat `si` of project `wi`. The active project goes through [`Self::delete_session`],
-    /// which also resets the composer and the open chat; another project only loses the row,
-    /// its file and its run state, and the indices of its later chats shift down.
-    pub(crate) fn delete_session_in(&mut self, wi: usize, si: usize) {
-        if wi == self.conv.active_workspace {
-            self.delete_session(si);
-            return;
-        }
-        if self
-            .conv
-            .workspaces
-            .get(wi)
-            .is_none_or(|ws| si >= ws.sessions.len())
-        {
-            return;
-        }
-        let delete_key = self.session_key(wi, si);
-        if self
-            .run_state(delete_key)
-            .is_some_and(|state| state.waiting_response)
-        {
-            return;
-        }
-        let session_file = self.conv.workspaces[wi].sessions[si].session_file.clone();
-        // Same key as `delete_session` (and `send_prompt_payload`) for the ACP subprocess.
-        let acp_key = session_file
-            .clone()
-            .unwrap_or_else(|| format!("mem:{wi}:{si}"));
-        self.acp.close(&acp_key);
-        if let Some(session_file) = session_file.clone().filter(|f| crate::remote::is_remote(f)) {
-            let root = self.conv.workspaces[wi].root_path.clone();
-            self.remote_delete_chat(&root, &session_file);
-        } else if let Some(session_file) = session_file {
-            if self.flow.current_backend_session_file.as_deref() == Some(session_file.as_str()) {
-                self.flow.current_backend_session_file = None;
-            }
-            self.chat_watch.forget_deleted(session_file.clone());
-            self.spawn_chore("Could not delete the chat file", move || {
-                delete_session_file_from_disk(Path::new(&session_file))
-            });
-        }
-
-        let config = crate::model::SessionConfig::from_provider(self.conv.settings.active_config());
-        let ws = &mut self.conv.workspaces[wi];
-        ws.sessions.remove(si);
-        if ws.sessions.is_empty() {
-            let mut session = Self::blank_session("Chat 1");
-            session.config = Some(config);
-            ws.sessions.push(session);
-            ws.active = 0;
-        } else if si < ws.active || ws.active >= ws.sessions.len() {
-            ws.active = ws.active.saturating_sub(1);
-        }
-        let shift = |key: SessionKey| -> Option<SessionKey> {
-            if key.workspace_idx != wi || key.session_idx < si {
-                Some(key)
-            } else if key.session_idx == si {
-                None
-            } else {
-                Some(SessionKey {
-                    session_idx: key.session_idx - 1,
-                    ..key
-                })
-            }
-        };
-        self.flow.sessions = std::mem::take(&mut self.flow.sessions)
-            .into_iter()
-            .filter_map(|(key, state)| shift(key).map(|key| (key, state)))
-            .collect();
-        if let Some(c) = self.conv.compaction.as_mut() {
-            match shift(c.key) {
-                Some(key) => c.key = key,
-                None => self.conv.compaction = None,
-            }
-        }
-        if self
-            .conv
-            .sidebar
-            .renaming_session
-            .is_some_and(|(w, _)| w == wi)
-        {
-            self.conv.sidebar.renaming_session = None;
-        }
-        self.sync_workspaces_to_settings();
+        true
     }
 
     /// Removes a workspace from the sidebar. Doesn't touch its files on disk (chats
@@ -801,81 +710,36 @@ pub(crate) fn clipboard_image_png() -> Result<Option<Vec<u8>>, String> {
 }
 
 #[cfg(test)]
-mod other_project_tests {
-    use super::super::state::{SessionKey, Workspace};
+mod rename_tests {
+    use super::super::state::Workspace;
     use super::OxiApp;
     use crate::model::ChatMessage;
 
-    fn project(root: &str, titles: &[&str], active: usize) -> Workspace {
-        Workspace {
-            root_path: root.into(),
-            sessions: titles.iter().map(|t| OxiApp::blank_session(*t)).collect(),
-            active,
+    #[test]
+    fn renaming_a_chat_that_was_never_opened_keeps_its_saved_history() {
+        crate::secrets::use_mock_store();
+        let dir =
+            std::env::temp_dir().join(format!("oxi-rename-unopened-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let mut app = OxiApp::new();
+        app.conv.workspaces = vec![Workspace {
+            root_path: root.clone(),
+            sessions: ["Open", "Unopened"]
+                .iter()
+                .map(|t| OxiApp::blank_session(*t))
+                .collect(),
+            active: 0,
             sidebar_folded: false,
             pinned: vec![],
             archived: Vec::new(),
             folded_groups: vec![],
             worktree: None,
-        }
-    }
-
-    fn app_with_two_projects(dir: &std::path::Path) -> OxiApp {
-        crate::secrets::use_mock_store();
-        let mut app = OxiApp::new();
-        let other = dir.to_string_lossy().into_owned();
-        app.conv.workspaces = vec![
-            project("/tmp/oxi-active-project", &["Mine"], 0),
-            project(&other, &["A", "B", "C"], 2),
-        ];
+        }];
         app.conv.active_workspace = 0;
         app.conv.no_workspace = false;
         app.flow.sessions.clear();
-        app
-    }
-
-    #[test]
-    fn deleting_a_chat_in_another_project_shifts_its_later_chats_and_their_run_state() {
-        let dir = std::env::temp_dir().join(format!("oxi-del-other-{}", rand::random::<u64>()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut app = app_with_two_projects(&dir);
-        let c = SessionKey {
-            workspace_idx: 1,
-            session_idx: 2,
-        };
-        app.run_state_mut(c).completion_unseen = true;
-        app.run_state_mut(SessionKey {
-            workspace_idx: 1,
-            session_idx: 0,
-        })
-        .completion_unseen = true;
-
-        app.delete_session_in(1, 0);
-
-        let titles: Vec<_> = app.conv.workspaces[1]
-            .sessions
-            .iter()
-            .map(|s| s.title.as_str())
-            .collect();
-        assert_eq!(titles, ["B", "C"]);
-        assert_eq!(app.conv.workspaces[1].active, 1, "C stays its open chat");
-        let shifted = SessionKey {
-            workspace_idx: 1,
-            session_idx: 1,
-        };
-        assert!(app.run_state(shifted).is_some_and(|r| r.completion_unseen));
-        assert!(app.run_state(c).is_none());
-        assert_eq!(app.conv.active_workspace, 0);
-        assert_eq!(app.active_session().title, "Mine");
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn renaming_a_chat_in_another_project_keeps_its_saved_history() {
-        let dir = std::env::temp_dir().join(format!("oxi-rename-other-{}", rand::random::<u64>()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut app = app_with_two_projects(&dir);
-        let root = dir.to_string_lossy().into_owned();
-        let session = &mut app.conv.workspaces[1].sessions[1];
+        let session = &mut app.conv.workspaces[0].sessions[1];
         session.messages.push(ChatMessage::user("keep me", &[]));
         crate::session_store::save_session_messages(&root, session).unwrap();
         // As listed at startup: known on disk, history not read yet.
@@ -883,9 +747,9 @@ mod other_project_tests {
         session.messages_loaded = false;
         let file = session.session_file.clone().unwrap();
 
-        app.rename_session_in(1, 1, "Renamed".into());
+        app.rename_session(1, "Renamed".into());
 
-        assert_eq!(app.conv.workspaces[1].sessions[1].title, "Renamed");
+        assert_eq!(app.conv.workspaces[0].sessions[1].title, "Renamed");
         let saved = crate::session_store::load_session_messages(&file).unwrap();
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].text, "keep me");

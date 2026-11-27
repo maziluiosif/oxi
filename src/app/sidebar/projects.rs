@@ -114,6 +114,25 @@ impl OxiApp {
             .collect()
     }
 
+    /// The work trees listed under project `wi`, in sidebar `order`. An Orchestrator
+    /// worker's work tree shows with its lead chat instead, unless it is the open checkout.
+    /// The sidebar, ⌥⌘← / → and opening a project all use this, so they agree.
+    pub(crate) fn sidebar_worktrees(
+        &self,
+        order: &[(usize, Option<usize>)],
+        wi: usize,
+    ) -> Vec<usize> {
+        order
+            .iter()
+            .filter(|(_, parent)| *parent == Some(wi))
+            .map(|&(child, _)| child)
+            .filter(|&child| {
+                child == self.conv.active_workspace
+                    || !self.hidden_worker_workspace(&self.conv.workspaces[child].root_path)
+            })
+            .collect()
+    }
+
     /// Open project `wi` at the checkout last used in it and that checkout's last chat, unless
     /// the open chat is already in the project (or in one of its work trees).
     pub(crate) fn switch_to_project(&mut self, wi: usize) {
@@ -128,11 +147,14 @@ impl OxiApp {
             .last_checkout
             .get(&self.conv.workspaces[wi].root_path)
             .map(String::as_str);
-        let parents = sidebar_parents(&self.conv.workspaces);
-        let target = project_checkout_to_open(&self.conv.workspaces, &parents, wi, remembered);
+        let worktrees = self.sidebar_worktrees(&self.sidebar_order(), wi);
+        let target = project_checkout_to_open(&self.conv.workspaces, wi, &worktrees, remembered);
         self.select_workspace(target);
-        self.reveal_chat_view();
-        self.focus_active_view_next_frame();
+        // Switching is refused while a file has unsaved changes; the editor stays then.
+        if self.conv.active_workspace == target {
+            self.reveal_chat_view();
+            self.focus_active_view_next_frame();
+        }
     }
 
     /// Notes the open checkout as its project's last one. Called just before the open
@@ -576,22 +598,15 @@ impl OxiApp {
 }
 
 /// The checkout to open for project `wi`: the `remembered` one if it still exists, else the
-/// one (project or work tree) with the newest saved chat, else the project itself.
+/// one (project or one of its listed `worktrees`) with the newest saved chat, else the project
+/// itself.
 fn project_checkout_to_open(
     workspaces: &[Workspace],
-    parents: &[Option<usize>],
     wi: usize,
+    worktrees: &[usize],
     remembered: Option<&str>,
 ) -> usize {
-    let checkouts = || {
-        std::iter::once(wi).chain(
-            parents
-                .iter()
-                .enumerate()
-                .filter(move |&(w, parent)| *parent == Some(wi) && w != wi)
-                .map(|(w, _)| w),
-        )
-    };
+    let checkouts = || std::iter::once(wi).chain(worktrees.iter().copied());
     if let Some(root) = remembered
         && let Some(w) = checkouts().find(|&w| workspaces[w].root_path == root)
     {
@@ -652,8 +667,11 @@ mod tests {
             workspace("/trees/elsewhere", Some("/other")),
         ];
         let parents = sidebar_parents(&workspaces);
+        let trees: Vec<usize> = (0..workspaces.len())
+            .filter(|&w| parents[w] == Some(0) && w != 0)
+            .collect();
         let pick =
-            |ws: &[Workspace], remembered| project_checkout_to_open(ws, &parents, 0, remembered);
+            |ws: &[Workspace], remembered| project_checkout_to_open(ws, 0, &trees, remembered);
         assert_eq!(
             pick(&workspaces, None),
             0,

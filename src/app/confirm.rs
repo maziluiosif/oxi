@@ -390,8 +390,10 @@ impl OxiApp {
                 si,
                 remove_worktree,
             } => {
-                self.delete_session_in(wi, si);
-                if remove_worktree {
+                // Sessions can only be deleted from the active workspace (the sidebar
+                // enforces this); guard anyway in case state moved under the modal. The work
+                // tree goes only with its chat: a chat that started a turn meanwhile stays.
+                if wi == self.conv.active_workspace && self.delete_session(si) && remove_worktree {
                     self.remove_worktree(wi, worktree);
                 }
             }

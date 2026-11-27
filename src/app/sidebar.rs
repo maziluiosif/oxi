@@ -266,6 +266,14 @@ impl OxiApp {
                 field.request_focus();
             }
             let escaped = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if field.lost_focus() {
+                // The field lets go on Enter / Escape without taking the key; take it, or the
+                // approval card drawn later this frame reads it as Approve / Deny.
+                ui.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+                });
+            }
             let closed =
                 crate::ui::chrome::icon_button_plain(ui, ICON_CLOSE, CONTROL_HEIGHT, false)
                     .on_hover_text("Close search (Esc)")
@@ -337,16 +345,7 @@ impl OxiApp {
                 }
                 projects_header = true;
             }
-            // Orchestrator workers' work trees show with their lead chat instead.
-            let children: Vec<usize> = order
-                .iter()
-                .filter(|(_, p)| *p == Some(wi))
-                .map(|&(child, _)| child)
-                .filter(|&child| {
-                    child == self.conv.active_workspace
-                        || !self.hidden_worker_workspace(&self.conv.workspaces[child].root_path)
-                })
-                .collect();
+            let children = self.sidebar_worktrees(&order, wi);
             if self.conv.sidebar.history
                 && self
                     .conv

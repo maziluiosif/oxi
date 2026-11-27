@@ -122,11 +122,7 @@ impl OxiApp {
             {
                 continue;
             }
-            let worktrees: Vec<usize> = order
-                .iter()
-                .filter(|(_, parent)| *parent == Some(wi))
-                .map(|&(child, _)| child)
-                .collect();
+            let worktrees = self.sidebar_worktrees(&order, wi);
             let before = stops.len();
             self.list_row_chats(ctx, wi, None, false, &q, &worktrees, &mut stops);
             if daily && stops.len() == before {
@@ -499,36 +495,47 @@ mod tests {
         );
     }
 
+    /// Draw the sidebar and check that ⌥⌘← / → walks exactly the rows it drew.
+    fn assert_walk_matches_drawing(app: &mut OxiApp, ctx: &egui::Context, case: &str) {
+        for _ in 0..2 {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320.0, 2000.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.render_sidebar(ui),
+            );
+        }
+        let drawn = app.conv.sidebar.drawn_stops.clone();
+        assert!(!drawn.is_empty(), "{case}: rows were drawn");
+        assert_eq!(app.sidebar_stops(ctx), drawn, "{case}");
+    }
+
+    fn worktree_of(root: &str, main_root: &str, sessions: Vec<crate::model::Session>) -> Workspace {
+        let mut tree = workspace(root, sessions);
+        tree.worktree = Some(crate::git::worktree::WorktreeInfo {
+            branch: "oxi/task".into(),
+            main_root: main_root.into(),
+            main_branch: "dev".into(),
+        });
+        tree
+    }
+
     #[test]
     fn stepping_walks_the_rows_the_sidebar_draws() {
         let mut app = app();
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx, "dark");
-        let check = |app: &mut OxiApp, case: &str| {
-            for _ in 0..2 {
-                let _ = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            egui::vec2(320.0, 2000.0),
-                        )),
-                        ..Default::default()
-                    },
-                    |ui| app.render_sidebar(ui),
-                );
-            }
-            let drawn = app.conv.sidebar.drawn_stops.clone();
-            assert!(!drawn.is_empty(), "{case}: rows were drawn");
-            assert_eq!(app.sidebar_stops(&ctx), drawn, "{case}");
-        };
+        let check = |app: &mut OxiApp, case: &str| assert_walk_matches_drawing(app, &ctx, case);
         // A work tree of `/a`, so `/a` lists its main checkout and the work tree as rows.
-        let mut tree = workspace("/tmp/oxi-step-a-tree", vec![chat("T1", "t1", 10)]);
-        tree.worktree = Some(crate::git::worktree::WorktreeInfo {
-            branch: "oxi/task".into(),
-            main_root: "/tmp/oxi-step-a".into(),
-            main_branch: "dev".into(),
-        });
-        app.conv.workspaces.push(tree);
+        app.conv.workspaces.push(worktree_of(
+            "/tmp/oxi-step-a-tree",
+            "/tmp/oxi-step-a",
+            vec![chat("T1", "t1", 10)],
+        ));
         check(&mut app, "daily list");
         assert!(
             app.conv.sidebar.drawn_stops.contains(&chat_stop(3, 0)),
@@ -550,5 +557,95 @@ mod tests {
         app.conv.sidebar.search.clear();
         app.conv.sidebar.history = true;
         check(&mut app, "history");
+    }
+
+    /// `/c`'s only work tree belongs to an Orchestrator worker, whose chat shows with its lead.
+    fn app_with_a_hidden_worker() -> OxiApp {
+        let mut app = app();
+        const WORKER: &str = "/tmp/oxi-step-c-worker";
+        app.conv.workspaces.push(worktree_of(
+            WORKER,
+            "/tmp/oxi-step-c",
+            // The worker's own chat, and one it doesn't own (opened there by hand, say).
+            vec![chat("W1", "w1", 1), chat("Other", "w2", 1)],
+        ));
+        app.push_demo_worker(
+            key(2, 0),
+            crate::delegation::Status {
+                task: "w1".into(),
+                state: crate::delegation::TaskState::Running,
+                provider: "codex".into(),
+                model: String::new(),
+                title: "Worker".into(),
+                chat: Some("/chats/w1.jsonl".into()),
+                worktree: Some(WORKER.into()),
+                result: None,
+                error: None,
+                worker: Some(crate::orchestrator::WorkerInfo {
+                    root: "/tmp/oxi-step-c".into(),
+                    cwd: WORKER.into(),
+                    ..Default::default()
+                }),
+            },
+        );
+        assert!(app.hidden_worker_workspace(WORKER));
+        app
+    }
+
+    #[test]
+    fn a_hidden_workers_work_tree_is_neither_walked_nor_drawn() {
+        let mut app = app_with_a_hidden_worker();
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx, "dark");
+        assert_walk_matches_drawing(&mut app, &ctx, "a project whose only work tree is hidden");
+        for si in 0..2 {
+            assert!(
+                !app.conv.sidebar.drawn_stops.contains(&chat_stop(3, si)),
+                "the hidden work tree lists none of its chats"
+            );
+        }
+        assert!(
+            app.conv.sidebar.drawn_stops.contains(&chat_stop(2, 0)),
+            "the project's own chat still is"
+        );
+        app.conv.workspaces[2].folded_groups.push("checkout".into());
+        assert_walk_matches_drawing(&mut app, &ctx, "and its main checkout folded");
+    }
+
+    #[test]
+    fn opening_a_project_skips_a_hidden_workers_work_tree() {
+        let mut app = app_with_a_hidden_worker();
+        // The worker's chat is the project's newest, which would otherwise pick its work tree.
+        app.switch_to_project(2);
+        assert_eq!(
+            app.conv.active_workspace, 2,
+            "the project itself, not the worker's tree"
+        );
+    }
+
+    #[test]
+    fn a_refused_project_switch_leaves_the_open_file_showing() {
+        let mut app = app();
+        let dir = std::env::temp_dir().join(format!("oxi-step-dirty-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("file.rs");
+        std::fs::write(&file, "original").unwrap();
+        // The editor opens files of the open project only.
+        app.conv.workspaces[0].root_path = dir.to_string_lossy().into_owned();
+        app.open_editor_file(file);
+        let document = &mut app.conv.editor.documents[0];
+        document.content = "unsaved changes".into();
+        document.dirty = true;
+        let open = app.conv.editor.active;
+        assert!(open.is_some());
+
+        app.switch_to_project(2);
+
+        assert_eq!(
+            app.conv.active_workspace, 0,
+            "unsaved changes keep the project"
+        );
+        assert_eq!(app.conv.editor.active, open, "and the file stays in view");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
